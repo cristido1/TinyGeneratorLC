@@ -1,0 +1,27 @@
+@page
+@model GeneraModel
+@{
+    ViewData["Title"] = "Genera storia";
+}
+
+<h1>Genera una storia lunga</h1>
+
+<form method="post">
+    <label for="Prompt">Inserisci il prompt della storia:</label><br />
+    <input type="text" id="Prompt" name="Prompt" value="@Model.Prompt" style="width:100%; padding:8px" required />
+    <br /><br />
+    <button type="submit">Genera storia</button>
+</form>
+
+@if (Model.IsProcessing)
+{
+    <hr />
+    <h2>Stato:</h2>
+    <pre>@Model.Status</pre>
+}
+else if (Model.Story != null)
+{
+    <hr />
+    <h2>Storia generata</h2>
+    <pre style="white-space: pre-wrap;">@Model.Story</pre>
+}

@@ -1,0 +1,53 @@
+## Ignore build and user files for .NET / Visual Studio / Razor Pages
+
+# User-specific
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+bin/
+obj/
+out/
+artifacts/
+
+# Visual Studio cache/options
+*.cache
+
+# Rider
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
+packages/
+project.lock.json
+
+# Database files created by the app - keep local DB out of source control
+data/*.db
+data/*.db-journal
+
+# Backups created by the tool
+backups/
+
+# Static web assets build outputs
+wwwroot/lib/**/LICENSE*
+
+# Runtime native assets (if produced locally)
+runtimes/
+
+# dotnet publish
+publish/
+
+# Logs
+*.log
+
+# Secrets
+secrets.json
+appsettings.*.Local.json

@@ -6,22 +6,63 @@
 
 <h1>Genera una storia lunga</h1>
 
-<form method="post">
+<form id="genForm">
+    @Html.AntiForgeryToken()
     <label for="Prompt">Inserisci il prompt della storia:</label><br />
     <input type="text" id="Prompt" name="Prompt" value="@Model.Prompt" style="width:100%; padding:8px" required />
     <br /><br />
-    <button type="submit">Genera storia</button>
+    <button type="button" id="startBtn">Avvia generazione</button>
 </form>
 
-@if (Model.IsProcessing)
-{
-    <hr />
-    <h2>Stato:</h2>
-    <pre>@Model.Status</pre>
-}
-else if (Model.Story != null)
-{
-    <hr />
-    <h2>Storia generata</h2>
-    <pre style="white-space: pre-wrap;">@Model.Story</pre>
-}
+<hr />
+<h2>Stato generazione (live):</h2>
+<div id="statusArea">
+    <pre id="statusPre">Pronto.</pre>
+</div>
+
+<script>
+    const startBtn = document.getElementById('startBtn');
+    const statusPre = document.getElementById('statusPre');
+    let pollInterval = null;
+
+    startBtn.addEventListener('click', async () => {
+        const prompt = document.getElementById('Prompt').value;
+        if (!prompt || prompt.trim().length === 0) {
+            alert('Inserisci il prompt');
+            return;
+        }
+
+        statusPre.textContent = '🟡 Avvio...';
+    // send start request (include antiforgery token automatically by using the form)
+    const form = document.getElementById('genForm');
+    const fd = new FormData(form);
+    const res = await fetch('?handler=start', { method: 'POST', body: fd });
+        if (!res.ok) {
+            const text = await res.text();
+            statusPre.textContent = 'Errore avvio: ' + text;
+            return;
+        }
+        const data = await res.json();
+        const id = data.id;
+        statusPre.textContent = '🟢 Generazione avviata. id: ' + id + '\n\n';
+
+        // start polling
+        pollInterval = setInterval(async () => {
+            try {
+                const p = await fetch(`?handler=progress&id=${encodeURIComponent(id)}`);
+                if (!p.ok) return;
+                const js = await p.json();
+                statusPre.textContent = js.messages.join('\n');
+                if (js.completed) {
+                    statusPre.textContent += '\n\n✅ Completato.';
+                    if (js.result) {
+                        statusPre.textContent += '\n\nRisultato finale (estratto):\n' + js.result.substring(0, 1000);
+                    }
+                    clearInterval(pollInterval);
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }, 1000);
+    });
+</script>

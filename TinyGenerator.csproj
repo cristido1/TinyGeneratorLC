@@ -10,6 +10,8 @@
     <!-- Semantic Kernel packages required by the original Program.cs -->
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.19.0" />
     <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.19.0-alpha" />
+    <!-- SQLite provider used by CostController -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="7.1.7" />
   <!-- NOTE: sqlite memory package omitted — if memory store package is required, we'll add the correct package id/version after checking NuGet. -->
   </ItemGroup>
 </Project>

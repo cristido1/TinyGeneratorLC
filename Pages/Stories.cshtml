@@ -1,0 +1,58 @@
+@page
+@model TinyGenerator.Pages.StoriesModel
+@{
+    ViewData["Title"] = "Storie salvate";
+}
+
+<h1>Storie salvate</h1>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Id</th>
+            <th>Timestamp</th>
+            <th>Prompt</th>
+            <th>Model A</th>
+            <th>Score A</th>
+            <th>Model B</th>
+            <th>Score B</th>
+            <th>Approved</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+@foreach(var s in Model.Stories) {
+        <tr>
+            <td>@s.Id</td>
+            <td>@s.Timestamp</td>
+            <td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">@s.Prompt</td>
+            <td>@s.ModelA</td>
+            <td>@s.ScoreA</td>
+            <td>@s.ModelB</td>
+            <td>@s.ScoreB</td>
+            <td>@(s.Approved ? "✅" : "❌")</td>
+            <td>
+                <form method="post" asp-route-id="@s.Id" onsubmit="return confirm('Eliminare la storia?');">
+                    <button type="submit" class="btn btn-sm btn-danger">Elimina</button>
+                </form>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="7">
+                <details>
+                    <summary>Apri dettagli</summary>
+                    <h5>Storia A (model: @s.ModelA, score: @s.ScoreA)</h5>
+                    <pre style="white-space: pre-wrap">@s.StoryA</pre>
+                    <h6>Valutazioni A</h6>
+                    <pre style="white-space: pre-wrap">@s.EvalA</pre>
+
+                    <h5>Storia B (model: @s.ModelB, score: @s.ScoreB)</h5>
+                    <pre style="white-space: pre-wrap">@s.StoryB</pre>
+                    <h6>Valutazioni B</h6>
+                    <pre style="white-space: pre-wrap">@s.EvalB</pre>
+                </details>
+            </td>
+        </tr>
+}
+    </tbody>
+</table>

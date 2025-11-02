@@ -1,0 +1,19 @@
+- Obiettivo del programma è generare dei file audio lunghi almeno 10 minuti con una storia parlata con una voce per il narratore e una voce per ciascun personaggio, poi vengono aggiunti i rumori ambientali, poi gli effetti sonori, poi la musica nei momenti salienti che non deve superare il 30% della durata dell'audio.
+- per fare questo usiamo degli agenti semantic kernel con skill e memoria.
+- Lista agenti
+  - 2 Agenti Scrittori con prompt iniziale diverso, possibilmente due modelli diversi
+    
+    Nota sul flusso di scrittura (multi-pass per storie lunghe): lo scrittore non riesce a produrre una storia lunga in un'unica passata. Procedura consigliata:
+    - Decidere genere, sottogenere, stile, ambientazione e scrivere una descrizione breve della storia.
+    - Generare una traccia di 6-8 capitoli con il dettaglio sintetico di ciò che deve succedere in ciascun capitolo. Salvare questa traccia.
+    - Scrivere il primo capitolo con narrazione e dialoghi, avendo come input l'intera traccia dei capitoli. Salvare il primo capitolo e produrre un breve riassunto di quanto accaduto.
+    - Per ogni capitolo successivo: usare la traccia completa + i riassunti dei capitoli precedenti (incluso il riassunto dell'ultimo capitolo scritto) come contesto per generare il capitolo successivo; salvare il capitolo e aggiornare il riassunto cumulativo.
+    - Conservare la traccia e i riassunti nella memoria in modo che gli agenti possano riferirsi allo stato corrente della storia durante la generazione.
+  - 2 Agenti Valutatori con prompt diverso per valutare aspetti diversi della storia. Possibilmente con due modelli diversi. Se la media delle due valutazioni è inferiore a 7 (da 7 a 10) la storia viene scartata e riscritta. Vanno avanti solo le storie con punteggio superiore a 7.
+  - 1 Agente Vocale che si occupa di utilizzare il motore tts esterno per assegnare le voci e generare i colloqui con l'enfasi del momento e aumentando velocità e volume delle voci a seconda del contesto, se una persona parla ma ad esempio ad un certo momento si innervosisce, va spezzato laudio in due per gestire la maggiore enfasi. Questa fase genera dei files audio per la storia. Questo agente deve anche fare una mappa indicativa con il timing della storia, ad esempio i primi 8 secondi dedicati a sigla iniziale e lettura del titolo, poi prende un file audio alla avolta e ne calcola la lunghezza e mette una pausa a seconda del contesto tra una frase ed un'altra. Quindi l'agente vocale genera un json con scena, colloqui con timing di durata.
+  - 1 Agente agli effetti ambientali legge il json che ha generato l'agente vocale e usa audiocraft per generare il sottofondo ambientale delle scene usando il timing del file json.
+  - 1 Agente agli effetti speciali che legge il json e se trova dei punti in cui mettere dei rumori particolari, ad esempio un colpo di pistola o una porta che sbatte, lui li genera e li aggiunge al json con la tempistica esatta in cui farli partire.
+  - 1 Agenge musicale che legge il json ed i dialoghi contenuti, legge il genere e sottogenere della storia e valuta che stile di musica usare, preferendo quella orchestrale che va sempre bene, e piazza nei momenti più salienti la musica adatta, triste, allegra, di tensione, di mistero... cercando di mantenere uno stile nella storia e riutilizzando la musica usata prima se possibile. La musica non deve coprire più del 30% della storia.
+  - 1 Agente Mixer che legge il json e mixa le tracce della voce, effetti ambientali, effetti sonori, musica in un unico file audio, il file audio va messo nella cartella data dell'applicazione, seguendo le seguenti regole:
+     - Le voci si devono sentire bene, se c'è la musica si abbassa a zero il rumore dei suoni ambientali. Gli effetti sonori hanno un volume indipendente che dipende dalla natura, uno sparo di pistola deve avere un volume altissimo.
+ 

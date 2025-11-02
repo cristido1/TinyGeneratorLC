@@ -3,115 +3,421 @@ using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.Connectors.Ollama;
 using Microsoft.SemanticKernel.Memory;
+using Microsoft.SemanticKernel.Planning;
 using System.Diagnostics;
+using System.Linq;
 
-public class StoryGeneratorService
+namespace TinyGenerator.Services
 {
-    private readonly IKernel _kernel;
-    private readonly string _collection = "storie";
-    private readonly string _outputPath = "wwwroot/story_output.txt";
-
-    public StoryGeneratorService(IKernel kernel)
+    public class StoryGeneratorService
     {
-        _kernel = kernel;
-    }
+        private readonly IKernel _kernel;
+        private readonly CostController _cost;
+        private readonly StoriesService _stories;
+    private readonly HandlebarsPlanner _planner;
+    private readonly PersistentMemoryService _persistentMemory;
+    private readonly PlannerExecutor _plannerExecutor;
+        private readonly string _collection = "storie";
+        private readonly string _outputPath = "wwwroot/story_output.txt";
+        private readonly Dictionary<string, string> _currentStoryMemory = new Dictionary<string, string>();
 
-    public async Task<string> GenerateAsync(string theme)
-    {
-        const int MIN_CHARS = 20000;
-        const double MIN_SCORE = 7.0;
-        progress("Inizializzazione agenti, 2 scrittori e 2 valutatori...");
-        var writerA = MakeAgent("WriterA", "Scrittore bilanciato", "Scrivi storie coerenti senza premesse.");
-        var writerB = MakeAgent("WriterB", "Scrittore emotivo", "Stile intenso, narrativo e diretto.");
-        var evaluator1 = MakeAgent("Evaluator1", "Coerenza", "Valuta coerenza e struttura. Rispondi JSON: {\"score\":<1-10>}");
-        var evaluator2 = MakeAgent("Evaluator2", "Stile", "Valuta stile e ritmo. Rispondi JSON: {\"score\":<1-10>}");
-
-        var prompt = $"""
-Scrivi una storia lunga in italiano sul tema: {theme}
-Requisiti:
-- Almeno {MIN_CHARS} caratteri
-- Finale chiuso
-- NO premesse o riassunti
-""";
-
-        var storiaA = await Ask(writerA, prompt);
-        var storiaB = await Ask(writerB, prompt);
-
-        storiaA = await ExtendUntil(storiaA, MIN_CHARS, writerA);
-        storiaB = await ExtendUntil(storiaB, MIN_CHARS, writerB);
-
-        var scoreA = await GetScore(storiaA, evaluator1, evaluator2);
-        var scoreB = await GetScore(storiaB, evaluator1, evaluator2);
-
-        string approvata = "";
-        if (scoreA >= MIN_SCORE)
+        public StoryGeneratorService(IKernel kernel, CostController cost, StoriesService stories, PersistentMemoryService persistentMemory, PlannerExecutor plannerExecutor)
         {
-            approvata = storiaA;
-        }
-        else if (scoreB >= MIN_SCORE)
-        {
-            approvata = storiaB;
+            _kernel = kernel;
+            _cost = cost;
+            _stories = stories;
+            _planner = new HandlebarsPlanner(_kernel);
+            _persistentMemory = persistentMemory;
+            _plannerExecutor = plannerExecutor;
         }
 
-        if (!string.IsNullOrEmpty(approvata))
+        public class GenerationResult
         {
-            await File.WriteAllTextAsync(_outputPath, approvata);
-            await _kernel.Memory.SaveInformationAsync(_collection, approvata, Guid.NewGuid().ToString());
-            return approvata;
+            public string StoryA { get; set; } = string.Empty;
+            public string EvalA { get; set; } = string.Empty;
+            public double ScoreA { get; set; }
+
+            public string ModelA { get; set; } = string.Empty;
+
+            public string StoryB { get; set; } = string.Empty;
+            public string EvalB { get; set; } = string.Empty;
+            public double ScoreB { get; set; }
+
+            public string ModelB { get; set; } = string.Empty;
+
+            public string? Approved { get; set; }
+            public string Message { get; set; } = string.Empty;
         }
-        else
+
+        public async Task<GenerationResult> GenerateStoryAsync(string theme, Action<string> progress)
         {
-            return "Entrambe le storie sono state bocciate.";
+            const int MIN_CHARS = 3000;
+            const double MIN_SCORE = 7.0;
+            progress?.Invoke("Inizializzazione agenti e planner...");
+            _cost?.ResetRunCounters();
+            _currentStoryMemory.Clear(); // Clear previous story memory
+            // qwen2.5:14b-instruct-q4_K_M,mistral-nemo:12b-instruct-2407-q4_K_M
+            var writerModelA = "phi3:3.8b-mini-4k-instruct-q4_K_M";
+            var writerModelB = "mistral:7b-instruct-q4_K_M";
+            // Diagnostic: print configured models for agents to ensure correct mapping
+            try { Console.WriteLine($"[StoryGen] Configured writerModelA={writerModelA}, writerModelB={writerModelB}"); } catch { }
+            var writerA = MakeAgent("WriterA", "Scrittore bilanciato", "Sei uno scrittore esperto. Scrivi in italiano, coerente e ben strutturata. Evita ripetizioni.", writerModelA);
+            var writerB = MakeAgent("WriterB", "Scrittore emotivo", "Sei un narratore emotivo. Scrivi in italiano coinvolgente, evita ripetizioni.", writerModelB);
+            var evaluator1 = MakeAgent("Evaluator1", "Coerenza", "Valuta coerenza e struttura. Rispondi JSON: {\"score\":<1-10>}", "qwen2.5:3b");
+            var evaluator2 = MakeAgent("Evaluator2", "Stile", "Valuta stile e ritmo. Rispondi JSON: {\"score\":<1-10>}", "llama3.2:3b");
+
+            // Create plan for the theme
+            var plan = await _planner.CreatePlanAsync($"Genera una storia completa sul tema: {theme}");
+
+            // Use PlannerExecutor which will run the plan for each writer and report per-step progress
+            var memoryKey = Guid.NewGuid().ToString();
+            var candidateStories = new Dictionary<string, string>();
+
+            // --- Writer A: use PlannerExecutor (planner-driven steps) ---
+            {
+                var writer = writerA;
+                var agentMemoryKey = $"{writer.Name}_{memoryKey}";
+                progress?.Invoke($"{writer.Name}: avvio esecuzione piano...");
+                var assembled = await _plannerExecutor.ExecutePlanForAgentAsync(writer, plan, agentMemoryKey, msg => progress?.Invoke(msg));
+                if (string.IsNullOrWhiteSpace(assembled)) assembled = string.Empty;
+                assembled = await EnsureCoherent(assembled, writer, $"Storia completa sul tema: {theme}");
+                assembled = await ExtendUntil(assembled, MIN_CHARS, writer);
+                candidateStories[writer.Name] = assembled;
+            }
+
+            // --- Writer B: use the FreeWriterPlanner (autonomous planner) ---
+            {
+                var writer = writerB;
+                var agentMemoryKey = $"{writer.Name}_{memoryKey}";
+                progress?.Invoke($"{writer.Name}: avvio FreeWriterPlanner...");
+
+                var freePlanner = new FreeWriterPlanner(_kernel);
+                // prefix progress messages with agent name so UI can distinguish
+                var assembledRaw = await freePlanner.RunAsync(theme, agentMemoryKey, writer, msg => progress?.Invoke($"{writer.Name}|freeplanner|{msg}"));
+
+                // Extract MEMORY-JSON blocks from the returned text and save as chapters if present
+                var chapParts = new List<string>();
+                try
+                {
+                    var rx = new System.Text.RegularExpressions.Regex("---MEMORY-JSON---\\s*(\\{[\\s\\S]*?\\})\\s*---END-MEMORY---", System.Text.RegularExpressions.RegexOptions.Singleline);
+                    var matches = rx.Matches(assembledRaw ?? string.Empty);
+                    int chap = 1;
+                    foreach (System.Text.RegularExpressions.Match m in matches)
+                    {
+                        var json = m.Groups[1].Value;
+                        try
+                        {
+                            using var doc = System.Text.Json.JsonDocument.Parse(json);
+                            var root = doc.RootElement;
+                            var content = root.GetProperty("content").GetString() ?? string.Empty;
+                            chapParts.Add(content);
+                            try { _stories?.SaveChapter(agentMemoryKey, chap, content); } catch { }
+                            chap++;
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+
+                var assembled = chapParts.Count > 0 ? string.Join("\n\n", chapParts) : assembledRaw ?? string.Empty;
+                assembled = await EnsureCoherent(assembled, writer, $"Storia completa sul tema: {theme}");
+                assembled = await ExtendUntil(assembled, MIN_CHARS, writer);
+                candidateStories[writer.Name] = assembled;
+            }
+
+            // pick candidate stories produced by writers
+            var storiaA = candidateStories.ContainsKey(writerA.Name) ? candidateStories[writerA.Name] : string.Empty;
+            var storiaB = candidateStories.ContainsKey(writerB.Name) ? candidateStories[writerB.Name] : string.Empty;
+
+            // Evaluate both candidate stories produced by writers (use helper to keep code tidy)
+            var (scoreA, evalACombined) = await EvaluateAsync(storiaA, evaluator1, evaluator2);
+            var (scoreB, evalBCombined) = await EvaluateAsync(storiaB, evaluator1, evaluator2);
+
+            var result = new GenerationResult
+            {
+                StoryA = storiaA,
+                EvalA = evalACombined,
+                ScoreA = scoreA,
+                ModelA = writerModelA,
+                StoryB = storiaB,
+                EvalB = evalBCombined,
+                ScoreB = scoreB,
+                ModelB = writerModelB
+            };
+
+            if (scoreA >= MIN_SCORE)
+            {
+                result.Approved = storiaA;
+                result.Message = "Story A approvata.";
+            }
+            else if (scoreB >= MIN_SCORE)
+            {
+                result.Approved = storiaB;
+                result.Message = "Story B approvata.";
+            }
+            else
+            {
+                result.Approved = null;
+                result.Message = "Entrambe le storie sono state bocciate.";
+            }
+
+            if (!string.IsNullOrEmpty(result.Approved))
+            {
+                await File.WriteAllTextAsync(_outputPath, result.Approved);
+                try { await _kernel.Memory.SaveInformationAsync(_collection, result.Approved, Guid.NewGuid().ToString()); } catch { }
+            }
+
+            try { _stories?.SaveGeneration(theme, result); } catch { }
+
+            return result;
         }
-    }
 
-    private ChatCompletionAgent MakeAgent(string name, string desc, string sys) =>
-        new ChatCompletionAgent(name, _kernel, desc) { Instructions = sys };
+        private ChatCompletionAgent MakeAgent(string name, string desc, string sys, string? model = null) =>
+            new ChatCompletionAgent(name, _kernel, desc, model) { Instructions = sys };
 
-    private async Task<string> Ask(ChatCompletionAgent agent, string input)
-    {
-        var result = await agent.InvokeAsync(input);
-        return string.Join("\n", result.Select(x => x.Content));
-    }
-
-    private async Task<string> ExtendUntil(string text, int minChars, ChatCompletionAgent writer)
-    {
-        int rounds = 0;
-        while (text.Length < minChars && rounds++ < 6)
+        private async Task<string> Ask(ChatCompletionAgent agent, string input)
         {
-            var prompt = $"""
+            var result = await agent.InvokeAsync(input);
+            var content = string.Join("\n", result.Select(x => x.Content));
+
+            try
+            {
+                // record call with token estimates if CostController is available
+                if (_cost != null)
+                {
+                    var reqTokens = _cost.EstimateTokensFromText(input);
+                    var resTokens = _cost.EstimateTokensFromText(content);
+                    var total = reqTokens + resTokens;
+                    var model = agent.Model ?? "ollama";
+                    var provider = model.Split(':')[0];
+                    var cost = _cost.EstimateCost(provider, total);
+                    _cost.RecordCall(model, total, cost, input, content);
+                }
+            }
+            catch { /* don't fail on logging */ }
+
+            return content;
+        }
+
+        private async Task<string> ExtendUntil(string text, int minChars, ChatCompletionAgent writer)
+        {
+            int rounds = 0;
+            while (text.Length < minChars && rounds++ < 6)
+            {
+                var prompt = $"""
 Continua la storia da dove si era interrotta.
 NO riassunti, NO ripetizioni.
 Contesto:
 {text[^Math.Min(4000, text.Length)..]}
 """;
-            var extra = await Ask(writer, prompt);
-            if (extra.Length < 500) break;
-            text += "\n\n" + extra;
+                var extra = await Ask(writer, prompt);
+                // if the continuation looks gibberish/repetitive, stop extending
+                if (extra.Length < 500) break;
+                if (IsLikelyGibberish(extra)) break;
+                text += "\n\n" + extra;
+            }
+            return text;
         }
-        return text;
-    }
 
-    private async Task<double> GetScore(string story, ChatCompletionAgent eval1, ChatCompletionAgent eval2)
-    {
-        var j1 = await Ask(eval1, story);
-        var j2 = await Ask(eval2, story);
-        return (ParseScore(j1) + ParseScore(j2)) / 2;
-    }
-
-    private double ParseScore(string json)
-    {
-        try
+        // attempt to detect high repetition / gibberish and retry generation with an explicit hint
+        private async Task<string> EnsureCoherent(string initial, ChatCompletionAgent writer, string originalPrompt)
         {
-            var i = json.IndexOf("\"score\"");
-            if (i < 0) return 0;
-            var part = json[(i + 7)..];
-            var colon = part.IndexOf(':');
-            var val = part[(colon + 1)..].Trim();
-            var num = new string(val.TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());
-            return double.TryParse(num, System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+            var text = initial ?? string.Empty;
+            int attempts = 0;
+            while (attempts++ < 3)
+            {
+                if (!IsLikelyGibberish(text)) return text;
+                // ask to regenerate with explicit instruction avoiding repetition
+                var regenHint = originalPrompt + "\n\nRIGENERA la storia evitando ripetizioni, producendo frasi complete e un flusso narrativo coerente. Non ripetere parole o blocchi di testo.\n";
+                text = await Ask(writer, regenHint);
+            }
+            return text;
         }
-        catch { return 0; }
+
+        // crude heuristic: low ratio of unique words => repetition/gibberish
+        private bool IsLikelyGibberish(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return true;
+            var words = text.Split((char[])null!, StringSplitOptions.RemoveEmptyEntries).Select(w => w.Trim().ToLowerInvariant()).ToArray();
+            if (words.Length < 20) return true; // too short to be a full story
+            var unique = words.Distinct().Count();
+            double uniqRatio = (double)unique / words.Length;
+            if (uniqRatio < 0.45) return true; // too repetitive
+            // detect model outputs that are a sequence of short 'commands' like "Scrivi ..." repeated
+            var scriviCount = words.Count(w => w == "scrivi");
+            if ((double)scriviCount / words.Length > 0.02) return true;
+            // also check for repeated single-word tokens (e.g., "mare mare mare")
+            var repeats = words.Where((w, i) => i > 0 && w == words[i - 1]).Count();
+            if ((double)repeats / words.Length > 0.06) return true;
+            return false;
+        }
+
+        private async Task<double> GetScore(string story, ChatCompletionAgent eval1, ChatCompletionAgent eval2)
+        {
+            var j1 = await Ask(eval1, story);
+            var j2 = await Ask(eval2, story);
+            return (ParseScore(j1) + ParseScore(j2)) / 2;
+        }
+
+        private double ParseScore(string json)
+        {
+            try
+            {
+                var i = json.IndexOf("\"score\"");
+                if (i < 0) return 0;
+                var part = json[(i + 7)..];
+                var colon = part.IndexOf(':');
+                var val = part[(colon + 1)..].Trim();
+                var num = new string(val.TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());
+                return double.TryParse(num, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+            }
+            catch { return 0; }
+        }
+
+        // Helper: ask multiple evaluators and return average score and combined responses
+        private async Task<(double averageScore, string combinedResponses)> EvaluateAsync(string story, params ChatCompletionAgent[] evaluators)
+        {
+            if (evaluators == null || evaluators.Length == 0) return (0.0, string.Empty);
+            double total = 0.0;
+            var parts = new List<string>();
+            foreach (var ev in evaluators)
+            {
+                try
+                {
+                    var res = await Ask(ev, story);
+                    parts.Add(res);
+                    var parsed = ParseScore(res);
+                    total += parsed;
+                    try { Console.WriteLine($"[Evaluate] {ev.Name} -> score={parsed:F2} model={ev.Model ?? "?"} responsePreview={res.Substring(0, Math.Min(200, res.Length)).Replace('\n',' ')}"); } catch { }
+                }
+                catch (Exception ex)
+                {
+                    parts.Add($"ERROR from {ev.Name}: {ex.Message}");
+                    try { Console.WriteLine($"[Evaluate] ERROR from {ev.Name}: {ex.Message}"); } catch { }
+                }
+            }
+            var avg = evaluators.Length > 0 ? total / evaluators.Length : 0.0;
+            return (avg, string.Join("\n", parts));
+        }
+
+        private string BuildPromptForStep(PlanStep step, string theme, string memoryKey)
+        {
+            var basePrompt = $"Tema: {theme}\nPasso: {step.Description}\n";
+            if (step.Description.Contains("trama"))
+            {
+                return basePrompt + "Crea una trama dettagliata suddivisa in 6 capitoli. Descrivi brevemente ciascun capitolo. Nello scrivere la storia mantieniti nei lilmiti delle tue regole di generazione storie in ambito di violenza e volgarità, ma non fare storie noiose.";
+            }
+            else if (step.Description.Contains("personaggi"))
+            {
+                return basePrompt + "Definisci i personaggi principali e i loro caratteri.";
+            }
+            else if (step.Description.Contains("primo capitolo"))
+            {
+                return basePrompt + "Scrivi il primo capitolo, con narratore e dialoghi.";
+            }
+            else if (step.Description.Contains("riassunto") && step.Description.Contains("primo"))
+            {
+                return basePrompt + "Fai un riassunto di quello che è successo nel primo capitolo.";
+            }
+            else if (step.Description.Contains("secondo capitolo"))
+            {
+                var context = GetMemoryContext(memoryKey, new[] { "trama", "personaggi", "riassunto primo capitolo" });
+                return basePrompt + $"Contesto:\n{context}\nScrivi il secondo capitolo.";
+            }
+            else if (step.Description.Contains("terzo capitolo"))
+            {
+                var context = GetMemoryContext(memoryKey, new[] { "trama", "personaggi", "riassunto cumulativo" });
+                return basePrompt + $"Contesto:\n{context}\nScrivi il terzo capitolo.";
+            }
+            else if (step.Description.Contains("quarto capitolo"))
+            {
+                var context = GetMemoryContext(memoryKey, new[] { "trama", "personaggi", "riassunto cumulativo" });
+                return basePrompt + $"Contesto:\n{context}\nScrivi il quarto capitolo.";
+            }
+            else if (step.Description.Contains("quinto capitolo"))
+            {
+                var context = GetMemoryContext(memoryKey, new[] { "trama", "personaggi", "riassunto cumulativo" });
+                return basePrompt + $"Contesto:\n{context}\nScrivi il quinto capitolo.";
+            }
+            else if (step.Description.Contains("sesto capitolo"))
+            {
+                var context = GetMemoryContext(memoryKey, new[] { "trama", "personaggi", "riassunto cumulativo" });
+                return basePrompt + $"Contesto:\n{context}\nScrivi il sesto capitolo.";
+            }
+            else if (step.Description.Contains("aggiornare riassunto") && step.Description.Contains("secondo"))
+            {
+                var context = GetMemoryContext(memoryKey, new[] { "riassunto cumulativo", "capitolo 2" });
+                return basePrompt + $"Contesto:\n{context}\nAggiorna il riassunto cumulativo aggiungendo il riassunto del secondo capitolo.";
+            }
+            else if (step.Description.Contains("aggiornare riassunto") && step.Description.Contains("terzo"))
+            {
+                var context = GetMemoryContext(memoryKey, new[] { "riassunto cumulativo", "capitolo 3" });
+                return basePrompt + $"Contesto:\n{context}\nAggiorna il riassunto cumulativo aggiungendo il riassunto del terzo capitolo.";
+            }
+            // Similar for others
+            else if (step.Description.Contains("aggiornare riassunto"))
+            {
+                var chapterNum = ExtractChapterNumber(step.Description);
+                var context = GetMemoryContext(memoryKey, new[] { "riassunto cumulativo", $"capitolo {chapterNum}" });
+                return basePrompt + $"Contesto:\n{context}\nAggiorna il riassunto cumulativo aggiungendo il riassunto del capitolo {chapterNum}.";
+            }
+            return basePrompt;
+        }
+
+        private int ExtractChapterNumber(string desc)
+        {
+            var words = desc.Split(' ');
+            foreach (var word in words)
+            {
+                if (int.TryParse(word, out var num)) return num;
+            }
+            return 1;
+        }
+
+        private string GetMemoryContext(string agentMemoryKey, string[] keys)
+        {
+            var context = new List<string>();
+            foreach (var key in keys)
+            {
+                var composite = $"{agentMemoryKey}_{key}";
+                if (_currentStoryMemory.TryGetValue(composite, out var value))
+                {
+                    context.Add($"{key}: {value}");
+                }
+            }
+            return string.Join("\n", context);
+        }
+
+        private async Task SaveToMemory(string agentName, string agentMemoryKey, string key, string content)
+        {
+            var composite = $"{agentMemoryKey}_{key}";
+            _currentStoryMemory[composite] = content;
+            try
+            {
+                // save both agent-scoped and generic entry
+                await _kernel.Memory.SaveInformationAsync(_collection, $"{agentName}:{key}: {content}", $"{agentMemoryKey}_{key}");
+            }
+            catch { }
+        }
+
+        private string GetKeyForStep(string description)
+        {
+            if (description.Contains("trama")) return "trama";
+            if (description.Contains("personaggi")) return "personaggi";
+            if (description.Contains("primo capitolo")) return "capitolo 1";
+            if (description.Contains("riassunto") && description.Contains("primo")) return "riassunto primo capitolo";
+            if (description.Contains("secondo capitolo")) return "capitolo 2";
+            if (description.Contains("aggiornare riassunto") && description.Contains("secondo")) return "riassunto cumulativo";
+            if (description.Contains("terzo capitolo")) return "capitolo 3";
+            if (description.Contains("aggiornare riassunto") && description.Contains("terzo")) return "riassunto cumulativo";
+            if (description.Contains("quarto capitolo")) return "capitolo 4";
+            if (description.Contains("aggiornare riassunto") && description.Contains("quarto")) return "riassunto cumulativo";
+            if (description.Contains("quinto capitolo")) return "capitolo 5";
+            if (description.Contains("aggiornare riassunto") && description.Contains("quinto")) return "riassunto cumulativo";
+            if (description.Contains("sesto capitolo")) return "capitolo 6";
+            if (description.Contains("aggiornare riassunto") && description.Contains("sesto")) return "riassunto cumulativo";
+            return description;
+        }
     }
-} 
+}

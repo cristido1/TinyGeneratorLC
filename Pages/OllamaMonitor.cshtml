@@ -1,0 +1,54 @@
+@page
+@model TinyGenerator.Pages.OllamaMonitorModel
+@{
+    ViewData["Title"] = "Ollama Monitor";
+}
+
+<h1>Ollama Monitor</h1>
+
+<p>Questa pagina mostra i modelli caricati da Ollama (aggiornamento automatico ogni 20s). Viene anche mostrato l'ultimo prompt inviato per ciascun modello dall'app.</p>
+
+<button id="refreshBtn" class="btn btn-sm btn-primary">Aggiorna</button>
+<table class="table mt-2">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Id</th>
+            <th>Size</th>
+            <th>Processor</th>
+            <th>Context</th>
+            <th>Until</th>
+            <th>Last prompt (preview)</th>
+        </tr>
+    </thead>
+    <tbody id="tblBody">
+    </tbody>
+</table>
+
+<script>
+    async function fetchModels() {
+        try {
+            const res = await fetch('/OllamaMonitor?handler=Models');
+            if (!res.ok) return;
+            const models = await res.json();
+            const body = document.getElementById('tblBody');
+            body.innerHTML = '';
+            for (const m of models) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td>${m.name}</td><td>${m.id}</td><td>${m.size}</td><td>${m.processor}</td><td>${m.context}</td><td>${m.until}</td><td><button class='btn btn-sm btn-link' data-prompt='${encodeURIComponent(m.lastPrompt)}'>Preview</button> ${m.lastPrompt ? m.lastPrompt.substring(0,200) : ''}</td>`;
+                body.appendChild(row);
+            }
+            // attach click handlers for preview buttons
+            document.querySelectorAll('#tblBody button[data-prompt]').forEach(b => {
+                b.addEventListener('click', e => {
+                    const btn = e.currentTarget;
+                    const p = decodeURIComponent(btn.getAttribute('data-prompt') || '');
+                    alert(p || 'No prompt recorded');
+                });
+            });
+        } catch (e) { console.error(e); }
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', () => fetchModels());
+    setInterval(fetchModels, 20000);
+</script>

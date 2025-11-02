@@ -1,0 +1,44 @@
+@page
+@model TinyGenerator.Pages.AdminModel
+@{
+    ViewData["Title"] = "Controllo costi";
+}
+
+<h1>Controllo costi</h1>
+
+<section>
+    <h2>Utilizzo mese corrente</h2>
+    <p>Token usati: @Model.TokensThisMonth</p>
+    <p>Costo stimato: @Model.CostThisMonth €</p>
+</section>
+
+<section>
+    <h2>Ultime chiamate</h2>
+    <table style="width:100%; border-collapse: collapse;">
+        <thead>
+            <tr>
+                <th style="border-bottom:1px solid #ccc; text-align:left;">Id</th>
+                <th style="border-bottom:1px solid #ccc; text-align:left;">Timestamp</th>
+                <th style="border-bottom:1px solid #ccc; text-align:left;">Model</th>
+                <th style="border-bottom:1px solid #ccc; text-align:right;">Tokens</th>
+                <th style="border-bottom:1px solid #ccc; text-align:right;">Cost</th>
+            </tr>
+        </thead>
+        <tbody>
+@foreach(var c in Model.Calls) {
+            <tr>
+                <td style="padding:6px 4px; border-bottom:1px solid #eee;">@c.Id</td>
+                <td style="padding:6px 4px; border-bottom:1px solid #eee;">@c.Timestamp</td>
+                <td style="padding:6px 4px; border-bottom:1px solid #eee;">@c.Model</td>
+                <td style="padding:6px 4px; border-bottom:1px solid #eee; text-align:right;">@c.Tokens</td>
+                <td style="padding:6px 4px; border-bottom:1px solid #eee; text-align:right;">@c.Cost</td>
+            </tr>
+}
+        </tbody>
+    </table>
+</section>
+
+<section>
+    <h2>Dettaglio chiamata</h2>
+    <p>Seleziona un Id dalle ultime chiamate e visualizza request/response (console o API).</p>
+</section>

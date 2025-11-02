@@ -52,7 +52,7 @@ namespace TinyGenerator.Pages
             if (req.Context <= 0) req.Context = 8192;
             var nameArg = instanceName + $"-{req.Context}";
 
-            string RunCommand(string cmd, string args, int timeoutMs = 60000)
+            (bool Success, string Output, int ExitCode) RunCommand(string cmd, string args, int timeoutMs = 60000)
             {
                 try
                 {
@@ -63,26 +63,49 @@ namespace TinyGenerator.Pages
                         UseShellExecute = false
                     };
                     using var p = System.Diagnostics.Process.Start(psi);
-                    if (p == null) return "Could not start process";
+                    if (p == null) return (false, "Could not start process", -1);
                     p.WaitForExit(timeoutMs);
                     var outp = p.StandardOutput.ReadToEnd();
                     var err = p.StandardError.ReadToEnd();
-                    return outp + (string.IsNullOrEmpty(err) ? string.Empty : "\nERR:" + err);
+                    var combined = outp + (string.IsNullOrEmpty(err) ? string.Empty : "\nERR:" + err);
+                    return (p.ExitCode == 0, combined, p.ExitCode);
                 }
                 catch (Exception ex)
                 {
-                    return "EX:" + ex.Message;
+                    return (false, "EX:" + ex.Message, -1);
                 }
             }
 
             // attempt to stop any running instance of this model (best-effort)
-            var stopOut = RunCommand("ollama", $"stop \"{modelRef}\"");
+            var stopRes = RunCommand("ollama", $"stop \"{modelRef}\"");
 
-            // try to run the model with requested context
-            var runArgs = $"run \"{modelRef}\" --context {req.Context} --name \"{nameArg}\" --keep";
-            var runOut = RunCommand("ollama", runArgs, 2 * 60 * 1000);
+            // Check help to see if --context is supported
+            var helpRes = RunCommand("ollama", "run --help");
+            var useContextFlag = helpRes.Output != null && helpRes.Output.Contains("--context");
 
-            return new JsonResult(new { success = true, stopOutput = stopOut, runOutput = runOut });
+            string resultOut;
+            (bool Success, string Output, int ExitCode) runRes;
+            if (useContextFlag)
+            {
+                var runArgs = $"run \"{modelRef}\" --context {req.Context} --name \"{nameArg}\" --keep";
+                runRes = RunCommand("ollama", runArgs, 2 * 60 * 1000);
+                resultOut = stopRes.Output + "\n" + runRes.Output;
+                if (!runRes.Success && runRes.Output != null && runRes.Output.Contains("unknown flag"))
+                {
+                    var fallbackArgs = $"run \"{modelRef}\" --name \"{nameArg}\" --keep";
+                    var fallback = RunCommand("ollama", fallbackArgs, 2 * 60 * 1000);
+                    resultOut += "\nFALLBACK:\n" + fallback.Output;
+                    runRes = fallback;
+                }
+            }
+            else
+            {
+                var runArgs = $"run \"{modelRef}\" --name \"{nameArg}\" --keep";
+                runRes = RunCommand("ollama", runArgs, 2 * 60 * 1000);
+                resultOut = stopRes.Output + "\n" + helpRes.Output + "\n" + runRes.Output;
+            }
+
+            return new JsonResult(new { success = runRes.Success, stopOutput = stopRes.Output, runOutput = resultOut });
         }
 
         public class StartContextRequest { public string Model { get; set; } = string.Empty; public int Context { get; set; } = 8192; }

@@ -85,7 +85,7 @@ namespace Microsoft.SemanticKernel.Agents
         static ChatCompletionAgent()
         {
             // Default timeout in seconds (stories/chapters can take a while). Use a generous default
-            var defaultTimeout = 300; // 5 minutes
+            var defaultTimeout = 900; // 15 minutes
             var minTimeout = 30; // don't accept very small timeouts
             var timeoutEnv = Environment.GetEnvironmentVariable("OLLAMA_TIMEOUT_SECONDS");
             if (!int.TryParse(timeoutEnv, out var timeoutSec) || timeoutSec <= 0)

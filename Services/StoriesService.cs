@@ -48,6 +48,7 @@ public sealed class StoriesService
 CREATE TABLE IF NOT EXISTS stories_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     generation_id TEXT,
+    memory_key TEXT,
     ts TEXT,
     prompt TEXT,
     writer TEXT,
@@ -81,8 +82,9 @@ CREATE TABLE IF NOT EXISTS stories_new (
                             var genId = Guid.NewGuid().ToString();
 
                             using var insA = conn.CreateCommand();
-                            insA.CommandText = "INSERT INTO stories_new(generation_id, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$ts,$p,'A',$c,$m,$e,$s,$ap,$st);";
+                            insA.CommandText = "INSERT INTO stories_new(generation_id, memory_key, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$mk,$ts,$p,'A',$c,$m,$e,$s,$ap,$st);";
                             insA.Parameters.AddWithValue("$gid", genId);
+                            insA.Parameters.AddWithValue("$mk", genId);
                             insA.Parameters.AddWithValue("$ts", oldTs);
                             insA.Parameters.AddWithValue("$p", oldPrompt);
                             insA.Parameters.AddWithValue("$c", storyA);
@@ -94,8 +96,9 @@ CREATE TABLE IF NOT EXISTS stories_new (
                             insA.ExecuteNonQuery();
 
                             using var insB = conn.CreateCommand();
-                            insB.CommandText = "INSERT INTO stories_new(generation_id, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$ts,$p,'B',$c,$m,$e,$s,$ap,$st);";
+                            insB.CommandText = "INSERT INTO stories_new(generation_id, memory_key, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$mk,$ts,$p,'B',$c,$m,$e,$s,$ap,$st);";
                             insB.Parameters.AddWithValue("$gid", genId);
+                            insB.Parameters.AddWithValue("$mk", genId);
                             insB.Parameters.AddWithValue("$ts", oldTs);
                             insB.Parameters.AddWithValue("$p", oldPrompt);
                             insB.Parameters.AddWithValue("$c", storyB);
@@ -142,6 +145,24 @@ CREATE TABLE IF NOT EXISTS stories_new (
                         upd.CommandText = "UPDATE stories SET story = content WHERE story IS NULL OR story = ''";
                         upd.ExecuteNonQuery();
                     }
+                    // Ensure memory_key column exists for linking to chapters. If missing, add it and populate with generation_id.
+                    if (!cols2.Contains("memory_key"))
+                    {
+                        try
+                        {
+                            using var addMk = conn.CreateCommand();
+                            addMk.CommandText = "ALTER TABLE stories ADD COLUMN memory_key TEXT;";
+                            addMk.ExecuteNonQuery();
+                        }
+                        catch { }
+                        try
+                        {
+                            using var updMk = conn.CreateCommand();
+                            updMk.CommandText = "UPDATE stories SET memory_key = generation_id WHERE memory_key IS NULL OR memory_key = '';";
+                            updMk.ExecuteNonQuery();
+                        }
+                        catch { }
+                    }
                 }
 
             if (needsCreate)
@@ -152,6 +173,7 @@ CREATE TABLE IF NOT EXISTS stories_new (
 CREATE TABLE IF NOT EXISTS stories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     generation_id TEXT,
+    memory_key TEXT,
     ts TEXT,
     prompt TEXT,
     writer TEXT,
@@ -198,7 +220,7 @@ CREATE TABLE IF NOT EXISTS chapters (
     }
 
     // SaveGeneration: create one generation_id and insert one row per writer (A and B) to preserve compatibility
-    public long SaveGeneration(string prompt, StoryGeneratorService.GenerationResult r)
+    public long SaveGeneration(string prompt, StoryGeneratorService.GenerationResult r, string? memoryKey = null)
     {
         lock (_lock)
         {
@@ -208,8 +230,9 @@ CREATE TABLE IF NOT EXISTS chapters (
 
             // insert WriterA row
             using var cmdA = conn.CreateCommand();
-            cmdA.CommandText = "INSERT INTO stories(generation_id, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$ts,$p,$w,$c,$m,$e,$s,$ap,$st);";
+            cmdA.CommandText = "INSERT INTO stories(generation_id, memory_key, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$mk,$ts,$p,$w,$c,$m,$e,$s,$ap,$st);";
             cmdA.Parameters.AddWithValue("$gid", genId);
+            cmdA.Parameters.AddWithValue("$mk", memoryKey ?? genId);
             cmdA.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmdA.Parameters.AddWithValue("$p", prompt ?? string.Empty);
             cmdA.Parameters.AddWithValue("$w", "A");
@@ -223,8 +246,9 @@ CREATE TABLE IF NOT EXISTS chapters (
 
             // insert WriterB row
             using var cmdB = conn.CreateCommand();
-            cmdB.CommandText = "INSERT INTO stories(generation_id, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$ts,$p,$w,$c,$m,$e,$s,$ap,$st); SELECT last_insert_rowid();";
+            cmdB.CommandText = "INSERT INTO stories(generation_id, memory_key, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$mk,$ts,$p,$w,$c,$m,$e,$s,$ap,$st); SELECT last_insert_rowid();";
             cmdB.Parameters.AddWithValue("$gid", genId);
+            cmdB.Parameters.AddWithValue("$mk", memoryKey ?? genId);
             cmdB.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
             cmdB.Parameters.AddWithValue("$p", prompt ?? string.Empty);
             cmdB.Parameters.AddWithValue("$w", "B");
@@ -236,7 +260,23 @@ CREATE TABLE IF NOT EXISTS chapters (
             cmdB.Parameters.AddWithValue("$st", string.IsNullOrEmpty(r.Approved) ? "rejected" : "approved");
             var scalar = cmdB.ExecuteScalar();
             var id = scalar == null ? 0L : Convert.ToInt64(scalar);
-            return id;
+            // insert WriterC row if present in GenerationResult
+            using var cmdC = conn.CreateCommand();
+            cmdC.CommandText = "INSERT INTO stories(generation_id, memory_key, ts, prompt, writer, story, model, eval, score, approved, status) VALUES($gid,$mk,$ts,$p,$w,$c,$m,$e,$s,$ap,$st); SELECT last_insert_rowid();";
+            cmdC.Parameters.AddWithValue("$gid", genId);
+            cmdC.Parameters.AddWithValue("$mk", memoryKey ?? genId);
+            cmdC.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+            cmdC.Parameters.AddWithValue("$p", prompt ?? string.Empty);
+            cmdC.Parameters.AddWithValue("$w", "C");
+            cmdC.Parameters.AddWithValue("$c", r.StoryC ?? string.Empty);
+            cmdC.Parameters.AddWithValue("$m", r.ModelC ?? string.Empty);
+            cmdC.Parameters.AddWithValue("$e", r.EvalC ?? string.Empty);
+            cmdC.Parameters.AddWithValue("$s", r.ScoreC);
+            cmdC.Parameters.AddWithValue("$ap", string.IsNullOrEmpty(r.Approved) ? 0 : 1);
+            cmdC.Parameters.AddWithValue("$st", string.IsNullOrEmpty(r.Approved) ? "rejected" : "approved");
+            var scalarC = cmdC.ExecuteScalar();
+            var idC = scalarC == null ? id : Convert.ToInt64(scalarC);
+            return idC;
         }
     }
 
@@ -251,6 +291,7 @@ CREATE TABLE IF NOT EXISTS chapters (
             using var cmd = conn.CreateCommand();
             cmd.CommandText = @"
 SELECT generation_id,
+       MAX(memory_key) as memory_key,
        MIN(id) as min_id,
        MIN(ts) as ts,
        MIN(prompt) as prompt,
@@ -262,6 +303,10 @@ SELECT generation_id,
       MAX(CASE WHEN writer='B' THEN eval END) as eval_b,
       MAX(CASE WHEN writer='B' THEN score END) as score_b,
       MAX(CASE WHEN writer='B' THEN model END) as model_b,
+    MAX(CASE WHEN writer='C' THEN story END) as story_c,
+    MAX(CASE WHEN writer='C' THEN eval END) as eval_c,
+    MAX(CASE WHEN writer='C' THEN score END) as score_c,
+    MAX(CASE WHEN writer='C' THEN model END) as model_c,
        MAX(approved) as approved,
        MAX(status) as status
 FROM stories
@@ -273,19 +318,24 @@ ORDER BY min_id DESC
             {
                 list.Add(new StoryRecord
                 {
-                    Id = r.IsDBNull(1) ? 0 : r.GetInt64(1),
-                    Timestamp = r.IsDBNull(2) ? string.Empty : r.GetString(2),
-                    Prompt = r.IsDBNull(3) ? string.Empty : r.GetString(3),
-                    StoryA = r.IsDBNull(4) ? string.Empty : r.GetString(4),
-                    EvalA = r.IsDBNull(5) ? string.Empty : r.GetString(5),
-                    ScoreA = r.IsDBNull(6) ? 0 : r.GetDouble(6),
-                    ModelA = r.IsDBNull(7) ? string.Empty : r.GetString(7),
-                    StoryB = r.IsDBNull(7) ? string.Empty : r.GetString(7),
-                    EvalB = r.IsDBNull(8) ? string.Empty : r.GetString(8),
-                    ScoreB = r.IsDBNull(9) ? 0 : r.GetDouble(9),
-                    ModelB = r.IsDBNull(10) ? string.Empty : r.GetString(10),
-                    Approved = !r.IsDBNull(11) && r.GetInt32(11) == 1,
-                    Status = r.IsDBNull(12) ? string.Empty : r.GetString(12)
+                    Id = r.IsDBNull(2) ? 0 : r.GetInt64(2),
+                    MemoryKey = r.IsDBNull(1) ? string.Empty : r.GetString(1),
+                    Timestamp = r.IsDBNull(3) ? string.Empty : r.GetString(3),
+                    Prompt = r.IsDBNull(4) ? string.Empty : r.GetString(4),
+                    StoryA = r.IsDBNull(5) ? string.Empty : r.GetString(5),
+                    EvalA = r.IsDBNull(6) ? string.Empty : r.GetString(6),
+                    ScoreA = r.IsDBNull(7) ? 0 : r.GetDouble(7),
+                    ModelA = r.IsDBNull(8) ? string.Empty : r.GetString(8),
+                    StoryB = r.IsDBNull(9) ? string.Empty : r.GetString(9),
+                    EvalB = r.IsDBNull(10) ? string.Empty : r.GetString(10),
+                    ScoreB = r.IsDBNull(11) ? 0 : r.GetDouble(11),
+                    ModelB = r.IsDBNull(12) ? string.Empty : r.GetString(12),
+                    StoryC = r.IsDBNull(13) ? string.Empty : r.GetString(13),
+                    EvalC = r.IsDBNull(14) ? string.Empty : r.GetString(14),
+                    ScoreC = r.IsDBNull(15) ? 0 : r.GetDouble(15),
+                    ModelC = r.IsDBNull(16) ? string.Empty : r.GetString(16),
+                    Approved = !r.IsDBNull(17) && r.GetInt32(17) == 1,
+                    Status = r.IsDBNull(18) ? string.Empty : r.GetString(18)
                 });
             }
         }
@@ -320,6 +370,7 @@ ORDER BY min_id DESC
     public class StoryRecord
     {
         public long Id { get; set; }
+        public string MemoryKey { get; set; } = string.Empty;
         public string Timestamp { get; set; } = string.Empty;
         public string Prompt { get; set; } = string.Empty;
         public string StoryA { get; set; } = string.Empty;
@@ -330,6 +381,10 @@ ORDER BY min_id DESC
         public string EvalB { get; set; } = string.Empty;
         public double ScoreB { get; set; }
         public string ModelB { get; set; } = string.Empty;
+        public string StoryC { get; set; } = string.Empty;
+        public string EvalC { get; set; } = string.Empty;
+        public double ScoreC { get; set; }
+        public string ModelC { get; set; } = string.Empty;
         public bool Approved { get; set; }
         public string Status { get; set; } = string.Empty;
     }

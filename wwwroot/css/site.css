@@ -46,6 +46,26 @@ body {
   border: 1px solid rgba(0,0,0,0.03);
 }
 
+/* make the whole card anchor non-underlined and ensure it inherits text color */
+.note-card { display:block; text-decoration:none; color:inherit; position:relative; overflow:hidden }
+.note-card:focus { outline: none; box-shadow: 0 0 0 0.06rem rgba(37,140,251,0.15); }
+
+/* large faint icon in the background of the card */
+.note-card .note-card-icon {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  font-size: 84px;
+  line-height: 1;
+  color: #000;
+  opacity: 0.06;
+  pointer-events: none;
+  transform: translateZ(0);
+}
+
+/* ensure title/body are above the background icon */
+.note-card .note-title, .note-card .note-body { position: relative; z-index: 2 }
+
 .note-card.small { min-height: 80px; }
 .note-title { font-weight:600; margin-bottom:6px; }
 .note-body { color:#222; white-space:pre-wrap; }

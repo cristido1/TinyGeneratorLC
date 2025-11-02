@@ -11,6 +11,14 @@
     <label for="Prompt">Inserisci il prompt della storia:</label><br />
     <input type="text" id="Prompt" name="Prompt" value="@Model.Prompt" style="width:100%; padding:8px" required />
     <br /><br />
+    <label for="Writer">Scegli writer:</label>
+    <select id="Writer" name="Writer" style="padding:6px; margin-left:8px">
+        <option value="All">Tutti (A, B, C)</option>
+        <option value="A">Writer A (Planner)</option>
+        <option value="B">Writer B (FreePlanner)</option>
+        <option value="C">Writer C (Single-shot)</option>
+    </select>
+    <br /><br />
     <button type="button" id="startBtn">Avvia generazione</button>
 </form>
 
@@ -20,10 +28,51 @@
     <pre id="statusPre">Pronto.</pre>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/%40microsoft/signalr@7.0.11/dist/browser/signalr.min.js"></script>
 <script>
     const startBtn = document.getElementById('startBtn');
     const statusPre = document.getElementById('statusPre');
     let pollInterval = null;
+    let connection = null;
+
+    // helper: fetch and render history for a genId
+    async function loadHistory(id) {
+        try {
+            const p = await fetch(`?handler=progress&id=${encodeURIComponent(id)}`);
+            if (!p.ok) return;
+            const js = await p.json();
+            statusPre.textContent = js.messages.join('\n');
+            if (js.completed) {
+                statusPre.textContent += '\n\n✅ Completato.';
+                if (js.result) statusPre.textContent += '\n\nRisultato finale (estratto):\n' + js.result.substring(0,1000);
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    // open a SignalR connection and join a group for genId
+    async function connectSignalRAndJoin(genId) {
+        try {
+            if (!window.signalR) {
+                console.warn('SignalR not available');
+                return;
+            }
+            connection = new signalR.HubConnectionBuilder().withUrl('/progressHub').withAutomaticReconnect().build();
+
+            connection.on('ProgressAppended', (id, message) => {
+                if (id !== genId) return;
+                // append message
+                statusPre.textContent += (statusPre.textContent ? '\n' : '') + message;
+            });
+            connection.on('ProgressCompleted', (id, finalResult) => {
+                if (id !== genId) return;
+                statusPre.textContent += '\n\n✅ Completato.';
+                if (finalResult) statusPre.textContent += '\n\nRisultato finale (estratto):\n' + (finalResult.substring ? finalResult.substring(0,1000) : finalResult);
+            });
+
+            await connection.start();
+            await connection.invoke('JoinGroup', genId);
+        } catch (e) { console.error('SignalR connect error', e); }
+    }
 
     startBtn.addEventListener('click', async () => {
         const prompt = document.getElementById('Prompt').value;
@@ -44,25 +93,23 @@
         }
         const data = await res.json();
         const id = data.id;
+        // persist last gen id so user can come back to page and reconnect
+        try { localStorage.setItem('lastGenId', id); } catch { }
         statusPre.textContent = '🟢 Generazione avviata. id: ' + id + '\n\n';
-
-        // start polling
-        pollInterval = setInterval(async () => {
-            try {
-                const p = await fetch(`?handler=progress&id=${encodeURIComponent(id)}`);
-                if (!p.ok) return;
-                const js = await p.json();
-                statusPre.textContent = js.messages.join('\n');
-                if (js.completed) {
-                    statusPre.textContent += '\n\n✅ Completato.';
-                    if (js.result) {
-                        statusPre.textContent += '\n\nRisultato finale (estratto):\n' + js.result.substring(0, 1000);
-                    }
-                    clearInterval(pollInterval);
-                }
-            } catch (e) {
-                console.error(e);
-            }
-        }, 1000);
+        // load history and start SignalR for live updates
+        await loadHistory(id);
+        await connectSignalRAndJoin(id);
     });
+
+    // on page load, if there's a lastGenId in localStorage, reattach to it (so the page is persistent)
+    (async () => {
+        try {
+            const existing = localStorage.getItem('lastGenId');
+            if (existing) {
+                statusPre.textContent = '🔄 Ricollegamento alla generazione ' + existing + '...\n\n';
+                await loadHistory(existing);
+                await connectSignalRAndJoin(existing);
+            }
+        } catch (e) { console.error(e); }
+    })();
 </script>

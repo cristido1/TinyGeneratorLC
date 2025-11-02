@@ -21,6 +21,9 @@ public class GeneraModel : PageModel
     [BindProperty]
     public string Prompt { get; set; } = string.Empty;
 
+    [BindProperty]
+    public string Writer { get; set; } = "All";
+
     public StoryGeneratorService.GenerationResult? Story { get; set; }
     public string Status => _status.ToString();
     public bool IsProcessing { get; set; }
@@ -43,7 +46,7 @@ public class GeneraModel : PageModel
         {
             try
             {
-                var result = await _generator.GenerateStoryAsync(Prompt, msg => _progress.Append(genId, msg));
+                var result = await _generator.GenerateStoryAsync(Prompt, msg => _progress.Append(genId, msg), Writer);
                 // mark completed and store an indicative final result (approved or candidate)
                 var finalText = result?.Approved ?? result?.StoryA ?? result?.StoryB;
                 _progress.MarkCompleted(genId, finalText);

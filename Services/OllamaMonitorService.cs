@@ -2,8 +2,10 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Data.Sqlite;
 
 namespace TinyGenerator.Services
 {
@@ -27,6 +29,32 @@ namespace TinyGenerator.Services
             try
             {
                 _lastPrompt[model ?? string.Empty] = (prompt ?? string.Empty, DateTime.UtcNow);
+
+                // Persist recent prompts so they survive restarts and can be inspected later.
+                try
+                {
+                    var dbPath = "data/storage.db";
+                    var dir = Path.GetDirectoryName(dbPath) ?? ".";
+                    Directory.CreateDirectory(dir);
+                    using var conn = new SqliteConnection($"Data Source={dbPath}");
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"CREATE TABLE IF NOT EXISTS prompts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model TEXT,
+  prompt TEXT,
+  ts TEXT
+);";
+                    cmd.ExecuteNonQuery();
+
+                    using var ins = conn.CreateCommand();
+                    ins.CommandText = "INSERT INTO prompts(model, prompt, ts) VALUES($m,$p,$ts);";
+                    ins.Parameters.AddWithValue("$m", model ?? string.Empty);
+                    ins.Parameters.AddWithValue("$p", prompt ?? string.Empty);
+                    ins.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
+                    ins.ExecuteNonQuery();
+                }
+                catch { /* non-fatal: best-effort persistence */ }
             }
             catch { }
         }
@@ -89,6 +117,83 @@ namespace TinyGenerator.Services
                 }
                 catch { }
                 return list;
+            });
+        }
+
+        // Best-effort: stop any running instance for the model and run it with the requested context.
+        public static async Task<(bool Success, string Output)> StartModelWithContextAsync(string modelRef, int context)
+        {
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    // Run a process and return success flag, combined output and exit code
+                    (bool Success, string Output, int ExitCode) RunCommand(string cmd, string args, int timeoutMs = 60000)
+                    {
+                        try
+                        {
+                            var psi = new ProcessStartInfo(cmd, args)
+                            {
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true,
+                                UseShellExecute = false
+                            };
+                            using var p = Process.Start(psi);
+                            if (p == null) return (false, "Could not start process", -1);
+                            p.WaitForExit(timeoutMs);
+                            var outp = p.StandardOutput.ReadToEnd();
+                            var err = p.StandardError.ReadToEnd();
+                            var combined = outp + (string.IsNullOrEmpty(err) ? string.Empty : "\nERR:" + err);
+                            return (p.ExitCode == 0, combined, p.ExitCode);
+                        }
+                        catch (Exception ex)
+                        {
+                            return (false, "EX:" + ex.Message, -1);
+                        }
+                    }
+
+                    if (string.IsNullOrWhiteSpace(modelRef)) return (false, "modelRef empty");
+                    var model = modelRef.Trim();
+                    var instanceName = model.Replace(':', '-').Replace('/', '-');
+                    var nameArg = instanceName + $"-{context}";
+
+                    var stopRes = RunCommand("ollama", $"stop \"{model}\"");
+
+                    // Check if 'ollama run' supports the --context flag by checking run help output
+                    var helpRes = RunCommand("ollama", "run --help");
+                    var useContextFlag = helpRes.Output != null && helpRes.Output.Contains("--context");
+
+                    string finalOut;
+                    (bool Success, string Output, int ExitCode) runRes;
+                    if (useContextFlag)
+                    {
+                        var runArgs = $"run \"{model}\" --context {context} --name \"{nameArg}\" --keep";
+                        runRes = RunCommand("ollama", runArgs, 2 * 60 * 1000);
+                        finalOut = stopRes.Output + "\n" + runRes.Output;
+                        // If the run failed due to unknown flag or non-zero exit code, try fallback
+                        if (!runRes.Success && runRes.Output != null && runRes.Output.Contains("unknown flag") )
+                        {
+                            // fallback: try running without --context
+                            var fallbackArgs = $"run \"{model}\" --name \"{nameArg}\" --keep";
+                            var fallback = RunCommand("ollama", fallbackArgs, 2 * 60 * 1000);
+                            finalOut += "\nFALLBACK:\n" + fallback.Output;
+                            runRes = fallback;
+                        }
+                    }
+                    else
+                    {
+                        // Older ollama doesn't support --context; run without it and report that context couldn't be set
+                        var runArgs = $"run \"{model}\" --name \"{nameArg}\" --keep";
+                        runRes = RunCommand("ollama", runArgs, 2 * 60 * 1000);
+                        finalOut = stopRes.Output + "\n" + helpRes.Output + "\n" + runRes.Output;
+                    }
+
+                    return (runRes.Success, finalOut);
+                }
+                catch (Exception ex)
+                {
+                    return (false, "EX:" + ex.Message);
+                }
             });
         }
     }

@@ -45,12 +45,21 @@ namespace TinyGenerator.Services
 
             public string ModelB { get; set; } = string.Empty;
 
+            public string StoryC { get; set; } = string.Empty;
+            public string EvalC { get; set; } = string.Empty;
+            public double ScoreC { get; set; }
+
+            public string ModelC { get; set; } = string.Empty;
+
             public string? Approved { get; set; }
             public string Message { get; set; } = string.Empty;
         }
 
-        public async Task<GenerationResult> GenerateStoryAsync(string theme, Action<string> progress)
+        public async Task<GenerationResult> GenerateStoryAsync(string theme, Action<string> progress, string selectedWriter = "All")
         {
+            // normalize selection
+            selectedWriter = (selectedWriter ?? "All").Trim();
+            var sel = selectedWriter.ToUpperInvariant(); // "ALL", "A", "B", "C"
             const int MIN_CHARS = 3000;
             const double MIN_SCORE = 7.0;
             progress?.Invoke("Inizializzazione agenti e planner...");
@@ -59,10 +68,31 @@ namespace TinyGenerator.Services
             // qwen2.5:14b-instruct-q4_K_M,mistral-nemo:12b-instruct-2407-q4_K_M
             var writerModelA = "phi3:3.8b-mini-4k-instruct-q4_K_M";
             var writerModelB = "mistral:7b-instruct-q4_K_M";
+            // Ensure Ollama model instances are started with a larger context (best-effort).
+            try
+            {
+                var ctxEnv = Environment.GetEnvironmentVariable("OLLAMA_DEFAULT_CONTEXT");
+                var desiredContext = 8192;
+                if (!string.IsNullOrWhiteSpace(ctxEnv) && int.TryParse(ctxEnv, out var v)) desiredContext = v;
+                try
+                {
+                    var rA = await OllamaMonitorService.StartModelWithContextAsync(writerModelA, desiredContext);
+                    Console.WriteLine($"[OllamaMonitor] Start {writerModelA} ctx={desiredContext}: {rA.Output}");
+                }
+                catch { }
+                try
+                {
+                    var rB = await OllamaMonitorService.StartModelWithContextAsync(writerModelB, desiredContext);
+                    Console.WriteLine($"[OllamaMonitor] Start {writerModelB} ctx={desiredContext}: {rB.Output}");
+                }
+                catch { }
+            }
+            catch { }
             // Diagnostic: print configured models for agents to ensure correct mapping
             try { Console.WriteLine($"[StoryGen] Configured writerModelA={writerModelA}, writerModelB={writerModelB}"); } catch { }
             var writerA = MakeAgent("WriterA", "Scrittore bilanciato", "Sei uno scrittore esperto. Scrivi in italiano, coerente e ben strutturata. Evita ripetizioni.", writerModelA);
             var writerB = MakeAgent("WriterB", "Scrittore emotivo", "Sei un narratore emotivo. Scrivi in italiano coinvolgente, evita ripetizioni.", writerModelB);
+            var writerModelC = "llama3.1:8b";
             var evaluator1 = MakeAgent("Evaluator1", "Coerenza", "Valuta coerenza e struttura. Rispondi JSON: {\"score\":<1-10>}", "qwen2.5:3b");
             var evaluator2 = MakeAgent("Evaluator2", "Stile", "Valuta stile e ritmo. Rispondi JSON: {\"score\":<1-10>}", "llama3.2:3b");
 
@@ -73,7 +103,28 @@ namespace TinyGenerator.Services
             var memoryKey = Guid.NewGuid().ToString();
             var candidateStories = new Dictionary<string, string>();
 
+            // --- Writer C: single-shot epic writer (writes whole story in one shot: title + story only) ---
+            if (sel == "ALL" || sel == "C")
+            {
+                var writer = MakeAgent("WriterC", "Scrittore epico", "Sei uno scrittore epico: scrivi storie lunghe, avvincenti e dettagliate in italiano.", writerModelC);
+                var agentMemoryKey = $"{writer.Name}_{memoryKey}";
+                progress?.Invoke($"{writer.Name}: avvio single-shot writer (titolo + storia)...");
+
+                // Instruct the agent to reply ONLY with Title and Story in this exact format
+                var promptC = $"Genera una storia completa sul tema: {theme}\n\n" +
+                              "Rispondi ESCLUSIVAMENTE nel seguente formato:\nTitolo: <Il titolo qui>\n\n<Corpo della storia qui>\n\n" +
+                              "Niente altro: nessuna spiegazione, nessun metadata, solo il titolo e la storia. Scrivi la storia il più lunga e avvincente possibile.";
+
+                var raw = await Ask(writer, promptC);
+                // keep raw as-is; ensure coherence/length
+                var assembledC = raw ?? string.Empty;
+                assembledC = await EnsureCoherent(assembledC, writer, $"Storia completa sul tema: {theme}");
+                assembledC = await ExtendUntil(assembledC, MIN_CHARS, writer);
+                candidateStories[writer.Name] = assembledC;
+            }
+
             // --- Writer A: use PlannerExecutor (planner-driven steps) ---
+            if (sel == "ALL" || sel == "A")
             {
                 var writer = writerA;
                 var agentMemoryKey = $"{writer.Name}_{memoryKey}";
@@ -86,6 +137,7 @@ namespace TinyGenerator.Services
             }
 
             // --- Writer B: use the FreeWriterPlanner (autonomous planner) ---
+            if (sel == "ALL" || sel == "B")
             {
                 var writer = writerB;
                 var agentMemoryKey = $"{writer.Name}_{memoryKey}";
@@ -129,9 +181,13 @@ namespace TinyGenerator.Services
             var storiaA = candidateStories.ContainsKey(writerA.Name) ? candidateStories[writerA.Name] : string.Empty;
             var storiaB = candidateStories.ContainsKey(writerB.Name) ? candidateStories[writerB.Name] : string.Empty;
 
-            // Evaluate both candidate stories produced by writers (use helper to keep code tidy)
-            var (scoreA, evalACombined) = await EvaluateAsync(storiaA, evaluator1, evaluator2);
-            var (scoreB, evalBCombined) = await EvaluateAsync(storiaB, evaluator1, evaluator2);
+            // Evaluate candidate stories only if they exist (skip empty ones to avoid evaluator calls)
+            double scoreA = 0, scoreB = 0, scoreC = 0;
+            string evalACombined = string.Empty, evalBCombined = string.Empty, evalCCombined = string.Empty;
+            var storiaC = candidateStories.ContainsKey("WriterC") ? candidateStories["WriterC"] : string.Empty;
+            if (!string.IsNullOrWhiteSpace(storiaA)) (scoreA, evalACombined) = await EvaluateAsync(storiaA, evaluator1, evaluator2);
+            if (!string.IsNullOrWhiteSpace(storiaB)) (scoreB, evalBCombined) = await EvaluateAsync(storiaB, evaluator1, evaluator2);
+            if (!string.IsNullOrWhiteSpace(storiaC)) (scoreC, evalCCombined) = await EvaluateAsync(storiaC, evaluator1, evaluator2);
 
             var result = new GenerationResult
             {
@@ -143,22 +199,30 @@ namespace TinyGenerator.Services
                 EvalB = evalBCombined,
                 ScoreB = scoreB,
                 ModelB = writerModelB
+                ,
+                StoryC = storiaC,
+                EvalC = evalCCombined,
+                ScoreC = scoreC,
+                ModelC = !string.IsNullOrWhiteSpace(storiaC) ? writerModelC : string.Empty
             };
 
-            if (scoreA >= MIN_SCORE)
+            // Choose best approved story among A, B, C
+            var scores = new List<(string name, double score, string story)>
             {
-                result.Approved = storiaA;
-                result.Message = "Story A approvata.";
-            }
-            else if (scoreB >= MIN_SCORE)
+                ("A", scoreA, storiaA),
+                ("B", scoreB, storiaB),
+                ("C", scoreC, storiaC)
+            };
+            var best = scores.OrderByDescending(s => s.score).First();
+            if (best.score >= MIN_SCORE)
             {
-                result.Approved = storiaB;
-                result.Message = "Story B approvata.";
+                result.Approved = best.story;
+                result.Message = $"Story {best.name} approvata.";
             }
             else
             {
                 result.Approved = null;
-                result.Message = "Entrambe le storie sono state bocciate.";
+                result.Message = "Nessuna storia ha raggiunto il punteggio minimo.";
             }
 
             if (!string.IsNullOrEmpty(result.Approved))
@@ -167,7 +231,7 @@ namespace TinyGenerator.Services
                 try { await _kernel.Memory.SaveInformationAsync(_collection, result.Approved, Guid.NewGuid().ToString()); } catch { }
             }
 
-            try { _stories?.SaveGeneration(theme, result); } catch { }
+            try { _stories?.SaveGeneration(theme, result, memoryKey); } catch { }
 
             return result;
         }

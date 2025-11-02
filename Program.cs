@@ -2,6 +2,7 @@ using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Connectors.Ollama;
 using Microsoft.SemanticKernel.Memory;
 using TinyGenerator.Services;
+using TinyGenerator.Hubs;
 using Microsoft.Extensions.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,6 +12,9 @@ builder.Logging.AddProvider(new SqliteLoggerProvider("data/storage.db"));
 
 // === Razor Pages ===
 builder.Services.AddRazorPages();
+
+// SignalR for live progress updates
+builder.Services.AddSignalR();
 
 // Tokenizer (try to use local tokenizer library if installed; fallback inside service)
 builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_base"));
@@ -37,7 +41,7 @@ builder.Services.AddSingleton<StoriesService>();
 
 // Persistent memory service (sqlite)
 builder.Services.AddSingleton<PersistentMemoryService>();
-// Progress tracking for live UI updates
+// Progress tracking for live UI updates (will broadcast over SignalR)
 builder.Services.AddSingleton<ProgressService>();
 // Planner executor
 builder.Services.AddSingleton<PlannerExecutor>();
@@ -61,6 +65,10 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthorization();
+
+// SignalR hubs
+app.MapHub<ProgressHub>("/progressHub");
+
 app.MapRazorPages();
 
 app.Run();

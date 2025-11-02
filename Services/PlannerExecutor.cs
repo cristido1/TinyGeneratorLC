@@ -63,16 +63,23 @@ namespace TinyGenerator.Services
                         var key = root.GetProperty("key").GetString() ?? stepKey;
                         var saved = root.GetProperty("content").GetString() ?? string.Empty;
 
+                        // if the model provided a memory_key in the JSON, prefer it for saving
+                        string modelMemoryKey = agentMemoryKey;
+                        if (root.TryGetProperty("memory_key", out var mkProp))
+                        {
+                            try { var mk = mkProp.GetString(); if (!string.IsNullOrWhiteSpace(mk)) modelMemoryKey = mk; } catch { }
+                        }
+
                         try
                         {
-                            await _kernel.Memory.SaveInformationAsync(_collection, $"{agent.Name}:{key}: {saved}", $"{agentMemoryKey}_{key}");
+                            await _kernel.Memory.SaveInformationAsync(_collection, $"{agent.Name}:{key}: {saved}", $"{modelMemoryKey}_{key}");
                         }
                         catch { }
 
                         if (key.StartsWith("capitolo") && int.TryParse(new string(key.Where(char.IsDigit).ToArray()), out var chapNum))
                         {
                             parts.Add(saved);
-                            try { _stories?.SaveChapter(agentMemoryKey, chapNum, saved); } catch { }
+                            try { _stories?.SaveChapter(modelMemoryKey, chapNum, saved); } catch { }
                         }
 
                         // publish the full saved content for UI
@@ -114,24 +121,26 @@ namespace TinyGenerator.Services
             var prefix = string.Empty;
             if (!string.IsNullOrWhiteSpace(theme))
             {
-                // try to extract a short theme label if the plan goal contains it
-                var t = theme;
+                // Use a clear user-instructions prefix so it's obvious in the final prompt
+                var t = theme.Trim();
+                // If the theme already contains a leading 'tema:' token, strip it to avoid duplication
                 var idx = t.IndexOf("tema:", StringComparison.OrdinalIgnoreCase);
                 if (idx >= 0)
                 {
                     t = t[(idx + 5)..].Trim();
                 }
-                prefix = "Tema: " + t + "\n\n";
+                prefix = "Istruzioni utente: " + t + "\n\n";
             }
-            if (sd.Contains("trama")) return "Crea una trama dettagliata suddivisa in 6 capitoli. Per ogni capitolo scrivi una descrizione sintetica ma completa di quello che succede. Non usare contenuti sessali espliciti o violenti, ma fai in modo che la storia non sia noiosa.";
-            if (sd.Contains("personaggi")) return "Definisci i personaggi principali: nome, età approssimativa, tratto caratteriale, ruolo nella storia (max 6 personaggi).";
-            if (sd.Contains("primo capitolo")) return "Scrivi il primo capitolo con narratore e dialoghi. Mantieni tono coerente con la trama e i personaggi.";
-            if (sd.Contains("secondo capitolo")) return "Scrivi il secondo capitolo usando il contesto della trama, personaggi e riassunto precedente.";
-            if (sd.Contains("terzo capitolo")) return "Scrivi il terzo capitolo usando il contesto della trama, personaggi e riassunto cumulativo.";
-            if (sd.Contains("quarto capitolo")) return "Scrivi il quarto capitolo.";
-            if (sd.Contains("quinto capitolo")) return "Scrivi il quinto capitolo.";
-            if (sd.Contains("sesto capitolo")) return "Scrivi il sesto capitolo.";
-            if (sd.Contains("riassunto")) return "Fai un riassunto sintetico (3-5 frasi) di quanto accaduto.";
+            // Prepend the theme/context prefix (if any) so user-provided instructions are included
+            if (sd.Contains("trama")) return prefix + "Crea una trama dettagliata suddivisa in 6 capitoli. Per ogni capitolo scrivi una descrizione sintetica ma completa di quello che succede. Non usare contenuti sessali espliciti o violenti, ma fai in modo che la storia non sia noiosa.";
+            if (sd.Contains("personaggi")) return prefix + "Definisci i personaggi principali: nome, età approssimativa, tratto caratteriale, ruolo nella storia (max 6 personaggi).";
+            if (sd.Contains("primo capitolo")) return prefix + "Scrivi il primo capitolo con narratore e dialoghi. Mantieni tono coerente con la trama e i personaggi.";
+            if (sd.Contains("secondo capitolo")) return prefix + "Scrivi il secondo capitolo usando il contesto della trama, personaggi e riassunto precedente.";
+            if (sd.Contains("terzo capitolo")) return prefix + "Scrivi il terzo capitolo usando il contesto della trama, personaggi e riassunto cumulativo.";
+            if (sd.Contains("quarto capitolo")) return prefix + "Scrivi il quarto capitolo.";
+            if (sd.Contains("quinto capitolo")) return prefix + "Scrivi il quinto capitolo.";
+            if (sd.Contains("sesto capitolo")) return prefix + "Scrivi il sesto capitolo.";
+            if (sd.Contains("riassunto")) return prefix + "Fai un riassunto sintetico (3-5 frasi) di quanto accaduto.";
             return prefix + $"Esegui il passo: {stepDescription}";
         }
 
@@ -160,7 +169,7 @@ namespace TinyGenerator.Services
         _kernel = kernel;
     }
 
-        public async Task<string> RunAsync(string prompt, string storyId, Microsoft.SemanticKernel.Agents.ChatCompletionAgent agent, Action<string>? progress = null)
+    public async Task<string> RunAsync(string prompt, string storyId, Microsoft.SemanticKernel.Agents.ChatCompletionAgent agent, Action<string>? progress = null)
     {
         // Stubbed kernel memory may not support search in offline mode; keep memoria empty as a best-effort.
         var memoria = string.Empty;
@@ -179,7 +188,7 @@ namespace TinyGenerator.Services
             "}\n" +
             "---END-MEMORY---\n" +
             "Poi decidi il prossimo passo da solo (nuovo capitolo, modifica, riassunto...).\n" +
-            "Prompt iniziale: " + prompt + "\n";
+            "Istruzioni utente: " + prompt + "\n";
 
         string result = string.Empty;
             for (int i = 0; i < 6; i++)

@@ -18,6 +18,7 @@
             <th>Processor</th>
             <th>Context</th>
             <th>Until</th>
+            <th>Actions</th>
             <th>Last prompt (preview)</th>
         </tr>
     </thead>
@@ -35,7 +36,14 @@
             body.innerHTML = '';
             for (const m of models) {
                 const row = document.createElement('tr');
-                row.innerHTML = `<td>${m.name}</td><td>${m.id}</td><td>${m.size}</td><td>${m.processor}</td><td>${m.context}</td><td>${m.until}</td><td><button class='btn btn-sm btn-link' data-prompt='${encodeURIComponent(m.lastPrompt)}'>Preview</button> ${m.lastPrompt ? m.lastPrompt.substring(0,200) : ''}</td>`;
+                // actions: input for context and a button to start model with that context
+                const actionsHtml = `
+                    <div class="input-group input-group-sm">
+                      <input type="number" min="512" step="512" value="8192" class="form-control context-input" style="width:110px" />
+                      <button class="btn btn-sm btn-outline-primary start-with-context">Start</button>
+                    </div>`;
+
+                row.innerHTML = `<td>${m.name}</td><td>${m.id}</td><td>${m.size}</td><td>${m.processor}</td><td>${m.context}</td><td>${m.until}</td><td>${actionsHtml}</td><td><button class='btn btn-sm btn-link' data-prompt='${encodeURIComponent(m.lastPrompt)}'>Preview</button> ${m.lastPrompt ? m.lastPrompt.substring(0,200) : ''}</td>`;
                 body.appendChild(row);
             }
             // attach click handlers for preview buttons
@@ -44,6 +52,32 @@
                     const btn = e.currentTarget;
                     const p = decodeURIComponent(btn.getAttribute('data-prompt') || '');
                     alert(p || 'No prompt recorded');
+                });
+            });
+
+            // attach handlers for Start buttons
+            document.querySelectorAll('#tblBody .start-with-context').forEach((btn, idx) => {
+                btn.addEventListener('click', async e => {
+                    const tr = e.currentTarget.closest('tr');
+                    const modelName = tr.children[0].innerText;
+                    const input = tr.querySelector('.context-input');
+                    const contextVal = parseInt(input.value) || 8192;
+                    if (!confirm(`Start model ${modelName} with context ${contextVal}? This may use significant resources.`)) return;
+                    try {
+                        btn.disabled = true;
+                        btn.innerText = 'Starting...';
+                        const res = await fetch('/OllamaMonitor?handler=StartWithContext', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ model: modelName, context: contextVal })
+                        });
+                        const j = await res.json();
+                        alert('Start command completed. Output:\n' + (j.runOutput || j.stopOutput || JSON.stringify(j)));
+                    } catch (err) {
+                        alert('Error starting model: ' + err);
+                    } finally {
+                        btn.disabled = false;
+                        btn.innerText = 'Start';
+                    }
                 });
             });
         } catch (e) { console.error(e); }

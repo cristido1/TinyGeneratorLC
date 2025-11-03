@@ -72,18 +72,25 @@ namespace TinyGenerator.Services
             try
             {
                 var ctxEnv = Environment.GetEnvironmentVariable("OLLAMA_DEFAULT_CONTEXT");
-                var desiredContext = 8192;
-                if (!string.IsNullOrWhiteSpace(ctxEnv) && int.TryParse(ctxEnv, out var v)) desiredContext = v;
+                var desiredContextDefault = 8192;
+                if (!string.IsNullOrWhiteSpace(ctxEnv) && int.TryParse(ctxEnv, out var v)) desiredContextDefault = v;
+
+                // prefer per-model configured "context_to_use" if available in DB
                 try
                 {
-                    var rA = await OllamaMonitorService.StartModelWithContextAsync(writerModelA, desiredContext);
-                    Console.WriteLine($"[OllamaMonitor] Start {writerModelA} ctx={desiredContext}: {rA.Output}");
+                    var miA = _cost?.GetModelInfo(writerModelA);
+                    var ctxA = miA != null && miA.ContextToUse > 0 ? miA.ContextToUse : desiredContextDefault;
+                    var rA = await OllamaMonitorService.StartModelWithContextAsync(writerModelA, ctxA);
+                    Console.WriteLine($"[OllamaMonitor] Start {writerModelA} ctx={ctxA}: {rA.Output}");
                 }
                 catch { }
+
                 try
                 {
-                    var rB = await OllamaMonitorService.StartModelWithContextAsync(writerModelB, desiredContext);
-                    Console.WriteLine($"[OllamaMonitor] Start {writerModelB} ctx={desiredContext}: {rB.Output}");
+                    var miB = _cost?.GetModelInfo(writerModelB);
+                    var ctxB = miB != null && miB.ContextToUse > 0 ? miB.ContextToUse : desiredContextDefault;
+                    var rB = await OllamaMonitorService.StartModelWithContextAsync(writerModelB, ctxB);
+                    Console.WriteLine($"[OllamaMonitor] Start {writerModelB} ctx={ctxB}: {rB.Output}");
                 }
                 catch { }
             }
@@ -92,7 +99,7 @@ namespace TinyGenerator.Services
             try { Console.WriteLine($"[StoryGen] Configured writerModelA={writerModelA}, writerModelB={writerModelB}"); } catch { }
             var writerA = MakeAgent("WriterA", "Scrittore bilanciato", "Sei uno scrittore esperto. Scrivi in italiano, coerente e ben strutturata. Evita ripetizioni.", writerModelA);
             var writerB = MakeAgent("WriterB", "Scrittore emotivo", "Sei un narratore emotivo. Scrivi in italiano coinvolgente, evita ripetizioni.", writerModelB);
-            var writerModelC = "llama3.1:8b";
+            var writerModelC = "phi3:mini-128k";
             var evaluator1 = MakeAgent("Evaluator1", "Coerenza", "Valuta coerenza e struttura. Rispondi JSON: {\"score\":<1-10>}", "qwen2.5:3b");
             var evaluator2 = MakeAgent("Evaluator2", "Stile", "Valuta stile e ritmo. Rispondi JSON: {\"score\":<1-10>}", "llama3.2:3b");
 
@@ -251,11 +258,10 @@ namespace TinyGenerator.Services
                 {
                     var reqTokens = _cost.EstimateTokensFromText(input);
                     var resTokens = _cost.EstimateTokensFromText(content);
-                    var total = reqTokens + resTokens;
                     var model = agent.Model ?? "ollama";
-                    var provider = model.Split(':')[0];
-                    var cost = _cost.EstimateCost(provider, total);
-                    _cost.RecordCall(model, total, cost, input, content);
+                    // use per-model cost estimation (input/output)
+                    var cost = _cost.EstimateCost(model, reqTokens, resTokens);
+                    _cost.RecordCall(model, reqTokens, resTokens, cost, input, content);
                 }
             }
             catch { /* don't fail on logging */ }

@@ -2,6 +2,25 @@ html {
   font-size: 14px;
 }
 
+/* Lightweight replacements for a few Bootstrap utilities used in the layout
+   These keep the existing markup working after removing Bootstrap dependency. */
+.container { max-width: 1100px; margin-left: auto; margin-right: auto; padding-left: 12px; padding-right: 12px; }
+.d-flex { display:flex !important; }
+.d-none { display:none !important; }
+.ms-auto { margin-left: auto !important; }
+.btn { display: inline-block; padding: 6px 12px; border-radius:6px; border:1px solid rgba(0,0,0,0.08); background:#fff; cursor:pointer; }
+.btn-link { background: transparent; border: none; padding:4px 8px; }
+.btn-sm { padding:4px 8px; font-size:0.85rem; }
+
+@media (min-width: 768px) {
+  .d-md-inline { display:inline-block !important; }
+  .d-md-none { display:none !important; }
+}
+@media (max-width: 767px) {
+  .d-md-inline { display:none !important; }
+  .d-md-none { display:inline-block !important; }
+}
+
 @media (min-width: 768px) {
   html {
     font-size: 16px;
@@ -75,6 +94,18 @@ body {
 
 .action-btn { background:#fff; border:1px solid rgba(0,0,0,0.07); border-radius:6px; padding:6px 10px; cursor:pointer; }
 .action-btn.primary { background:#1a73e8; color:white; border-color:transparent; }
+
+/* nicer hover/focus for action buttons */
+.action-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(26,115,232,0.12); }
+.action-btn:active { transform: translateY(0); }
+.action-btn.primary:hover { background:#1669d8; }
+
+/* input style specific to generation page for better contrast */
+.keep-input { background:#fff; border-radius:10px; padding:10px 12px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); border: 1px solid rgba(0,0,0,0.06); font-size:1rem }
+
+/* small helper - visually separate status area */
+#statusArea { max-width:900px; }
+#statusPre { background: #f7f9fb; padding:12px; border-radius:8px; border:1px solid rgba(0,0,0,0.04); white-space:pre-wrap; }
 
 .admin-link { margin-left:12px; font-size:0.95rem; }
 

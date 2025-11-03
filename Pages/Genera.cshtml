@@ -6,21 +6,32 @@
 
 <h1>Genera una storia lunga</h1>
 
-<form id="genForm">
-    @Html.AntiForgeryToken()
-    <label for="Prompt">Inserisci il prompt della storia:</label><br />
-    <input type="text" id="Prompt" name="Prompt" value="@Model.Prompt" style="width:100%; padding:8px" required />
-    <br /><br />
-    <label for="Writer">Scegli writer:</label>
-    <select id="Writer" name="Writer" style="padding:6px; margin-left:8px">
-        <option value="All">Tutti (A, B, C)</option>
-        <option value="A">Writer A (Planner)</option>
-        <option value="B">Writer B (FreePlanner)</option>
-        <option value="C">Writer C (Single-shot)</option>
-    </select>
-    <br /><br />
-    <button type="button" id="startBtn">Avvia generazione</button>
-</form>
+<div class="note-card" style="max-width:900px; margin-bottom:18px">
+    <form id="genForm">
+        @Html.AntiForgeryToken()
+        <div style="margin-bottom:10px">
+            <label for="Prompt" class="note-title">Inserisci il prompt della storia</label>
+            <input class="keep-input" type="text" id="Prompt" name="Prompt" value="@Model.Prompt" required />
+        </div>
+        <div id="genError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
+
+        <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <label for="Writer" class="note-title" style="margin:0">Scegli writer</label>
+                <select id="Writer" name="Writer" class="keep-input" style="width:220px; padding:8px">
+                    <option value="All">Tutti (A, B, C)</option>
+                    <option value="A">Writer A (Planner)</option>
+                    <option value="B">Writer B (FreePlanner)</option>
+                    <option value="C">Writer C (Single-shot)</option>
+                </select>
+            </div>
+
+            <div style="margin-left:auto">
+                <button type="button" id="startBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia generazione</button>
+            </div>
+        </div>
+    </form>
+</div>
 
 <hr />
 <h2>Stato generazione (live):</h2>
@@ -76,9 +87,17 @@
 
     startBtn.addEventListener('click', async () => {
         const prompt = document.getElementById('Prompt').value;
+        const genError = document.getElementById('genError');
         if (!prompt || prompt.trim().length === 0) {
-            alert('Inserisci il prompt');
+            if (genError) {
+                genError.textContent = 'Inserisci il prompt';
+                genError.style.display = 'block';
+            }
+            document.getElementById('Prompt').focus();
             return;
+        } else if (genError) {
+            genError.textContent = '';
+            genError.style.display = 'none';
         }
 
         statusPre.textContent = '🟡 Avvio...';
@@ -112,4 +131,12 @@
             }
         } catch (e) { console.error(e); }
     })();
+    // hide error when user edits prompt
+    const promptInput = document.getElementById('Prompt');
+    if (promptInput) {
+        promptInput.addEventListener('input', () => {
+            const genError = document.getElementById('genError');
+            if (genError) { genError.textContent = ''; genError.style.display = 'none'; }
+        });
+    }
 </script>

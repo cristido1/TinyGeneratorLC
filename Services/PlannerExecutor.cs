@@ -13,13 +13,15 @@ namespace TinyGenerator.Services
     // Executor that gives an agent a plan and lets it run steps, returning assembled chapters.
     public sealed class PlannerExecutor
     {
-        private readonly IKernel _kernel;
+    private readonly Kernel _kernel; // Campo kernel reale
         private readonly StoriesService? _stories;
+        private readonly PersistentMemoryService _persistentMemory;
         private readonly string _collection = "storie";
 
-        public PlannerExecutor(IKernel kernel, StoriesService? stories = null)
+        public PlannerExecutor(Kernel kernel, PersistentMemoryService persistentMemory, StoriesService? stories = null)
         {
             _kernel = kernel;
+            _persistentMemory = persistentMemory;
             _stories = stories;
         }
 
@@ -72,7 +74,7 @@ namespace TinyGenerator.Services
 
                         try
                         {
-                            await _kernel.Memory.SaveInformationAsync(_collection, $"{agent.Name}:{key}: {saved}", $"{modelMemoryKey}_{key}");
+                            await _persistentMemory.SaveAsync(_collection, $"{agent.Name}:{key}: {saved}");
                         }
                         catch { }
 
@@ -98,7 +100,7 @@ namespace TinyGenerator.Services
                     {
                         try
                         {
-                            await _kernel.Memory.SaveInformationAsync(_collection, $"{agent.Name}:{stepKey}: {content}", $"{agentMemoryKey}_{stepKey}");
+                            await _persistentMemory.SaveAsync(_collection, $"{agent.Name}:{stepKey}: {content}");
                         }
                         catch { }
                     }
@@ -161,12 +163,15 @@ namespace TinyGenerator.Services
     }
     public class FreeWriterPlanner
 {
-    private readonly IKernel _kernel;
+    // private readonly IKernel _kernel; // RIMOSSO: ora si usa solo Kernel reale
+    private readonly Kernel _kernel; // Campo kernel reale
+    private readonly PersistentMemoryService _persistentMemory;
     private readonly string _collection = "storie";
 
-    public FreeWriterPlanner(IKernel kernel)
+    public FreeWriterPlanner(Kernel kernel, PersistentMemoryService persistentMemory)
     {
         _kernel = kernel;
+        _persistentMemory = persistentMemory;
     }
 
     public async Task<string> RunAsync(string prompt, string storyId, Microsoft.SemanticKernel.Agents.ChatCompletionAgent agent, Action<string>? progress = null)
@@ -224,11 +229,7 @@ namespace TinyGenerator.Services
         var match = Regex.Match(reply, @"---MEMORY-JSON---(.*?)---END-MEMORY---", RegexOptions.Singleline);
         if (match.Success)
         {
-            await _kernel.Memory.SaveInformationAsync(
-                _collection,
-                match.Groups[1].Value,
-                storyId + "_" + Guid.NewGuid().ToString("N")
-            );
+            await _persistentMemory.SaveAsync(_collection, match.Groups[1].Value);
         }
     }
 

@@ -1,0 +1,152 @@
+@page
+@using Microsoft.AspNetCore.Html
+@model TinyGenerator.Pages.ModelsModel
+@{
+    ViewData["Title"] = "Models";
+}
+
+<h1>Models</h1>
+
+<p>Lista dei modelli presenti nel database. Premi "Test function-calling" per eseguire una verifica delle principali funzioni (memory/db/skills) sul modello selezionato.</p>
+
+<p>
+    <button id="testAllBtn" class="btn btn-success mb-2">Testa tutti i modelli</button>
+</p>
+
+<div class="models-table-wrapper">
+<table class="table table-bordered table-hover models-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Provider</th>
+            <th>Local</th>
+            <th>ContextToUse</th>
+            <th>FunctionCallingScore</th>
+            <th>ToUpper</th>
+            <th>ToLower</th>
+            <th>Trim</th>
+            <th>Length</th>
+            <th>Substring</th>
+            <th>Join</th>
+            <th>Split</th>
+            <th>Add</th>
+            <th>Subtract</th>
+            <th>Multiply</th>
+            <th>Divide</th>
+            <th>Sqrt</th>
+            <th>Now</th>
+            <th>Today</th>
+            <th>AddDays</th>
+            <th>AddHours</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody id="modelsBody">
+    @foreach (var m in Model.Models)
+    {
+        <tr data-name="@m.Name">
+            <td>@m.Name</td>
+            <td>@m.Provider</td>
+            <td>@(m.IsLocal ? "Yes" : "No")</td>
+            <td>@m.ContextToUse</td>
+            <td class="score">@m.FunctionCallingScore</td>
+            <td>@(RenderSkillCheck(m.SkillToUpper))</td>
+            <td>@(RenderSkillCheck(m.SkillToLower))</td>
+            <td>@(RenderSkillCheck(m.SkillTrim))</td>
+            <td>@(RenderSkillCheck(m.SkillLength))</td>
+            <td>@(RenderSkillCheck(m.SkillSubstring))</td>
+            <td>@(RenderSkillCheck(m.SkillJoin))</td>
+            <td>@(RenderSkillCheck(m.SkillSplit))</td>
+            <td>@(RenderSkillCheck(m.SkillAdd))</td>
+            <td>@(RenderSkillCheck(m.SkillSubtract))</td>
+            <td>@(RenderSkillCheck(m.SkillMultiply))</td>
+            <td>@(RenderSkillCheck(m.SkillDivide))</td>
+            <td>@(RenderSkillCheck(m.SkillSqrt))</td>
+            <td>@(RenderSkillCheck(m.SkillNow))</td>
+            <td>@(RenderSkillCheck(m.SkillToday))</td>
+            <td>@(RenderSkillCheck(m.SkillAddDays))</td>
+            <td>@(RenderSkillCheck(m.SkillAddHours))</td>
+            <td><button class="btn btn-sm btn-primary test-btn">Test function-calling</button></td>
+        </tr>
+    }
+    </tbody>
+</table>
+</div>
+
+@functions {
+    // Rende un check colorato per il valore della skill (true=verde, false=rosso, null=grigio)
+    public static HtmlString RenderSkillCheck(bool? value)
+    {
+        if (value == true) return new HtmlString("<span style='color:green;font-size:1.2em' title='OK'>&#10003;</span>");
+        if (value == false) return new HtmlString("<span style='color:red;font-size:1.2em' title='FAIL'>&#10007;</span>");
+        return new HtmlString("<span style='color:#bbb;font-size:1.2em' title='N/A'>&#8212;</span>");
+    }
+}
+
+<h3>Test results</h3>
+<div id="results">
+    <p>No tests yet.</p>
+</div>
+
+<script>
+    async function runTest(modelName, btn)
+    {
+        btn.disabled = true;
+        btn.innerText = 'Testing...';
+        try {
+            const res = await fetch('/Models?handler=TestModel', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelName })
+            });
+            if (!res.ok) throw new Error('Request failed');
+            const j = await res.json();
+            // update score cell
+            const tr = document.querySelector(`tr[data-name='${modelName}']`);
+            if (tr) {
+                const scoreCell = tr.querySelector('.score');
+                if (scoreCell) scoreCell.innerText = j.functionCallingScore ?? '0';
+            }
+
+            // append detailed per-function results
+            const resultsDiv = document.getElementById('results');
+            const block = document.createElement('div');
+            block.className = 'card mb-2 p-2';
+            let html = `<h4>Model: ${modelName} — score: ${j.functionCallingScore ?? 0}/10</h4>`;
+            html += '<ul>';
+            for (const r of j.results) {
+                html += `<li><strong>${r.name}</strong>: ${r.ok ? 'OK' : 'FAIL'} — ${r.message || ''}</li>`;
+            }
+            html += '</ul>';
+            block.innerHTML = html;
+            resultsDiv.prepend(block);
+        } catch (err) {
+            alert('Test failed: ' + err);
+        } finally {
+            btn.disabled = false;
+            btn.innerText = 'Test function-calling';
+        }
+    }
+
+    document.querySelectorAll('.test-btn').forEach(b => {
+        b.addEventListener('click', e => {
+            const tr = e.currentTarget.closest('tr');
+            const name = tr.getAttribute('data-name');
+            runTest(name, e.currentTarget);
+        });
+    });
+
+    // Testa tutti i modelli in sequenza
+    document.getElementById('testAllBtn').addEventListener('click', async function() {
+        const btn = this;
+        btn.disabled = true;
+        btn.innerText = 'Testing...';
+        const rows = Array.from(document.querySelectorAll('#modelsBody tr'));
+        for (const tr of rows) {
+            const name = tr.getAttribute('data-name');
+            const testBtn = tr.querySelector('.test-btn');
+            if (testBtn) await runTest(name, testBtn);
+        }
+        btn.disabled = false;
+        btn.innerText = 'Testa tutti i modelli';
+    });
+</script>

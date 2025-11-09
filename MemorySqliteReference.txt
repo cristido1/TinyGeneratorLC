@@ -1,0 +1,1 @@
+  <PackageReference Include="Microsoft.SemanticKernel.Memory.Sqlite" Version="1.66.0" />

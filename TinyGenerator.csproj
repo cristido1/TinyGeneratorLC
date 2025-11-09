@@ -7,11 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Semantic Kernel packages required by the original Program.cs -->
-    <PackageReference Include="Microsoft.SemanticKernel" Version="1.19.0" />
-    <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.19.0-alpha" />
+    <!-- Semantic Kernel packages removed: using local stubs for lightweight testing -->
     <!-- SQLite provider used by CostController -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="7.1.7" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <PackageReference Include="Microsoft.SemanticKernel" Version="1.66.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.66.0-alpha" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.66.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.Sqlite" Version="1.51.0-preview" />
   <!-- NOTE: sqlite memory package omitted — if memory store package is required, we'll add the correct package id/version after checking NuGet. -->
   </ItemGroup>
 </Project>

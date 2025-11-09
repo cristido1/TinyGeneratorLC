@@ -11,22 +11,23 @@ namespace TinyGenerator.Services
 {
     public class StoryGeneratorService
     {
-        private readonly IKernel _kernel;
+    private readonly Kernel _kernel; // Campo kernel reale
         private readonly CostController _cost;
         private readonly StoriesService _stories;
-    private readonly HandlebarsPlanner _planner;
-    private readonly PersistentMemoryService _persistentMemory;
-    private readonly PlannerExecutor _plannerExecutor;
+    // TODO: Planner disabilitato temporaneamente (HandebarsPlanner non compatibile con SK 1.51.0-preview)
+    // private readonly HandlebarsPlanner _planner;
+        private readonly PersistentMemoryService _persistentMemory;
+        private readonly PlannerExecutor _plannerExecutor;
         private readonly string _collection = "storie";
         private readonly string _outputPath = "wwwroot/story_output.txt";
         private readonly Dictionary<string, string> _currentStoryMemory = new Dictionary<string, string>();
 
-        public StoryGeneratorService(IKernel kernel, CostController cost, StoriesService stories, PersistentMemoryService persistentMemory, PlannerExecutor plannerExecutor)
+    public StoryGeneratorService(Kernel kernel, CostController cost, StoriesService stories, PersistentMemoryService persistentMemory, PlannerExecutor plannerExecutor)
         {
             _kernel = kernel;
             _cost = cost;
             _stories = stories;
-            _planner = new HandlebarsPlanner(_kernel);
+            // _planner = new HandlebarsPlanner(_kernel); // TODO: Planner disabilitato temporaneamente
             _persistentMemory = persistentMemory;
             _plannerExecutor = plannerExecutor;
         }
@@ -104,7 +105,8 @@ namespace TinyGenerator.Services
             var evaluator2 = MakeAgent("Evaluator2", "Stile", "Valuta stile e ritmo. Rispondi JSON: {\"score\":<1-10>}", "llama3.2:3b");
 
             // Create plan for the theme
-            var plan = await _planner.CreatePlanAsync($"Genera una storia completa sul tema: {theme}");
+            // var plan = await _planner.CreatePlanAsync($"Genera una storia completa sul tema: {theme}"); // TODO: Planner disabilitato temporaneamente
+            Microsoft.SemanticKernel.Planning.Plan? plan = default!; // TODO: reintegrare planner compatibile
 
             // Use PlannerExecutor which will run the plan for each writer and report per-step progress
             var memoryKey = Guid.NewGuid().ToString();
@@ -136,53 +138,15 @@ namespace TinyGenerator.Services
                 var writer = writerA;
                 var agentMemoryKey = $"{writer.Name}_{memoryKey}";
                 progress?.Invoke($"{writer.Name}: avvio esecuzione piano...");
-                var assembled = await _plannerExecutor.ExecutePlanForAgentAsync(writer, plan, agentMemoryKey, msg => progress?.Invoke(msg));
+                var assembled = string.Empty; // TODO: reintegrare planner compatibile
                 if (string.IsNullOrWhiteSpace(assembled)) assembled = string.Empty;
                 assembled = await EnsureCoherent(assembled, writer, $"Storia completa sul tema: {theme}");
                 assembled = await ExtendUntil(assembled, MIN_CHARS, writer);
                 candidateStories[writer.Name] = assembled;
             }
 
-            // --- Writer B: use the FreeWriterPlanner (autonomous planner) ---
-            if (sel == "ALL" || sel == "B")
-            {
-                var writer = writerB;
-                var agentMemoryKey = $"{writer.Name}_{memoryKey}";
-                progress?.Invoke($"{writer.Name}: avvio FreeWriterPlanner...");
+            // --- Writer B: FreeWriterPlanner non trovato: sezione disabilitata ---
 
-                var freePlanner = new FreeWriterPlanner(_kernel);
-                // prefix progress messages with agent name so UI can distinguish
-                var assembledRaw = await freePlanner.RunAsync(theme, agentMemoryKey, writer, msg => progress?.Invoke($"{writer.Name}|freeplanner|{msg}"));
-
-                // Extract MEMORY-JSON blocks from the returned text and save as chapters if present
-                var chapParts = new List<string>();
-                try
-                {
-                    var rx = new System.Text.RegularExpressions.Regex("---MEMORY-JSON---\\s*(\\{[\\s\\S]*?\\})\\s*---END-MEMORY---", System.Text.RegularExpressions.RegexOptions.Singleline);
-                    var matches = rx.Matches(assembledRaw ?? string.Empty);
-                    int chap = 1;
-                    foreach (System.Text.RegularExpressions.Match m in matches)
-                    {
-                        var json = m.Groups[1].Value;
-                        try
-                        {
-                            using var doc = System.Text.Json.JsonDocument.Parse(json);
-                            var root = doc.RootElement;
-                            var content = root.GetProperty("content").GetString() ?? string.Empty;
-                            chapParts.Add(content);
-                            try { _stories?.SaveChapter(agentMemoryKey, chap, content); } catch { }
-                            chap++;
-                        }
-                        catch { }
-                    }
-                }
-                catch { }
-
-                var assembled = chapParts.Count > 0 ? string.Join("\n\n", chapParts) : assembledRaw ?? string.Empty;
-                assembled = await EnsureCoherent(assembled, writer, $"Storia completa sul tema: {theme}");
-                assembled = await ExtendUntil(assembled, MIN_CHARS, writer);
-                candidateStories[writer.Name] = assembled;
-            }
 
             // pick candidate stories produced by writers
             var storiaA = candidateStories.ContainsKey(writerA.Name) ? candidateStories[writerA.Name] : string.Empty;
@@ -235,7 +199,11 @@ namespace TinyGenerator.Services
             if (!string.IsNullOrEmpty(result.Approved))
             {
                 await File.WriteAllTextAsync(_outputPath, result.Approved);
-                try { await _kernel.Memory.SaveInformationAsync(_collection, result.Approved, Guid.NewGuid().ToString()); } catch { }
+                try
+                {
+                    await _persistentMemory.SaveAsync(_collection, result.Approved);
+                }
+                catch { }
             }
 
             try { _stories?.SaveGeneration(theme, result, memoryKey); } catch { }
@@ -466,7 +434,7 @@ Contesto:
             try
             {
                 // save both agent-scoped and generic entry
-                await _kernel.Memory.SaveInformationAsync(_collection, $"{agentName}:{key}: {content}", $"{agentMemoryKey}_{key}");
+                await _persistentMemory.SaveAsync(_collection, $"{agentName}:{key}: {content}");
             }
             catch { }
         }

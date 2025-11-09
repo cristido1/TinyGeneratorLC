@@ -20,27 +20,15 @@ builder.Services.AddSignalR();
 builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_base"));
 
 // === Semantic Kernel + memoria SQLite ===
-builder.Services.AddSingleton<IKernel>(sp =>
-{
-    var kernelBuilder = Kernel.CreateBuilder();
-    // Use a specific local Ollama model instance (include model variant)
-    kernelBuilder.AddOllamaChatCompletion(
-        "llama3.1:8b",
-        new Uri("http://127.0.0.1:11434") // Ollama locale
-    );
-    kernelBuilder.WithMemoryStorage(new SqliteMemoryStore("memoria_sk.db"));
-    var kernel = kernelBuilder.Build();
-    // Diagnostic: log kernel implementation type so we know whether the real SK is in use
-    try { Console.WriteLine($"[Startup] Kernel implementation: {kernel.GetType().FullName}"); } catch { }
-    return kernel;
-});
+// RIMOSSA la registrazione di IKernel: ora si usa solo Kernel reale tramite KernelFactory
 
 // === Servizio di generazione storie ===
 // Stories persistence service
 builder.Services.AddSingleton<StoriesService>();
 
 // Persistent memory service (sqlite)
-builder.Services.AddSingleton<PersistentMemoryService>();
+var memory = new PersistentMemoryService("Data/memory.sqlite");
+builder.Services.AddSingleton(memory);
 // Progress tracking for live UI updates (will broadcast over SignalR)
 builder.Services.AddSingleton<ProgressService>();
 // Planner executor
@@ -54,6 +42,25 @@ builder.Services.AddSingleton<TinyGenerator.Services.CostController>(sp =>
 builder.Services.AddScoped<StoryGeneratorService>();
 
 var app = builder.Build();
+
+// Populate local Ollama models into the modelli table (best-effort)
+try
+{
+    var cost = app.Services.GetService<TinyGenerator.Services.CostController>();
+    if (cost != null)
+    {
+        try
+        {
+            var added = cost.PopulateLocalOllamaModelsAsync().GetAwaiter().GetResult();
+            Console.WriteLine($"[Startup] Populated {added} local ollama models into modelli");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Startup] PopulateLocalOllamaModelsAsync failed: {ex.Message}");
+        }
+    }
+}
+catch { }
 
 // === Middleware ===
 if (!app.Environment.IsDevelopment())

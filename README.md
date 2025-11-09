@@ -1,5 +1,9 @@
 # TinyGenerator
 
+> ATTENZIONE PER SVILUPPATORI
+>
+> Questo progetto usa agenti costruiti con Microsoft Semantic Kernel. È obbligatorio usare le function/skill e le API fornite da Semantic Kernel per qualsiasi integrazione di funzioni (es. salvataggio/lettura memoria, accesso al DB, skill esterne). Non "inventare" nomi di funzioni o meccaniche di invocation alternative nei prompt degli agenti che vadano a modificare il comportamento degli agenti writer o evaluator in produzione. I test di function-calling devono essere isolati e non influire sui prompt usati dagli agenti di generazione.
+
 Un'applicazione web ASP.NET Core per la generazione di storie usando agenti AI basati su Semantic Kernel e modelli locali Ollama.
 
 ## Descrizione

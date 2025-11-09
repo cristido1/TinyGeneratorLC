@@ -1,93 +1,129 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+using System.Data;
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
+using System.Text;
+using System.Security.Cryptography;
 
 namespace TinyGenerator.Services
 {
-    // Simple key/value memory store backed by the same SQLite database used by StoriesService.
-    // Stores entries per memoryKey and key. ReadContext returns concatenated values for requested keys.
-    public sealed class PersistentMemoryService
-    {
-        private readonly object _lock = new();
-        private readonly string _dbPath;
-        private readonly string _connectionString;
 
-        public PersistentMemoryService(string dbPath = "data/storage.db")
+    public class PersistentMemoryService
+    {
+        private readonly string _dbPath;
+
+        public PersistentMemoryService(string dbPath = "Data/memory.sqlite")
         {
             _dbPath = dbPath;
-            Directory.CreateDirectory(Path.GetDirectoryName(_dbPath) ?? ".");
-            _connectionString = $"Data Source={_dbPath}";
-            InitializeDb();
+            Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
+            Initialize();
         }
 
-        private void InitializeDb()
+        private void Initialize()
         {
-            lock (_lock)
-            {
-                using var conn = new SqliteConnection(_connectionString);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-CREATE TABLE IF NOT EXISTS memory (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  memory_key TEXT,
-  key TEXT,
-  value TEXT,
-  agent TEXT,
-  ts TEXT
-);
-";
-                cmd.ExecuteNonQuery();
-            }
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            connection.Open();
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+            CREATE TABLE IF NOT EXISTS Memory (
+                Id TEXT PRIMARY KEY,
+                Collection TEXT NOT NULL,
+                TextValue TEXT NOT NULL,
+                Metadata TEXT,
+                CreatedAt TEXT NOT NULL
+            );
+            ";
+            cmd.ExecuteNonQuery();
         }
 
-        public void Save(string memoryKey, string key, string value, string? agent = null)
+        private static string ComputeHash(string text)
         {
-            lock (_lock)
-            {
-                using var conn = new SqliteConnection(_connectionString);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "INSERT INTO memory(memory_key, key, value, agent, ts) VALUES($mk,$k,$v,$a,$ts);";
-                cmd.Parameters.AddWithValue("$mk", memoryKey ?? string.Empty);
-                cmd.Parameters.AddWithValue("$k", key ?? string.Empty);
-                cmd.Parameters.AddWithValue("$v", value ?? string.Empty);
-                cmd.Parameters.AddWithValue("$a", agent ?? string.Empty);
-                cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
-                cmd.ExecuteNonQuery();
-            }
+            using var sha = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes(text);
+            var hash = sha.ComputeHash(bytes);
+            return Convert.ToHexString(hash);
         }
 
-        public string ReadContext(string memoryKey, string[] keys)
+        // ➕ Salva informazione testuale
+        public async Task SaveAsync(string collection, string text, object? metadata = null)
         {
-            if (keys == null || keys.Length == 0) return string.Empty;
-            lock (_lock)
+            var id = ComputeHash(collection + text);
+            var json = metadata != null ? JsonSerializer.Serialize(metadata) : null;
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                INSERT OR REPLACE INTO Memory (Id, Collection, TextValue, Metadata, CreatedAt)
+                VALUES ($id, $collection, $text, $metadata, datetime('now'))
+            ";
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.Parameters.AddWithValue("$collection", collection);
+            cmd.Parameters.AddWithValue("$text", text);
+            cmd.Parameters.AddWithValue("$metadata", json ?? (object)DBNull.Value);
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // 🔍 Cerca testo simile (ricerca semplice full-text LIKE)
+        public async Task<List<string>> SearchAsync(string collection, string query, int limit = 5)
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT TextValue FROM Memory
+                WHERE Collection = $collection
+                AND TextValue LIKE $query
+                ORDER BY CreatedAt DESC
+                LIMIT $limit;
+            ";
+            cmd.Parameters.AddWithValue("$collection", collection);
+            cmd.Parameters.AddWithValue("$query", $"%{query}%");
+            cmd.Parameters.AddWithValue("$limit", limit);
+
+            var results = new List<string>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
             {
-                using var conn = new SqliteConnection(_connectionString);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                // build parameterized IN clause
-                var parts = new List<string>();
-                for (int i = 0; i < keys.Length; i++)
-                {
-                    parts.Add($"$k{i}");
-                    cmd.Parameters.AddWithValue($"$k{i}", keys[i]);
-                }
-                var inClause = string.Join(",", parts);
-                cmd.CommandText = $"SELECT key, value FROM memory WHERE memory_key = $mk AND key IN ({inClause}) ORDER BY id";
-                cmd.Parameters.AddWithValue("$mk", memoryKey ?? string.Empty);
-                using var r = cmd.ExecuteReader();
-                var list = new List<string>();
-                while (r.Read())
-                {
-                    var k = r.IsDBNull(0) ? string.Empty : r.GetString(0);
-                    var v = r.IsDBNull(1) ? string.Empty : r.GetString(1);
-                    list.Add($"{k}: {v}");
-                }
-                return string.Join("\n", list);
+                results.Add(reader.GetString(0));
             }
+
+            return results;
+        }
+
+        // 🧹 Cancella una voce
+        public async Task DeleteAsync(string collection, string text)
+        {
+            var id = ComputeHash(collection + text);
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"DELETE FROM Memory WHERE Id = $id";
+            cmd.Parameters.AddWithValue("$id", id);
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // 🧾 Elenca tutte le collezioni
+        public async Task<List<string>> GetCollectionsAsync()
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"SELECT DISTINCT Collection FROM Memory ORDER BY Collection;";
+            var collections = new List<string>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                collections.Add(reader.GetString(0));
+            }
+
+            return collections;
         }
     }
 }

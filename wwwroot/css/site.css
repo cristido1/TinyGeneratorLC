@@ -1,3 +1,37 @@
+/* Tabella modelli compatta e scrollabile */
+.models-table-wrapper {
+  max-width: 100vw;
+  overflow-x: auto;
+  margin-bottom: 1.5rem;
+}
+.models-table {
+  font-size: 0.92rem;
+  min-width: 1200px;
+}
+.models-table th, .models-table td {
+  padding: 0.25rem 0.5rem !important;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+/* Pulsanti primary custom per compatibilità Bootstrap/Pico */
+.btn-primary, .btn.btn-primary {
+  background: #1a73e8 !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+.btn-primary:hover, .btn.btn-primary:hover {
+  background: #1669d8 !important;
+  color: #fff !important;
+}
+/* Forza tema chiaro per la tabella modelli anche se Pico.css è in dark mode */
+table, .table, .table-striped, .table-hover, .table-bordered, .table-responsive {
+  background: #fff !important;
+  color: #222 !important;
+}
+table th, table td, .table th, .table td {
+  background: #fff !important;
+  color: #222 !important;
+}
 html {
   font-size: 14px;
 }

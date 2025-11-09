@@ -120,6 +120,40 @@ namespace TinyGenerator.Services
             });
         }
 
+        // List installed Ollama models (best-effort) by calling `ollama list` and parsing output.
+        public static async Task<List<ModelInfo>> GetInstalledModelsAsync()
+        {
+            return await Task.Run(() =>
+            {
+                var list = new List<ModelInfo>();
+                try
+                {
+                    var psi = new ProcessStartInfo("ollama", "list") { RedirectStandardOutput = true, UseShellExecute = false };
+                    using var p = Process.Start(psi);
+                    if (p == null) return list;
+                    p.WaitForExit(3000);
+                    var outp = p.StandardOutput.ReadToEnd();
+                    if (string.IsNullOrWhiteSpace(outp)) return list;
+                    var lines = outp.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                    // skip possible header line(s). Heuristic: lines that contain 'NAME' or 'ID' are headers
+                    foreach (var raw in lines)
+                    {
+                        var line = raw.Trim();
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+                        var lower = line.ToLowerInvariant();
+                        if (lower.Contains("name") || lower.Contains("id") || lower.StartsWith("----")) continue;
+                        // take first token as model name
+                        var parts = System.Text.RegularExpressions.Regex.Split(line, "\\s{2,}");
+                        string name = parts.Length > 0 ? parts[0].Trim() : string.Empty;
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+                        list.Add(new ModelInfo { Name = name });
+                    }
+                }
+                catch { }
+                return list;
+            });
+        }
+
         // Best-effort: stop any running instance for the model and run it with the requested context.
         public static async Task<(bool Success, string Output)> StartModelWithContextAsync(string modelRef, int context)
         {

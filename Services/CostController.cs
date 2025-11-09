@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace TinyGenerator.Services;
@@ -37,64 +38,123 @@ public sealed class CostController
     {
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
 CREATE TABLE IF NOT EXISTS usage_state (
-  month TEXT PRIMARY KEY,
-  tokens_this_run INTEGER DEFAULT 0,
-  tokens_this_month INTEGER DEFAULT 0,
-  cost_this_month REAL DEFAULT 0
+    month TEXT PRIMARY KEY,
+    tokens_this_run INTEGER DEFAULT 0,
+    tokens_this_month INTEGER DEFAULT 0,
+    cost_this_month REAL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS calls (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts TEXT,
-  model TEXT,
-  provider TEXT,
-  input_tokens INTEGER DEFAULT 0,
-  output_tokens INTEGER DEFAULT 0,
-  tokens INTEGER,
-  cost REAL,
-  request TEXT,
-  response TEXT
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT,
+    model TEXT,
+    provider TEXT,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    tokens INTEGER,
+    cost REAL,
+    request TEXT,
+    response TEXT
 );
 
--- table for model metadata/configuration
-CREATE TABLE IF NOT EXISTS modelli (
-  name TEXT PRIMARY KEY,
-  provider TEXT,
-  is_local INTEGER DEFAULT 1,
-  max_context INTEGER DEFAULT 4096,
-  context_to_use INTEGER DEFAULT 4096,
-  cost_in_per_token REAL DEFAULT 0,
-  cost_out_per_token REAL DEFAULT 0,
-  limit_tokens_day INTEGER DEFAULT 0,
-  limit_tokens_week INTEGER DEFAULT 0,
-  limit_tokens_month INTEGER DEFAULT 0,
-  metadata TEXT,
-  enabled INTEGER DEFAULT 1,
-  created_at TEXT,
-  updated_at TEXT
-);
+        CREATE TABLE IF NOT EXISTS models (
+            name TEXT PRIMARY KEY,
+            provider TEXT,
+            endpoint TEXT,
+            is_local INTEGER DEFAULT 1,
+            max_context INTEGER DEFAULT 4096,
+            context_to_use INTEGER DEFAULT 4096,
+            function_calling_score INTEGER DEFAULT 0,
+            cost_in_per_token REAL DEFAULT 0,
+            cost_out_per_token REAL DEFAULT 0,
+            limit_tokens_day INTEGER DEFAULT 0,
+            limit_tokens_week INTEGER DEFAULT 0,
+            limit_tokens_month INTEGER DEFAULT 0,
+            metadata TEXT,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT,
+            updated_at TEXT,
+            skill_toupper INTEGER DEFAULT NULL,
+            skill_tolower INTEGER DEFAULT NULL,
+            skill_trim INTEGER DEFAULT NULL,
+            skill_length INTEGER DEFAULT NULL,
+            skill_substring INTEGER DEFAULT NULL,
+            skill_join INTEGER DEFAULT NULL,
+            skill_split INTEGER DEFAULT NULL,
+            skill_add INTEGER DEFAULT NULL,
+            skill_subtract INTEGER DEFAULT NULL,
+            skill_multiply INTEGER DEFAULT NULL,
+            skill_divide INTEGER DEFAULT NULL,
+            skill_sqrt INTEGER DEFAULT NULL,
+            skill_now INTEGER DEFAULT NULL,
+            skill_today INTEGER DEFAULT NULL,
+            skill_adddays INTEGER DEFAULT NULL,
+            skill_addhours INTEGER DEFAULT NULL
+        );
 ";
-        cmd.ExecuteNonQuery();
+                cmd.ExecuteNonQuery();
+
+        // lightweight migration: ensure function_calling_score column exists for older DBs
+        try
+        {
+            using var chk = conn.CreateCommand();
+            chk.CommandText = "PRAGMA table_info(models);";
+            var hasCol = false;
+            using var r = chk.ExecuteReader();
+            while (r.Read())
+            {
+                var colName = r.IsDBNull(1) ? string.Empty : r.GetString(1);
+                if (string.Equals(colName, "function_calling_score", StringComparison.OrdinalIgnoreCase)) { hasCol = true; break; }
+            }
+            if (!hasCol)
+            {
+                using var alt = conn.CreateCommand();
+                alt.CommandText = "ALTER TABLE models ADD COLUMN function_calling_score INTEGER DEFAULT 0;";
+                alt.ExecuteNonQuery();
+            }
+        }
+        catch { /* non-fatal migration */ }
     }
 
     // Simple model info container
     public class ModelInfo
     {
-        public string Name { get; set; } = string.Empty;
-        public string Provider { get; set; } = string.Empty;
-        public bool IsLocal { get; set; }
-        public int MaxContext { get; set; }
-        public int ContextToUse { get; set; }
-        public double CostInPerToken { get; set; }
-        public double CostOutPerToken { get; set; }
-        public long LimitTokensDay { get; set; }
-        public long LimitTokensWeek { get; set; }
-        public long LimitTokensMonth { get; set; }
-        public string Metadata { get; set; } = string.Empty;
-        public bool Enabled { get; set; } = true;
+    public string Name { get; set; } = string.Empty;
+    public string Provider { get; set; } = string.Empty;
+    public string? Endpoint { get; set; }
+    public bool IsLocal { get; set; }
+    public int MaxContext { get; set; }
+    public int ContextToUse { get; set; }
+    // score 0..10 indicating model function-calling capability
+    public int FunctionCallingScore { get; set; }
+    public double CostInPerToken { get; set; }
+    public double CostOutPerToken { get; set; }
+    public long LimitTokensDay { get; set; }
+    public long LimitTokensWeek { get; set; }
+    public long LimitTokensMonth { get; set; }
+    public string Metadata { get; set; } = string.Empty;
+    public bool Enabled { get; set; } = true;
+    // Skill booleans
+    public bool? SkillToUpper { get; set; }
+    public bool? SkillToLower { get; set; }
+    public bool? SkillTrim { get; set; }
+    public bool? SkillLength { get; set; }
+    public bool? SkillSubstring { get; set; }
+    public bool? SkillJoin { get; set; }
+    public bool? SkillSplit { get; set; }
+    public bool? SkillAdd { get; set; }
+    public bool? SkillSubtract { get; set; }
+    public bool? SkillMultiply { get; set; }
+    public bool? SkillDivide { get; set; }
+    public bool? SkillSqrt { get; set; }
+    public bool? SkillNow { get; set; }
+    public bool? SkillToday { get; set; }
+    public bool? SkillAddDays { get; set; }
+    public bool? SkillAddHours { get; set; }
     }
 
     // Lookup model info by exact name first, then by provider fallback
@@ -107,7 +167,7 @@ CREATE TABLE IF NOT EXISTS modelli (
             conn.Open();
             using var cmd = conn.CreateCommand();
             // try exact name
-            cmd.CommandText = "SELECT name, provider, is_local, max_context, context_to_use, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM modelli WHERE name = $n LIMIT 1";
+            cmd.CommandText = "SELECT name, provider, endpoint, is_local, max_context, context_to_use, function_calling_score, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM models WHERE name = $n LIMIT 1";
             cmd.Parameters.AddWithValue("$n", modelOrProvider);
             using var r = cmd.ExecuteReader();
             if (r.Read())
@@ -116,23 +176,26 @@ CREATE TABLE IF NOT EXISTS modelli (
                 {
                     Name = r.GetString(0),
                     Provider = r.IsDBNull(1) ? string.Empty : r.GetString(1),
-                    IsLocal = !r.IsDBNull(2) && r.GetInt32(2) != 0,
-                    MaxContext = r.IsDBNull(3) ? 0 : r.GetInt32(3),
-                    ContextToUse = r.IsDBNull(4) ? 0 : r.GetInt32(4),
-                    CostInPerToken = r.IsDBNull(5) ? 0.0 : r.GetDouble(5),
-                    CostOutPerToken = r.IsDBNull(6) ? 0.0 : r.GetDouble(6),
-                    LimitTokensDay = r.IsDBNull(7) ? 0 : r.GetInt64(7),
-                    LimitTokensWeek = r.IsDBNull(8) ? 0 : r.GetInt64(8),
-                    LimitTokensMonth = r.IsDBNull(9) ? 0 : r.GetInt64(9),
-                    Metadata = r.IsDBNull(10) ? string.Empty : r.GetString(10),
-                    Enabled = r.IsDBNull(11) ? true : r.GetInt32(11) != 0
+                    Endpoint = r.IsDBNull(2) ? null : r.GetString(2),
+                    IsLocal = !r.IsDBNull(3) && r.GetInt32(3) != 0,
+                    MaxContext = r.IsDBNull(4) ? 0 : r.GetInt32(4),
+                    ContextToUse = r.IsDBNull(5) ? 0 : r.GetInt32(5),
+                    FunctionCallingScore = r.IsDBNull(6) ? 0 : r.GetInt32(6),
+                    CostInPerToken = r.IsDBNull(7) ? 0.0 : r.GetDouble(7),
+                    CostOutPerToken = r.IsDBNull(8) ? 0.0 : r.GetDouble(8),
+                    LimitTokensDay = r.IsDBNull(9) ? 0 : r.GetInt64(9),
+                    LimitTokensWeek = r.IsDBNull(10) ? 0 : r.GetInt64(10),
+                    LimitTokensMonth = r.IsDBNull(11) ? 0 : r.GetInt64(11),
+                    Metadata = r.IsDBNull(12) ? string.Empty : r.GetString(12),
+                    Enabled = r.IsDBNull(13) ? true : r.GetInt32(13) != 0
                 };
             }
 
-            // fallback: try provider match
+            // fallback: try provider match (use the part before ':' if present)
+            var provider = modelOrProvider.Split(':')[0];
             cmd.Parameters.Clear();
-            cmd.CommandText = "SELECT name, provider, is_local, max_context, context_to_use, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM modelli WHERE provider = $p LIMIT 1";
-            cmd.Parameters.AddWithValue("$p", modelOrProvider);
+            cmd.CommandText = "SELECT name, provider, endpoint, is_local, max_context, context_to_use, function_calling_score, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM models WHERE provider = $p LIMIT 1";
+            cmd.Parameters.AddWithValue("$p", provider);
             using var r2 = cmd.ExecuteReader();
             if (r2.Read())
             {
@@ -140,16 +203,18 @@ CREATE TABLE IF NOT EXISTS modelli (
                 {
                     Name = r2.GetString(0),
                     Provider = r2.IsDBNull(1) ? string.Empty : r2.GetString(1),
-                    IsLocal = !r2.IsDBNull(2) && r2.GetInt32(2) != 0,
-                    MaxContext = r2.IsDBNull(3) ? 0 : r2.GetInt32(3),
-                    ContextToUse = r2.IsDBNull(4) ? 0 : r2.GetInt32(4),
-                    CostInPerToken = r2.IsDBNull(5) ? 0.0 : r2.GetDouble(5),
-                    CostOutPerToken = r2.IsDBNull(6) ? 0.0 : r2.GetDouble(6),
-                    LimitTokensDay = r2.IsDBNull(7) ? 0 : r2.GetInt64(7),
-                    LimitTokensWeek = r2.IsDBNull(8) ? 0 : r2.GetInt64(8),
-                    LimitTokensMonth = r2.IsDBNull(9) ? 0 : r2.GetInt64(9),
-                    Metadata = r2.IsDBNull(10) ? string.Empty : r2.GetString(10),
-                    Enabled = r2.IsDBNull(11) ? true : r2.GetInt32(11) != 0
+                    Endpoint = r2.IsDBNull(2) ? null : r2.GetString(2),
+                    IsLocal = !r2.IsDBNull(3) && r2.GetInt32(3) != 0,
+                    MaxContext = r2.IsDBNull(4) ? 0 : r2.GetInt32(4),
+                    ContextToUse = r2.IsDBNull(5) ? 0 : r2.GetInt32(5),
+                    FunctionCallingScore = r2.IsDBNull(6) ? 0 : r2.GetInt32(6),
+                    CostInPerToken = r2.IsDBNull(7) ? 0.0 : r2.GetDouble(7),
+                    CostOutPerToken = r2.IsDBNull(8) ? 0.0 : r2.GetDouble(8),
+                    LimitTokensDay = r2.IsDBNull(9) ? 0 : r2.GetInt64(9),
+                    LimitTokensWeek = r2.IsDBNull(10) ? 0 : r2.GetInt64(10),
+                    LimitTokensMonth = r2.IsDBNull(11) ? 0 : r2.GetInt64(11),
+                    Metadata = r2.IsDBNull(12) ? string.Empty : r2.GetString(12),
+                    Enabled = r2.IsDBNull(13) ? true : r2.GetInt32(13) != 0
                 };
             }
             return null;
@@ -165,15 +230,17 @@ CREATE TABLE IF NOT EXISTS modelli (
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"INSERT INTO modelli(name, provider, is_local, max_context, context_to_use, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled, created_at, updated_at)
-VALUES($name,$provider,$is_local,$max_context,$context_to_use,$cost_in,$cost_out,$limd,$limw,$limm,$meta,$enabled,$now,$now)
-ON CONFLICT(name) DO UPDATE SET provider=$provider, is_local=$is_local, max_context=$max_context, context_to_use=$context_to_use, cost_in_per_token=$cost_in, cost_out_per_token=$cost_out, limit_tokens_day=$limd, limit_tokens_week=$limw, limit_tokens_month=$limm, metadata=$meta, enabled=$enabled, updated_at=$now";
+            cmd.CommandText = @"INSERT INTO models(name, provider, endpoint, is_local, max_context, context_to_use, function_calling_score, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled, created_at, updated_at)
+VALUES($name,$provider,$endpoint,$is_local,$max_context,$context_to_use,$funcscore,$cost_in,$cost_out,$limd,$limw,$limm,$meta,$enabled,$now,$now)
+ON CONFLICT(name) DO UPDATE SET provider=$provider, endpoint=$endpoint, is_local=$is_local, max_context=$max_context, context_to_use=$context_to_use, function_calling_score=$funcscore, cost_in_per_token=$cost_in, cost_out_per_token=$cost_out, limit_tokens_day=$limd, limit_tokens_week=$limw, limit_tokens_month=$limm, metadata=$meta, enabled=$enabled, updated_at=$now";
             var now = DateTime.UtcNow.ToString("o");
             cmd.Parameters.AddWithValue("$name", m.Name ?? string.Empty);
             cmd.Parameters.AddWithValue("$provider", m.Provider ?? string.Empty);
+            cmd.Parameters.AddWithValue("$endpoint", m.Endpoint ?? (object)DBNull.Value);
             cmd.Parameters.AddWithValue("$is_local", m.IsLocal ? 1 : 0);
             cmd.Parameters.AddWithValue("$max_context", m.MaxContext);
             cmd.Parameters.AddWithValue("$context_to_use", m.ContextToUse);
+            cmd.Parameters.AddWithValue("$funcscore", m.FunctionCallingScore);
             cmd.Parameters.AddWithValue("$cost_in", m.CostInPerToken);
             cmd.Parameters.AddWithValue("$cost_out", m.CostOutPerToken);
             cmd.Parameters.AddWithValue("$limd", m.LimitTokensDay);
@@ -195,7 +262,7 @@ ON CONFLICT(name) DO UPDATE SET provider=$provider, is_local=$is_local, max_cont
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT name, provider, is_local, max_context, context_to_use, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM modelli";
+            cmd.CommandText = "SELECT name, provider, endpoint, is_local, max_context, context_to_use, function_calling_score, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM models";
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {
@@ -203,20 +270,72 @@ ON CONFLICT(name) DO UPDATE SET provider=$provider, is_local=$is_local, max_cont
                 {
                     Name = r.GetString(0),
                     Provider = r.IsDBNull(1) ? string.Empty : r.GetString(1),
-                    IsLocal = !r.IsDBNull(2) && r.GetInt32(2) != 0,
-                    MaxContext = r.IsDBNull(3) ? 0 : r.GetInt32(3),
-                    ContextToUse = r.IsDBNull(4) ? 0 : r.GetInt32(4),
-                    CostInPerToken = r.IsDBNull(5) ? 0.0 : r.GetDouble(5),
-                    CostOutPerToken = r.IsDBNull(6) ? 0.0 : r.GetDouble(6),
-                    LimitTokensDay = r.IsDBNull(7) ? 0 : r.GetInt64(7),
-                    LimitTokensWeek = r.IsDBNull(8) ? 0 : r.GetInt64(8),
-                    LimitTokensMonth = r.IsDBNull(9) ? 0 : r.GetInt64(9),
-                    Metadata = r.IsDBNull(10) ? string.Empty : r.GetString(10),
-                    Enabled = r.IsDBNull(11) ? true : r.GetInt32(11) != 0
+                    Endpoint = r.IsDBNull(2) ? null : r.GetString(2),
+                    IsLocal = !r.IsDBNull(3) && r.GetInt32(3) != 0,
+                    MaxContext = r.IsDBNull(4) ? 0 : r.GetInt32(4),
+                    ContextToUse = r.IsDBNull(5) ? 0 : r.GetInt32(5),
+                    FunctionCallingScore = r.IsDBNull(6) ? 0 : r.GetInt32(6),
+                    CostInPerToken = r.IsDBNull(7) ? 0.0 : r.GetDouble(7),
+                    CostOutPerToken = r.IsDBNull(8) ? 0.0 : r.GetDouble(8),
+                    LimitTokensDay = r.IsDBNull(9) ? 0 : r.GetInt64(9),
+                    LimitTokensWeek = r.IsDBNull(10) ? 0 : r.GetInt64(10),
+                    LimitTokensMonth = r.IsDBNull(11) ? 0 : r.GetInt64(11),
+                    Metadata = r.IsDBNull(12) ? string.Empty : r.GetString(12),
+                    Enabled = r.IsDBNull(13) ? true : r.GetInt32(13) != 0
                 });
             }
         }
         return outList;
+    }
+
+    // Scan local Ollama running instances (best-effort) and upsert them into the models table.
+    // Returns number of models upserted.
+    public async Task<int> PopulateLocalOllamaModelsAsync()
+    {
+        try
+        {
+            // prefer installed models (ollama list) since user asked for installed models
+            var list = await OllamaMonitorService.GetInstalledModelsAsync();
+            var added = 0;
+            foreach (var m in list)
+            {
+                // try to extract a numeric context if present in the Context string
+                var ctx = 0;
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(m.Context))
+                    {
+                        var digits = new string(m.Context.Where(char.IsDigit).ToArray());
+                        if (int.TryParse(digits, out var parsed)) ctx = parsed;
+                    }
+                }
+                catch { }
+
+                var mi = new ModelInfo
+                {
+                    Name = m.Name ?? string.Empty,
+                    Provider = "ollama",
+                    IsLocal = true,
+                    MaxContext = ctx > 0 ? ctx : 4096,
+                    ContextToUse = ctx > 0 ? ctx : 4096,
+                    CostInPerToken = 0.0,
+                    CostOutPerToken = 0.0,
+                    LimitTokensDay = 0,
+                    LimitTokensWeek = 0,
+                    LimitTokensMonth = 0,
+                    Metadata = JsonSerializer.Serialize(new { m.Id, m.Size, m.Processor, m.Context, m.Until }),
+                    Enabled = true
+                };
+
+                UpsertModel(mi);
+                added++;
+            }
+            return added;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     // semplice euristica: 1 token ~ 4 caratteri

@@ -51,3 +51,4 @@ publish/
 # Secrets
 secrets.json
 appsettings.*.Local.json
+appsettings.secrets.json

@@ -14,10 +14,12 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, bool> _completed = new();
         private readonly ConcurrentDictionary<string, string?> _result = new();
         private readonly IHubContext<ProgressHub>? _hubContext;
+        private readonly Microsoft.Extensions.Logging.ILogger<ProgressService>? _logger;
 
-        public ProgressService(IHubContext<ProgressHub>? hubContext = null)
+        public ProgressService(IHubContext<ProgressHub>? hubContext = null, Microsoft.Extensions.Logging.ILogger<ProgressService>? logger = null)
         {
             _hubContext = hubContext;
+            _logger = logger;
         }
 
         public void Start(string id)
@@ -30,13 +32,21 @@ namespace TinyGenerator.Services
         public async Task AppendAsync(string id, string message)
         {
             if (!_store.ContainsKey(id)) Start(id);
-            _store[id].Add(message);
+            var ts = DateTime.UtcNow.ToString("o");
+            var stamped = $"{ts} - {message}";
+            _store[id].Add(stamped);
+            try
+            {
+                if (_logger != null) _logger.LogInformation("ProgressAppend [{RunId}] {Message}", id, stamped);
+                else Console.WriteLine($"[ProgressService] Append {id}: {stamped}");
+            }
+            catch { }
             // Broadcast to connected clients in the group for this id (best-effort)
             try
             {
                 if (_hubContext != null)
                 {
-                    await _hubContext.Clients.Group(id).SendAsync("ProgressAppended", id, message);
+                    await _hubContext.Clients.Group(id).SendAsync("ProgressAppended", id, stamped);
                 }
             }
             catch { }
@@ -57,12 +67,18 @@ namespace TinyGenerator.Services
             _result[id] = finalResult;
             try
             {
+                if (_logger != null) _logger.LogInformation("ProgressCompleted [{RunId}] {Result}", id, finalResult);
+                else Console.WriteLine($"[ProgressService] Completed {id}: {finalResult}");
+
                 if (_hubContext != null)
                 {
                     await _hubContext.Clients.Group(id).SendAsync("ProgressCompleted", id, finalResult);
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                try { _logger?.LogWarning(ex, "Failed broadcasting ProgressCompleted for {RunId}", id); } catch { }
+            }
         }
 
         // backward-compatible synchronous wrapper

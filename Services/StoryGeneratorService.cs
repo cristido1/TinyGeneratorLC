@@ -11,7 +11,7 @@ namespace TinyGenerator.Services
 {
     public class StoryGeneratorService
     {
-    private readonly Kernel _kernel; // Campo kernel reale
+    private readonly IKernelFactory _kernelFactory;
         private readonly CostController _cost;
         private readonly StoriesService _stories;
     // TODO: Planner disabilitato temporaneamente (HandebarsPlanner non compatibile con SK 1.51.0-preview)
@@ -22,15 +22,15 @@ namespace TinyGenerator.Services
         private readonly string _outputPath = "wwwroot/story_output.txt";
         private readonly Dictionary<string, string> _currentStoryMemory = new Dictionary<string, string>();
 
-    public StoryGeneratorService(Kernel kernel, CostController cost, StoriesService stories, PersistentMemoryService persistentMemory, PlannerExecutor plannerExecutor)
-        {
-            _kernel = kernel;
-            _cost = cost;
-            _stories = stories;
-            // _planner = new HandlebarsPlanner(_kernel); // TODO: Planner disabilitato temporaneamente
-            _persistentMemory = persistentMemory;
-            _plannerExecutor = plannerExecutor;
-        }
+    public StoryGeneratorService(IKernelFactory kernelFactory, CostController cost, StoriesService stories, PersistentMemoryService persistentMemory, PlannerExecutor plannerExecutor)
+    {
+        _kernelFactory = kernelFactory;
+        _cost = cost;
+        _stories = stories;
+        // _planner = new HandlebarsPlanner(_kernel); // TODO: Planner disabilitato temporaneamente
+        _persistentMemory = persistentMemory;
+        _plannerExecutor = plannerExecutor;
+    }
 
         public class GenerationResult
         {
@@ -115,7 +115,7 @@ namespace TinyGenerator.Services
             // --- Writer C: single-shot epic writer (writes whole story in one shot: title + story only) ---
             if (sel == "ALL" || sel == "C")
             {
-                var writer = MakeAgent("WriterC", "Scrittore epico", "Sei uno scrittore epico: scrivi storie lunghe, avvincenti e dettagliate in italiano.", writerModelC);
+                    var writer = MakeAgent("WriterC", "Scrittore epico", "Sei uno scrittore epico: scrivi storie lunghe, avvincenti e dettagliate in italiano.", writerModelC);
                 var agentMemoryKey = $"{writer.Name}_{memoryKey}";
                 progress?.Invoke($"{writer.Name}: avvio single-shot writer (titolo + storia)...");
 
@@ -211,8 +211,11 @@ namespace TinyGenerator.Services
             return result;
         }
 
-        private ChatCompletionAgent MakeAgent(string name, string desc, string sys, string? model = null) =>
-            new ChatCompletionAgent(name, _kernel, desc, model) { Instructions = sys };
+        private ChatCompletionAgent MakeAgent(string name, string desc, string sys, string? model = null)
+        {
+            var kernel = _kernelFactory.CreateKernel(model);
+            return new ChatCompletionAgent(name, kernel!, desc, model) { Instructions = sys };
+        }
 
         private async Task<string> Ask(ChatCompletionAgent agent, string input)
         {

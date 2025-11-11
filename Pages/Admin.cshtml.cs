@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using TinyGenerator.Models;
 using TinyGenerator.Services;
-using CallRecord = TinyGenerator.Services.CostController.CallRecord;
 
 namespace TinyGenerator.Pages
 {

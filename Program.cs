@@ -1,3 +1,4 @@
+using System.IO;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Connectors.Ollama;
 using Microsoft.SemanticKernel.Memory;
@@ -7,8 +8,15 @@ using Microsoft.Extensions.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// register sqlite logger provider so Microsoft logs are also persisted to storage.db
-builder.Logging.AddProvider(new SqliteLoggerProvider("data/storage.db"));
+// Load secrets file (kept out of source control) if present.
+var secretsPath = Path.Combine(builder.Environment.ContentRootPath, "appsettings.secrets.json");
+if (File.Exists(secretsPath))
+{
+    builder.Configuration.AddJsonFile(secretsPath, optional: false, reloadOnChange: true);
+}
+
+// The old sqlite logger provider has been replaced by a single async Database-backed logger.
+// Remove the legacy registration to avoid duplicate writes.
 
 // === Razor Pages ===
 builder.Services.AddRazorPages();
@@ -31,19 +39,46 @@ var memory = new PersistentMemoryService("Data/memory.sqlite");
 builder.Services.AddSingleton(memory);
 // Progress tracking for live UI updates (will broadcast over SignalR)
 builder.Services.AddSingleton<ProgressService>();
-// Planner executor
-builder.Services.AddSingleton<PlannerExecutor>();
 
-// Cost controller (sqlite) - create with tokenizer from DI
-builder.Services.AddSingleton<TinyGenerator.Services.CostController>(sp =>
-    new TinyGenerator.Services.CostController(sp.GetService<ITokenizer>()));
+// Kernel factory (nuova DI)
+builder.Services.AddSingleton<IKernelFactory, KernelFactory>();
+builder.Services.AddTransient<StoryGeneratorService>();
+builder.Services.AddTransient<PlannerExecutor>();
 
-// Story generator depends on StoriesService
-builder.Services.AddScoped<StoryGeneratorService>();
+// Database access service + cost controller (sqlite)
+builder.Services.AddSingleton(new DatabaseService("data/storage.db"));
+// Configure custom logger options from configuration (section: CustomLogger)
+builder.Services.Configure<CustomLoggerOptions>(builder.Configuration.GetSection("CustomLogger"));
+// Register the async database-backed logger (ensure DatabaseService is available)
+builder.Services.AddSingleton<ICustomLogger>(sp => new CustomLogger(sp.GetRequiredService<DatabaseService>(), sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CustomLoggerOptions>>().Value));
+builder.Services.AddSingleton<ILoggerProvider, CustomLoggerProvider>();
+// TTS service configuration: read HOST/PORT from environment with defaults
+var ttsHost = Environment.GetEnvironmentVariable("HOST") ?? "0.0.0.0";
+var ttsPortRaw = Environment.GetEnvironmentVariable("PORT") ?? Environment.GetEnvironmentVariable("TTS_PORT") ?? "8004";
+if (!int.TryParse(ttsPortRaw, out var ttsPort)) ttsPort = 8004;
+var ttsOptions = new TtsOptions { Host = ttsHost, Port = ttsPort };
+builder.Services.AddSingleton(ttsOptions);
+builder.Services.AddHttpClient<TtsService>(client =>
+{
+    client.BaseAddress = new Uri(ttsOptions.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
+builder.Services.AddSingleton<CostController>(sp =>
+    new CostController(
+        sp.GetRequiredService<DatabaseService>(),
+        sp.GetService<ITokenizer>()));
 
 var app = builder.Build();
 
-// Populate local Ollama models into the modelli table (best-effort)
+// Startup model actions
+// NOTE: The application does NOT run the function-calling capability tests at startup.
+// What happens here at startup is a best-effort discovery of locally installed Ollama
+// models: we call `PopulateLocalOllamaModelsAsync()` which queries `ollama list` /
+// `ollama ps` and upserts basic metadata into the `models` table (name, provider,
+// context, metadata). This is only for discovery and does NOT exercise model
+// functions or plugins. Capability tests are run manually via the Models admin UI
+// (the "Test function-calling" button) or by calling the Models test API endpoint.
 try
 {
     var cost = app.Services.GetService<TinyGenerator.Services.CostController>();

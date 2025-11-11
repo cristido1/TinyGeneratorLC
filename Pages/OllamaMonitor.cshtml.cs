@@ -9,7 +9,7 @@ namespace TinyGenerator.Pages
     [Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryToken]
     public class OllamaMonitorModel : PageModel
     {
-        public List<ModelInfo> Models { get; set; } = new();
+    public List<TinyGenerator.Services.OllamaModelInfo> Models { get; set; } = new();
 
         public void OnGet()
         {

@@ -13,14 +13,14 @@ namespace TinyGenerator.Services
     // Executor that gives an agent a plan and lets it run steps, returning assembled chapters.
     public sealed class PlannerExecutor
     {
-    private readonly Kernel _kernel; // Campo kernel reale
+    private readonly IKernelFactory _kernelFactory;
         private readonly StoriesService? _stories;
         private readonly PersistentMemoryService _persistentMemory;
         private readonly string _collection = "storie";
 
-        public PlannerExecutor(Kernel kernel, PersistentMemoryService persistentMemory, StoriesService? stories = null)
+        public PlannerExecutor(IKernelFactory kernelFactory, PersistentMemoryService persistentMemory, StoriesService? stories = null)
         {
-            _kernel = kernel;
+            _kernelFactory = kernelFactory;
             _persistentMemory = persistentMemory;
             _stories = stories;
         }
@@ -29,6 +29,7 @@ namespace TinyGenerator.Services
         {
             var parts = new List<string>();
 
+            var kernel = _kernelFactory.CreateKernel(agent.Model);
             foreach (var step in plan.Steps)
             {
                 progress?.Invoke($"{agent.Name}: eseguo passo: {step.Description}");
@@ -164,19 +165,19 @@ namespace TinyGenerator.Services
     public class FreeWriterPlanner
 {
     // private readonly IKernel _kernel; // RIMOSSO: ora si usa solo Kernel reale
-    private readonly Kernel _kernel; // Campo kernel reale
+    private readonly IKernelFactory _kernelFactory;
     private readonly PersistentMemoryService _persistentMemory;
     private readonly string _collection = "storie";
 
-    public FreeWriterPlanner(Kernel kernel, PersistentMemoryService persistentMemory)
+    public FreeWriterPlanner(IKernelFactory kernelFactory, PersistentMemoryService persistentMemory)
     {
-        _kernel = kernel;
+        _kernelFactory = kernelFactory;
         _persistentMemory = persistentMemory;
     }
 
     public async Task<string> RunAsync(string prompt, string storyId, Microsoft.SemanticKernel.Agents.ChatCompletionAgent agent, Action<string>? progress = null)
     {
-        // Stubbed kernel memory may not support search in offline mode; keep memoria empty as a best-effort.
+        // Stubbed kernel memory may not support search in offline mode; keep memoria empty come best-effort.
         var memoria = string.Empty;
 
         // Build the meta-prompt without using raw interpolated strings to avoid brace-escaping issues.
@@ -195,8 +196,10 @@ namespace TinyGenerator.Services
             "Poi decidi il prossimo passo da solo (nuovo capitolo, modifica, riassunto...).\n" +
             "Istruzioni utente: " + prompt + "\n";
 
+    var kernel = _kernelFactory.CreateKernel(agent.Model);
+
         string result = string.Empty;
-            for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 6; i++)
         {
             progress?.Invoke($"🪶 Step {i + 1}: generazione autonoma…");
 

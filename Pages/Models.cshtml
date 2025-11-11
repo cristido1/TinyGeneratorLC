@@ -1,152 +1,286 @@
 @page
-@using Microsoft.AspNetCore.Html
 @model TinyGenerator.Pages.ModelsModel
 @{
     ViewData["Title"] = "Models";
 }
 
-<h1>Models</h1>
+<!-- Modal for editing costs -->
+<div id="costModal" class="tg-modal" aria-hidden="true" style="display:none;">
+    <div class="tg-modal-backdrop"></div>
+    <div class="tg-modal-panel">
+        <h5>Modifica costi</h5>
+        <form method="post" action="?handler=UpdateCost" onsubmit="(function(f){ var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.innerText='Saving...'; } })(this)">
+            <input type="hidden" name="model" id="costModal_model" value="" />
+            <div class="mb-2">
+                <label class="form-label">Cost In $/1k</label>
+                <input name="costInPer1k" id="costModal_in" class="form-control form-control-sm" />
+            </div>
+            <div class="mb-2">
+                <label class="form-label">Cost Out $/1k</label>
+                <input name="costOutPer1k" id="costModal_out" class="form-control form-control-sm" />
+            </div>
+            <div class="text-end">
+                <button type="button" class="btn btn-sm btn-light me-2" onclick="closeCostModal()">Annulla</button>
+                <button type="submit" class="btn btn-sm btn-primary">Salva</button>
+            </div>
+        </form>
+    </div>
+</div>
 
-<p>Lista dei modelli presenti nel database. Premi "Test function-calling" per eseguire una verifica delle principali funzioni (memory/db/skills) sul modello selezionato.</p>
+@section Scripts {
+    <style>
+        /* simple modal styles (lightweight, no bootstrap js required) */
+        .tg-modal { position:fixed; inset:0; z-index:1050; display:none; }
+        .tg-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.45); }
+        .tg-modal-panel { position:relative; width:420px; max-width:92%; margin:6% auto; background:#fff; padding:16px; border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,0.2); z-index:1060; }
+    </style>
+    <script>
+        function openCostModal(btn) {
+            var name = btn.getAttribute('data-name');
+            var inCost = btn.getAttribute('data-costin') || '';
+            var outCost = btn.getAttribute('data-costout') || '';
+            document.getElementById('costModal_model').value = name || '';
+            document.getElementById('costModal_in').value = inCost;
+            document.getElementById('costModal_out').value = outCost;
+            var m = document.getElementById('costModal');
+            if (!m) return;
+            m.style.display = 'block';
+            m.setAttribute('aria-hidden', 'false');
+        }
+        function closeCostModal() {
+            var m = document.getElementById('costModal');
+            if (!m) return;
+            m.style.display = 'none';
+            m.setAttribute('aria-hidden', 'true');
+        }
+        // Close modal on ESC
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeCostModal(); });
+        function toggleDetails(btn) {
+            try {
+                var tr = btn.closest('td').parentElement;
+                var next = tr.nextElementSibling;
+                if (!next) return;
+                if (next.style.display === 'none' || next.style.display === '') {
+                    next.style.display = '';
+                } else {
+                    next.style.display = 'none';
+                }
+            } catch (e) { }
+        }
+    </script>
+}
+@section Styles {
+    <style>
+          /* Align the models grid exactly 10px from the left menu.
+              Force no internal padding so the layout is consistent regardless of container or breakpoint. */
+                    /* Make the models page content span the full viewport width (full-bleed) while keeping 2% horizontal padding.
+                         This helps the table use the available space even when the parent .container has a max-width. */
+                                .models-page {
+                                    /* Center the full-bleed block while keeping 2% horizontal inset from the viewport edges.
+                                         Using transform + calc(width) avoids fractional-pixel overflow that the negative-margin technique
+                                         sometimes causes when combined with scrollbars or parent containers. */
+                                    position: relative;
+                                    left: 50%;
+                                    transform: translateX(-50%);
+                                    width: calc(100vw - 4%);
+                                    max-width: none;
+                                    padding-left: 2% !important;
+                                    padding-right: 2% !important;
+                                    box-sizing: border-box;
+                                    overflow-x: hidden; /* guard against tiny rounding overflow */
+                                }
+    .models-table-wrapper { overflow-x: auto; padding-bottom: 12px; -webkit-overflow-scrolling: touch; }
+    /* Make horizontal scrollbar thicker and easier to grab */
+    .models-table-wrapper::-webkit-scrollbar { height: 16px; }
+    .models-table-wrapper::-webkit-scrollbar-track { background: #f1f1f1; }
+    .models-table-wrapper::-webkit-scrollbar-thumb { background: #9aa0a6; border-radius: 8px; }
+    /* Firefox: use thicker scrollbar if supported (best-effort) */
+    .models-table-wrapper { scrollbar-width: auto; }
+    .models-table.table { font-size: 0.92rem; width:100%; }
+        .models-table td, .models-table th { padding: 0.35rem 0.5rem; vertical-align: middle; }
+        .models-table .first-col { width: 140px; white-space: nowrap; }
+        .models-table .score { font-weight:700; text-align:center; width:90px; }
+            /* Row coloring based on function-calling score */
+            /* Apply background to TDs inside the row with higher specificity to override Bootstrap table styles */
+            .models-table tr.score-low td { background-color: #ffecec !important; }
+            .models-table tr.score-mid td { background-color: #fff7d6 !important; }
+            .models-table tr.score-max td { background-color: #e9ffea !important; }
+            /* Optional subtle left accent border for easier scanning */
+            .models-table tr.score-low td:first-child { border-left: 4px solid #e25858; }
+            .models-table tr.score-mid td:first-child { border-left: 4px solid #e6c44d; }
+            .models-table tr.score-max td:first-child { border-left: 4px solid #39b54a; }
+    </style>
+}
 
-<p>
-    <button id="testAllBtn" class="btn btn-success mb-2">Testa tutti i modelli</button>
-</p>
+<div class="models-page">
+    <h1>Models</h1>
+    <p>Premi il pulsante "Test" su un modello per eseguire i controlli di function-calling.</p>
 
-<div class="models-table-wrapper">
-<table class="table table-bordered table-hover models-table">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Provider</th>
-            <th>Local</th>
-            <th>ContextToUse</th>
-            <th>FunctionCallingScore</th>
-            <th>ToUpper</th>
-            <th>ToLower</th>
-            <th>Trim</th>
-            <th>Length</th>
-            <th>Substring</th>
-            <th>Join</th>
-            <th>Split</th>
-            <th>Add</th>
-            <th>Subtract</th>
-            <th>Multiply</th>
-            <th>Divide</th>
-            <th>Sqrt</th>
-            <th>Now</th>
-            <th>Today</th>
-            <th>AddDays</th>
-            <th>AddHours</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody id="modelsBody">
-    @foreach (var m in Model.Models)
+    <div class="mb-2">
+        <form method="post" class="d-inline" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Running...';}})(this)" asp-page-handler="AddOllamaModels">
+            <button type="submit" class="btn btn-sm btn-outline-success">Add ollama models</button>
+        </form>
+        <form method="post" class="d-inline ms-2" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Refreshing...';}})(this)" asp-page-handler="RefreshContexts">
+            <button type="submit" class="btn btn-sm btn-outline-info">Refresh contexts from running instances</button>
+        </form>
+    </div>
+
+    @if (TempData["TestResultMessage"] != null)
     {
-        <tr data-name="@m.Name">
-            <td>@m.Name</td>
-            <td>@m.Provider</td>
-            <td>@(m.IsLocal ? "Yes" : "No")</td>
-            <td>@m.ContextToUse</td>
-            <td class="score">@m.FunctionCallingScore</td>
-            <td>@(RenderSkillCheck(m.SkillToUpper))</td>
-            <td>@(RenderSkillCheck(m.SkillToLower))</td>
-            <td>@(RenderSkillCheck(m.SkillTrim))</td>
-            <td>@(RenderSkillCheck(m.SkillLength))</td>
-            <td>@(RenderSkillCheck(m.SkillSubstring))</td>
-            <td>@(RenderSkillCheck(m.SkillJoin))</td>
-            <td>@(RenderSkillCheck(m.SkillSplit))</td>
-            <td>@(RenderSkillCheck(m.SkillAdd))</td>
-            <td>@(RenderSkillCheck(m.SkillSubtract))</td>
-            <td>@(RenderSkillCheck(m.SkillMultiply))</td>
-            <td>@(RenderSkillCheck(m.SkillDivide))</td>
-            <td>@(RenderSkillCheck(m.SkillSqrt))</td>
-            <td>@(RenderSkillCheck(m.SkillNow))</td>
-            <td>@(RenderSkillCheck(m.SkillToday))</td>
-            <td>@(RenderSkillCheck(m.SkillAddDays))</td>
-            <td>@(RenderSkillCheck(m.SkillAddHours))</td>
-            <td><button class="btn btn-sm btn-primary test-btn">Test function-calling</button></td>
-        </tr>
+        <div class="alert alert-info" role="alert">@TempData["TestResultMessage"]</div>
     }
-    </tbody>
-</table>
+
+    <div class="models-table-wrapper">
+        <table id="modelsTable" class="table table-bordered table-hover models-table" style="width:100%;">
+            <thead>
+                <tr>
+                    <th class="first-col">Actions</th>
+                    <th>Name</th>
+                    <th>Provider</th>
+                    <th>Local</th>
+                    <th>ContextToUse</th>
+                    <th class="score" title="Function calling score">Score</th>
+                    <th class="text-center" title="Test duration in seconds">Duration (s)</th>
+                    <th class="text-end">Cost In $/1k</th>
+                    <th class="text-end">Cost Out $/1k</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var m in Model.Models)
+            {
+                <tr class="@GetScoreClass(m.FunctionCallingScore, m.TestDurationSeconds)" data-name="@m.Name" data-costin='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)' data-costout='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)'>
+                    <td class="first-col text-center">
+                        <form method="post" class="d-inline" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='▶ Running...';}})(this)">
+                            <input type="hidden" name="model" value="@m.Name" />
+                            <button type="submit" class="btn btn-outline-primary btn-sm" value="@m.Name" formaction="?handler=TestModel">▶ Test</button>
+                        </form>
+                                <button type="button" class="btn btn-sm btn-outline-secondary ms-1" onclick="toggleDetails(this)" title="Show test details">▾</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary ms-1" onclick="openCostModal(this)" data-name="@m.Name" data-costin='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)' data-costout='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)'>Costi</button>
+                    </td>
+                    <td>@m.Name</td>
+                    <td>@m.Provider</td>
+                    <td>@(m.IsLocal ? "Yes" : "No")</td>
+                    <td>
+                        @if (string.Equals(m.Provider, "ollama", StringComparison.OrdinalIgnoreCase) || m.IsLocal)
+                        {
+                            <form method="post" class="d-inline" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Saving...';}})(this)">
+                                <input type="hidden" name="model" value="@m.Name" />
+                                <input type="number" name="contextToUse" value="@m.ContextToUse" min="1" step="1" style="width:6.5rem;display:inline-block;margin-right:6px;" />
+                                <button type="submit" formaction="?handler=UpdateContext" class="btn btn-sm btn-outline-primary">Save</button>
+                            </form>
+                        }
+                        else
+                        {
+                            @m.ContextToUse
+                        }
+                    </td>
+                    <td class="score">@m.FunctionCallingScore</td>
+                    <td class="text-center">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}", m.TestDurationSeconds.Value) : "-")</td>
+                    <td class="align-middle text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</td>
+                    <td class="align-middle text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</td>
+                </tr>
+                <tr class="test-details" style="display:none;">
+                    <td colspan="9" style="background:#fafafa;padding:8px 12px;">
+                        <div style="display:flex;gap:18px;align-items:flex-start;">
+                            <div style="min-width:240px;flex:0 0 240px;">
+                                <h6 style="margin:0 0 8px 0;">Model info</h6>
+                                <dl style="margin:0;font-size:0.95rem;">
+                                    <dt style="float:left;width:110px;font-weight:600;">ContextToUse</dt><dd style="margin:0 0 6px 120px;">@m.ContextToUse</dd>
+                                    <dt style="float:left;width:110px;font-weight:600;">MaxContext</dt><dd style="margin:0 0 6px 120px;">@m.MaxContext</dd>
+                                    <dt style="float:left;width:110px;font-weight:600;">Duration</dt><dd style="margin:0 0 6px 120px;">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##} s", m.TestDurationSeconds.Value) : "-")</dd>
+                                    <dt style="float:left;width:110px;font-weight:600;">Cost In</dt><dd style="margin:0 0 6px 120px;">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</dd>
+                                    <dt style="float:left;width:110px;font-weight:600;">Cost Out</dt><dd style="margin:0 0 6px 120px;">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</dd>
+                                </dl>
+                            </div>
+                            <div style="flex:1 1 auto;">
+                                <h6 style="margin:0 0 8px 0;">Skill flags</h6>
+                                <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:8px;font-size:0.95rem;">
+                                    <div>ToUpper: @Html.Raw(RenderSkillCheck(m.SkillToUpper))</div>
+                                    <div>ToLower: @Html.Raw(RenderSkillCheck(m.SkillToLower))</div>
+                                    <div>Trim: @Html.Raw(RenderSkillCheck(m.SkillTrim))</div>
+                                    <div>Length: @Html.Raw(RenderSkillCheck(m.SkillLength))</div>
+                                    <div>Substring: @Html.Raw(RenderSkillCheck(m.SkillSubstring))</div>
+                                    <div>Join: @Html.Raw(RenderSkillCheck(m.SkillJoin))</div>
+                                    <div>Split: @Html.Raw(RenderSkillCheck(m.SkillSplit))</div>
+                                    <div>Add: @Html.Raw(RenderSkillCheck(m.SkillAdd))</div>
+                                    <div>Subtract: @Html.Raw(RenderSkillCheck(m.SkillSubtract))</div>
+                                    <div>Multiply: @Html.Raw(RenderSkillCheck(m.SkillMultiply))</div>
+                                    <div>Divide: @Html.Raw(RenderSkillCheck(m.SkillDivide))</div>
+                                    <div>Sqrt: @Html.Raw(RenderSkillCheck(m.SkillSqrt))</div>
+                                    <div>Now: @Html.Raw(RenderSkillCheck(m.SkillNow))</div>
+                                    <div>Today: @Html.Raw(RenderSkillCheck(m.SkillToday))</div>
+                                    <div>AddDays: @Html.Raw(RenderSkillCheck(m.SkillAddDays))</div>
+                                    <div>AddHours: @Html.Raw(RenderSkillCheck(m.SkillAddHours))</div>
+                                    <div>Remember: @Html.Raw(RenderSkillCheck(m.SkillRemember))</div>
+                                    <div>Recall: @Html.Raw(RenderSkillCheck(m.SkillRecall))</div>
+                                    <div>Forget: @Html.Raw(RenderSkillCheck(m.SkillForget))</div>
+                                    <div>FileExists: @Html.Raw(RenderSkillCheck(m.SkillFileExists))</div>
+                                    <div>HttpGet: @Html.Raw(RenderSkillCheck(m.SkillHttpGet))</div>
+                                    <div>Audio:Health: @Html.Raw(RenderSkillCheck(m.SkillAudioCheckHealth))</div>
+                                    <div>Audio:List: @Html.Raw(RenderSkillCheck(m.SkillAudioListModels))</div>
+                                    <div>Audio:GenMusic: @Html.Raw(RenderSkillCheck(m.SkillAudioGenerateMusic))</div>
+                                    <div>Audio:GenSound: @Html.Raw(RenderSkillCheck(m.SkillAudioGenerateSound))</div>
+                                    <div>Audio:Download: @Html.Raw(RenderSkillCheck(m.SkillAudioDownloadFile))</div>
+                                </div>
+                            </div>
+                        </div>
+                       
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
 </div>
 
 @functions {
     // Rende un check colorato per il valore della skill (true=verde, false=rosso, null=grigio)
-    public static HtmlString RenderSkillCheck(bool? value)
+    public static string RenderSkillCheck(bool? value)
     {
-        if (value == true) return new HtmlString("<span style='color:green;font-size:1.2em' title='OK'>&#10003;</span>");
-        if (value == false) return new HtmlString("<span style='color:red;font-size:1.2em' title='FAIL'>&#10007;</span>");
-        return new HtmlString("<span style='color:#bbb;font-size:1.2em' title='N/A'>&#8212;</span>");
+        if (value == true) return "<span style='color:green;font-size:1.2em' title='OK'>&#10003;</span>";
+        if (value == false) return "<span style='color:red;font-size:1.2em' title='FAIL'>&#10007;</span>";
+        return "<span style='color:#bbb;font-size:1.2em' title='N/A'>&#8212;</span>";
+    }
+
+    // Return a CSS class for the table row based on the function-calling score and whether a test was executed
+    public static string GetScoreClass(int score, double? duration)
+    {
+        // percentage on 0-100 based on 10-point scale
+        var pct = (score / 10.0) * 100.0;
+        // If score > 75% => green
+        if (pct > 75.0) return "score-max";
+        // If score > 0 and <=75% => yellow
+        if (pct > 0.0 && pct <= 75.0) return "score-mid";
+        // If score == 0 but a test was executed (duration present) => red
+        if (score == 0 && duration.HasValue) return "score-low";
+        // Otherwise no special class
+        return string.Empty;
+    }
+
+    // Render last test results JSON into HTML (returns safe HTML)
+    public static string RenderTestResults(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return "<em class='text-muted'>No recent test results</em>";
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (!doc.RootElement.ValueKind.Equals(System.Text.Json.JsonValueKind.Array)) return "<em class='text-muted'>No results</em>";
+            var sb = new System.Text.StringBuilder();
+            sb.Append("<div style='font-size:0.95rem'><table class='table table-sm mb-0' style='min-width:420px;'><thead><tr><th>Test</th><th style='width:80px;'>Result</th><th>Message</th></tr></thead><tbody>");
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var name = el.TryGetProperty("name", out var pn) ? pn.GetString() ?? "" : "";
+                var ok = el.TryGetProperty("ok", out var pok) ? (pok.ValueKind == System.Text.Json.JsonValueKind.True) : false;
+                var msg = el.TryGetProperty("message", out var pm) ? pm.GetString() ?? "" : "";
+                var icon = ok ? "<span style='color:green'>&#10003;</span>" : "<span style='color:red'>&#10007;</span>";
+                sb.Append($"<tr><td>{System.Web.HttpUtility.HtmlEncode(name)}</td><td style='text-align:center'>{icon}</td><td>{System.Web.HttpUtility.HtmlEncode(msg)}</td></tr>");
+            }
+            sb.Append("</tbody></table></div>");
+            return sb.ToString();
+        }
+        catch
+        {
+            return "<em class='text-muted'>Invalid results</em>";
+        }
     }
 }
-
-<h3>Test results</h3>
-<div id="results">
-    <p>No tests yet.</p>
-</div>
-
-<script>
-    async function runTest(modelName, btn)
-    {
-        btn.disabled = true;
-        btn.innerText = 'Testing...';
-        try {
-            const res = await fetch('/Models?handler=TestModel', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: modelName })
-            });
-            if (!res.ok) throw new Error('Request failed');
-            const j = await res.json();
-            // update score cell
-            const tr = document.querySelector(`tr[data-name='${modelName}']`);
-            if (tr) {
-                const scoreCell = tr.querySelector('.score');
-                if (scoreCell) scoreCell.innerText = j.functionCallingScore ?? '0';
-            }
-
-            // append detailed per-function results
-            const resultsDiv = document.getElementById('results');
-            const block = document.createElement('div');
-            block.className = 'card mb-2 p-2';
-            let html = `<h4>Model: ${modelName} — score: ${j.functionCallingScore ?? 0}/10</h4>`;
-            html += '<ul>';
-            for (const r of j.results) {
-                html += `<li><strong>${r.name}</strong>: ${r.ok ? 'OK' : 'FAIL'} — ${r.message || ''}</li>`;
-            }
-            html += '</ul>';
-            block.innerHTML = html;
-            resultsDiv.prepend(block);
-        } catch (err) {
-            alert('Test failed: ' + err);
-        } finally {
-            btn.disabled = false;
-            btn.innerText = 'Test function-calling';
-        }
-    }
-
-    document.querySelectorAll('.test-btn').forEach(b => {
-        b.addEventListener('click', e => {
-            const tr = e.currentTarget.closest('tr');
-            const name = tr.getAttribute('data-name');
-            runTest(name, e.currentTarget);
-        });
-    });
-
-    // Testa tutti i modelli in sequenza
-    document.getElementById('testAllBtn').addEventListener('click', async function() {
-        const btn = this;
-        btn.disabled = true;
-        btn.innerText = 'Testing...';
-        const rows = Array.from(document.querySelectorAll('#modelsBody tr'));
-        for (const tr of rows) {
-            const name = tr.getAttribute('data-name');
-            const testBtn = tr.querySelector('.test-btn');
-            if (testBtn) await runTest(name, testBtn);
-        }
-        btn.disabled = false;
-        btn.innerText = 'Testa tutti i modelli';
-    });
-</script>

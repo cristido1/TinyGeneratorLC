@@ -6,7 +6,6 @@ using System.Security.Cryptography;
 
 namespace TinyGenerator.Services
 {
-
     public class PersistentMemoryService
     {
         private readonly string _dbPath;

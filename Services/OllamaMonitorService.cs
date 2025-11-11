@@ -9,7 +9,7 @@ using Microsoft.Data.Sqlite;
 
 namespace TinyGenerator.Services
 {
-    public class ModelInfo
+    public class OllamaModelInfo
     {
         public string Name { get; set; } = string.Empty;
         public string Id { get; set; } = string.Empty;
@@ -18,6 +18,10 @@ namespace TinyGenerator.Services
         public string Context { get; set; } = string.Empty;
         public string Until { get; set; } = string.Empty;
     }
+
+    // NOTE: do not define a `ModelInfo` type in this namespace to avoid collision
+    // with the canonical POCO in TinyGenerator.Models.ModelInfo. Use
+    // `OllamaModelInfo` for Ollama-specific monitoring data.
 
     // Simple monitor: stores last prompt per model and can run `ollama ps` to list running models.
     public static class OllamaMonitorService
@@ -66,11 +70,11 @@ namespace TinyGenerator.Services
             return null;
         }
 
-        public static async Task<List<ModelInfo>> GetRunningModelsAsync()
+    public static async Task<List<OllamaModelInfo>> GetRunningModelsAsync()
         {
             return await Task.Run(() =>
             {
-                var list = new List<ModelInfo>();
+        var list = new List<OllamaModelInfo>();
                 try
                 {
                     var psi = new ProcessStartInfo("ollama", "ps") { RedirectStandardOutput = true, UseShellExecute = false };
@@ -90,7 +94,7 @@ namespace TinyGenerator.Services
                         var parts = Regex.Split(line, "\\s{2,}");
                         if (parts.Length >= 6)
                         {
-                            list.Add(new ModelInfo
+                            list.Add(new OllamaModelInfo
                             {
                                 Name = parts[0].Trim(),
                                 Id = parts[1].Trim(),
@@ -103,7 +107,7 @@ namespace TinyGenerator.Services
                         else if (parts.Length >= 5)
                         {
                             // fallback if 'UNTIL' missing
-                            list.Add(new ModelInfo
+                            list.Add(new OllamaModelInfo
                             {
                                 Name = parts[0].Trim(),
                                 Id = parts.Length > 1 ? parts[1].Trim() : string.Empty,
@@ -121,11 +125,11 @@ namespace TinyGenerator.Services
         }
 
         // List installed Ollama models (best-effort) by calling `ollama list` and parsing output.
-        public static async Task<List<ModelInfo>> GetInstalledModelsAsync()
+    public static async Task<List<OllamaModelInfo>> GetInstalledModelsAsync()
         {
             return await Task.Run(() =>
             {
-                var list = new List<ModelInfo>();
+        var list = new List<OllamaModelInfo>();
                 try
                 {
                     var psi = new ProcessStartInfo("ollama", "list") { RedirectStandardOutput = true, UseShellExecute = false };
@@ -146,7 +150,7 @@ namespace TinyGenerator.Services
                         var parts = System.Text.RegularExpressions.Regex.Split(line, "\\s{2,}");
                         string name = parts.Length > 0 ? parts[0].Trim() : string.Empty;
                         if (string.IsNullOrWhiteSpace(name)) continue;
-                        list.Add(new ModelInfo { Name = name });
+                        list.Add(new OllamaModelInfo { Name = name });
                     }
                 }
                 catch { }

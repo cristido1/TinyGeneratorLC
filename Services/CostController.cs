@@ -1,16 +1,15 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Linq;
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
+using CallRecord = TinyGenerator.Models.CallRecord;
+using ModelRecord = TinyGenerator.Models.ModelInfo;
 
 namespace TinyGenerator.Services;
 
 public sealed class CostController
 {
-    private readonly object _lock = new();
-    private readonly string _dbPath;
-    private readonly string _connectionString;
+    private readonly DatabaseService _database;
 
     // per modello costo per 1000 token (esempio). Aggiorna in base al provider usato.
     private readonly Dictionary<string, double> _costPerK = new(StringComparer.OrdinalIgnoreCase)
@@ -25,268 +24,28 @@ public sealed class CostController
 
     private readonly ITokenizer? _tokenizer;
 
-    public CostController(ITokenizer? tokenizer = null, string dbPath = "data/storage.db")
+    public CostController(DatabaseService database, ITokenizer? tokenizer = null)
     {
+        _database = database ?? throw new ArgumentNullException(nameof(database));
         _tokenizer = tokenizer;
-        _dbPath = dbPath;
-        Directory.CreateDirectory(Path.GetDirectoryName(_dbPath) ?? ".");
-        _connectionString = $"Data Source={_dbPath}";
-        InitializeDb();
     }
 
-    private void InitializeDb()
-    {
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
+    // Database schema handled by DatabaseService
 
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-CREATE TABLE IF NOT EXISTS usage_state (
-    month TEXT PRIMARY KEY,
-    tokens_this_run INTEGER DEFAULT 0,
-    tokens_this_month INTEGER DEFAULT 0,
-    cost_this_month REAL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS calls (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT,
-    model TEXT,
-    provider TEXT,
-    input_tokens INTEGER DEFAULT 0,
-    output_tokens INTEGER DEFAULT 0,
-    tokens INTEGER,
-    cost REAL,
-    request TEXT,
-    response TEXT
-);
-
-        CREATE TABLE IF NOT EXISTS models (
-            name TEXT PRIMARY KEY,
-            provider TEXT,
-            endpoint TEXT,
-            is_local INTEGER DEFAULT 1,
-            max_context INTEGER DEFAULT 4096,
-            context_to_use INTEGER DEFAULT 4096,
-            function_calling_score INTEGER DEFAULT 0,
-            cost_in_per_token REAL DEFAULT 0,
-            cost_out_per_token REAL DEFAULT 0,
-            limit_tokens_day INTEGER DEFAULT 0,
-            limit_tokens_week INTEGER DEFAULT 0,
-            limit_tokens_month INTEGER DEFAULT 0,
-            metadata TEXT,
-            enabled INTEGER DEFAULT 1,
-            created_at TEXT,
-            updated_at TEXT,
-            skill_toupper INTEGER DEFAULT NULL,
-            skill_tolower INTEGER DEFAULT NULL,
-            skill_trim INTEGER DEFAULT NULL,
-            skill_length INTEGER DEFAULT NULL,
-            skill_substring INTEGER DEFAULT NULL,
-            skill_join INTEGER DEFAULT NULL,
-            skill_split INTEGER DEFAULT NULL,
-            skill_add INTEGER DEFAULT NULL,
-            skill_subtract INTEGER DEFAULT NULL,
-            skill_multiply INTEGER DEFAULT NULL,
-            skill_divide INTEGER DEFAULT NULL,
-            skill_sqrt INTEGER DEFAULT NULL,
-            skill_now INTEGER DEFAULT NULL,
-            skill_today INTEGER DEFAULT NULL,
-            skill_adddays INTEGER DEFAULT NULL,
-            skill_addhours INTEGER DEFAULT NULL
-        );
-";
-                cmd.ExecuteNonQuery();
-
-        // lightweight migration: ensure function_calling_score column exists for older DBs
-        try
-        {
-            using var chk = conn.CreateCommand();
-            chk.CommandText = "PRAGMA table_info(models);";
-            var hasCol = false;
-            using var r = chk.ExecuteReader();
-            while (r.Read())
-            {
-                var colName = r.IsDBNull(1) ? string.Empty : r.GetString(1);
-                if (string.Equals(colName, "function_calling_score", StringComparison.OrdinalIgnoreCase)) { hasCol = true; break; }
-            }
-            if (!hasCol)
-            {
-                using var alt = conn.CreateCommand();
-                alt.CommandText = "ALTER TABLE models ADD COLUMN function_calling_score INTEGER DEFAULT 0;";
-                alt.ExecuteNonQuery();
-            }
-        }
-        catch { /* non-fatal migration */ }
-    }
-
-    // Simple model info container
-    public class ModelInfo
-    {
-    public string Name { get; set; } = string.Empty;
-    public string Provider { get; set; } = string.Empty;
-    public string? Endpoint { get; set; }
-    public bool IsLocal { get; set; }
-    public int MaxContext { get; set; }
-    public int ContextToUse { get; set; }
-    // score 0..10 indicating model function-calling capability
-    public int FunctionCallingScore { get; set; }
-    public double CostInPerToken { get; set; }
-    public double CostOutPerToken { get; set; }
-    public long LimitTokensDay { get; set; }
-    public long LimitTokensWeek { get; set; }
-    public long LimitTokensMonth { get; set; }
-    public string Metadata { get; set; } = string.Empty;
-    public bool Enabled { get; set; } = true;
-    // Skill booleans
-    public bool? SkillToUpper { get; set; }
-    public bool? SkillToLower { get; set; }
-    public bool? SkillTrim { get; set; }
-    public bool? SkillLength { get; set; }
-    public bool? SkillSubstring { get; set; }
-    public bool? SkillJoin { get; set; }
-    public bool? SkillSplit { get; set; }
-    public bool? SkillAdd { get; set; }
-    public bool? SkillSubtract { get; set; }
-    public bool? SkillMultiply { get; set; }
-    public bool? SkillDivide { get; set; }
-    public bool? SkillSqrt { get; set; }
-    public bool? SkillNow { get; set; }
-    public bool? SkillToday { get; set; }
-    public bool? SkillAddDays { get; set; }
-    public bool? SkillAddHours { get; set; }
-    }
+    // Model metadata lives in TinyGenerator.Models namespace
 
     // Lookup model info by exact name first, then by provider fallback
-    public ModelInfo? GetModelInfo(string modelOrProvider)
-    {
-        if (string.IsNullOrWhiteSpace(modelOrProvider)) return null;
-        lock (_lock)
-        {
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            // try exact name
-            cmd.CommandText = "SELECT name, provider, endpoint, is_local, max_context, context_to_use, function_calling_score, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM models WHERE name = $n LIMIT 1";
-            cmd.Parameters.AddWithValue("$n", modelOrProvider);
-            using var r = cmd.ExecuteReader();
-            if (r.Read())
-            {
-                return new ModelInfo
-                {
-                    Name = r.GetString(0),
-                    Provider = r.IsDBNull(1) ? string.Empty : r.GetString(1),
-                    Endpoint = r.IsDBNull(2) ? null : r.GetString(2),
-                    IsLocal = !r.IsDBNull(3) && r.GetInt32(3) != 0,
-                    MaxContext = r.IsDBNull(4) ? 0 : r.GetInt32(4),
-                    ContextToUse = r.IsDBNull(5) ? 0 : r.GetInt32(5),
-                    FunctionCallingScore = r.IsDBNull(6) ? 0 : r.GetInt32(6),
-                    CostInPerToken = r.IsDBNull(7) ? 0.0 : r.GetDouble(7),
-                    CostOutPerToken = r.IsDBNull(8) ? 0.0 : r.GetDouble(8),
-                    LimitTokensDay = r.IsDBNull(9) ? 0 : r.GetInt64(9),
-                    LimitTokensWeek = r.IsDBNull(10) ? 0 : r.GetInt64(10),
-                    LimitTokensMonth = r.IsDBNull(11) ? 0 : r.GetInt64(11),
-                    Metadata = r.IsDBNull(12) ? string.Empty : r.GetString(12),
-                    Enabled = r.IsDBNull(13) ? true : r.GetInt32(13) != 0
-                };
-            }
-
-            // fallback: try provider match (use the part before ':' if present)
-            var provider = modelOrProvider.Split(':')[0];
-            cmd.Parameters.Clear();
-            cmd.CommandText = "SELECT name, provider, endpoint, is_local, max_context, context_to_use, function_calling_score, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM models WHERE provider = $p LIMIT 1";
-            cmd.Parameters.AddWithValue("$p", provider);
-            using var r2 = cmd.ExecuteReader();
-            if (r2.Read())
-            {
-                return new ModelInfo
-                {
-                    Name = r2.GetString(0),
-                    Provider = r2.IsDBNull(1) ? string.Empty : r2.GetString(1),
-                    Endpoint = r2.IsDBNull(2) ? null : r2.GetString(2),
-                    IsLocal = !r2.IsDBNull(3) && r2.GetInt32(3) != 0,
-                    MaxContext = r2.IsDBNull(4) ? 0 : r2.GetInt32(4),
-                    ContextToUse = r2.IsDBNull(5) ? 0 : r2.GetInt32(5),
-                    FunctionCallingScore = r2.IsDBNull(6) ? 0 : r2.GetInt32(6),
-                    CostInPerToken = r2.IsDBNull(7) ? 0.0 : r2.GetDouble(7),
-                    CostOutPerToken = r2.IsDBNull(8) ? 0.0 : r2.GetDouble(8),
-                    LimitTokensDay = r2.IsDBNull(9) ? 0 : r2.GetInt64(9),
-                    LimitTokensWeek = r2.IsDBNull(10) ? 0 : r2.GetInt64(10),
-                    LimitTokensMonth = r2.IsDBNull(11) ? 0 : r2.GetInt64(11),
-                    Metadata = r2.IsDBNull(12) ? string.Empty : r2.GetString(12),
-                    Enabled = r2.IsDBNull(13) ? true : r2.GetInt32(13) != 0
-                };
-            }
-            return null;
-        }
-    }
+    public ModelRecord? GetModelInfo(string modelOrProvider) => _database.GetModelInfo(modelOrProvider);
 
     // Insert or update a model config
-    public void UpsertModel(ModelInfo m)
+    public void UpsertModel(ModelRecord model)
     {
-        if (m == null) return;
-        lock (_lock)
-        {
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"INSERT INTO models(name, provider, endpoint, is_local, max_context, context_to_use, function_calling_score, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled, created_at, updated_at)
-VALUES($name,$provider,$endpoint,$is_local,$max_context,$context_to_use,$funcscore,$cost_in,$cost_out,$limd,$limw,$limm,$meta,$enabled,$now,$now)
-ON CONFLICT(name) DO UPDATE SET provider=$provider, endpoint=$endpoint, is_local=$is_local, max_context=$max_context, context_to_use=$context_to_use, function_calling_score=$funcscore, cost_in_per_token=$cost_in, cost_out_per_token=$cost_out, limit_tokens_day=$limd, limit_tokens_week=$limw, limit_tokens_month=$limm, metadata=$meta, enabled=$enabled, updated_at=$now";
-            var now = DateTime.UtcNow.ToString("o");
-            cmd.Parameters.AddWithValue("$name", m.Name ?? string.Empty);
-            cmd.Parameters.AddWithValue("$provider", m.Provider ?? string.Empty);
-            cmd.Parameters.AddWithValue("$endpoint", m.Endpoint ?? (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("$is_local", m.IsLocal ? 1 : 0);
-            cmd.Parameters.AddWithValue("$max_context", m.MaxContext);
-            cmd.Parameters.AddWithValue("$context_to_use", m.ContextToUse);
-            cmd.Parameters.AddWithValue("$funcscore", m.FunctionCallingScore);
-            cmd.Parameters.AddWithValue("$cost_in", m.CostInPerToken);
-            cmd.Parameters.AddWithValue("$cost_out", m.CostOutPerToken);
-            cmd.Parameters.AddWithValue("$limd", m.LimitTokensDay);
-            cmd.Parameters.AddWithValue("$limw", m.LimitTokensWeek);
-            cmd.Parameters.AddWithValue("$limm", m.LimitTokensMonth);
-            cmd.Parameters.AddWithValue("$meta", m.Metadata ?? string.Empty);
-            cmd.Parameters.AddWithValue("$enabled", m.Enabled ? 1 : 0);
-            cmd.Parameters.AddWithValue("$now", now);
-            cmd.ExecuteNonQuery();
-        }
+        if (model == null) return;
+        _database.UpsertModel(model);
     }
 
     // List all models
-    public List<ModelInfo> ListModels()
-    {
-        var outList = new List<ModelInfo>();
-        lock (_lock)
-        {
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT name, provider, endpoint, is_local, max_context, context_to_use, function_calling_score, cost_in_per_token, cost_out_per_token, limit_tokens_day, limit_tokens_week, limit_tokens_month, metadata, enabled FROM models";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
-            {
-                outList.Add(new ModelInfo
-                {
-                    Name = r.GetString(0),
-                    Provider = r.IsDBNull(1) ? string.Empty : r.GetString(1),
-                    Endpoint = r.IsDBNull(2) ? null : r.GetString(2),
-                    IsLocal = !r.IsDBNull(3) && r.GetInt32(3) != 0,
-                    MaxContext = r.IsDBNull(4) ? 0 : r.GetInt32(4),
-                    ContextToUse = r.IsDBNull(5) ? 0 : r.GetInt32(5),
-                    FunctionCallingScore = r.IsDBNull(6) ? 0 : r.GetInt32(6),
-                    CostInPerToken = r.IsDBNull(7) ? 0.0 : r.GetDouble(7),
-                    CostOutPerToken = r.IsDBNull(8) ? 0.0 : r.GetDouble(8),
-                    LimitTokensDay = r.IsDBNull(9) ? 0 : r.GetInt64(9),
-                    LimitTokensWeek = r.IsDBNull(10) ? 0 : r.GetInt64(10),
-                    LimitTokensMonth = r.IsDBNull(11) ? 0 : r.GetInt64(11),
-                    Metadata = r.IsDBNull(12) ? string.Empty : r.GetString(12),
-                    Enabled = r.IsDBNull(13) ? true : r.GetInt32(13) != 0
-                });
-            }
-        }
-        return outList;
-    }
+    public List<ModelRecord> ListModels() => _database.ListModels();
 
     // Scan local Ollama running instances (best-effort) and upsert them into the models table.
     // Returns number of models upserted.
@@ -311,7 +70,7 @@ ON CONFLICT(name) DO UPDATE SET provider=$provider, endpoint=$endpoint, is_local
                 }
                 catch { }
 
-                var mi = new ModelInfo
+                var mi = new ModelRecord
                 {
                     Name = m.Name ?? string.Empty,
                     Provider = "ollama",
@@ -356,8 +115,12 @@ ON CONFLICT(name) DO UPDATE SET provider=$provider, endpoint=$endpoint, is_local
         var mi = GetModelInfo(model);
         if (mi != null)
         {
-            // cost fields are per-token
-            return inputTokens * mi.CostInPerToken + outputTokens * mi.CostOutPerToken;
+            // Interpretiamo i campi CostInPerToken / CostOutPerToken come costo in USD per 1000 token (per-1k tokens).
+            // Questo è più leggibile per valori pratici (es. $ per 1k tokens). Per calcolare il costo reale:
+            // cost = (tokens / 1000) * costPerThousand
+            var inCost = (inputTokens / 1000.0) * mi.CostInPerToken;
+            var outCost = (outputTokens / 1000.0) * mi.CostOutPerToken;
+            return inCost + outCost;
         }
 
         // fallback: use provider-level rates (per 1000 tokens stored in _costPerK)
@@ -378,150 +141,38 @@ ON CONFLICT(name) DO UPDATE SET provider=$provider, endpoint=$endpoint, is_local
     // Reserve tokens for a call. Accepts input and output tokens counts.
     public bool TryReserve(string model, int inputTokens, int outputTokens)
     {
-        lock (_lock)
-        {
-            var nowMonth = DateTime.UtcNow.ToString("yyyy-MM");
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-
-            // ensure row exists for this month
-            using (var ins = conn.CreateCommand())
-            {
-                ins.CommandText = "INSERT OR IGNORE INTO usage_state(month, tokens_this_run, tokens_this_month, cost_this_month) VALUES($m, 0, 0, 0)";
-                ins.Parameters.AddWithValue("$m", nowMonth);
-                ins.ExecuteNonQuery();
-            }
-
-            long tokensThisRun = 0; long tokensThisMonth = 0; double costThisMonth = 0;
-            using (var sel = conn.CreateCommand())
-            {
-                sel.CommandText = "SELECT tokens_this_run, tokens_this_month, cost_this_month FROM usage_state WHERE month = $m";
-                sel.Parameters.AddWithValue("$m", nowMonth);
-                using var r = sel.ExecuteReader();
-                if (r.Read())
-                {
-                    tokensThisRun = r.GetInt64(0);
-                    tokensThisMonth = r.GetInt64(1);
-                    costThisMonth = r.GetDouble(2);
-                }
-            }
-
-            var estimatedCost = EstimateCost(model, inputTokens, outputTokens);
-            var tokens = inputTokens + outputTokens;
-            if (tokensThisRun + tokens > MaxTokensPerRun) return false;
-            if (costThisMonth + estimatedCost > MaxCostPerMonth) return false;
-
-            // update
-            using (var upd = conn.CreateCommand())
-            {
-                upd.CommandText = "UPDATE usage_state SET tokens_this_run = tokens_this_run + $t, tokens_this_month = tokens_this_month + $t, cost_this_month = cost_this_month + $c WHERE month = $m";
-                upd.Parameters.AddWithValue("$t", tokens);
-                upd.Parameters.AddWithValue("$c", estimatedCost);
-                upd.Parameters.AddWithValue("$m", nowMonth);
-                upd.ExecuteNonQuery();
-            }
-
-            return true;
-        }
+        var monthKey = DateTime.UtcNow.ToString("yyyy-MM");
+        var estimatedCost = EstimateCost(model, inputTokens, outputTokens);
+        var tokens = inputTokens + outputTokens;
+        return _database.TryReserveUsage(monthKey, tokens, estimatedCost, MaxTokensPerRun, MaxCostPerMonth);
     }
 
     public void RecordCall(string model, int inputTokens, int outputTokens, double cost, string request, string response)
     {
-        lock (_lock)
-        {
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "INSERT INTO calls(ts, model, provider, input_tokens, output_tokens, tokens, cost, request, response) VALUES($ts, $m, $p, $in, $out, $t, $c, $req, $res)";
-            var provider = model.Split(':')[0];
-            var total = inputTokens + outputTokens;
-            cmd.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
-            cmd.Parameters.AddWithValue("$m", model);
-            cmd.Parameters.AddWithValue("$p", provider);
-            cmd.Parameters.AddWithValue("$in", inputTokens);
-            cmd.Parameters.AddWithValue("$out", outputTokens);
-            cmd.Parameters.AddWithValue("$t", total);
-            cmd.Parameters.AddWithValue("$c", cost);
-            cmd.Parameters.AddWithValue("$req", request ?? string.Empty);
-            cmd.Parameters.AddWithValue("$res", response ?? string.Empty);
-            cmd.ExecuteNonQuery();
-        }
+        _database.RecordCall(model, inputTokens, outputTokens, cost, request, response);
     }
 
     public void ResetRunCounters()
     {
-        lock (_lock)
-        {
-            var nowMonth = DateTime.UtcNow.ToString("yyyy-MM");
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "UPDATE usage_state SET tokens_this_run = 0 WHERE month = $m";
-            cmd.Parameters.AddWithValue("$m", nowMonth);
-            cmd.ExecuteNonQuery();
-        }
+        var monthKey = DateTime.UtcNow.ToString("yyyy-MM");
+        _database.ResetRunCounters(monthKey);
     }
 
     // utility: read latest usage summary
     public (long tokensThisMonth, double costThisMonth) GetMonthUsage()
     {
-        lock (_lock)
-        {
-            var nowMonth = DateTime.UtcNow.ToString("yyyy-MM");
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-            using var sel = conn.CreateCommand();
-            sel.CommandText = "SELECT tokens_this_month, cost_this_month FROM usage_state WHERE month = $m";
-            sel.Parameters.AddWithValue("$m", nowMonth);
-            using var r = sel.ExecuteReader();
-            if (r.Read()) return (r.GetInt64(0), r.GetDouble(1));
-            return (0, 0.0);
-        }
+        var monthKey = DateTime.UtcNow.ToString("yyyy-MM");
+        return _database.GetMonthUsage(monthKey);
     }
 
     // Retrieve recent calls (for admin UI)
     public List<CallRecord> GetRecentCalls(int limit = 50)
     {
-        var list = new List<CallRecord>();
-        lock (_lock)
-        {
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT id, ts, model, provider, input_tokens, output_tokens, tokens, cost, request, response FROM calls ORDER BY id DESC LIMIT $l";
-            cmd.Parameters.AddWithValue("$l", limit);
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
-            {
-                list.Add(new CallRecord
-                {
-                    Id = r.GetInt64(0),
-                    Timestamp = r.GetString(1),
-                    Model = r.GetString(2),
-                    Provider = r.IsDBNull(3) ? string.Empty : r.GetString(3),
-                    InputTokens = r.IsDBNull(4) ? 0 : r.GetInt32(4),
-                    OutputTokens = r.IsDBNull(5) ? 0 : r.GetInt32(5),
-                    Tokens = r.IsDBNull(6) ? 0 : r.GetInt32(6),
-                    Cost = r.IsDBNull(7) ? 0.0 : r.GetDouble(7),
-                    Request = r.IsDBNull(8) ? string.Empty : r.GetString(8),
-                    Response = r.IsDBNull(9) ? string.Empty : r.GetString(9)
-                });
-            }
-        }
-        return list;
+        return _database.GetRecentCalls(limit);
     }
 
-    public class CallRecord
+    public void UpdateModelTestResults(string modelName, int functionCallingScore, IReadOnlyDictionary<string, bool?> skillFlags, double? testDurationSeconds = null)
     {
-        public long Id { get; set; }
-        public string Timestamp { get; set; } = string.Empty;
-        public string Model { get; set; } = string.Empty;
-        public string Provider { get; set; } = string.Empty;
-        public int InputTokens { get; set; }
-        public int OutputTokens { get; set; }
-        public int Tokens { get; set; }
-        public double Cost { get; set; }
-        public string Request { get; set; } = string.Empty;
-        public string Response { get; set; } = string.Empty;
+        _database.UpdateModelTestResults(modelName, functionCallingScore, skillFlags, testDurationSeconds);
     }
 }

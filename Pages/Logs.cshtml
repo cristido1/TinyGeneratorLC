@@ -14,6 +14,18 @@
 
 <form method="get" class="mb-2 d-flex gap-2 align-items-center">
     <label class="form-check-label"><input type="checkbox" id="onlyErrors" name="onlyErrors" value="true" class="form-check-input me-1" />Mostra solo errori</label>
+    <label class="ms-2">Livello:</label>
+    <select name="level" class="form-select form-select-sm" style="width:140px;">
+        <option value="">(qualsiasi)</option>
+        <option>Trace</option>
+        <option>Debug</option>
+        <option>Information</option>
+        <option>Warning</option>
+        <option>Error</option>
+        <option>Critical</option>
+    </select>
+    <label class="ms-2">Categoria:</label>
+    <input name="category" type="text" class="form-control form-control-sm" style="width:180px;" placeholder="Filtra per categoria" />
     <label class="ms-2">Pagina:</label>
     <input type="number" name="page" min="1" value="@Model.CurrentPage" class="form-control form-control-sm" style="width:80px;" />
     <label class="ms-2">Per pagina:</label>
@@ -54,8 +66,10 @@
                     <td>@l.Ts</td>
                     <td>@l.Level</td>
                     <td>@l.Category</td>
-                    <td><pre style="white-space:pre-wrap; margin:0;">@l.Message</pre></td>
-                    <td><pre style="white-space:pre-wrap; margin:0;">@l.Exception</pre></td>
+                    <td><pre style="white-space:pre-wrap; margin:0;">@l.Message</pre></td>    
+                </tr>
+                <tr col="6">
+                    <td><small>@l.Exception</small></td>
                 </tr>
             }
         }
@@ -83,5 +97,8 @@
         // ensure page input has a minimum of 1
         var pageInput = document.querySelector('input[name="page"]');
         if (pageInput) { if (!pageInput.value) pageInput.value = '@Model.CurrentPage'; }
+        // restore category and level values from query if present
+        try { var lvl = new URLSearchParams(location.search).get('level'); if (lvl) document.querySelector('select[name="level"]').value = lvl; } catch(e){}
+        try { var cat = new URLSearchParams(location.search).get('category'); if (cat) document.querySelector('input[name="category"]').value = cat; } catch(e){}
     } catch(e) { console.error(e); }
 </script>

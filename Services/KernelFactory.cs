@@ -24,6 +24,7 @@ namespace TinyGenerator.Services
         private readonly TinyGenerator.Services.PersistentMemoryService _memoryService;
         private readonly DatabaseService _database;
         private readonly System.Net.Http.HttpClient _httpClient;
+        private readonly System.Net.Http.HttpClient _ttsHttpClient;
     private readonly bool _forceAudioCpu;
 
         // Proprietà pubbliche per i plugin
@@ -34,6 +35,7 @@ namespace TinyGenerator.Services
         public TinyGenerator.Skills.HttpPlugin HttpPlugin { get; }
         public TinyGenerator.Skills.MemorySkill MemorySkill { get; }
         public TinyGenerator.Skills.AudioCraftSkill AudioCraftSkill { get; }
+            public TinyGenerator.Skills.TtsApiSkill TtsApiSkill { get; }
 
         public KernelFactory(
             IConfiguration config,
@@ -46,6 +48,7 @@ namespace TinyGenerator.Services
             _logger = logger;
             _memoryService = memoryService;
             _httpClient = new System.Net.Http.HttpClient();
+            _ttsHttpClient = new System.Net.Http.HttpClient();
             _forceAudioCpu = false;
             try
             {
@@ -65,6 +68,7 @@ namespace TinyGenerator.Services
             HttpPlugin = new TinyGenerator.Skills.HttpPlugin();
             MemorySkill = new TinyGenerator.Skills.MemorySkill(_memoryService);
             AudioCraftSkill = new TinyGenerator.Skills.AudioCraftSkill(_httpClient, _forceAudioCpu);
+            TtsApiSkill = new TinyGenerator.Skills.TtsApiSkill(_ttsHttpClient);
         }
 
         public Kernel CreateKernel(string? modelId = null)
@@ -125,7 +129,11 @@ namespace TinyGenerator.Services
                 _logger?.LogInformation("Creazione kernel Ollama con modello {model} su {endpoint}", model, endpoint);
                 builder.AddOllamaChatCompletion(modelId: model, endpoint: new Uri(endpoint));
             }
-
+            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.FileIOPlugin>();
+            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.TextPlugin>();
+            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.TimePlugin>();
+            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.HttpPlugin>();
+            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.ConversationSummaryPlugin>();
             // Istanze plugin registrate nel kernel
             builder.Plugins.AddFromObject(TextPlugin, "text");
             _logger?.LogDebug("Registered plugin: {plugin}", TextPlugin?.GetType().FullName);
@@ -141,9 +149,10 @@ namespace TinyGenerator.Services
             _logger?.LogDebug("Registered plugin: {plugin}", MemorySkill?.GetType().FullName);
             builder.Plugins.AddFromObject(AudioCraftSkill, "audiocraft");
             _logger?.LogDebug("Registered plugin: {plugin}", AudioCraftSkill?.GetType().FullName);
+            builder.Plugins.AddFromObject(TtsApiSkill, "tts");
+            _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName);
 
             var kernel = builder.Build();
-
             // Best-effort verification: log that kernel was created and which plugin instances we attached.
             try
             {

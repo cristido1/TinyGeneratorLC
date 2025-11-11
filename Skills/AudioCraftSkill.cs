@@ -13,6 +13,9 @@ namespace TinyGenerator.Skills
         private readonly bool _forceCpu;
 
         public string? LastCalled { get; set; }
+            // Last returned filenames (as returned by the generation endpoints). These may be server-side names.
+            public string? LastGeneratedMusicFile { get; set; }
+            public string? LastGeneratedSoundFile { get; set; }
 
         public AudioCraftSkill(HttpClient httpClient, bool forceCpu = false)
         {
@@ -61,7 +64,35 @@ namespace TinyGenerator.Skills
             var response = await _http.PostAsJsonAsync("/api/musicgen", payload);
             if (response.IsSuccessStatusCode)
             {
-                return await response.Content.ReadAsStringAsync();
+                var respBody = await response.Content.ReadAsStringAsync();
+                // Try to parse returned body to extract a file name if possible (JSON or plain string)
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(respBody))
+                    {
+                        // Try JSON { "file": "name" } or { "filename": "name" }
+                        try
+                        {
+                            using var doc = System.Text.Json.JsonDocument.Parse(respBody);
+                            if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                            {
+                                if (doc.RootElement.TryGetProperty("file", out var pf)) LastGeneratedMusicFile = pf.GetString();
+                                else if (doc.RootElement.TryGetProperty("filename", out var pfn)) LastGeneratedMusicFile = pfn.GetString();
+                            }
+                        }
+                        catch { /* not JSON */ }
+
+                        // If still null and body looks like a simple filename, use it
+                        if (string.IsNullOrWhiteSpace(LastGeneratedMusicFile))
+                        {
+                            var trimmed = respBody.Trim();
+                            if (trimmed.Length > 0 && trimmed.IndexOf(' ') < 0 && trimmed.IndexOf('\n') < 0) LastGeneratedMusicFile = trimmed;
+                        }
+                    }
+                }
+                catch { }
+
+                return respBody;
             }
 
             // Read body for diagnostics
@@ -106,7 +137,32 @@ namespace TinyGenerator.Skills
             var response = await _http.PostAsJsonAsync("/api/audiogen", payload);
             if (response.IsSuccessStatusCode)
             {
-                return await response.Content.ReadAsStringAsync();
+                var respBody = await response.Content.ReadAsStringAsync();
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(respBody))
+                    {
+                        try
+                        {
+                            using var doc = System.Text.Json.JsonDocument.Parse(respBody);
+                            if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                            {
+                                if (doc.RootElement.TryGetProperty("file", out var pf)) LastGeneratedSoundFile = pf.GetString();
+                                else if (doc.RootElement.TryGetProperty("filename", out var pfn)) LastGeneratedSoundFile = pfn.GetString();
+                            }
+                        }
+                        catch { }
+
+                        if (string.IsNullOrWhiteSpace(LastGeneratedSoundFile))
+                        {
+                            var trimmed = respBody.Trim();
+                            if (trimmed.Length > 0 && trimmed.IndexOf(' ') < 0 && trimmed.IndexOf('\n') < 0) LastGeneratedSoundFile = trimmed;
+                        }
+                    }
+                }
+                catch { }
+
+                return respBody;
             }
 
             var body = await SafeReadContentAsync(response);

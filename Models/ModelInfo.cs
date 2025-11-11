@@ -48,8 +48,17 @@ public class ModelInfo
     public bool? SkillAudioGenerateSound { get; set; }
     public bool? SkillAudioDownloadFile { get; set; }
 
+    // TTS skill test flags
+    public bool? SkillTtsCheckHealth { get; set; }
+    public bool? SkillTtsListVoices { get; set; }
+    public bool? SkillTtsSynthesize { get; set; }
+
     // Duration in seconds taken to run the full battery of tests
     public double? TestDurationSeconds { get; set; }
     // JSON-serialized last test results (array of { name, ok, message })
     public string? LastTestResults { get; set; }
+    // Last generated test audio files (relative paths under wwwroot)
+    public string? LastMusicTestFile { get; set; }
+    public string? LastSoundTestFile { get; set; }
+    public string? LastTtsTestFile { get; set; }
 }

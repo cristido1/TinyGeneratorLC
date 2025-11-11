@@ -224,6 +224,48 @@
                                 </div>
                             </div>
                         </div>
+                        <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                            <h6 style="margin:0 8px 0 0;min-width:140px;">Last artifacts</h6>
+                            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                                @if (!string.IsNullOrWhiteSpace(m.LastMusicTestFile))
+                                {
+                                    <div style="min-width:220px;">
+                                        <div style="font-size:0.9rem;font-weight:600;">Music</div>
+                                        <audio controls preload="none" style="width:220px;">
+                                            <source src="/@m.LastMusicTestFile" />
+                                            Your browser does not support the audio element.
+                                        </audio>
+                                        <div><a class="small" href="/@m.LastMusicTestFile" download>Download</a></div>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(m.LastSoundTestFile))
+                                {
+                                    <div style="min-width:160px;">
+                                        <div style="font-size:0.9rem;font-weight:600;">Sound</div>
+                                        <audio controls preload="none" style="width:160px;">
+                                            <source src="/@m.LastSoundTestFile" />
+                                            Your browser does not support the audio element.
+                                        </audio>
+                                        <div><a class="small" href="/@m.LastSoundTestFile" download>Download</a></div>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(m.LastTtsTestFile))
+                                {
+                                    <div style="min-width:220px;">
+                                        <div style="font-size:0.9rem;font-weight:600;">TTS</div>
+                                        <audio controls preload="none" style="width:220px;">
+                                            <source src="/@m.LastTtsTestFile" />
+                                            Your browser does not support the audio element.
+                                        </audio>
+                                        <div><a class="small" href="/@m.LastTtsTestFile" download>Download</a></div>
+                                    </div>
+                                }
+                                @if (string.IsNullOrWhiteSpace(m.LastMusicTestFile) && string.IsNullOrWhiteSpace(m.LastSoundTestFile) && string.IsNullOrWhiteSpace(m.LastTtsTestFile))
+                                {
+                                    <div class="text-muted">No generated artifacts</div>
+                                }
+                            </div>
+                        </div>
                        
                     </td>
                 </tr>

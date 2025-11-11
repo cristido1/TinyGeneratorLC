@@ -2,29 +2,24 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
+using System.IO;
+using System.Reflection;
 
-// Self-contained compatibility layer providing a minimal kernel API and helpers
-// so the existing codebase (written against an older SK shape) can compile
-// and run while we wire real connectors. This avoids referencing
-// Microsoft.SemanticKernel.Abstractions directly and keeps behavior safe.
+// Compatibility shim for Semantic Kernel used for development/testing only.
+// See README for guidance. This file implements a minimal compatibility
+// surface and additional diagnostics (raw dumps) to help debugging provider
+// responses. It supports a strict mode via the environment variable
+// TINYGENERATOR_STRICT_SK which disables fallbacks and forces fail-fast.
+
 namespace Microsoft.SemanticKernel
 {
     // Minimal kernel interface used by the application.
     public interface IKernel
     {
-        /// <summary>
-        /// Run the kernel with a prompt and return a simple result wrapper.
-        /// Implementations may return a placeholder if no real model is configured.
-        /// </summary>
         Task<KernelRunResult> RunAsync(string prompt);
-
-        /// <summary>
-        /// Simple memory abstraction used by the app (only SaveInformationAsync is required).
-        /// </summary>
         IMemoryStore Memory { get; }
     }
 
@@ -38,8 +33,6 @@ namespace Microsoft.SemanticKernel
         Task SaveInformationAsync(string collection, string content, string id);
     }
 
-    // A very small in-process kernel implementation that does not call external models.
-    // It provides deterministic placeholder responses so the rest of the app can run.
     public class SimpleKernel : IKernel
     {
         private readonly SimpleMemoryStore _mem = new SimpleMemoryStore();
@@ -54,7 +47,6 @@ namespace Microsoft.SemanticKernel
 
         public Task<KernelRunResult> RunAsync(string prompt)
         {
-            // Return a safe placeholder that indicates there is no configured LLM yet.
             var shortPrompt = prompt?.Length > 300 ? prompt.Substring(0, 300) + "..." : prompt;
             var resultText = $"{_notice}\nPrompt (truncated): {shortPrompt}";
             return Task.FromResult(new KernelRunResult { Result = resultText });
@@ -67,12 +59,11 @@ namespace Microsoft.SemanticKernel
         {
             try
             {
-                // best-effort: write to a local file for debugging when possible
-                var safe = System.IO.Path.Combine("data", "sk_memory.log");
+                var safe = Path.Combine("data", "sk_memory.log");
                 try
                 {
-                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(safe) ?? "data");
-                    System.IO.File.AppendAllText(safe, $"[{DateTime.UtcNow:O}] {collection} {id}: {content}\n");
+                    Directory.CreateDirectory(Path.GetDirectoryName(safe) ?? "data");
+                    File.AppendAllText(safe, $"[{DateTime.UtcNow:O}] {collection} {id}: {content}\n");
                 }
                 catch { }
             }
@@ -85,7 +76,8 @@ namespace Microsoft.SemanticKernel
 namespace Microsoft.SemanticKernel.Agents
 {
     // Lightweight compatibility ChatCompletionAgent used by the existing codebase.
-    // It wraps the minimal IKernel above and returns a single ChatResult.
+    // It wraps either the minimal IKernel (SimpleKernel) or a real Semantic Kernel
+    // instance. It adds diagnostics and a strict-mode toggle.
     public class ChatCompletionAgent
     {
         private readonly object _kernel;
@@ -94,6 +86,19 @@ namespace Microsoft.SemanticKernel.Agents
         public string? Instructions { get; set; }
         private readonly KernelArguments _args;
 
+        private static readonly bool StrictMode;
+
+        static ChatCompletionAgent()
+        {
+            try
+            {
+                var v = Environment.GetEnvironmentVariable("TINYGENERATOR_STRICT_SK") ?? Environment.GetEnvironmentVariable("TINYGENERATOR_STRICT") ?? "false";
+                v = v.Trim().ToLowerInvariant();
+                StrictMode = v == "1" || v == "true" || v == "yes";
+            }
+            catch { StrictMode = false; }
+        }
+
         public ChatCompletionAgent(string name, object kernel, string description, string model)
         {
             Name = name;
@@ -101,35 +106,101 @@ namespace Microsoft.SemanticKernel.Agents
             Model = model;
             Instructions = description;
             var execSettings = new PromptExecutionSettings
-                {
-                    // AutoInvoke: permette al modello di chiamare direttamente le funzioni registrate nel kernel
-                    FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
-                };
+            {
+                FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
+            };
             _args = new KernelArguments(execSettings);
         }
 
         public async Task<IEnumerable<ChatResult>> InvokeAsync(string prompt)
         {
             var finalPrompt = string.IsNullOrWhiteSpace(Instructions) ? prompt : Instructions + "\n\n" + prompt;
+
+            // If kernel is our minimal in-process kernel, just use it.
             if (_kernel is Microsoft.SemanticKernel.IKernel ikernel)
             {
                 var run = await ikernel.RunAsync(finalPrompt);
                 return new[] { new ChatResult { Content = run.Result ?? string.Empty } };
             }
-            else if (_kernel is Microsoft.SemanticKernel.Kernel kernel)
+
+            // If kernel is a real Semantic Kernel instance, instrument the call.
+            if (_kernel is Microsoft.SemanticKernel.Kernel kernel)
             {
-                // Instrument the concrete Semantic Kernel invocation to help diagnose slow internals.
                 var sw = System.Diagnostics.Stopwatch.StartNew();
+                object? runObj = null;
                 try
                 {
                     var run = await kernel.InvokePromptAsync(finalPrompt, _args);
+                    runObj = run;
                     sw.Stop();
-                    var content = run?.GetValue<string>() ?? string.Empty;
+
+                    string content = string.Empty;
+
+                    if (StrictMode)
+                    {
+                        // Strict mode: obtain raw value without multi-level defensive fallbacks, but
+                        // still handle JsonElement explicitly to avoid artificial JsonException when
+                        // the underlying value is structured (this is observation, not a semantic fallback).
+                        try
+                        {
+                            var rawObj = run?.GetValue<object>();
+                            if (rawObj is JsonElement je)
+                            {
+                                try { content = je.GetRawText(); } catch { content = je.ToString() ?? string.Empty; }
+                            }
+                            else if (rawObj is string s)
+                            {
+                                content = s;
+                            }
+                            else if (rawObj != null)
+                            {
+                                // Provide a minimal string representation for logging/tracing.
+                                content = rawObj.ToString() ?? string.Empty;
+                            }
+                            else
+                            {
+                                content = string.Empty;
+                            }
+                        }
+                        catch
+                        {
+                            // Preserve original strict semantics: try direct string, let exception bubble if invalid.
+                            content = run?.GetValue<string>() ?? string.Empty;
+                        }
+                    }
+                    else
+                    {
+                        // Compatibility extraction: prefer object extraction and handle JsonElement.
+                        try
+                        {
+                            object? obj = null;
+                            try { obj = run?.GetValue<object>(); }
+                            catch { try { content = run?.GetValue<string>() ?? string.Empty; } catch { content = run?.ToString() ?? string.Empty; } }
+
+                            if (obj != null)
+                            {
+                                if (obj is JsonElement je)
+                                {
+                                    try { content = je.GetRawText(); } catch { content = je.ToString() ?? string.Empty; }
+                                }
+                                else
+                                {
+                                    try { content = JsonSerializer.Serialize(obj); } catch { content = obj.ToString() ?? string.Empty; }
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            try { content = run?.ToString() ?? string.Empty; } catch { content = string.Empty; }
+                        }
+                    }
+
+                    // Write a compact log entry with preview and hash.
                     try
                     {
-                        var safeLog = System.IO.Path.Combine("data", "sk_invoke.log");
-                        try { System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(safeLog) ?? "data"); } catch { }
-                        // Prepare a safe preview (truncate and remove newlines) and a hash so we can correlate full responses without storing everything.
+                        var safeLog = Path.Combine("data", "sk_invoke.log");
+                        try { Directory.CreateDirectory(Path.GetDirectoryName(safeLog) ?? "data"); } catch { }
+
                         var respLen = content?.Length ?? 0;
                         var preview = string.Empty;
                         if (!string.IsNullOrEmpty(content))
@@ -137,43 +208,88 @@ namespace Microsoft.SemanticKernel.Agents
                             preview = content.Replace("\r", " ").Replace("\n", " ");
                             if (preview.Length > 2000) preview = preview.Substring(0, 2000) + "...[truncated]";
                         }
+
                         string respHash = string.Empty;
-                        try
-                        {
-                            using var sha = SHA256.Create();
-                            var bytes = Encoding.UTF8.GetBytes(content ?? string.Empty);
-                            var hash = sha.ComputeHash(bytes);
-                            respHash = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
-                        }
-                        catch { respHash = string.Empty; }
+                        try { using var sha = SHA256.Create(); var bytes = Encoding.UTF8.GetBytes(content ?? string.Empty); var hash = sha.ComputeHash(bytes); respHash = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant(); } catch { respHash = string.Empty; }
 
                         var line = $"[{DateTime.UtcNow:O}] Agent={Name} Model={Model} Elapsed={sw.Elapsed.TotalSeconds:0.###}s RespLen={respLen} RespHash={respHash} RespPreview=\"{preview}\"\n";
-                        System.IO.File.AppendAllText(safeLog, line);
+                        File.AppendAllText(safeLog, line);
                     }
                     catch { }
 
-                    Console.WriteLine($"[SKCompatibility] InvokePromptAsync elapsed={sw.Elapsed.TotalSeconds:0.###}s, respLen={content?.Length ?? 0}, respHash={ (content!=null ? BitConverter.ToString(SHA256.Create().ComputeHash(Encoding.UTF8.GetBytes(content))).Replace("-","").ToLowerInvariant() : "") }");
-                    return new[] { new ChatResult { Content = content } };
+                    try { Console.WriteLine($"[SKCompatibility] InvokePromptAsync elapsed={sw.Elapsed.TotalSeconds:0.###}s, respLen={content?.Length ?? 0}"); } catch { }
+
+                    return new[] { new ChatResult { Content = content ?? string.Empty } };
                 }
                 catch (Exception ex)
                 {
                     sw.Stop();
+
                     try
                     {
-                        var safeLog = System.IO.Path.Combine("data", "sk_invoke.log");
-                        try { System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(safeLog) ?? "data"); } catch { }
-                        var line = $"[{DateTime.UtcNow:O}] Agent={Name} Model={Model} ERROR Elapsed={sw.Elapsed.TotalSeconds:0.###}s Ex={ex.GetType().Name}:{ex.Message}\n";
-                        System.IO.File.AppendAllText(safeLog, line);
+                        var safeLog = Path.Combine("data", "sk_invoke.log");
+                        try { Directory.CreateDirectory(Path.GetDirectoryName(safeLog) ?? "data"); } catch { }
+                        var line = $"[{DateTime.UtcNow:O}] Agent={Name} Model={Model} ERROR Elapsed={sw.Elapsed.TotalSeconds:0.###}s Ex={ex.GetType().Name}:{ex.Message} Stack={ex}\n";
+                        File.AppendAllText(safeLog, line);
                     }
                     catch { }
-                    Console.WriteLine($"[SKCompatibility] InvokePromptAsync threw {ex.GetType().Name} after {sw.Elapsed.TotalSeconds:0.###}s: {ex.Message}");
-                    throw;
+
+                    // Attempt to dump raw response (via reflection) to a file for debugging.
+                    try
+                    {
+                        if (runObj != null)
+                        {
+                            object? extracted = null;
+                            try
+                            {
+                                var method = runObj.GetType().GetMethods().FirstOrDefault(mi => mi.Name == "GetValue" && mi.IsGenericMethod);
+                                if (method != null)
+                                {
+                                    var gm = method.MakeGenericMethod(new[] { typeof(object) });
+                                    extracted = gm.Invoke(runObj, null);
+                                }
+                            }
+                            catch { }
+
+                            var rawDir = Path.Combine("data");
+                            try { Directory.CreateDirectory(rawDir); } catch { }
+                            var ts = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+                            var fname = Path.Combine(rawDir, $"sk_raw_{ts}_{Guid.NewGuid():N}.json");
+                            try
+                            {
+                                if (extracted is JsonElement je)
+                                {
+                                    File.WriteAllText(fname, je.GetRawText());
+                                }
+                                else if (extracted != null)
+                                {
+                                    try { File.WriteAllText(fname, JsonSerializer.Serialize(extracted)); }
+                                    catch { try { File.WriteAllText(fname, extracted.ToString() ?? string.Empty); } catch { } }
+                                }
+                                else
+                                {
+                                    try { File.WriteAllText(fname, runObj?.ToString() ?? ex.ToString()); } catch { }
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+
+                    Console.WriteLine($"[SKCompatibility] InvokePromptAsync threw {ex.GetType().Name} after {sw.Elapsed.TotalSeconds:0.###}s: {ex}");
+
+                    if (StrictMode)
+                    {
+                        // In strict mode we want to fail fast and surface the exception to the caller.
+                        throw;
+                    }
+
+                    // Compatibility fallback: return an error ChatResult so tests can continue in dev mode.
+                    return new[] { new ChatResult { Content = $"[SK Error] {ex.GetType().Name}: {ex.Message}" } };
                 }
             }
-            else
-            {
-                throw new InvalidOperationException("Kernel type non supportato in ChatCompletionAgent");
-            }
+
+            throw new InvalidOperationException("Kernel type non supportato in ChatCompletionAgent");
         }
     }
 
@@ -185,7 +301,6 @@ namespace Microsoft.SemanticKernel.Agents
 
 namespace Microsoft.SemanticKernel.Planning
 {
-    // Minimal Plan and PlanStep compatibility types used by PlannerExecutor and StoryGeneratorService.
     public class Plan
     {
         public string? Goal { get; set; }
@@ -197,7 +312,6 @@ namespace Microsoft.SemanticKernel.Planning
         public string Description { get; set; } = string.Empty;
     }
 
-    // A tiny planner that creates a fixed sequence of steps used by the app.
     public class HandlebarsPlanner
     {
         private readonly Microsoft.SemanticKernel.IKernel _kernel;

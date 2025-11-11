@@ -43,6 +43,11 @@ public sealed class DatabaseService
         "SkillAudioGenerateMusic",
         "SkillAudioGenerateSound",
         "SkillAudioDownloadFile"
+        ,
+        // TTS skill columns
+        "SkillTtsCheckHealth",
+        "SkillTtsListVoices",
+        "SkillTtsSynthesize"
     };
 
     private static readonly HashSet<string> SkillColumnSet = new(SkillColumns, StringComparer.OrdinalIgnoreCase);
@@ -93,7 +98,10 @@ public sealed class DatabaseService
         ["FunctionCallingScore"] = "INTEGER DEFAULT 0",
         ["CreatedAt"] = "TEXT",
         ["UpdatedAt"] = "TEXT",
-        ["TestDurationSeconds"] = "REAL"
+        ["TestDurationSeconds"] = "REAL",
+        ["LastMusicTestFile"] = "TEXT",
+        ["LastSoundTestFile"] = "TEXT",
+        ["LastTtsTestFile"] = "TEXT"
     };
 
     // Add LastTestResults to column definitions (TEXT JSON)
@@ -121,7 +129,7 @@ public sealed class DatabaseService
     {
         using var conn = CreateConnection();
         conn.Open();
-        var cols = string.Join(", ", new[] { "Name","Provider","Endpoint","IsLocal","MaxContext","ContextToUse","FunctionCallingScore","CostInPerToken","CostOutPerToken","LimitTokensDay","LimitTokensWeek","LimitTokensMonth","Metadata","Enabled","CreatedAt","UpdatedAt","TestDurationSeconds","LastTestResults" }.Concat(SkillColumns));
+    var cols = string.Join(", ", new[] { "Name","Provider","Endpoint","IsLocal","MaxContext","ContextToUse","FunctionCallingScore","CostInPerToken","CostOutPerToken","LimitTokensDay","LimitTokensWeek","LimitTokensMonth","Metadata","Enabled","CreatedAt","UpdatedAt","TestDurationSeconds","LastTestResults","LastMusicTestFile","LastSoundTestFile","LastTtsTestFile" }.Concat(SkillColumns));
         var sql = $"SELECT {cols} FROM models";
         return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
     }
@@ -218,7 +226,7 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
         return conn.Query<CallRecord>(sql, new { Limit = limit }).ToList();
     }
 
-    public void UpdateModelTestResults(string modelName, int functionCallingScore, IReadOnlyDictionary<string, bool?> skillFlags, double? testDurationSeconds = null, string? lastTestResultsJson = null)
+    public void UpdateModelTestResults(string modelName, int functionCallingScore, IReadOnlyDictionary<string, bool?> skillFlags, double? testDurationSeconds = null, string? lastTestResultsJson = null, string? lastMusicTestFile = null, string? lastSoundTestFile = null, string? lastTtsTestFile = null)
     {
         if (string.IsNullOrWhiteSpace(modelName)) return;
         using var conn = CreateConnection();
@@ -238,6 +246,28 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
             setList.Add("LastTestResults = @LastTestResults");
             parameters.Add("LastTestResults", lastTestResultsJson);
         }
+        if (!string.IsNullOrWhiteSpace(lastMusicTestFile))
+        {
+            setList.Add("LastMusicTestFile = @LastMusicTestFile");
+            parameters.Add("LastMusicTestFile", lastMusicTestFile);
+        }
+        if (!string.IsNullOrWhiteSpace(lastSoundTestFile))
+        {
+            setList.Add("LastSoundTestFile = @LastSoundTestFile");
+            parameters.Add("LastSoundTestFile", lastSoundTestFile);
+        }
+        if (!string.IsNullOrWhiteSpace(lastTtsTestFile))
+        {
+            setList.Add("LastTtsTestFile = @LastTtsTestFile");
+            parameters.Add("LastTtsTestFile", lastTtsTestFile);
+        }
+        // Accept optional TTS file path (backwards compatible: method signature unchanged for callers that don't pass it)
+        if (skillFlags != null && skillFlags.ContainsKey("SkillTtsSynthesize") && skillFlags.TryGetValue("SkillTtsSynthesize", out var _))
+        {
+            // noop: presence of flag is not the file; keep compatibility
+        }
+
+        // If caller passed a dynamic parameter named LastTtsTestFile, it will be included by callers via the method overload below.
 
         if (skillFlags != null)
         {
@@ -501,7 +531,7 @@ SELECT ts, level, category, message, exception, state FROM logs;";
 
     private static string SelectModelColumns()
     {
-        return string.Join(", ", new[] { "Name","Provider","Endpoint","IsLocal","MaxContext","ContextToUse","FunctionCallingScore","CostInPerToken","CostOutPerToken","LimitTokensDay","LimitTokensWeek","LimitTokensMonth","Metadata","Enabled","CreatedAt","UpdatedAt","TestDurationSeconds","LastTestResults" }.Concat(SkillColumns));
+    return string.Join(", ", new[] { "Name","Provider","Endpoint","IsLocal","MaxContext","ContextToUse","FunctionCallingScore","CostInPerToken","CostOutPerToken","LimitTokensDay","LimitTokensWeek","LimitTokensMonth","Metadata","Enabled","CreatedAt","UpdatedAt","TestDurationSeconds","LastTestResults","LastMusicTestFile","LastSoundTestFile","LastTtsTestFile" }.Concat(SkillColumns));
     }
 
     // Retrieve recent log entries with optional filtering by level or category and support offset for pagination.

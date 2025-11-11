@@ -4,6 +4,16 @@
 >
 > Questo progetto usa agenti costruiti con Microsoft Semantic Kernel. È obbligatorio usare le function/skill e le API fornite da Semantic Kernel per qualsiasi integrazione di funzioni (es. salvataggio/lettura memoria, accesso al DB, skill esterne). Non "inventare" nomi di funzioni o meccaniche di invocation alternative nei prompt degli agenti che vadano a modificare il comportamento degli agenti writer o evaluator in produzione. I test di function-calling devono essere isolati e non influire sui prompt usati dagli agenti di generazione.
 
+> NOTE DI PROGETTO (importante)
+>
+> - Questo repository è specificamente progettato per testare e validare il comportamento di Microsoft Semantic Kernel. Pertanto:
+>   1. Non usare workaround che bypassano Semantic Kernel (compatibility shims, wrapper che trasformano risposte in stringhe o che reinterpretano invocation). Se il kernel non è presente o genera errori, i test devono fallire visibilmente (fail-fast) per evidenziare problemi di integrazione.
+>   2. Evitare fallback automatici che trasformano chiamate di funzione in testo o JSON nel prompt. Gli agenti devono invocare le skill/addin tramite il meccanismo ufficiale del Semantic Kernel.
+>   3. Se si aggiungono compatibility helpers (per sviluppo locale), documentarli chiaramente e assicurarsi che possano essere disabilitati con una flag di configurazione in modo che l'app possa eseguire un'esperienza "pure SK" senza shim.
+>   4. Qualsiasi modifica che cambia il flusso di invocation degli agenti richiede revisione e approvazione prima del merge.
+
+> Rileggi queste note prima di modificare il comportamento degli agenti o la compatibility layer.
+
 Un'applicazione web ASP.NET Core per la generazione di storie usando agenti AI basati su Semantic Kernel e modelli locali Ollama.
 
 ## Descrizione

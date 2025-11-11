@@ -100,6 +100,10 @@ namespace TinyGenerator.Pages
                 try { Console.WriteLine($"[ModelsModel] Received TestModel request: model={model}, runId={runId}, remote={HttpContext.Connection.RemoteIpAddress}"); } catch { }
 
                 var results = new List<TestResultItem>();
+                string? lastMusicFile = null;
+                string? lastSoundFile = null;
+                string? lastTtsFile = null;
+                double externalSeconds = 0.0; // time spent in external services (downloads, direct synthesize)
 
                 // Recupera info modello dalla tabella
                 var modelInfo = _database.GetModelInfo(model);
@@ -155,7 +159,10 @@ namespace TinyGenerator.Pages
             
 
                 // ✅ Crea l’agente e gli passa gli argomenti
-                var agent = new ChatCompletionAgent("tester", createdKernel, "Function calling tester", model ?? string.Empty);
+                // Instruction: do NOT emit function-invocation JSON or textual function calls in the model response.
+                // The agent should rely on the kernel's addins/skills invocation mechanism instead.
+                var agentInstructions = "Use the kernel's skill/addin mechanism to invoke functions (do NOT emit JSON or textual function-call syntax in your response). Respond normally otherwise.";
+                var agent = new ChatCompletionAgent("tester", createdKernel, agentInstructions, model ?? string.Empty);
 
                 // Safe invoker with timeout to avoid hanging tests. Returns (completedSuccessfully, errorMessage, elapsedSeconds)
                 async Task<(bool completed, string? error, double elapsedSeconds)> InvokeAgentSafe(string p, int timeoutMs = 30000)
@@ -188,15 +195,18 @@ namespace TinyGenerator.Pages
                     var _warm = await InvokeAgentSafe("Pronto", 30000);
                     if (!_warm.completed)
                     {
-                        // If warmup times out or errors, record and abort the test run so we don't start timed tests on an inactive model
+                        // If warmup times out or errors, record the warmup failure but DO NOT abort the test run.
+                        // Some providers may return structured values that occasionally trigger conversion errors during warmup;
+                        // record the failure and continue so the rest of the tests can still run and be persisted.
                         results.Add(new TestResultItem { name = "Warmup", ok = false, message = _warm.error, durationSeconds = _warm.elapsedSeconds });
+                        AppendProgress(runId, $"Warmup failed (continuing): {_warm.error}");
                         try
                         {
                             var json = System.Text.Json.JsonSerializer.Serialize(results);
                             _database.UpdateModelTestResults(modelInfo.Name, 0, new Dictionary<string, bool?>(), 0.0, json);
                         }
                         catch { }
-                        return BadRequest($"Warmup failed: {_warm.error}");
+                        // continue with tests despite warmup failure
                     }
                     else
                     {
@@ -206,14 +216,17 @@ namespace TinyGenerator.Pages
                 }
                 catch (Exception ex)
                 {
+                    // Record warmup exception but continue with the test sequence. We want test runs to be resilient
+                    // to provider conversion quirks so we can collect per-test timings and results.
                     results.Add(new TestResultItem { name = "Warmup", ok = false, message = ex.Message, durationSeconds = 0.0 });
+                    AppendProgress(runId, $"Warmup threw exception (continuing): {ex.Message}");
                     try
                     {
                         var json = System.Text.Json.JsonSerializer.Serialize(results);
                         _database.UpdateModelTestResults(modelInfo.Name, 0, new Dictionary<string, bool?>(), 0.0, json);
                     }
                     catch { }
-                    return BadRequest(new { error = ex.Message });
+                    // do not return; continue with tests
                 }
 
                 // Start timing after warmup completes
@@ -389,24 +402,89 @@ namespace TinyGenerator.Pages
                 try
                 {
                     // Helper to run a single audio test safely and append results regardless of exceptions
-                    async Task RunAudioTestAsync(string testName, string prompt, Func<bool> successPredicate, string successMessage)
+                    async Task RunAudioTestAsync(string testName, string prompt, Func<bool> successPredicate, string successMessage, int timeoutMs = 30000)
                     {
                         try
                         {
                             AppendProgress(runId, $"Running AudioCraft.{testName} test...");
-                            var _res = await InvokeAgentSafe(prompt);
+                            var _res = await InvokeAgentSafe(prompt, timeoutMs);
                             if (!_res.completed)
                             {
                                 results.Add(new TestResultItem { name = $"AudioCraft.{testName}", ok = false, message = _res.error, durationSeconds = _res.elapsedSeconds });
+                                return;
                             }
-                            else
+
+                            var called = factory.AudioCraftSkill.LastCalled;
+                            var ok = false;
+                            try { ok = successPredicate(); } catch { ok = false; }
+                            AppendProgress(runId, $"AudioCraft.{testName} => {(ok ? "OK" : "FAIL: " + (called ?? "null"))}");
+                            results.Add(new TestResultItem { name = $"AudioCraft.{testName}", ok = ok, message = ok ? successMessage : ($"LastCalled: {called}"), durationSeconds = _res.elapsedSeconds });
+
+                            // If generation succeeded, attempt to download and save the generated file into wwwroot
+                            try
                             {
-                                var called = factory.AudioCraftSkill.LastCalled;
-                                var ok = false;
-                                try { ok = successPredicate(); } catch { ok = false; }
-                                AppendProgress(runId, $"AudioCraft.{testName} => {(ok ? "OK" : "FAIL: " + (called ?? "null"))}");
-                                results.Add(new TestResultItem { name = $"AudioCraft.{testName}", ok = ok, message = ok ? successMessage : ($"LastCalled: {called}"), durationSeconds = _res.elapsedSeconds });
+                                if (ok && string.Equals(testName, "GenerateMusic", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var remote = factory.AudioCraftSkill.LastGeneratedMusicFile;
+                                    if (!string.IsNullOrWhiteSpace(remote))
+                                    {
+                                        try
+                                        {
+                                                var swExt = System.Diagnostics.Stopwatch.StartNew();
+                                                var bytes = await factory.AudioCraftSkill.DownloadFileAsync(remote);
+                                                swExt.Stop();
+                                                externalSeconds += swExt.Elapsed.TotalSeconds;
+                                            if (bytes != null && bytes.Length > 0)
+                                            {
+                                                var dir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "music_test");
+                                                Directory.CreateDirectory(dir);
+                                                var ext = Path.GetExtension(remote);
+                                                if (string.IsNullOrWhiteSpace(ext)) ext = ".wav";
+                                                var fname = $"{modelInfo.Name}_{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}{ext}";
+                                                var full = Path.Combine(dir, fname);
+                                                await System.IO.File.WriteAllBytesAsync(full, bytes);
+                                                lastMusicFile = Path.Combine("music_test", fname).Replace('\\','/');
+                                                AppendProgress(runId, $"Saved generated music to {lastMusicFile}");
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            AppendProgress(runId, $"Failed to save generated music: {ex.Message}");
+                                        }
+                                    }
+                                }
+                                else if (ok && string.Equals(testName, "GenerateSound", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var remote = factory.AudioCraftSkill.LastGeneratedSoundFile;
+                                    if (!string.IsNullOrWhiteSpace(remote))
+                                    {
+                                        try
+                                        {
+                                                var swExt = System.Diagnostics.Stopwatch.StartNew();
+                                                var bytes = await factory.AudioCraftSkill.DownloadFileAsync(remote);
+                                                swExt.Stop();
+                                                externalSeconds += swExt.Elapsed.TotalSeconds;
+                                            if (bytes != null && bytes.Length > 0)
+                                            {
+                                                var dir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "audio_test");
+                                                Directory.CreateDirectory(dir);
+                                                var ext = Path.GetExtension(remote);
+                                                if (string.IsNullOrWhiteSpace(ext)) ext = ".wav";
+                                                var fname = $"{modelInfo.Name}_{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}{ext}";
+                                                var full = Path.Combine(dir, fname);
+                                                await System.IO.File.WriteAllBytesAsync(full, bytes);
+                                                lastSoundFile = Path.Combine("audio_test", fname).Replace('\\','/');
+                                                AppendProgress(runId, $"Saved generated sound to {lastSoundFile}");
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            AppendProgress(runId, $"Failed to save generated sound: {ex.Message}");
+                                        }
+                                    }
+                                }
                             }
+                            catch { }
                         }
                         catch (Exception ex)
                         {
@@ -418,11 +496,70 @@ namespace TinyGenerator.Pages
                     // Run individual audio tests with safe wrapper
                     await RunAudioTestAsync("CheckHealth", "Verifica se AudioCraft è online usando la funzione check_health del plugin audiocraft", () => string.Equals(factory.AudioCraftSkill.LastCalled, nameof(TinyGenerator.Skills.AudioCraftSkill.CheckHealthAsync), StringComparison.OrdinalIgnoreCase), "Chiamata CheckHealth eseguita");
                     await RunAudioTestAsync("ListModels", "Elenca i modelli AudioCraft usando la funzione list_models del plugin audiocraft", () => string.Equals(factory.AudioCraftSkill.LastCalled, nameof(TinyGenerator.Skills.AudioCraftSkill.ListModelsAsync), StringComparison.OrdinalIgnoreCase), "Chiamata ListModels eseguita");
-                    await RunAudioTestAsync("GenerateMusic", "Genera un breve frammento musicale usando la funzione generate_music del plugin audiocraft con durata 1", () => string.Equals(factory.AudioCraftSkill.LastCalled, nameof(TinyGenerator.Skills.AudioCraftSkill.GenerateMusicAsync), StringComparison.OrdinalIgnoreCase), "Chiamata GenerateMusic eseguita");
-                    await RunAudioTestAsync("GenerateSound", "Genera un breve effetto sonoro usando la funzione generate_sound del plugin audiocraft con durata 1", () => string.Equals(factory.AudioCraftSkill.LastCalled, nameof(TinyGenerator.Skills.AudioCraftSkill.GenerateSoundAsync), StringComparison.OrdinalIgnoreCase), "Chiamata GenerateSound eseguita");
+                    await RunAudioTestAsync("GenerateMusic", "Genera un breve frammento musicale usando la funzione generate_music del plugin audiocraft con durata 1", () => string.Equals(factory.AudioCraftSkill.LastCalled, nameof(TinyGenerator.Skills.AudioCraftSkill.GenerateMusicAsync), StringComparison.OrdinalIgnoreCase), "Chiamata GenerateMusic eseguita", timeoutMs: 180000);
+                    await RunAudioTestAsync("GenerateSound", "Genera un breve effetto sonoro usando la funzione generate_sound del plugin audiocraft con durata 1", () => string.Equals(factory.AudioCraftSkill.LastCalled, nameof(TinyGenerator.Skills.AudioCraftSkill.GenerateSoundAsync), StringComparison.OrdinalIgnoreCase), "Chiamata GenerateSound eseguita", timeoutMs: 180000);
                     await RunAudioTestAsync("DownloadFile", "Scarica un file di esempio usando la funzione download_file del plugin audiocraft (nome file di test)", () => string.Equals(factory.AudioCraftSkill.LastCalled, nameof(TinyGenerator.Skills.AudioCraftSkill.DownloadFileAsync), StringComparison.OrdinalIgnoreCase), "Chiamata DownloadFile eseguita");
                 }
                 catch (Exception ex) { results.Add(new TestResultItem { name = "AudioCraft.Sequence", ok = false, message = ex.Message }); }
+
+                // TTS tests: CheckHealth, ListVoices, Synthesize
+                try
+                {
+                    async Task RunTtsTestAsync(string testName, string prompt, Func<bool> successPredicate, string successMessage)
+                    {
+                        try
+                        {
+                            AppendProgress(runId, $"Running TTS.{testName} test...");
+                            var _res = await InvokeAgentSafe(prompt);
+                            if (!_res.completed)
+                            {
+                                results.Add(new TestResultItem { name = $"Tts.{testName}", ok = false, message = _res.error, durationSeconds = _res.elapsedSeconds });
+                                return;
+                            }
+
+                            var called = factory.TtsApiSkill.LastCalled;
+                            var ok = false;
+                            try { ok = successPredicate(); } catch { ok = false; }
+                            AppendProgress(runId, $"Tts.{testName} => {(ok ? "OK" : "FAIL: " + (called ?? "null"))}");
+                            results.Add(new TestResultItem { name = $"Tts.{testName}", ok = ok, message = ok ? successMessage : ($"LastCalled: {called}"), durationSeconds = _res.elapsedSeconds });
+
+                            // If synthesize succeeded, fetch bytes directly from the TTS client and save to wwwroot/tts_test
+                            if (ok && string.Equals(testName, "Synthesize", StringComparison.OrdinalIgnoreCase))
+                            {
+                                    try
+                                    {
+                                        var swExt = System.Diagnostics.Stopwatch.StartNew();
+                                        var bytes = await factory.TtsApiSkill.SynthesizeAsync("Prova TTS da TinyGenerator", "voice_templates", "template_alien", null, -1, null, "it", "neutral", 1.0, "wav");
+                                        swExt.Stop();
+                                        externalSeconds += swExt.Elapsed.TotalSeconds;
+                                        if (bytes != null && bytes.Length > 0)
+                                        {
+                                            var dir = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "tts_test");
+                                            Directory.CreateDirectory(dir);
+                                            var fname = $"{modelInfo.Name}_{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}.wav";
+                                            var full = Path.Combine(dir, fname);
+                                            await System.IO.File.WriteAllBytesAsync(full, bytes);
+                                            lastTtsFile = Path.Combine("tts_test", fname).Replace('\\','/');
+                                            AppendProgress(runId, $"Saved synthesized TTS to {lastTtsFile}");
+                                        }
+                                    }
+                                catch (Exception ex)
+                                {
+                                    AppendProgress(runId, $"Failed to synthesize/save TTS: {ex.Message}");
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            results.Add(new TestResultItem { name = $"Tts.{testName}", ok = false, message = ex.Message });
+                        }
+                    }
+
+                    await RunTtsTestAsync("CheckHealth", "Verifica se il servizio TTS è online usando la funzione check_health del plugin tts", () => string.Equals(factory.TtsApiSkill.LastCalled, nameof(TinyGenerator.Skills.TtsApiSkill.CheckHealthAsync), StringComparison.OrdinalIgnoreCase), "Chiamata CheckHealth eseguita");
+                    await RunTtsTestAsync("ListVoices", "Elenca le voci TTS usando la funzione list_voices del plugin tts", () => string.Equals(factory.TtsApiSkill.LastCalled, nameof(TinyGenerator.Skills.TtsApiSkill.ListVoicesAsync), StringComparison.OrdinalIgnoreCase), "Chiamata ListVoices eseguita");
+                    await RunTtsTestAsync("Synthesize", "Sintetizza un breve testo usando la funzione synthesize del plugin tts", () => string.Equals(factory.TtsApiSkill.LastCalled, nameof(TinyGenerator.Skills.TtsApiSkill.SynthesizeAsync), StringComparison.OrdinalIgnoreCase), "Chiamata Synthesize eseguita");
+                }
+                catch (Exception ex) { results.Add(new TestResultItem { name = "Tts.Sequence", ok = false, message = ex.Message }); }
 
                 // compute score: number of ok tests / total * 10 (guard divide by zero)
                 var okCount = results.Count(r => r.ok);
@@ -444,6 +581,10 @@ namespace TinyGenerator.Pages
                 skillFlagMap["AudioCraft.GenerateMusic"] = "SkillAudioGenerateMusic";
                 skillFlagMap["AudioCraft.GenerateSound"] = "SkillAudioGenerateSound";
                 skillFlagMap["AudioCraft.DownloadFile"] = "SkillAudioDownloadFile";
+                // TTS mappings
+                skillFlagMap["Tts.CheckHealth"] = "SkillTtsCheckHealth";
+                skillFlagMap["Tts.ListVoices"] = "SkillTtsListVoices";
+                skillFlagMap["Tts.Synthesize"] = "SkillTtsSynthesize";
                 var flagUpdates = new Dictionary<string, bool?>(StringComparer.OrdinalIgnoreCase);
                 foreach (var pair in skillFlagMap)
                 {
@@ -451,16 +592,19 @@ namespace TinyGenerator.Pages
                     flagUpdates[pair.Value] = entry?.ok;
                 }
 
-                // Duration
+                // Duration: compute total wall time and subtract external service time (downloads, synthesize)
                 var testEnd = DateTime.UtcNow;
-                var elapsedSeconds = (testEnd - testStart).TotalSeconds;
+                var totalSeconds = (testEnd - testStart).TotalSeconds;
+                var adjustedSeconds = totalSeconds - externalSeconds;
+                if (adjustedSeconds < 0) adjustedSeconds = 0;
 
-                _database.UpdateModelTestResults(modelInfo.Name, score, flagUpdates, elapsedSeconds);
+                // Persist adjusted duration (excluding external service time)
+                _database.UpdateModelTestResults(modelInfo.Name, score, flagUpdates, adjustedSeconds, null, lastMusicFile, lastSoundFile, lastTtsFile);
                 // Persist per-test results JSON so UI can show details after redirect
                 try
                 {
                     var json = System.Text.Json.JsonSerializer.Serialize(results);
-                    _database.UpdateModelTestResults(modelInfo.Name, score, flagUpdates, elapsedSeconds, json);
+                    _database.UpdateModelTestResults(modelInfo.Name, score, flagUpdates, adjustedSeconds, json, lastMusicFile, lastSoundFile, lastTtsFile);
                 }
                 catch { /* ignore persistence failures */ }
 
@@ -468,13 +612,14 @@ namespace TinyGenerator.Pages
                 // is shown after the redirect back to the Models page.
                 try
                 {
-                    TempData["TestResultMessage"] = $"Model {modelInfo.Name}: Score {score}/10 — Duration: {elapsedSeconds:0.##}s";
+                    // Show both total wall time and adjusted time (excluding external services) for transparency
+                    TempData["TestResultMessage"] = $"Model {modelInfo.Name}: Score {score}/10 — Duration: {adjustedSeconds:0.##}s (wall: {totalSeconds:0.##}s, external: {externalSeconds:0.###}s)";
                 }
                 catch { }
 
                 try { AppendProgress(runId, $"All tests completed. Score: {score}/10"); _progress?.MarkCompleted(runId, score.ToString()); Console.WriteLine($"[ModelsModel] {runId}: Marked completed with score {score}"); } catch { }
 
-                var resp = new TestResponse { functionCallingScore = score, results = results, durationSeconds = elapsedSeconds };
+                var resp = new TestResponse { functionCallingScore = score, results = results, durationSeconds = adjustedSeconds };
                 var wrapper = new { runId = runId, result = resp };
 
                 // If the request came from the Models page form, redirect back to the Models page

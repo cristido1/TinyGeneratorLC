@@ -1,0 +1,103 @@
+API usage — localTTS (FastAPI)
+
+Posizione servizio (di default):
+  http://localhost:8004/
+
+Endpoint principali
+
+1) GET /health
+  - Scopo: controllo rapido dello stato.
+  - Response: {"status": "ok"}
+
+2) GET /voices
+  - Scopo: elenca i modelli e le voci disponibili, metadati inclusi.
+  - Note: il servizio arricchisce le voci template ("voice_templates") con i campioni e i percorsi relativi trovati in `voice_templates/` e `voices/samples/`.
+
+3) POST /patch_transformers
+  - Scopo: tentativo best-effort per applicare una patch runtime a `transformers` (risolve import incompatibilities per alcune versioni di TTS).
+  - Response: JSON con stato della patch.
+
+4) POST /synthesize
+  - Scopo: generare audio.
+  - Content-Type: application/json
+  - Parametri body (JSON):
+    - text (string, required): testo da sintetizzare.
+    - model (string, optional): nome del modello Coqui (es. "tts_models/multilingual/multi-dataset/xtts_v2") oppure "voice_templates" per usare le voci basate su template.
+    - voice (string, optional): alias alternativo per selezionare modello o template id.
+    - speaker (int|string, optional): id o nome dello speaker per modelli multi-speaker, oppure template id quando si usa `voice_templates`.
+    - speaker_idx (int, optional): indice del speaker.
+    - speaker_wav (string, optional): percorso locale a WAV o wav codificato in base64 (se fornito come base64 sarà scritto temporaneamente e usato come reference speaker).
+    - language (string, optional): lingua per la voce (es. "it").
+    - emotion (string, optional): emozione supportata dal modello (es. "neutral", "happy", "sad", "angry").
+    - speed (float, optional): fattore di velocità (es. 0.8 = più lento, 1.2 = più veloce).
+    - format (string, optional): "wav" (default) o "base64" per ricevere l'audio inline.
+
+  - Esempio JSON body:
+    {
+      "text": "Questa è una prova.",
+      "model": "voice_templates",
+      "speaker": "template_alien",
+      "language": "it",
+      "emotion": "neutral"
+    }
+
+  - Risposta (file): il server restituisce un FileResponse con `audio/wav` oppure, se `format: "base64"`, un JSON {"audio_base64": "...", "format": "wav"}.
+  - Errori comuni: 400 per richieste malformate; 500 per errori del motore TTS.
+
+Usare voci template (voice_templates)
+
+- Le voci basate su template sono elencate in `GET /voices` sotto il modello "voice_templates".
+- Ogni voce template ha `template_wav` (il file di riferimento) e `sample` (es. "voices/samples/template_x_neutral.wav").
+- Per sintetizzare con un template, invia `model: "voice_templates"` e `speaker: "template_id"`, oppure `voice: "template_id"`.
+- Il server imposta automaticamente `speaker_wav` con il file template, quindi non serve fornire ulteriori file.
+
+Esempi pratici
+
+- cURL (scaricare WAV):
+
+  curl -X POST http://localhost:8004/synthesize \
+    -H "Content-Type: application/json" \
+    -d '{"text":"Ciao, come va?","model":"voice_templates","speaker":"template_alien","language":"it","emotion":"neutral"}' \
+    --output out.wav
+
+- cURL (ricevere base64 nel JSON):
+
+  curl -X POST http://localhost:8004/synthesize \
+    -H "Content-Type: application/json" \
+    -d '{"text":"Test base64","model":"tts_models/multilingual/multi-dataset/xtts_v2","format":"base64"}'
+
+- Python (requests) — scaricare e scrivere WAV:
+
+  import requests
+  payload = {"text": "Ciao mondo", "model": "voice_templates", "speaker": "template_alien", "language": "it"}
+  r = requests.post('http://localhost:8004/synthesize', json=payload)
+  r.raise_for_status()
+  with open('out.wav','wb') as f:
+      f.write(r.content)
+
+- Fornire un wav come speaker di riferimento (local path):
+  - In `speaker_wav` passare un percorso assoluto a un file WAV già presente sul server.
+  - Oppure inviare i bytes in base64 nella stringa `speaker_wav` (il server decodificherà e userà un file temporaneo).
+
+Debug e consigli
+
+- Se vedi errori di import/compatibilità (es. BeamSearchScorer), chiama `POST /patch_transformers` e riavvia se necessario.
+- Se senti rumore o artefatti con una voce template (es. vocoder), rigenera il template pulito e sovrascrivi `voice_templates/<template>.wav` (script helper: `scripts/rebuild_vocoder_template.py`). Poi rigenera i sample con `scripts/generate_template_samples.py`.
+- Verifica i sample generati in `voices/samples/` per esempi pre-registrati.
+
+Sicurezza e limiti
+
+- L'API non richiede autenticazione (locale by default). Se esponi su rete pubblica, aggiungi un reverse-proxy con autenticazione o una VPN.
+- Il modello XTTS può essere pesante: la prima chiamata può scaricare i pesi (tempo e spazio). Assicurati di avere spazio disco sufficiente.
+
+Contatti tecnici per integrazione
+
+- File di interesse nel repo:
+  - `app/main.py` : implementazione server
+  - `models.json` : catalogo dei modelli
+  - `voice_metadata.json` : metadati delle voci (puoi modificare le note)
+  - `voice_templates/` : WAV di riferimento dei template
+  - `voices/samples/` : esempi generati
+  - `scripts/` : utilità (es. `generate_template_samples.py`, `rebuild_vocoder_template.py`)
+
+Se hai bisogno, posso produrre esempi ready-to-run (script curl o un client Python) adattati al programma che l'altra AI sta sviluppando.

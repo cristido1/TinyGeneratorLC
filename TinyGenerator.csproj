@@ -11,6 +11,7 @@
     <!-- SQLite provider used by CostController -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
   <PackageReference Include="Microsoft.SemanticKernel" Version="1.67.1" />
+    <PackageReference Include="Microsoft.SemanticKernel.Plugins.Core" Version="1.67.1-preview" />
   <PackageReference Include="Microsoft.SemanticKernel.Connectors.Ollama" Version="1.67.1-alpha" />
   <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.67.1" />
   <PackageReference Include="Microsoft.SemanticKernel.Connectors.Sqlite" Version="1.51.0-preview" />

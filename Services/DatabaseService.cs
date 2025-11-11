@@ -134,6 +134,34 @@ public sealed class DatabaseService
         return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
     }
 
+    /// <summary>
+    /// Return a lightweight summary of the latest test run for the given model name, or null if none.
+    /// </summary>
+    public (int runId, string testCode, bool passed, long? durationMs, string? runDate)? GetLatestTestRunSummary(string modelName)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        try
+        {
+            // Resolve model id from name and query by model_id (model_name column was removed)
+            var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+            if (!modelId.HasValue) return null;
+            var sql = @"SELECT id AS RunId, test_code AS TestCode, passed AS Passed, duration_ms AS DurationMs, run_date AS RunDate FROM model_test_runs WHERE model_id = @mid ORDER BY id DESC LIMIT 1";
+            var row = conn.QueryFirstOrDefault(sql, new { mid = modelId.Value });
+            if (row == null) return null;
+            int runId = (int)row.RunId;
+            string testCode = row.TestCode ?? string.Empty;
+            bool passed = Convert.ToInt32(row.Passed) != 0;
+            long? duration = row.DurationMs == null ? (long?)null : Convert.ToInt64(row.DurationMs);
+            string? runDate = row.RunDate;
+            return (runId, testCode, passed, duration, runDate);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public ModelInfo? GetModelInfo(string modelOrProvider)
     {
         if (string.IsNullOrWhiteSpace(modelOrProvider)) return null;
@@ -282,6 +310,77 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
         parameters.Add("Name", modelName);
         var sql = $"UPDATE models SET {string.Join(", ", setList)} WHERE Name = @Name";
         conn.Execute(sql, parameters);
+
+        // Also persist into normalized runs/steps if JSON of per-step results is provided.
+        if (!string.IsNullOrWhiteSpace(lastTestResultsJson))
+        {
+            try
+            {
+                var runId = CreateTestRun(modelName, "ADHOC", "Ad-hoc test run", true, testDurationSeconds.HasValue ? (long?)(testDurationSeconds.Value * 1000) : null, "Saved from UpdateModelTestResults");
+                using var doc = System.Text.Json.JsonDocument.Parse(lastTestResultsJson);
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    int idx = 0;
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        idx++;
+                        var nameStep = el.TryGetProperty("name", out var pn) ? pn.GetString() ?? string.Empty : string.Empty;
+                        var ok = el.TryGetProperty("ok", out var pok) && pok.GetBoolean();
+                        var message = el.TryGetProperty("message", out var pm) ? pm.GetString() : null;
+                        var dur = el.TryGetProperty("durationSeconds", out var pdur) && pdur.TryGetDouble(out var dd) ? (long?)(dd * 1000) : null;
+                        var stepId = AddTestStep(runId, idx, nameStep, null);
+                        UpdateTestStepResult(stepId, ok, message != null ? System.Text.Json.JsonSerializer.Serialize(new { message }) : null, ok ? null : message, dur);
+                    }
+                }
+            }
+            catch
+            {
+                // swallow errors - DB update already performed for compatibility
+            }
+        }
+    }
+
+    /// <summary>
+    /// Create a new test run and return its id.
+    /// </summary>
+    public int CreateTestRun(string modelName, string testCode, string? description = null, bool passed = false, long? durationMs = null, string? notes = null)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        // Insert run: resolve model_id from models.Name and store only model_id (model_name column removed)
+        var sql = @"INSERT INTO model_test_runs(model_id, test_code, description, passed, duration_ms, notes) VALUES((SELECT Id FROM models WHERE Name = @model_name LIMIT 1), @test_code, @description, @passed, @duration_ms, @notes); SELECT last_insert_rowid();";
+        var id = conn.ExecuteScalar<long>(sql, new { model_name = modelName, test_code = testCode, description, passed = passed ? 1 : 0, duration_ms = durationMs, notes });
+        return (int)id;
+    }
+
+    public int AddTestStep(int runId, int stepNumber, string stepName, string? inputJson = null)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"INSERT INTO model_test_steps(run_id, step_number, step_name, input_json) VALUES(@run_id, @step_number, @step_name, @input_json); SELECT last_insert_rowid();";
+        var id = conn.ExecuteScalar<long>(sql, new { run_id = runId, step_number = stepNumber, step_name = stepName, input_json = inputJson });
+        return (int)id;
+    }
+
+    public void UpdateTestStepResult(int stepId, bool passed, string? outputJson = null, string? error = null, long? durationMs = null)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var set = new List<string> { "passed = @passed" };
+        if (!string.IsNullOrWhiteSpace(outputJson)) set.Add("output_json = @output_json");
+        if (!string.IsNullOrWhiteSpace(error)) set.Add("error = @error");
+        if (durationMs.HasValue) set.Add("duration_ms = @duration_ms");
+        var sql = $"UPDATE model_test_steps SET {string.Join(", ", set)} WHERE id = @id";
+        conn.Execute(sql, new { id = stepId, passed = passed ? 1 : 0, output_json = outputJson, error, duration_ms = durationMs });
+    }
+
+    public int AddTestAsset(int stepId, string fileType, string filePath, string? description = null, double? durationSec = null, long? sizeBytes = null)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"INSERT INTO model_test_assets(step_id, file_type, file_path, description, duration_sec, size_bytes) VALUES(@step_id, @file_type, @file_path, @description, @duration_sec, @size_bytes); SELECT last_insert_rowid();";
+        var id = conn.ExecuteScalar<long>(sql, new { step_id = stepId, file_type = fileType, file_path = filePath, description, duration_sec = durationSec, size_bytes = sizeBytes });
+        return (int)id;
     }
 
     private void InitializeSchema()
@@ -362,6 +461,7 @@ CREATE TABLE IF NOT EXISTS models (
 ";
         logCmd.ExecuteNonQuery();
 
+        // Migration steps were already executed for this installation. No runtime migration performed.
         // Migrate legacy `logs` table (if present) into the new `Log` table and remove the old table.
         try
         {
@@ -519,6 +619,8 @@ SELECT ts, level, category, message, exception, state FROM logs;";
 
         return columns;
     }
+
+    
 
     private static void EnsureUsageRow(IDbConnection connRaw, string monthKey)
     {

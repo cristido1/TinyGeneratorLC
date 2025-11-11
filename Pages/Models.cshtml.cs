@@ -53,6 +53,24 @@ namespace TinyGenerator.Pages
                 .ThenBy(m => m.TestDurationSeconds.HasValue ? m.TestDurationSeconds.Value : double.PositiveInfinity)
                 .ThenBy(m => m.Name ?? string.Empty)
                 .ToList();
+            
+            // For each model, fetch a lightweight summary of the latest normalized test run (if any)
+            foreach (var m in Models)
+            {
+                try
+                {
+                    var s = _database.GetLatestTestRunSummary(m.Name);
+                    if (s.HasValue)
+                    {
+                        var v = s.Value;
+                        var passedStr = v.passed ? "passed" : "failed";
+                        var dur = v.durationMs.HasValue ? $"{(v.durationMs.Value / 1000.0):0.##}s" : "n/a";
+                        m.LastTestResults = $"Last run: {v.testCode} ({passedStr}) on {v.runDate ?? "?"}, duration {dur}";
+                    }
+                }
+                catch { }
+            }
+
         }
 
         public class TestResultItem { public string name = ""; public bool ok; public string? message; public double durationSeconds; }

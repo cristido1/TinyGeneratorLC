@@ -1,212 +1,54 @@
-/* Tabella modelli compatta e scrollabile */
-.models-table-wrapper {
-  max-width: 100vw;
-  overflow-x: auto;
-  margin-bottom: 1.5rem;
-}
-.models-table {
-  font-size: 0.92rem;
-  min-width: 1200px;
-}
-.models-table th, .models-table td {
-  padding: 0.25rem 0.5rem !important;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-/* Pulsanti primary custom per compatibilità Bootstrap/Pico */
-.btn-primary, .btn.btn-primary {
-  background: #1a73e8 !important;
-  color: #fff !important;
-  border-color: transparent !important;
-}
-.btn-primary:hover, .btn.btn-primary:hover {
-  background: #1669d8 !important;
-  color: #fff !important;
-}
-/* Forza tema chiaro per la tabella modelli anche se Pico.css è in dark mode */
-table, .table, .table-striped, .table-hover, .table-bordered, .table-responsive {
-  background: #fff !important;
-  color: #222 !important;
-}
-table th, table td, .table th, .table td {
-  background: #fff !important;
-  color: #222 !important;
-}
-html {
-  font-size: 14px;
-}
+/* Keep Bootstrap defaults for colors (removed local :root overrides to restore standard Bootstrap look) */
 
-/* Lightweight replacements for a few Bootstrap utilities used in the layout
-   These keep the existing markup working after removing Bootstrap dependency. */
-.container { max-width: 1100px; margin-left: auto; margin-right: auto; padding-left: 12px; padding-right: 12px; }
-.d-flex { display:flex !important; }
-.d-none { display:none !important; }
-.ms-auto { margin-left: auto !important; }
-.btn { display: inline-block; padding: 6px 12px; border-radius:6px; border:1px solid rgba(0,0,0,0.08); background:#fff; cursor:pointer; }
-.btn-link { background: transparent; border: none; padding:4px 8px; }
-.btn-sm { padding:4px 8px; font-size:0.85rem; }
+/* Keep some compact table helpers */
+.models-table-wrapper { max-width: 100vw; overflow-x: auto; margin-bottom: 1.2rem; }
+.models-table { font-size: 0.95rem; }
+.models-table th, .models-table td { vertical-align: middle; }
 
-@media (min-width: 768px) {
-  .d-md-inline { display:inline-block !important; }
-  .d-md-none { display:none !important; }
-}
-@media (max-width: 767px) {
-  .d-md-inline { display:none !important; }
-  .d-md-none { display:inline-block !important; }
-}
+/* Prefer Bootstrap button styling but make focus/hover slightly softer */
+.btn-primary { background-color: var(--bs-primary); border-color: rgba(var(--bs-primary-rgb), 0.12); }
+.btn-primary:hover { background-color: #3f6ec0; }
+.btn:focus, .btn:active:focus, .form-control:focus { box-shadow: 0 0 0 0.15rem rgba(var(--bs-primary-rgb),0.12); }
 
-@media (min-width: 768px) {
-  html {
-    font-size: 16px;
-  }
-}
-
-.btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
-}
-
-html {
-  position: relative;
-  min-height: 100%;
-}
-
-body {
-  margin-bottom: 60px;
-}
-
-/* Google Keep-like cards and grid */
-.app-header {
-  background: #fff8e1; /* soft yellow */
-  border-bottom: 1px solid rgba(0,0,0,0.06);
-}
-
-.keep-container {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
-  align-items: start;
-  padding: 18px 6px;
-}
-
-.note-card {
-  /* match the soft yellow used for header/sidebar so the cards look cohesive */
-  background: #fff8e1;
-  border-radius: 8px;
-  padding: 12px 14px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-  min-height: 120px;
-  word-wrap: break-word;
-  border: 1px solid rgba(0,0,0,0.03);
-}
-
-/* make the whole card anchor non-underlined and ensure it inherits text color */
-.note-card { display:block; text-decoration:none; color:inherit; position:relative; overflow:hidden }
-.note-card:focus { outline: none; box-shadow: 0 0 0 0.06rem rgba(37,140,251,0.15); }
-
-/* large faint icon in the background of the card */
-.note-card .note-card-icon {
-  position: absolute;
-  right: 12px;
-  bottom: 8px;
-  font-size: 84px;
-  line-height: 1;
-  color: #000;
-  opacity: 0.06;
-  pointer-events: none;
-  transform: translateZ(0);
-}
-
-/* ensure title/body are above the background icon */
-.note-card .note-title, .note-card .note-body { position: relative; z-index: 2 }
-
-.note-card.small { min-height: 80px; }
+/* Card / grid: use neutral backgrounds and subtle borders */
+.keep-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; align-items: start; padding: 14px 6px; }
+.note-card { background: var(--bs-white); border-radius: 8px; padding: 12px 14px; box-shadow: 0 1px 2px rgba(20,24,32,0.04); min-height: 110px; border: 1px solid var(--bs-border-color); display:block; text-decoration:none; color:inherit; position:relative; overflow:hidden; }
+.note-card:focus { outline: none; box-shadow: 0 0 0 0.06rem rgba(var(--bs-primary-rgb),0.08); }
+.note-card .note-card-icon { position: absolute; right: 12px; bottom: 8px; font-size: 84px; line-height: 1; color: #000; opacity: 0.04; pointer-events: none; transform: translateZ(0); }
 .note-title { font-weight:600; margin-bottom:6px; }
-.note-body { color:#222; white-space:pre-wrap; }
+.note-body { color: #333; white-space:pre-wrap; }
 
-.keep-toolbar { display:flex; gap:8px; align-items:center; }
-.keep-input { background:#fff; border-radius:8px; padding:10px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); width:100%; }
+/* Layout: softer header and sidebar colors but keep structure */
+.app-header { background: var(--bs-light); border-bottom: 1px solid var(--bs-border-color); }
+.sidebar { width: 220px; background: var(--bs-light); border-right: 1px solid var(--bs-border-color); padding: 12px 8px; box-sizing: border-box; }
+.sidebar-link { color: #2b2f36; text-decoration:none; padding:8px 10px; border-radius:6px; display:block; }
+.sidebar-link:hover { background: rgba(34,37,48,0.04); }
+.sidebar-link.active, .sidebar-link[aria-current="page"] { background: rgba(34,37,48,0.04); font-weight:600; }
+.main-content { flex:1; background: var(--bs-white); min-height:100vh; }
 
-.action-btn { background:#fff; border:1px solid rgba(0,0,0,0.07); border-radius:6px; padding:6px 10px; cursor:pointer; }
-.action-btn.primary { background:#1a73e8; color:white; border-color:transparent; }
-
-/* nicer hover/focus for action buttons */
-.action-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(26,115,232,0.12); }
-.action-btn:active { transform: translateY(0); }
-.action-btn.primary:hover { background:#1669d8; }
-
-/* input style specific to generation page for better contrast */
-.keep-input { background:#fff; border-radius:10px; padding:10px 12px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); border: 1px solid rgba(0,0,0,0.06); font-size:1rem }
-
-/* small helper - visually separate status area */
-#statusArea { max-width:900px; }
+/* Minor helpers */
+.keep-input { background: var(--bs-white); border-radius:8px; padding:10px; box-shadow: inset 0 0 0 1px var(--bs-border-color); width:100%; }
 #statusPre { background: #f7f9fb; padding:12px; border-radius:8px; border:1px solid rgba(0,0,0,0.04); white-space:pre-wrap; }
 
-.admin-link { margin-left:12px; font-size:0.95rem; }
-
-/* responsive spacing */
-@media (max-width: 576px) {
-  .keep-container { gap:10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
-}
-
-/* Sidebar layout similar to Google Keep */
-.app-shell { display:flex; min-height: calc(100vh - 0px); }
-.sidebar {
-  width: 220px;
-  background: #fff8e1; /* soft yellow */
-  border-right: 1px solid rgba(0,0,0,0.06);
-  padding: 12px 8px;
-  box-sizing: border-box;
-}
-/* collapsed sidebar: keep icons visible, hide labels */
-.sidebar.collapsed {
-  width: 64px;
-  padding: 12px 6px;
-}
-.sidebar.collapsed .brand-title { display:none; }
-.sidebar.collapsed .sidebar-nav { align-items: center; }
-.sidebar.collapsed .sidebar-link { justify-content: center; padding: 10px 6px; }
-.sidebar.collapsed .sidebar-link span { display: none; }
-.sidebar.collapsed .sidebar-link i.bi { margin-right: 0; font-size: 20px; }
-.sidebar.collapsed .sidebar-brand { justify-content: center; }
-.sidebar.collapsed .sidebar-collapse i { transform: rotate(180deg); }
-.sidebar .icon { margin-right:10px; vertical-align:middle; opacity:0.9 }
-.sidebar-link { display:flex; align-items:center; gap:8px; }
-.sidebar i.bi { margin-right:10px; vertical-align:middle; opacity:0.95; font-size:18px }
-.sidebar-link span { display:inline-block; }
-.sidebar-link.active, .sidebar-link[aria-current="page"] { background: rgba(0,0,0,0.06); font-weight:600; }
-
-.sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.32); z-index:1500; opacity:0; transition:opacity .18s ease; }
-.sidebar-overlay.visible { display:block; opacity:1; }
-
-/* when toggled, show sidebar on small screens */
-body.sidebar-open .sidebar { display:block; position:fixed; left:0; top:0; bottom:0; z-index:1600; width:260px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
-body.sidebar-open .main-content { overflow: hidden; }
-.sidebar-brand { padding: 6px 8px; margin-bottom: 8px; }
-.brand-title { font-weight:700; color:#333; }
-.sidebar-nav { display:flex; flex-direction:column; gap:6px; padding-top:8px; }
-.sidebar-link { color:#333; text-decoration:none; padding:8px 10px; border-radius:6px; display:block; }
-.sidebar-link:hover { background: rgba(0,0,0,0.04); }
-.main-content { flex:1; background: #fff; min-height:100vh; }
-.topbar { background: transparent; padding:6px 0; }
-
-@media (max-width: 768px) {
-  .sidebar { display:none; }
-  .main-content { padding: 0 10px; }
-  .sidebar-overlay { display:none; }
-}
-
-/* smooth transitions */
-.sidebar, .sidebar .sidebar-link, .sidebar .brand-title { transition: width .18s ease, padding .18s ease, opacity .18s ease; }
-
-.form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {
-  color: var(--bs-secondary-color);
-  text-align: end;
-}
-
-.form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
-  text-align: start;
-}
-
-/* Logs: highlight error rows with a soft pastel yellow and ensure horizontal scrolling available */
-.log-error-row { background: #fff8e1; }
 .table-responsive { overflow-x: auto; }
+
+/* Ensure test definitions table shows clear borders/colors if needed (keep subtle borders, but avoid overriding Bootstrap striping) */
+.table.table-bordered {
+  border: 1px solid rgba(0,0,0,0.08);
+}
+.table.table-bordered > :where(thead, tbody, tfoot) > tr > th,
+.table.table-bordered > :where(thead, tbody, tfoot) > tr > td {
+  border: 1px solid rgba(0,0,0,0.06);
+}
+/* Leave .table.table-striped behavior to Bootstrap's defaults so striping uses standard colors */
+
+/* Styling for the injected home icon near page titles */
+.page-title-with-home .page-home-icon { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:6px; }
+.page-title-with-home .page-home-icon:hover { background: rgba(74,123,210,0.06); }
+
+/* TestDefinitions improvements */
+.card .table-responsive { margin-top: 6px; }
+.extra-row td { background: transparent; transition: background-color 0.12s ease; }
+.extra-row.show td { background: #fbfcfd; }
+.extra-row.show td pre { background: transparent; margin:0; padding:0; }
+.btn-outline-primary i, .btn-outline-danger i, .btn-outline-secondary i { pointer-events: none; }

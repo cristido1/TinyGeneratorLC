@@ -46,7 +46,8 @@ namespace TinyGenerator.Services
             {
                 if (_hubContext != null)
                 {
-                    await _hubContext.Clients.Group(id).SendAsync("ProgressAppended", id, stamped);
+                    // Broadcast to all clients so progress messages appear on any page
+                    await _hubContext.Clients.All.SendAsync("ProgressAppended", id, stamped);
                 }
             }
             catch { }
@@ -72,7 +73,8 @@ namespace TinyGenerator.Services
 
                 if (_hubContext != null)
                 {
-                    await _hubContext.Clients.Group(id).SendAsync("ProgressCompleted", id, finalResult);
+                    // Broadcast to all clients so completion messages appear on any page
+                    await _hubContext.Clients.All.SendAsync("ProgressCompleted", id, finalResult);
                 }
             }
             catch (Exception ex)

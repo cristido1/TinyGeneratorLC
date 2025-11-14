@@ -1,0 +1,105 @@
+@page
+@model TinyGenerator.Pages.TestDefinitions.IndexModel
+@{
+    ViewData["Title"] = "Test Definitions";
+}
+
+<div class="mb-3 d-flex justify-content-between align-items-center">
+    <div class="d-flex">
+        <input type="search" id="searchBox" class="form-control form-control-sm me-2" placeholder="Search test definitions..." />
+        <a class="btn btn-sm btn-primary" asp-page="./Create">Create Test Definition</a>
+    </div>
+</div>
+
+<table id="tabTests" class="table table-bordered table-sm table-pastel table-compact">
+    <thead>
+        <tr>
+            <th>Group</th>
+            <th>Library</th>
+            <th>Function</th>
+            <th>Priority</th>
+            <th>Timeout (ms)</th>
+            <th>Test Type</th>
+            <th class="d-none">Prompt</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    @if (Model.Definitions != null && Model.Definitions.Any())
+    {
+        foreach (var d in Model.Definitions)
+        {
+            <tr>
+                <td class="group">@d.GroupName</td>
+                <td class="library">@d.Library</td>
+                <td class="function">@d.FunctionName</td>
+                <td class="priority" data-priority="@d.Priority">@d.Priority</td>
+                <td class="timeout">@d.TimeoutMs</td>
+                <td class="testtype">@(string.IsNullOrWhiteSpace(d.TestType) ? "" : d.TestType)</td>
+                <td class="prompt d-none">@System.Net.WebUtility.HtmlEncode(d.Prompt)</td>
+                <td class="actions">
+                    <button type="button" class="btn btn-sm btn-outline-secondary dt-expand me-1">+</button>
+                    <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@d.Id">Edit</a>
+                    <a class="btn btn-sm btn-outline-danger" asp-page="./Delete" asp-route-id="@d.Id">Delete</a>
+                </td>
+            </tr>
+        }
+    }
+    else
+    {
+        <tr>
+            <td colspan="8">No test definitions found.</td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
+}
+
+@section Scripts {
+    <script>
+        $(document).ready(function() {
+            // Initialize DataTable (Bootstrap 5 integration assumed in _Layout)
+            var table = $('#tabTests').DataTable({
+                paging: true,
+                searching: true,
+                ordering: true,
+                info: true,
+                lengthChange: true,
+                lengthMenu: [ [10, 25, 50, 100], [10, 25, 50, 100] ],
+                pageLength: 25,
+                responsive: true,
+                columnDefs: [{ orderable: false, targets: -1 }], // actions column not sortable
+                stateSave: true
+            });
+
+            // Format detail content showing the prompt
+            function formatPrompt(rowNode) {
+                var promptText = $(rowNode).find('td.prompt').text() || '';
+                if (!promptText) return '<div style="padding:6px 8px;font-size:0.85rem;color:#666">(no prompt)</div>';
+                return '<div style="padding:6px 8px;font-size:0.9rem;color:#333"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:0.9rem;line-height:1.25;background:transparent;border:0;padding:0;">' + promptText + '</pre></div>';
+            }
+
+            // Toggle details on expand button click
+            $('#tabTests tbody').on('click', 'button.dt-expand', function () {
+                var tr = $(this).closest('tr');
+                var row = table.row(tr);
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $(this).text('+');
+                } else {
+                    row.child(formatPrompt(tr)).show();
+                    $(this).text('−');
+                }
+            });
+
+            // Wire the external searchBox to DataTables
+            $('#searchBox').on('input', function() {
+                table.search(this.value).draw();
+            });
+        });
+    </script>
+}
+

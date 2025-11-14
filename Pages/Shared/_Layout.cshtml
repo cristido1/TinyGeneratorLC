@@ -1,98 +1,80 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] - TinyGenerator</title>
     <script type="importmap"></script>
-    <!-- Bootstrap 5 -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" />
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <!-- Bootstrap 5 (local) -->
+    <link href="~/lib/bootstrap/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <!-- Local copy of Bootstrap Icons (use scripts/vendor_assets.sh to fetch) -->
+    <link href="~/lib/bootstrap-icons/bootstrap-icons.css" rel="stylesheet" />
+    
+    <!-- New minimalist panel design CSS -->
+    <link rel="stylesheet" href="~/css/minimalist-panels.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/TinyGenerator.styles.css" asp-append-version="true" />
+    <!-- DataTables CSS (shared) -->
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     @await RenderSectionAsync("Styles", required: false)
 </head>
 <body>
-    <header class="app-header">
-        <div class="app-shell">
-            <aside class="sidebar" role="navigation" aria-label="Main sidebar">
-                <div class="sidebar-brand d-flex align-items-center justify-content-between">
-                    <a asp-area="" asp-page="/Index" class="d-flex align-items-center text-decoration-none">
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:8px">
-                            <rect x="2" y="3" width="20" height="18" rx="3" fill="#fff59d" stroke="#f0c419"/>
-                            <rect x="6" y="7" width="12" height="2" rx="1" fill="#000" opacity="0.6"/>
-                        </svg>
-                        <span class="brand-title">TinyGenerator</span>
-                    </a>
-                    <!-- collapse toggle visible on md+ screens -->
-                    <button class="btn btn-sm btn-light sidebar-collapse d-none d-md-inline" title="Riduci menu" aria-pressed="false">
-                        <i class="bi bi-chevron-left"></i>
-                    </button>
-                </div>
+    <!-- Main content area with header (title + home icon) rendered by layout -->
+    @{
+        var path = Context.Request.Path.HasValue ? Context.Request.Path.Value.ToLowerInvariant() : "/";
+        var isHome = path == "/" || path == "/index" || path == "/index/";
+        var pageTitle = ViewData["Title"] as string ?? string.Empty;
+    }
 
-                <nav class="sidebar-nav">
-                    <a class="sidebar-link" asp-area="" asp-page="/Index">
-                        <i class="bi bi-house"></i>
-                        <span>Home</span>
-                    </a>
-                    <a class="sidebar-link" asp-area="" asp-page="/Genera">
-                        <i class="bi bi-pencil-square"></i>
-                        <span>Genera</span>
-                    </a>
-                    <a class="sidebar-link" asp-area="" asp-page="/Stories">
-                        <i class="bi bi-journal-text"></i>
-                        <span>Storie</span>
-                    </a>
-                    <a class="sidebar-link" asp-area="" asp-page="/Admin">
-                        <i class="bi bi-graph-up"></i>
-                        <span>Controllo costi</span>
-                    </a>
-                    <a class="sidebar-link" asp-area="" asp-page="/OllamaMonitor">
-                        <i class="bi bi-cpu"></i>
-                        <span>Ollama Monitor</span>
-                    </a>
-                    <a class="sidebar-link" asp-area="" asp-page="/Logs">
-                        <i class="bi bi-list-check"></i>
-                        <span>Logs</span>
-                    </a>
-                    <a class="sidebar-link" asp-area="" asp-page="/Models">
-                        <i class="bi bi-diagram-3"></i>
-                        <span>Modelli</span>
-                    </a>
-                    <!-- Privacy page removed per user request -->
-                </nav>
-            </aside>
-
-            <div class="main-content">
-                <nav class="topbar">
-                    <div class="container d-flex align-items-center">
-                        <button class="btn btn-link nav-toggle d-md-none">☰</button>
-                        <div class="ms-auto">
-                            <!-- reserved for future topbar items -->
-                        </div>
-                    </div>
-                </nav>
-                <div class="container">
-                    <main role="main" class="pb-3">
-                        @RenderBody()
-                    </main>
-                </div>
+    <main class="container mt-4">
+        @if (!isHome && !string.IsNullOrWhiteSpace(pageTitle))
+        {
+            <div class="page-header-outside d-flex align-items-center mb-3">
+                <i class="bi bi-house-fill page-home-icon" title="Torna alla home" role="link" aria-label="Torna alla home" onclick="location.href='/'"></i>
+                <h1 class="ms-2">@pageTitle</h1>
             </div>
-        </div>
-    </header>
-    <div class="container">
-        <main role="main" class="pb-3">
-            @RenderBody()
-        </main>
+        }
+
+        @RenderBody()
+    </main>
+
+    <!-- Toast container for app-wide notifications (Bootstrap toasts) -->
+    <div id="toast-container" class="toast-container tg-toast-sm-container position-fixed top-0 end-0 p-3" style="z-index:1060;">
+        <!-- toasts appended dynamically by signalr-notifs.js -->
     </div>
 
-    <footer class="border-top footer text-muted">
-        <div class="container">
-            &copy; 2025 - TinyGenerator
-        </div>
-    </footer>
-
+    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
+
+    <!-- Shared JS libs: jQuery (local + CDN fallback), SignalR, DataTables and Buttons -->
+    <script src="~/lib/jquery/jquery.min.js"></script>
+    <script>window.jQuery || document.write('<script src="https://code.jquery.com/jquery-3.6.0.min.js"><\/script>');</script>
+    <script src="~/lib/signalr/signalr.min.js"></script>
+    <script src="~/lib/datatables/js/jquery.dataTables.min.js"></script>
+    <script src="~/lib/datatables/js/dataTables.bootstrap5.min.js"></script>
+    <script src="~/lib/datatables/js/dataTables.buttons.min.js"></script>
+    <script src="~/lib/datatables/js/buttons.bootstrap5.min.js"></script>
+    <script src="~/lib/datatables/js/jszip.min.js"></script>
+    <script src="~/lib/datatables/js/pdfmake.min.js"></script>
+    <script src="~/lib/datatables/js/vfs_fonts.js"></script>
+    <script src="~/lib/datatables/js/buttons.html5.min.js"></script>
+    <script src="~/lib/datatables/js/buttons.print.min.js"></script>
+    <script src="~/lib/datatables/js/buttons.colVis.min.js"></script>
+    <script src="~/lib/datatables/js/dataTables.colReorder.min.js"></script>
+
+    <!-- App SignalR notification client (toasts) -->
+    <script src="~/js/signalr-notifs.js" asp-append-version="true"></script>
+    @* Render a toast from TempData if set (server-side notification to the current page) *@
+    @{
+        var tTitle = TempData["ToastTitle"] as string;
+        var tMessage = TempData["ToastMessage"] as string;
+        var tLevel = TempData["ToastLevel"] as string ?? "info";
+    }
+    @if (!string.IsNullOrWhiteSpace(tMessage))
+    {
+        <script>document.addEventListener('DOMContentLoaded', function(){ try{ if (window.appNotify) { window.appNotify.show('@(tTitle ?? "")', '@(tMessage.Replace("\"","\\\""))', '@tLevel'); } }catch(e){} });</script>
+    }
 
     @await RenderSectionAsync("Scripts", required: false)
 </body>

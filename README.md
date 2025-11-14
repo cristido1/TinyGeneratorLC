@@ -96,3 +96,21 @@ Contributi benvenuti! Segui le linee guida standard per pull request.
 ## Licenza
 
 MIT
+
+## Note operative e best practice
+
+Per le pagine che gestiscono la lista e la modifica degli agenti seguire le best practice di Razor Pages, DataTables.net e Bootstrap 5:
+
+- Centralizzare i riferimenti a JS/CSS critici (jQuery, Bootstrap, DataTables) in `Pages/Shared/_Layout.cshtml` e usare fallback CDN quando necessario.
+- Usare le Tag Helpers Razor per i form (`asp-for`, `asp-page`, `asp-route-*`) e `SelectList`/`select` per le combo valorizzate dal server.
+- Inizializzare DataTables in un file JS separato (es. `wwwroot/js/agents-index.js`) e usare l'estensione `Buttons` per toolbar coese, `responsive.renderer` per i dettagli e la paginazione/filtro forniti da DataTables (evitare duplicazioni UI).
+- Mettere la logica di rendering dei dettagli (prompt/instructions/execution_plan) nel renderer di DataTables o usare colonne nascoste solo come fonte dati; non duplicare icone o handler JS manuali quando DataTables fornisce lo stesso comportamento.
+- Validare sempre i campi JSON lato server (es. `Skills`, `Config`, `ExecutionPlan`) e fornire messaggi di errore chiari nella pagina `Edit`.
+
+Pagine di riferimento per queste modifiche e per la UI Agents:
+
+- `Pages/Agents/Index.cshtml`
+- `Pages/Agents/Edit.cshtml`
+- `Pages/Agents/Create.cshtml`
+
+Seguire questi punti garantisce coerenza visiva, migliore manutenzione e comportamenti prevedibili tra client/server.

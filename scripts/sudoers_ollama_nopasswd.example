@@ -1,0 +1,22 @@
+# Example sudoers drop-in to allow starting/stopping Ollama with high priority without password.
+# Copy this file to /etc/sudoers.d/ollama-nopasswd using visudo:
+#   sudo visudo -f /etc/sudoers.d/ollama-nopasswd
+# Then paste the adjusted content.
+#
+# IMPORTANT: Replace <USERNAME> with your macOS username (e.g., cristianodonaggio).
+# You can tighten the commands further by constraining arguments; these lines aim for practicality.
+#
+# Command aliases for the operations used by scripts/restart_ollama.sh
+Cmnd_Alias OLLAMA_BINARIES = /usr/local/bin/ollama, /opt/homebrew/bin/ollama
+Cmnd_Alias OLLAMA_CTL = /usr/bin/kill, /usr/bin/killall, /usr/bin/pkill, /usr/bin/nice, /usr/bin/renice
+# Optional helpers used in the script launch line
+Cmnd_Alias OLLAMA_HELPERS = /usr/bin/nohup, /usr/bin/env
+
+# Allow the specified user to run the above commands as root without password
+<USERNAME> ALL=(root) NOPASSWD: OLLAMA_BINARIES, OLLAMA_CTL, OLLAMA_HELPERS
+
+# Note:
+# - If you prefer stricter rules, you can enumerate exact command forms, e.g.:
+#   <USERNAME> ALL=(root) NOPASSWD: /usr/bin/kill -15 [0-9]*, /usr/bin/kill -9 [0-9]*, /usr/bin/nice -n -20 *
+# - On macOS, sudo often uses a restricted secure_path; since the script now resolves the absolute path to ollama,
+#   starting via sudo should work even with secure_path enforced.

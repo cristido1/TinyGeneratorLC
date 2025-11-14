@@ -47,49 +47,13 @@ public sealed class CostController
     // List all models
     public List<ModelRecord> ListModels() => _database.ListModels();
 
-    // Scan local Ollama running instances (best-effort) and upsert them into the models table.
-    // Returns number of models upserted.
+    // Delegate discovery to DatabaseService so CostController does not perform DB operations itself.
+    // Returns number of newly added models.
     public async Task<int> PopulateLocalOllamaModelsAsync()
     {
         try
         {
-            // prefer installed models (ollama list) since user asked for installed models
-            var list = await OllamaMonitorService.GetInstalledModelsAsync();
-            var added = 0;
-            foreach (var m in list)
-            {
-                // try to extract a numeric context if present in the Context string
-                var ctx = 0;
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(m.Context))
-                    {
-                        var digits = new string(m.Context.Where(char.IsDigit).ToArray());
-                        if (int.TryParse(digits, out var parsed)) ctx = parsed;
-                    }
-                }
-                catch { }
-
-                var mi = new ModelRecord
-                {
-                    Name = m.Name ?? string.Empty,
-                    Provider = "ollama",
-                    IsLocal = true,
-                    MaxContext = ctx > 0 ? ctx : 4096,
-                    ContextToUse = ctx > 0 ? ctx : 4096,
-                    CostInPerToken = 0.0,
-                    CostOutPerToken = 0.0,
-                    LimitTokensDay = 0,
-                    LimitTokensWeek = 0,
-                    LimitTokensMonth = 0,
-                    Metadata = JsonSerializer.Serialize(new { m.Id, m.Size, m.Processor, m.Context, m.Until }),
-                    Enabled = true
-                };
-
-                UpsertModel(mi);
-                added++;
-            }
-            return added;
+            return await _database.AddLocalOllamaModelsAsync();
         }
         catch
         {

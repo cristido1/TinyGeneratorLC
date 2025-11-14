@@ -1,0 +1,28 @@
+@page "{id:int}"
+@model TinyGenerator.Pages.TestDefinitions.DeleteModel
+@{
+    ViewData["Title"] = "Delete Test Definition";
+}
+
+@* Title rendered by layout using ViewData["Title"] *@
+
+@if (Model.Definition == null)
+{
+    <div class="alert alert-warning">Test definition not found.</div>
+}
+else
+{
+    <div class="card">
+        <div class="card-body">
+            <h5>@Model.Definition.FunctionName</h5>
+            <p><strong>Group:</strong> @Model.Definition.GroupName</p>
+            <p><strong>Library:</strong> @Model.Definition.Library</p>
+            <p><strong>Prompt:</strong></p>
+            <pre style="white-space:pre-wrap;">@Model.Definition.Prompt</pre>
+            <form method="post">
+                <button type="submit" class="btn btn-danger">Delete</button>
+                <a asp-page="./Index" class="btn btn-secondary">Cancel</a>
+            </form>
+        </div>
+    </div>
+}

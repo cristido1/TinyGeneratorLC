@@ -1,0 +1,52 @@
+@page
+@model TinyGenerator.Pages.Agents.CreateModel
+@{
+    Layout = "_Layout";
+}
+
+<h2>Create Agent</h2>
+
+<form method="post">
+    <div class="mb-3">
+        <label class="form-label">Name</label>
+        <input asp-for="Agent.Name" class="form-control" />
+        <span asp-validation-for="Agent.Name" class="text-danger"></span>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Role</label>
+        <input asp-for="Agent.Role" class="form-control" />
+        <span asp-validation-for="Agent.Role" class="text-danger"></span>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">ModelId (optional)</label>
+        <input asp-for="Agent.ModelId" class="form-control" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Voice (optional)</label>
+        <select asp-for="Agent.VoiceId" class="form-select">
+            <option value="">-- none --</option>
+            @foreach (var v in Model.Voices)
+            {
+                <option value="@v.Id" selected="@(v.Id == Model.Agent.VoiceId ? "selected" : null)">@v.Name @((!string.IsNullOrWhiteSpace(v.Model)) ? "(" + v.Model + ")" : "")</option>
+            }
+        </select>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Skills (JSON array)</label>
+        <textarea asp-for="Agent.Skills" class="form-control" rows="3"></textarea>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Config (JSON)</label>
+        <textarea asp-for="Agent.Config" class="form-control" rows="4"></textarea>
+    </div>
+    <div class="mb-3 form-check">
+        <input asp-for="Agent.IsActive" class="form-check-input" />
+        <label class="form-check-label">Active</label>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Notes</label>
+        <textarea asp-for="Agent.Notes" class="form-control" rows="3"></textarea>
+    </div>
+    <button class="btn btn-primary">Create</button>
+    <a class="btn btn-secondary" asp-page="/Agents/Index">Cancel</a>
+</form>

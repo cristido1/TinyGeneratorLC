@@ -1,0 +1,63 @@
+/* Compact pastel styles for DataTables + Bootstrap 5 */
+/* Aim: reduced padding, pastel alternating rows, subtle borders, smaller fonts */
+
+/* Base: apply to table element with class .table-pastel.table-compact */
+.table-pastel.table-compact {
+  font-size: 0.9rem;
+}
+.table-pastel.table-compact thead th {
+  padding: 0.4rem 0.6rem;
+  font-weight: 600;
+  color: #334155; /* muted navy */
+  background: rgba(246,248,250,0.6);
+  border-bottom: 1px solid rgba(100,116,139,0.08);
+}
+.table-pastel.table-compact tbody td {
+  padding: 0.34rem 0.6rem; /* reduced padding */
+  vertical-align: middle;
+  border-top: none;
+  border-bottom: 1px solid rgba(30,41,59,0.04);
+}
+.table-pastel.table-compact tbody tr:nth-child(odd) td {
+  background: linear-gradient(180deg, rgba(255,249,240,0.5), rgba(255,255,255,0.5)); /* soft warm */
+}
+.table-pastel.table-compact tbody tr:nth-child(even) td {
+  background: linear-gradient(180deg, rgba(240,249,255,0.5), rgba(255,255,255,0.5)); /* soft cool */
+}
+.table-pastel.table-compact tbody tr:hover td {
+  background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,1));
+  transform: translateY(-1px);
+}
+
+/* Small buttons inside compact theme */
+.table-pastel.table-compact .btn {
+  padding: 4px 6px;
+  font-size: 0.8rem;
+}
+
+/* Make pagination and length smaller */
+.table-pastel.table-compact .dataTables_paginate .paginate_button a {
+  padding: 4px 10px;
+}
+.table-pastel.table-compact .dataTables_length select,
+.table-pastel.table-compact .dataTables_filter input {
+  height: 30px;
+  padding: 4px 8px;
+  font-size: 0.9rem;
+}
+
+/* Make the last column action buttons tightly spaced */
+.table-pastel.table-compact td.actions {
+  white-space: nowrap;
+}
+
+/* Child row (detail) style */
+.table-pastel.table-compact tr.gridjs-detail-row, .table-pastel.table-compact tr.child-row {
+  background: #fbfbfb;
+}
+
+/* Responsive: reduce font on small screens */
+@media(max-width: 768px){
+  .table-pastel.table-compact thead th { font-size: 0.78rem; }
+  .table-pastel.table-compact tbody td { font-size: 0.86rem; padding: 0.28rem 6px; }
+}

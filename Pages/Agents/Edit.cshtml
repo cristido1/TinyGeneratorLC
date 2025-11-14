@@ -1,0 +1,78 @@
+@page
+@model TinyGenerator.Pages.Agents.EditModel
+@{
+    Layout = "_Layout";
+}
+
+<h2>Edit Agent</h2>
+
+<form method="post">
+    <input type="hidden" asp-for="Agent.Id" />
+    <div class="row mb-3">
+        <div class="col-md-8">
+            <label class="form-label">Name</label>
+            <input asp-for="Agent.Name" class="form-control" />
+            <span asp-validation-for="Agent.Name" class="text-danger"></span>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Role</label>
+            @{ 
+                var roles = new List<string> { "coordinator", "writer", "story_evaluator", "musician", "sfx", "ambient", "tts", "mixer" };
+                if (!string.IsNullOrWhiteSpace(Model.Agent.Role) && !roles.Contains(Model.Agent.Role)) { roles.Insert(0, Model.Agent.Role); }
+            }
+            <select asp-for="Agent.Role" class="form-select">
+                @foreach (var r in roles)
+                {
+                    <option value="@r" selected="@(r == Model.Agent.Role ? "selected" : null)">@r</option>
+                }
+            </select>
+        </div>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">ModelId (optional)</label>
+        <input asp-for="Agent.ModelId" class="form-control" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Voice (optional)</label>
+        <select asp-for="Agent.VoiceId" class="form-select">
+            <option value="">-- none --</option>
+            @foreach (var v in Model.Voices)
+            {
+                <option value="@v.Id" selected="@(v.Id == Model.Agent.VoiceId ? "selected" : null)">@v.Name @((!string.IsNullOrWhiteSpace(v.Model)) ? "(" + v.Model + ")" : "")</option>
+            }
+        </select>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Prompt</label>
+        <textarea asp-for="Agent.Prompt" class="form-control" rows="2"></textarea>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Instructions</label>
+        <textarea asp-for="Agent.Instructions" class="form-control" rows="3"></textarea>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Execution Plan (JSON or text)</label>
+        <textarea asp-for="Agent.ExecutionPlan" class="form-control" rows="4"></textarea>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Skills</label>
+        <div id="skillsTags" class="form-control p-2" style="min-height:44px; display:flex; flex-wrap:wrap; align-items:center; gap:.25rem;">            
+        </div>
+        <input type="hidden" id="Agent_Skills" name="Agent.Skills" value='@((Model.Agent.Skills ?? "[]"))' />
+        <small class="form-text text-muted">Aggiungi skill premendo Invio o la virgola. Le skill saranno salvate come array JSON.</small>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Config (JSON)</label>
+        <textarea asp-for="Agent.Config" class="form-control" rows="4"></textarea>
+    </div>
+    <div class="mb-3 form-check">
+        <input asp-for="Agent.IsActive" class="form-check-input" />
+        <label class="form-check-label">Active</label>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Notes</label>
+        <textarea asp-for="Agent.Notes" class="form-control" rows="3"></textarea>
+    </div>
+    <button class="btn btn-primary">Save</button>
+    <a class="btn btn-secondary" asp-page="/Agents/Index">Cancel</a>
+</form>

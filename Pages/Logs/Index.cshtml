@@ -1,0 +1,45 @@
+@page
+@model TinyGenerator.Pages.Logs.LogsModel
+@{
+    ViewData["Title"] = "Logs";
+}
+
+<h1 class="mb-3">Logs</h1>
+
+<div class="table-responsive">
+    <table id="logsTable" class="table table-sm table-striped table-hover align-middle">
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Level</th>
+                <th>Message</th>
+                <th>Source</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var log in Model.LogEntries)
+        {
+            <tr>
+                <td>@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                <td>@log.Level</td>
+                <td>@log.Message</td>
+                <td>@log.Source</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>
+
+@section Scripts {
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" />
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+    <script>
+        $(function () {
+            $('#logsTable').DataTable({
+                order: [[0, 'desc']],
+                pageLength: 25
+            });
+        });
+    </script>
+}

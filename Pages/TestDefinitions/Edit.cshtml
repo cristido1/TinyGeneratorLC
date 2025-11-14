@@ -1,0 +1,72 @@
+@page "{id?}"
+@model TinyGenerator.Pages.TestDefinitions.EditModel
+@{
+    ViewData["Title"] = Model.Definition != null && Model.Definition.Id > 0 ? "Edit Test Definition" : "Create Test Definition";
+}
+
+@* Title rendered by layout using ViewData["Title"] *@
+
+
+<form method="post">
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label asp-for="Definition.GroupName" class="form-label"></label>
+            <input asp-for="Definition.GroupName" class="form-control" />
+            <span asp-validation-for="Definition.GroupName" class="text-danger"></span>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="Definition.Library" class="form-label"></label>
+            <input asp-for="Definition.Library" class="form-control" />
+            <span asp-validation-for="Definition.Library" class="text-danger"></span>
+        </div>
+    </div>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label asp-for="Definition.FunctionName" class="form-label"></label>
+            <input asp-for="Definition.FunctionName" class="form-control" />
+            <span asp-validation-for="Definition.FunctionName" class="text-danger"></span>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="Definition.Priority" class="form-label"></label>
+            <input asp-for="Definition.Priority" class="form-control" />
+            <span asp-validation-for="Definition.Priority" class="text-danger"></span>
+        </div>
+    </div>
+    <div class="mb-3">
+        <label asp-for="Definition.Prompt" class="form-label"></label>
+        <textarea asp-for="Definition.Prompt" class="form-control" rows="6"></textarea>
+        <span asp-validation-for="Definition.Prompt" class="text-danger"></span>
+    </div>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label asp-for="Definition.TestType" class="form-label">Test Type</label>
+            <input asp-for="Definition.TestType" class="form-control" />
+            <span asp-validation-for="Definition.TestType" class="text-danger"></span>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="Definition.ValidScoreRange" class="form-label">Valid Score Range</label>
+            <input asp-for="Definition.ValidScoreRange" class="form-control" />
+            <span asp-validation-for="Definition.ValidScoreRange" class="text-danger"></span>
+            <small class="form-text text-muted">Usa <b>min-max</b> per range numerico (es: 1-5) oppure una lista separata da virgola (es: A,B,C). Il test verifica che la risposta sia numerica e rientri nel range, oppure che sia uguale a uno dei valori della lista.</small>
+        </div>
+    </div>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label asp-for="Definition.TimeoutMs" class="form-label">Timeout (ms)</label>
+            <input asp-for="Definition.TimeoutMs" class="form-control" type="number" min="0" />
+            <span asp-validation-for="Definition.TimeoutMs" class="text-danger"></span>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="Definition.ExpectedPromptValue" class="form-label">Expected Prompt Value</label>
+            <input asp-for="Definition.ExpectedPromptValue" class="form-control" />
+            <span asp-validation-for="Definition.ExpectedPromptValue" class="text-danger"></span>
+        </div>
+    </div>
+    <input type="hidden" asp-for="Definition.Id" />
+    <button type="submit" class="btn btn-primary">Save</button>
+    <a asp-page="./Index" class="btn btn-secondary">Cancel</a>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

@@ -70,11 +70,11 @@ namespace TinyGenerator.Services
             return null;
         }
 
-    public static async Task<List<OllamaModelInfo>> GetRunningModelsAsync()
+        public static async Task<List<OllamaModelInfo>> GetRunningModelsAsync()
         {
             return await Task.Run(() =>
             {
-        var list = new List<OllamaModelInfo>();
+                var list = new List<OllamaModelInfo>();
                 try
                 {
                     var psi = new ProcessStartInfo("ollama", "ps") { RedirectStandardOutput = true, UseShellExecute = false };
@@ -125,11 +125,11 @@ namespace TinyGenerator.Services
         }
 
         // List installed Ollama models (best-effort) by calling `ollama list` and parsing output.
-    public static async Task<List<OllamaModelInfo>> GetInstalledModelsAsync()
+        public static async Task<List<OllamaModelInfo>> GetInstalledModelsAsync()
         {
             return await Task.Run(() =>
             {
-        var list = new List<OllamaModelInfo>();
+                var list = new List<OllamaModelInfo>();
                 try
                 {
                     var psi = new ProcessStartInfo("ollama", "list") { RedirectStandardOutput = true, UseShellExecute = false };
@@ -234,5 +234,93 @@ namespace TinyGenerator.Services
                 }
             });
         }
+
+        // Attempt to delete/uninstall an installed Ollama model by trying several common CLI verbs.
+        // Returns (success, output).
+        public static async Task<(bool Success, string Output)> DeleteInstalledModelAsync(string modelName)
+        {
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(modelName)) return (false, "modelName empty");
+
+                    (bool Success, string Output, int ExitCode) RunCommand(string cmd, string args, int timeoutMs = 60000)
+                    {
+                        try
+                        {
+                            var psi = new ProcessStartInfo(cmd, args)
+                            {
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true,
+                                UseShellExecute = false
+                            };
+                            using var p = Process.Start(psi);
+                            if (p == null) return (false, "Could not start process", -1);
+                            p.WaitForExit(timeoutMs);
+                            var outp = p.StandardOutput.ReadToEnd();
+                            var err = p.StandardError.ReadToEnd();
+                            var combined = outp + (string.IsNullOrEmpty(err) ? string.Empty : "\nERR:" + err);
+                            return (p.ExitCode == 0, combined, p.ExitCode);
+                        }
+                        catch (Exception ex)
+                        {
+                            return (false, "EX:" + ex.Message, -1);
+                        }
+                    }
+
+                    var tried = new List<string>();
+                    // Primary command supported by modern Ollama
+                    var candidates = new[]
+                    {
+                        $"rm \"{modelName}\"",
+                        // Older variants: 'models rm' is sometimes present
+                        $"models rm \"{modelName}\""
+                    };
+
+                    foreach (var args in candidates)
+                    {
+                        tried.Add(args);
+                        var res = RunCommand("ollama", args);
+                        if (res.Success)
+                        {
+                            return (true, "Command: ollama " + args + "\n" + res.Output);
+                        }
+                    }
+
+                    // If none succeeded, return attempted commands for diagnostics
+                    return (false, "Tried commands: " + string.Join("; ", tried));
+                }
+                catch (Exception ex)
+                {
+                    return (false, "EX:" + ex.Message);
+                }
+            });
+        }
+
+        // Stop a running Ollama model instance (best-effort). Returns (success, output).
+        public static async Task<(bool Success, string Output)> StopModelAsync(string modelName)
+        {
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(modelName)) return (false, "modelName empty");
+                    var psi = new ProcessStartInfo("ollama", $"stop \"{modelName}\"") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+                    using var p = Process.Start(psi);
+                    if (p == null) return (false, "Could not start process");
+                    p.WaitForExit(30000);
+                    var outp = p.StandardOutput.ReadToEnd();
+                    var err = p.StandardError.ReadToEnd();
+                    var combined = outp + (string.IsNullOrEmpty(err) ? string.Empty : "\nERR:" + err);
+                    return (p.ExitCode == 0, combined);
+                }
+                catch (Exception ex)
+                {
+                    return (false, "EX:" + ex.Message);
+                }
+            });
+        }
     }
 }
+

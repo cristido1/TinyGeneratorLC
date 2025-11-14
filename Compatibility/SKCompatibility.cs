@@ -128,9 +128,148 @@ namespace Microsoft.SemanticKernel.Agents
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 object? runObj = null;
+
+                // Attempt to capture the outbound request information (final prompt, args,
+                // and a best-effort list of registered functions/skills) to help debugging
+                // provider-side slowness. This is best-effort and must not throw.
                 try
                 {
-                    var run = await kernel.InvokePromptAsync(finalPrompt, _args);
+                    var debug = new Dictionary<string, object?>();
+                    debug["Timestamp"] = DateTime.UtcNow;
+                    debug["Agent"] = Name;
+                    debug["Model"] = Model;
+                    debug["FinalPromptLength"] = finalPrompt?.Length ?? 0;
+                    debug["FinalPromptPreview"] = finalPrompt is null ? null : (finalPrompt.Length > 2000 ? finalPrompt.Substring(0, 2000) + "...[truncated]" : finalPrompt);
+                    debug["InstructionsLength"] = Instructions?.Length ?? 0;
+
+                    try
+                    {
+                        // Try to serialize execution args (may fail for internal types)
+                        debug["Args"] = JsonSerializer.Serialize(_args);
+                    }
+                    catch
+                    {
+                        debug["Args"] = _args?.ToString();
+                    }
+
+                    // Inspect kernel for registered functions/skills (best-effort via reflection)
+                    try
+                    {
+                        var funcs = new List<string>();
+                        var ktype = kernel.GetType();
+                        debug["KernelType"] = ktype.FullName;
+
+                        // Inspect properties and fields for enumerable containers that may hold skills/functions
+                        var members = new List<object?>();
+                        try
+                        {
+                            foreach (var p in ktype.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
+                            {
+                                object? val = null;
+                                try { val = p.GetValue(kernel); } catch { val = null; }
+                                if (val == null) continue;
+                                members.Add(val);
+                            }
+                        }
+                        catch { }
+
+                        try
+                        {
+                            foreach (var f in ktype.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
+                            {
+                                object? val = null;
+                                try { val = f.GetValue(kernel); } catch { val = null; }
+                                if (val == null) continue;
+                                members.Add(val);
+                            }
+                        }
+                        catch { }
+
+                        foreach (var m in members)
+                        {
+                            try
+                            {
+                                if (m is System.Collections.IEnumerable en && !(m is string))
+                                {
+                                    var enu = en.GetEnumerator();
+                                    int seen = 0;
+                                    while (enu.MoveNext() && seen++ < 20)
+                                    {
+                                        var item = enu.Current;
+                                        if (item == null) continue;
+                                        var iname = item.GetType().Name;
+                                        string desc = iname;
+                                        try
+                                        {
+                                            var nameProp = item.GetType().GetProperty("Name") ?? item.GetType().GetProperty("Id") ?? item.GetType().GetProperty("SkillName");
+                                            if (nameProp != null)
+                                            {
+                                                var nval = nameProp.GetValue(item);
+                                                if (nval != null) desc += ":" + nval.ToString();
+                                            }
+                                            else
+                                            {
+                                                var tostr = item.ToString();
+                                                if (!string.IsNullOrWhiteSpace(tostr)) desc += ":" + (tostr.Length > 200 ? tostr.Substring(0, 200) + "...[truncated]" : tostr);
+                                            }
+                                        }
+                                        catch { }
+
+                                        funcs.Add(desc);
+                                    }
+                                }
+                                else
+                                {
+                                    var sval = m?.ToString() ?? string.Empty;
+                                    if (!string.IsNullOrEmpty(sval)) funcs.Add(sval.Length > 200 ? sval.Substring(0, 200) + "...[truncated]" : sval);
+                                }
+                            }
+                            catch { }
+                        }
+
+                        if (funcs.Count > 0) debug["DiscoveredFunctions"] = funcs;
+                    }
+                    catch { }
+
+                    try
+                    {
+                        // Respect configuration flag Debug:EnableOutboundGeneration when present.
+                        try
+                        {
+                            bool enabled = true;
+                            try
+                            {
+                                // Best-effort: load configuration from appsettings and environment variables.
+                                var builder = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+                                    .SetBasePath(System.IO.Directory.GetCurrentDirectory())
+                                    .AddJsonFile("appsettings.json", optional: true)
+                                    .AddJsonFile("appsettings.Development.json", optional: true)
+                                    .AddJsonFile("appsettings.secrets.json", optional: true)
+                                    .AddEnvironmentVariables();
+                                var cfg = builder.Build();
+                                enabled = cfg.GetValue<bool?>("Debug:EnableOutboundGeneration") ?? true;
+                            }
+                            catch { enabled = true; }
+
+                            if (enabled)
+                            {
+                                var rawDir = Path.Combine("data");
+                                Directory.CreateDirectory(rawDir);
+                                var ts = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+                                var fname = Path.Combine(rawDir, $"sk_outbound_{ts}_{Guid.NewGuid():N}.json");
+                                var opts = new JsonSerializerOptions { WriteIndented = true };
+                                File.WriteAllText(fname, JsonSerializer.Serialize(debug, opts));
+                            }
+                        }
+                        catch { }
+                    }
+                    catch { }
+                }
+                catch { }
+
+                try
+                {
+                    var run = await kernel.InvokePromptAsync(finalPrompt ?? string.Empty, _args);
                     runObj = run;
                     sw.Stop();
 
@@ -217,7 +356,7 @@ namespace Microsoft.SemanticKernel.Agents
                     }
                     catch { }
 
-                    try { Console.WriteLine($"[SKCompatibility] InvokePromptAsync elapsed={sw.Elapsed.TotalSeconds:0.###}s, respLen={content?.Length ?? 0}"); } catch { }
+                    try { Console.WriteLine($"[SKCompatibility] InvokePromptAsync elapsed={sw.Elapsed.TotalSeconds:0.###}s, respLen={content?.Length ?? 0}, prompt={prompt}"); } catch { }
 
                     return new[] { new ChatResult { Content = content ?? string.Empty } };
                 }
@@ -254,21 +393,43 @@ namespace Microsoft.SemanticKernel.Agents
                             var rawDir = Path.Combine("data");
                             try { Directory.CreateDirectory(rawDir); } catch { }
                             var ts = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-                            var fname = Path.Combine(rawDir, $"sk_raw_{ts}_{Guid.NewGuid():N}.json");
+                            // Only write raw dump files when outbound generation is enabled (same flag as sk_outbound)
                             try
                             {
-                                if (extracted is JsonElement je)
+                                bool enabled = true;
+                                try
                                 {
-                                    File.WriteAllText(fname, je.GetRawText());
+                                    var builder = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+                                        .SetBasePath(System.IO.Directory.GetCurrentDirectory())
+                                        .AddJsonFile("appsettings.json", optional: true)
+                                        .AddJsonFile("appsettings.Development.json", optional: true)
+                                        .AddJsonFile("appsettings.secrets.json", optional: true)
+                                        .AddEnvironmentVariables();
+                                    var cfg = builder.Build();
+                                    enabled = cfg.GetValue<bool?>("Debug:EnableOutboundGeneration") ?? true;
                                 }
-                                else if (extracted != null)
+                                catch { enabled = true; }
+
+                                if (enabled)
                                 {
-                                    try { File.WriteAllText(fname, JsonSerializer.Serialize(extracted)); }
-                                    catch { try { File.WriteAllText(fname, extracted.ToString() ?? string.Empty); } catch { } }
-                                }
-                                else
-                                {
-                                    try { File.WriteAllText(fname, runObj?.ToString() ?? ex.ToString()); } catch { }
+                                    var fname = Path.Combine(rawDir, $"sk_raw_{ts}_{Guid.NewGuid():N}.json");
+                                    try
+                                    {
+                                        if (extracted is JsonElement je)
+                                        {
+                                            File.WriteAllText(fname, je.GetRawText());
+                                        }
+                                        else if (extracted != null)
+                                        {
+                                            try { File.WriteAllText(fname, JsonSerializer.Serialize(extracted)); }
+                                            catch { try { File.WriteAllText(fname, extracted.ToString() ?? string.Empty); } catch { } }
+                                        }
+                                        else
+                                        {
+                                            try { File.WriteAllText(fname, runObj?.ToString() ?? ex.ToString()); } catch { }
+                                        }
+                                    }
+                                    catch { }
                                 }
                             }
                             catch { }

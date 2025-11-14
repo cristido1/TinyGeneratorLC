@@ -1,10 +1,10 @@
 @page
 @model GeneraModel
 @{
-    ViewData["Title"] = "Genera storia";
+    ViewData["Title"] = "Genera una storia lunga";
 }
 
-<h1>Genera una storia lunga</h1>
+@* Title rendered by layout using ViewData["Title"] *@
 
 <div class="note-card" style="max-width:900px; margin-bottom:18px">
     <form id="genForm">
@@ -39,7 +39,7 @@
     <pre id="statusPre">Pronto.</pre>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/%40microsoft/signalr@7.0.11/dist/browser/signalr.min.js"></script>
+<script src="~/lib/signalr/signalr.min.js"></script>
 <script>
     const startBtn = document.getElementById('startBtn');
     const statusPre = document.getElementById('statusPre');
@@ -63,6 +63,21 @@
     // open a SignalR connection and join a group for genId
     async function connectSignalRAndJoin(genId) {
         try {
+            // prefer to reuse the global appSignalR connection if available
+            if (window.appSignalR && window.appSignalR.connection) {
+                connection = window.appSignalR.connection;
+                connection.on('ProgressAppended', (id, message) => {
+                    if (id !== genId) return;
+                    statusPre.textContent += (statusPre.textContent ? '\n' : '') + message;
+                });
+                connection.on('ProgressCompleted', (id, finalResult) => {
+                    if (id !== genId) return;
+                    statusPre.textContent += '\n\n✅ Completato.';
+                    if (finalResult) statusPre.textContent += '\n\nRisultato finale (estratto):\n' + (finalResult.substring ? finalResult.substring(0,1000) : finalResult);
+                });
+                await window.appSignalR.joinGroup(genId);
+                return;
+            }
             if (!window.signalR) {
                 console.warn('SignalR not available');
                 return;

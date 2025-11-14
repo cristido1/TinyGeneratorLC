@@ -1,0 +1,91 @@
+@page
+@model TinyGenerator.Pages.Agents.IndexModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Agents";
+}
+
+<div class="mb-3 d-flex justify-content-between align-items-center">
+    <form method="get" class="d-flex" asp-page="./Index">
+        <input type="search" name="Search" id="searchBox" value="@Model.Search" class="form-control me-2" placeholder="Search agents..." />
+        <button type="submit" class="btn btn-outline-primary">Search</button>
+    </form>
+    <a class="btn btn-primary" asp-page="./Create">Create Agent</a>
+</div>
+
+<table id="tabAgents" class="table table-bordered">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Role</th>
+            <th>Model</th>
+            <th>Voice</th>
+            <th>Skills</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    @if (Model.Agents != null && Model.Agents.Any())
+    {
+        foreach (var a in Model.Agents)
+        {
+                <tr>
+                <td>@a.Name</td>
+                <td>@a.Role</td>
+                <td>@(string.IsNullOrWhiteSpace(a.ModelName) ? a.ModelId?.ToString() ?? "" : a.ModelName)</td>
+                <td>@(string.IsNullOrWhiteSpace(a.VoiceName) ? (a.VoiceId?.ToString() ?? "") : a.VoiceName)</td>
+                <td>@a.Skills</td>
+                <td>
+                    <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@a.Id">Edit</a>
+                    <form method="post" asp-page-handler="Delete" asp-route-id="@a.Id" class="d-inline">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete agent?');">Delete</button>
+                    </form>
+                </td>
+            </tr>
+        }
+    }
+    else
+    {
+        <tr><td colspan="5">No agents found.</td></tr>
+    }
+    </tbody>
+</table>
+
+@if (Model.TotalPages > 1)
+{
+    <nav>
+        <ul class="pagination">
+        @{
+            var current = Model.Page;
+            var total = Model.TotalPages;
+            if (current > 1)
+            {
+                <li class="page-item">
+                    <a class="page-link" asp-route-Page="@(current-1)" asp-route-Search="@Model.Search">Previous</a>
+                </li>
+            }
+            for (int i = 1; i <= total; i++)
+            {
+                <li class="page-item @(i == current ? "active" : "")">
+                    <a class="page-link" asp-route-Page="@i" asp-route-Search="@Model.Search">@i</a>
+                </li>
+            }
+            if (current < total)
+            {
+                <li class="page-item">
+                    <a class="page-link" asp-route-Page="@(current+1)" asp-route-Search="@Model.Search">Next</a>
+                </li>
+            }
+        }
+        </ul>
+    </nav>
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/site.css" />
+}
+
+@section Scripts {
+    <script src="~/js/agents-index.js" asp-append-version="true"></script>
+}
+

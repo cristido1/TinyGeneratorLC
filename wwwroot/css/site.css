@@ -1,5 +1,8 @@
 /* Keep Bootstrap defaults for colors (removed local :root overrides to restore standard Bootstrap look) */
 
+/* Compact theme adjustments (reduce global font-size and paddings) */
+html, body { font-size: 14px; }
+
 /* Keep some compact table helpers */
 .models-table-wrapper { max-width: 100vw; overflow-x: auto; margin-bottom: 1.2rem; }
 .models-table { font-size: 0.95rem; }
@@ -32,6 +35,19 @@
 
 .table-responsive { overflow-x: auto; }
 
+/* Compact table and component tweaks */
+.models-table-wrapper { max-width: 100vw; overflow-x: auto; margin-bottom: 0.8rem; }
+.models-table { font-size: 0.9rem; }
+.models-table th, .models-table td { vertical-align: middle; padding: .4rem .5rem }
+.keep-container { gap: 10px; padding: 8px 6px; }
+.note-card { padding: 8px 10px; border-radius:6px; min-height:100px }
+.note-card .note-card-icon { font-size:64px; right:10px; bottom:6px }
+.note-title { font-size:.95rem; margin-bottom:4px }
+.note-body { font-size:.9rem }
+.sidebar { padding:8px 6px }
+.keep-input { padding:6px; font-size:.95rem }
+.table.table-striped, .table { font-size:.92rem }
+
 /* Ensure test definitions table shows clear borders/colors if needed (keep subtle borders, but avoid overriding Bootstrap striping) */
 .table.table-bordered {
   border: 1px solid rgba(0,0,0,0.08);
@@ -52,3 +68,89 @@
 .extra-row.show td { background: #fbfcfd; }
 .extra-row.show td pre { background: transparent; margin:0; padding:0; }
 .btn-outline-primary i, .btn-outline-danger i, .btn-outline-secondary i { pointer-events: none; }
+
+/* DataTables: white-styled buttons for a cleaner, lighter look */
+.dt-btn-white.btn {
+  background-color: #ffffff;
+  color: #212529;
+  border: 1px solid #ced4da;
+}
+.dt-btn-white.btn:hover, .dt-btn-white.btn:focus {
+  background-color: #f8f9fa;
+  color: #212529;
+}
+.dt-btn-white.btn:active {
+  background-color: #f0f0f0;
+}
+.dt-buttons { display:flex; gap:6px; align-items:center; }
+
+/* Ensure the DataTables search input aligns to the right when placed alongside buttons */
+.dataTables_wrapper .dataTables_filter { text-align: right; }
+
+/* Small, compact style for 'New' buttons used in DataTables toolbars */
+.btn-new-min {
+  padding: 2px 8px !important;
+  font-size: 0.75rem !important;
+  line-height: 1.1;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  width: auto !important;
+  min-width: 0 !important;
+  white-space: nowrap !important;
+}
+
+/* Global desaturation for Bootstrap buttons: keep contrast but reduce saturation */
+.btn,
+.btn-primary,
+.btn-secondary,
+.btn-success,
+.btn-danger,
+.btn-warning,
+.btn-info,
+.btn-light,
+.btn-dark,
+.btn-outline-primary,
+.btn-outline-secondary,
+.btn-outline-success,
+.btn-outline-danger,
+.btn-outline-warning,
+.btn-outline-info,
+.btn-outline-light,
+.btn-outline-dark {
+  -webkit-filter: saturate(65%) grayscale(10%);
+  filter: saturate(65%) grayscale(10%);
+}
+
+/* Slightly more saturated on hover/focus/active to indicate interaction */
+.btn:hover,
+.btn:focus,
+.btn:active,
+.btn:active:focus {
+  -webkit-filter: saturate(85%) grayscale(4%);
+  filter: saturate(85%) grayscale(4%);
+}
+
+/* --- FONT MODERNO ------------------------------------------------------- */
+body {
+    font-family: "Poppins", "Inter", sans-serif;
+}
+
+/* Toast pastel styling (top-right toasts) */
+.toast { opacity: 0.98; }
+.toast.border-success { background: linear-gradient(180deg,#e6ffef,#ffffff); }
+.toast.border-warning { background: linear-gradient(180deg,#fff7e6,#ffffff); }
+.toast.border-danger { background: linear-gradient(180deg,#fff1f0,#ffffff); }
+.toast .toast-body { color: #222; font-size: 0.95rem; }
+.toast .btn-close { opacity: 0.8; }
+
+/* Compact toasts variant: smaller padding, margin, and font size */
+.tg-toast-sm { min-width: 220px !important; margin-top: 4px !important; }
+.tg-toast-sm .toast-body { padding: 6px 8px !important; font-size: 0.82rem !important; line-height: 1.1; }
+.tg-toast-sm .btn-close { margin-left: 6px !important; padding: 0.12rem !important; }
+.toast-container.tg-toast-sm-container { padding: 6px !important; }
+.toast-container.tg-toast-sm-container .tg-toast-sm { margin-top: 4px !important; margin-bottom: 4px !important; }
+
+
+

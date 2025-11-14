@@ -27,12 +27,15 @@
     </div>
 </div>
 
+@* Removed overlay progress popup; using persistent small toasts instead *@
+
 @section Scripts {
     <style>
         /* simple modal styles (lightweight, no bootstrap js required) */
         .tg-modal { position:fixed; inset:0; z-index:1050; display:none; }
         .tg-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.45); }
         .tg-modal-panel { position:relative; width:420px; max-width:92%; margin:6% auto; background:#fff; padding:16px; border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,0.2); z-index:1060; }
+        /* Popup removed; we use toasts only */
     </style>
     <script>
         function openCostModal(btn) {
@@ -55,20 +58,11 @@
         }
         // Close modal on ESC
         document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeCostModal(); });
-        function toggleDetails(btn) {
-            try {
-                var tr = btn.closest('td').parentElement;
-                var next = tr.nextElementSibling;
-                if (!next) return;
-                // Use computed style to reliably detect visibility and toggle it
-                var cur = window.getComputedStyle(next).display;
-                if (cur === 'none') {
-                    next.style.display = '';
-                } else {
-                    next.style.display = 'none';
-                }
-            } catch (e) { }
-        }
+
+        // Keep a reference to the element that opened the popup so we can restore focus when closing.
+        let _tg_lastRunInvoker = null;
+        // Replaced overlay PRG popup with toast notifications only.
+        // showRunProgressPopup/hideRunProgressPopup removed; toast notifications via window.appNotify will be used.
 
         // Run a test group for a model via AJAX and poll progress
         async function runGroup(modelName, btn) {
@@ -82,76 +76,355 @@
                 }
                 btn.disabled = true;
                 btn.textContent = 'Starting...';
-                var progressEl = document.getElementById('progress_' + modelName);
-                if (progressEl) progressEl.textContent = 'Starting run...';
+                try { if (window.appNotify) window.appNotify.info('Run started', (modelName || '') + (group ? ' — ' + group : '')); } catch(e) {}
 
                 var res = await fetch(window.location.pathname + '?handler=RunGroup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: modelName, group: group }) });
                 var j = await res.json();
                 var runId = j && j.runId ? j.runId : null;
                 if (!runId) {
-                    if (progressEl) progressEl.textContent = 'Failed to start run';
                     btn.disabled = false;
                     btn.textContent = 'Run Group';
+                    try { if (window.appNotify) window.appNotify.error('Run failed', modelName); } catch(e) {}
                     return;
                 }
 
-                // Poll progress
-                if (progressEl) progressEl.textContent = 'Run started: ' + runId;
-                await pollProgress(runId, progressEl);
+                // Register mapping for this run so signalr-notifs can update per-row progress
+                try { if (window.appSignalR && window.appSignalR.registerRunMap) window.appSignalR.registerRunMap([{ runId: runId, model: modelName }]); } catch(e) {}
+                // Ask the global connection to join the group's run so updates are broadcast to us
+                try { if (window.appSignalR && window.appSignalR.joinGroup) await window.appSignalR.joinGroup(runId + ''); } catch (e) {}
 
-                // When completed, refresh the page to show updated scores
-                window.location.reload();
+                // Poll progress
+                // Start a SignalR connection to receive live updates for this runId (best-effort).
+                var popupLogEl = document.getElementById('progress_' + modelName);
+                var hubConnection = null;
+                try {
+                    if (window.appSignalR && window.appSignalR.connection) {
+                        // Reuse the global connection if available
+                        hubConnection = window.appSignalR.connection;
+                        // no-op; handlers attached below
+                    }
+                    else if (window.signalR && typeof signalR.HubConnectionBuilder === 'function') {
+                        hubConnection = new signalR.HubConnectionBuilder().withUrl('/progressHub').withAutomaticReconnect().build();
+                        hubConnection.on('ProgressAppended', function (id, stamped) {
+                            try {
+                                if (!id || (id + '') !== (runId + '')) return;
+                                // update both the per-model container and the popup
+                                if (popupLogEl) {
+                                    // append the new stamped line
+                                    if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + stamped; else popupLogEl.textContent = stamped;
+                                    popupLogEl.scrollTop = popupLogEl.scrollHeight;
+                                }
+                            } catch (e) { console.error(e); }
+                        });
+                        hubConnection.on('ProgressCompleted', function (id, finalResult) {
+                            try {
+                                if (!id || (id + '') !== (runId + '')) return;
+                                if (popupLogEl) {
+                                    if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + ('Completed: ' + (finalResult || '')); else popupLogEl.textContent = 'Completed: ' + (finalResult || '');
+                                    popupLogEl.scrollTop = popupLogEl.scrollHeight;
+                                }
+                            } catch (e) { console.error(e); }
+                        });
+                        await hubConnection.start();
+                        try { await hubConnection.invoke('JoinGroup', runId + ''); } catch (e) { /* ignore join errors */ }
+                    }
+                } catch (e) { console.warn('SignalR not available or failed to connect', e); hubConnection = null; }
+
+                // If a hubConnection (global or local) was created, attach the standard handlers and join group
+                try {
+                    if (hubConnection) {
+                        // Prevent double-adding handlers by using a symbol on the connection
+                        try {
+                            hubConnection.__tg_models_handlers_attached = hubConnection.__tg_models_handlers_attached || false;
+                        } catch { hubConnection.__tg_models_handlers_attached = false; }
+                        if (!hubConnection.__tg_models_handlers_attached) {
+                            hubConnection.on('ProgressAppended', function (id, stamped) {
+                                try {
+                                    if (!id || (id + '') !== (runId + '')) return;
+                                    if (popupLogEl) {
+                                        if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + stamped; else popupLogEl.textContent = stamped;
+                                        popupLogEl.scrollTop = popupLogEl.scrollHeight;
+                                    }
+                                    // Progress toast handled by global signalr-notifs.js
+                                } catch (e) { console.error(e); }
+                            });
+                            hubConnection.on('ProgressCompleted', function (id, finalResult) {
+                                try {
+                                    if (!id || (id + '') !== (runId + '')) return;
+                                    if (popupLogEl) {
+                                        if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + ('Completed: ' + (finalResult || '')) ; else popupLogEl.textContent = 'Completed: ' + (finalResult || '');
+                                        popupLogEl.scrollTop = popupLogEl.scrollHeight;
+                                    }
+                                    // Completion toast handled by global signalr-notifs.js
+                                } catch (e) { console.error(e); }
+                            });
+                            hubConnection.__tg_models_handlers_attached = true;
+                        }
+                        // Ensure the connection is started then join the run group
+                        try { await hubConnection.start(); } catch (e) { }
+                        try {
+                            if (window.appSignalR && window.appSignalR.joinGroup) await window.appSignalR.joinGroup(runId + '');
+                            else await hubConnection.invoke('JoinGroup', runId + '');
+                        } catch (e) { /* ignore join errors */ }
+                    }
+                } catch (e) { console.warn('Failed to attach hub handlers or join group', e); }
+
+                // also poll as a fallback for environments without SignalR
+                var pollResult = await pollProgress(runId, popupLogEl);
+                // cleanup hub connection when done
+                try { if (hubConnection) await hubConnection.stop(); } catch (e) { }
+
+                // When completed, show a success toast and update the row progress instead of a full page reload
+                try { if (window.appNotify) window.appNotify.success('Run complete', (modelName || '')); } catch(e) {}
+                try { btn.disabled = false; btn.textContent = 'Run Group'; } catch(e) {}
             } catch (e) {
                 try { btn.disabled = false; btn.textContent = 'Run Group'; } catch {}
                 console.error(e);
                 alert('Failed to start group run: ' + (e && e.message ? e.message : e));
+                try { if (window.appNotify) window.appNotify.error('Run all tests failed', (e && e.message ? e.message : '')); } catch(e) {}
             }
         }
 
-        async function pollProgress(runId, container) {
+        async function pollProgress(runId, popupLog) {
             try {
                 while (true) {
                     var r = await fetch(window.location.pathname + '?handler=ProgressMessages&runId=' + encodeURIComponent(runId));
                     var j = await r.json();
                     if (j && j.messages) {
-                        container.textContent = j.messages.join('\n');
+                        var text = j.messages.join('\n');
+                        if (popupLog) {
+                            popupLog.textContent = text;
+                            popupLog.scrollTop = popupLog.scrollHeight;
+                        }
                     }
                     if (j && j.completed) return j;
                     await new Promise(resolve => setTimeout(resolve, 1200));
                 }
             } catch (e) {
                 console.error('pollProgress failed', e);
+                try { if (window.appNotify) window.appNotify.error('Poll failed', (e && e.message) ? e.message : ''); } catch(e) {}
+            }
+        }
+
+        // Start runs for all enabled models. Server will create a run per model and return an array of runIds.
+        async function runAllTests(btn) {
+            try {
+                btn.disabled = true;
+                btn.textContent = 'Starting...';
+                try { if (window.appNotify) window.appNotify.info('Run all tests started', 'Starting all tests'); } catch(e) {}
+
+                // Read selected group from the global dropdown and send it to the server
+                var groupSel = document.getElementById('runall_group_select');
+                var group = groupSel ? (groupSel.value || '') : '';
+                var res = await fetch(window.location.pathname + '?handler=RunAll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group: group }) });
+                var j = await res.json();
+                var runIds = j && j.runIds ? j.runIds : [];
+                var runMap = j && j.runMap ? j.runMap : [];
+
+                var popupLogEl = null; // No popup; using toasts
+                var hubConnection = null;
+                try {
+                    if (window.appSignalR && window.appSignalR.connection) {
+                        hubConnection = window.appSignalR.connection;
+                        // handlers to be attached below
+                    }
+                    else if (window.signalR && typeof signalR.HubConnectionBuilder === 'function') {
+                        hubConnection = new signalR.HubConnectionBuilder().withUrl('/progressHub').withAutomaticReconnect().build();
+                        hubConnection.on('ProgressAppended', function (id, stamped) {
+                            try {
+                                if (!id) return;
+                                // if this runId is one we started, append
+                                if (runIds && runIds.indexOf && runIds.indexOf(id + '') >= 0) {
+                                    if (popupLogEl) {
+                                        if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + stamped; else popupLogEl.textContent = stamped;
+                                        popupLogEl.scrollTop = popupLogEl.scrollHeight;
+                                    }
+                                }
+                            } catch (e) { console.error(e); }
+                        });
+                        hubConnection.on('ProgressCompleted', function (id, finalResult) {
+                            try {
+                                if (!id) return;
+                                if (runIds && runIds.indexOf && runIds.indexOf(id + '') >= 0) {
+                                    if (popupLogEl) {
+                                        if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + ('Completed: ' + (finalResult || '')) ; else popupLogEl.textContent = 'Completed: ' + (finalResult || '');
+                                        popupLogEl.scrollTop = popupLogEl.scrollHeight;
+                                    }
+                                }
+                            } catch (e) { console.error(e); }
+                        });
+                        await hubConnection.start();
+                        try {
+                            // Join all run groups so server pushes messages to us
+                            if (runMap && runMap.forEach) {
+                                runMap.forEach(function (pair) {
+                                    try { hubConnection.invoke('JoinGroup', pair.runId + ''); } catch (e) { }
+                                });
+                            }
+                        } catch (e) { /* ignore join errors */ }
+                    }
+                    // the connection and handlers are attached below in common block
+                } catch (e) { console.warn('SignalR not available or failed to connect', e); hubConnection = null; }
+
+                try {
+                    if (hubConnection) {
+                        var already = hubConnection.__tg_models_attached || false;
+                        if (!already) {
+                            hubConnection.on('ProgressAppended', function (id, stamped) {
+                                try {
+                                    if (!id) return;
+                                    if (runIds && runIds.indexOf && runIds.indexOf(id + '') >= 0) {
+                                        if (popupLogEl) {
+                                            if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + stamped; else popupLogEl.textContent = stamped;
+                                            popupLogEl.scrollTop = popupLogEl.scrollHeight;
+                                        }
+                                    }
+                                    // Progress toast handled by global signalr-notifs.js
+                                } catch(e) { console.error(e); }
+                            });
+                            hubConnection.on('ProgressCompleted', function (id, finalResult) {
+                                try {
+                                    if (!id) return;
+                                    if (runIds && runIds.indexOf && runIds.indexOf(id + '') >= 0) {
+                                        if (popupLogEl) {
+                                            if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + ('Completed: ' + (finalResult || '')) ; else popupLogEl.textContent = 'Completed: ' + (finalResult || '');
+                                            popupLogEl.scrollTop = popupLogEl.scrollHeight;
+                                        }
+                                    }
+                                    // Completion toast handled by global signalr-notifs.js
+                                } catch(e) { console.error(e); }
+                            });
+                            hubConnection.__tg_models_attached = true;
+                        }
+                        try { await hubConnection.start(); } catch(e) {}
+                        try {
+                            if (window.appSignalR && window.appSignalR.joinGroup) {
+                                    runMap.forEach(function (pair) { try { window.appSignalR.joinGroup(pair.runId + ''); } catch(e) {} });
+                                    try { if (window.appSignalR.registerRunMap) window.appSignalR.registerRunMap(runMap); } catch(e) {}
+                                }
+                        } catch(e) {}
+                    }
+                } catch(e) { console.warn('Failed to attach hub handlers or join groups', e); }
+
+                // If no SignalR or as a fallback, poll the first run id
+                if ((!hubConnection || !hubConnection.connectionStarted) && runIds && runIds.length > 0) {
+                    // Poll each run for fallback, and try to attach to the per-row element when available
+                    for (var p = 0; p < runIds.length; p++) {
+                        var rid = runIds[p];
+                        var modelName = null;
+                        try { if (runMap && runMap.forEach) { for (var qi = 0; qi < runMap.length; qi++) { if ('' + runMap[qi].runId === ('' + rid)) { modelName = runMap[qi].model; break; } } } } catch(e) {}
+                        var el = modelName ? document.getElementById('progress_' + modelName) : null;
+                        await pollProgress(rid, el);
+                    }
+                }
+
+                try { if (hubConnection) await hubConnection.stop(); } catch (e) { }
+
+                // Re-enable button and show a success toast instead of a full page refresh
+                try { btn.disabled = false; btn.textContent = 'Run all tests'; } catch(e) {}
+                try { if (window.appNotify) window.appNotify.success('All runs started', runIds && runIds.length ? (runIds.length + ' runs scheduled') : 'Runs started'); } catch(e) {}
+            } catch (e) {
+                try { btn.disabled = false; btn.textContent = 'Run all tests'; } catch { }
+                console.error(e);
+                alert('Failed to start runs: ' + (e && e.message ? e.message : e));
+                try { if (window.appNotify) window.appNotify.error('Run all tests failed', (e && e.message ? e.message : '')); } catch(e) {}
+            }
+        }
+
+    // Purge (remove) disabled Ollama models from the local Ollama installation.
+    window.purgeDisabledOllama = async function (btn) {
+            try {
+                if (!confirm('Confirm: remove all disabled models from the local Ollama installation?')) return;
+                btn.disabled = true;
+                btn.textContent = 'Purging...';
+                try { if (window.appNotify) window.appNotify.info('Purge', 'Purging disabled models'); } catch(e) {}
+                var popupLogEl = null;
+
+                var res = await fetch(window.location.pathname + '?handler=PurgeDisabledOllama', { method: 'POST' });
+                var j = await res.json();
+                if (j && j.results) {
+                    var lines = [];
+                    for (var i = 0; i < j.results.length; i++) {
+                        var r = j.results[i];
+                        var line = (r.deleted ? 'DELETED' : 'FAILED') + ': ' + (r.name || '') + (r.output ? (' — ' + r.output) : '');
+                        lines.push(line);
+                    }
+                    if (j && j.results) {
+                        for (var li = 0; li < lines.length; li++) {
+                            try { if (window.appNotify) window.appNotify.info('Purge', lines[li]); } catch(e) {}
+                        }
+                    }
+                } else {
+                    if (popupLogEl) popupLogEl.textContent = 'No results returned';
+                }
+
+                btn.disabled = false; btn.textContent = 'Purge disabled Ollama models';
+            } catch (e) {
+                try { btn.disabled = false; btn.textContent = 'Purge disabled Ollama models'; } catch {}
+                console.error(e);
+                alert('Purge failed: ' + (e && e.message ? e.message : e));
+                try { if (window.appNotify) window.appNotify.error('Purge failed', (e && e.message ? e.message : '')); } catch(e) {}
             }
         }
     </script>
 }
-@* DataTables initialization and local includes *@
-<script src="~/lib/jquery/jquery.min.js"></script>
-<link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
-<script src="~/lib/datatables/js/jquery.dataTables.min.js"></script>
-<script src="~/lib/datatables/js/dataTables.bootstrap5.min.js"></script>
+@* DataTables CSS/JS moved to _Layout.cshtml; keep initialization below *@
 <script>
     document.addEventListener('DOMContentLoaded', function () {
         try {
-            if (window.jQuery && jQuery().DataTable) {
-                $('#modelsTable').DataTable({
+                if (window.jQuery && jQuery().DataTable) {
+                var mdlTable = $('#modelsTable').DataTable({
                     lengthChange: true,
                     pageLength: 25,
+                    stateSave: true,
+                    colReorder: true,
                     ordering: true,
                     order: [[1, 'asc']],
                     autoWidth: false,
                     columnDefs: [
+                        // details control (col 0) and actions column (col 1) are not orderable
                         { orderable: false, targets: 0 },
+                        { orderable: false, targets: 1 },
                         { orderable: false, targets: -1 }
                     ],
+                    // place Buttons on the left and the search on the right
+                    dom: "<'row mb-2'<'col-sm-6 d-flex align-items-center'B><'col-sm-6 d-flex justify-content-end align-items-center'f>>t<'row'<'col-sm-12'p>>",
+                    buttons: [ { extend: 'colvis', text: 'Columns', columns: ':not(.noVis)', postfixButtons: ['colvisRestore'], className: 'dt-btn-white btn btn-sm me-2' } ],
                     language: { search: "_INPUT_", searchPlaceholder: "Search..." },
                 });
+
+                    // Row details toggle using the first column (details-control)
+                    $('#modelsTable tbody').on('click', 'td.details-control', function () {
+                        try {
+                            var tr = $(this).closest('tr')[0];
+                            if (!tr) return;
+                            var row = mdlTable.row(tr);
+                            var icon = $(this).find('i.details-icon');
+                            if (row.child.isShown()) {
+                                row.child.hide();
+                                if (icon.length) { icon.removeClass('bi-caret-down-fill').addClass('bi-caret-right-fill'); }
+                            } else {
+                                var tpl = tr.querySelector('.details-template');
+                                var html = tpl ? tpl.innerHTML : '';
+                                row.child(html).show();
+                                if (icon.length) { icon.removeClass('bi-caret-right-fill').addClass('bi-caret-down-fill'); }
+                            }
+                        } catch (e) { console.error(e); }
+                    });
+
+                    // When table redraws (paging/search), ensure all icons are collapsed
+                    mdlTable.on('draw', function () {
+                        try { $('#modelsTable tbody td.details-control i.details-icon').removeClass('bi-caret-down-fill').addClass('bi-caret-right-fill'); } catch(e){}
+                    });
             }
         } catch (e) { console.error('DataTables init failed', e); }
     });
 </script>
 @section Styles {
     <style>
+        /* Details control column styling */
+        td.details-control { cursor: pointer; width:36px; }
+        td.details-control .details-icon { transition: transform 0.12s ease; }
           /* Align the models grid exactly 10px from the left menu.
               Force no internal padding so the layout is consistent regardless of container or breakpoint. */
                     /* Make the models page content span the full viewport width (full-bleed) while keeping 2% horizontal padding.
@@ -190,23 +463,39 @@
             .models-table tr.score-low td:first-child { border-left: 4px solid #e25858; }
             .models-table tr.score-mid td:first-child { border-left: 4px solid #e6c44d; }
             .models-table tr.score-max td:first-child { border-left: 4px solid #39b54a; }
+            /* Disabled models: gray background with white text for better visibility */
+            .models-table tr.disabled-model td { background-color: #6c757d; color: #ffffff; }
+            .models-table tr.disabled-model td a,
+            .models-table tr.disabled-model td pre { color: #ffffff; }
+        /* reduce padding so the details icon is well centered */
+        td.details-control { padding: 0.25rem 0.5rem; }
     </style>
 }
 
 <div class="models-page">
-    <h1>Models</h1>
+    @* Title rendered by layout using ViewData["Title"] *@
     <p>Premi il pulsante "Test" su un modello per eseguire i controlli di function-calling.</p>
 
     <div class="mb-2">
         <form method="post" class="d-inline" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Running...';}})(this)" asp-page-handler="AddOllamaModels">
             <button type="submit" class="btn btn-sm btn-outline-success">Add ollama models</button>
         </form>
+        <label class="ms-2 me-2" style="vertical-align:middle;font-size:0.9rem;">Group:</label>
+        <select id="runall_group_select" class="form-select form-select-sm d-inline-block" style="width:200px;vertical-align:middle;">
+            <option value="">(first available)</option>
+            @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
+            {
+                <option value="@g">@g</option>
+            }
+        </select>
+        <button type="button" class="btn btn-sm btn-outline-danger ms-2" onclick="runAllTests(this)">Run all tests</button>
+        <button type="button" class="btn btn-sm btn-outline-warning ms-2" onclick="purgeDisabledOllama(this)">Purge disabled Ollama models</button>
         <form method="post" class="d-inline ms-2" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Refreshing...';}})(this)" asp-page-handler="RefreshContexts">
             <button type="submit" class="btn btn-sm btn-outline-info">Refresh contexts from running instances</button>
         </form>
         <form method="get" class="d-inline ms-2">
             <label class="form-check form-check-inline" style="margin-bottom:0;">
-                <input type="checkbox" name="showDisabled" value="true" class="form-check-input" @(Model.ShowDisabled ? "checked\" checked\"" : "") onchange="this.form.submit()" />
+                <input type="checkbox" name="showDisabled" value="true" class="form-check-input" @(Model.ShowDisabled ? "checked" : "") onchange="this.form.submit()" />
                 <span class="form-check-label">Mostra disabilitati</span>
             </label>
         </form>
@@ -217,24 +506,28 @@
         <div class="alert alert-info" role="alert">@TempData["TestResultMessage"]</div>
     }
 
+    @{ 
+        // Compute visible groups (max 4) and the total column count so detail rows use correct colspan
+        var groupsHeader = Model.TestGroups ?? new System.Collections.Generic.List<string>();
+        var visibleGroups = groupsHeader.Take(4).ToList();
+        // Now we have an extra details-control column at position 0, so increase fixed count by 1
+        var colCount = 9 + visibleGroups.Count + 2; // 9 fixed cols (details + Actions + ... + NoTools + Duration) + visible groups + 2 cost cols
+    }
+
     <div class="models-table-wrapper">
         <table id="modelsTable" class="table table-bordered table-hover models-table" style="width:100%;">
             <thead>
                 <tr>
+                    <th style="width:36px;"></th>
                     <th class="first-col">Actions</th>
                     <th>Name</th>
                     <th>Provider</th>
                     <th>Local</th>
                     <th>ContextToUse</th>
                     <th class="score" title="Function calling score">Score</th>
+                    <th class="text-center" title="No tools supported">NoTools</th>
                     <th class="text-center" title="Test duration in seconds">Duration (s)</th>
-                    @{
-                        var groupsHeader = Model.TestGroups ?? new System.Collections.Generic.List<string>();
-                        foreach (var g in groupsHeader.Take(4))
-                        {
-                            <th class="text-center">@g</th>
-                        }
-                    }
+                    @{ foreach (var g in visibleGroups) { <th class="text-center">@g</th>; } }
                     <th class="text-end">Cost In $/1k</th>
                     <th class="text-end">Cost Out $/1k</th>
                 </tr>
@@ -242,150 +535,154 @@
             <tbody>
                 @foreach (var m in Model.Models)
             {
-                <tr class="@GetScoreClass(m.FunctionCallingScore, m.TestDurationSeconds)" data-name="@m.Name" data-costin='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)' data-costout='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)'>
+                <tr class="@((GetScoreClass(m.FunctionCallingScore, m.TestDurationSeconds) + (m.Enabled ? "" : " disabled-model")).Trim())" data-name="@m.Name" data-costin='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)' data-costout='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)'>
+                    <td class="details-control text-center"><i class="bi bi-caret-right-fill details-icon" aria-hidden="true" style="font-size:1.05rem;color:#6c757d;"></i></td>
                     <td class="first-col text-center">
-                        @* Removed per-row 'Test' button that ran the full test suite; use Run Group instead *@
-                        <button type="button" class="btn btn-sm btn-outline-secondary ms-1" onclick="toggleDetails(this)" title="Show test details">▾</button>
-                        @* Enable/Disable model controls *@
-                        @if (m.Enabled)
-                        {
-                            <form method="post" class="d-inline ms-1" asp-page-handler="DisableModel" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Disabling...';}})(this)">
-                                <input type="hidden" name="model" value="@m.Name" />
-                                <input type="hidden" name="showDisabled" value="@(Model.ShowDisabled.ToString().ToLowerInvariant())" />
-                                <button type="submit" class="btn btn-sm btn-outline-danger">Disable</button>
-                            </form>
-                        }
-                        else
-                        {
-                            <form method="post" class="d-inline ms-1" asp-page-handler="EnableModel" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Enabling...';}})(this)">
-                                <input type="hidden" name="model" value="@m.Name" />
-                                <input type="hidden" name="showDisabled" value="@(Model.ShowDisabled.ToString().ToLowerInvariant())" />
-                                <button type="submit" class="btn btn-sm btn-outline-success">Enable</button>
-                            </form>
-                        }
-                        <button type="button" class="btn btn-sm btn-outline-secondary ms-1" onclick="openCostModal(this)" data-name="@m.Name" data-costin='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)' data-costout='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)'>Costi</button>
-
-                        <div style="margin-top:6px;display:flex;gap:6px;align-items:center;justify-content:center;">
-                            <select class="form-select form-select-sm" style="width:9rem;display:inline-block;" id="group_select_@m.Name">
-                                <option value="">Select group</option>
-                                @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
-                                {
-                                    <option value="@g">@g</option>
-                                }
-                            </select>
-                            <button type="button" class="btn btn-sm btn-outline-success" onclick="runGroup('@m.Name', this)">Run Group</button>
+                        @* One dropdown with all actions (details control moved to the first column) *@
+                        <div class="d-flex flex-column align-items-center" style="gap:6px;">
+                            <div class="d-flex" style="gap:6px;align-items:center;">
+                                <div class="btn-group">
+                                    <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Actions">⋮</button>
+                                    <ul class="dropdown-menu dropdown-menu-end p-2">
+                                        @if (m.Enabled)
+                                        {
+                                            <li>
+                                                <form method="post" asp-page-handler="DisableModel" class="m-0">
+                                                    <input type="hidden" name="model" value="@m.Name" />
+                                                    <input type="hidden" name="showDisabled" value="@(Model.ShowDisabled.ToString().ToLowerInvariant())" />
+                                                    <button type="submit" class="dropdown-item">Disable</button>
+                                                </form>
+                                            </li>
+                                        }
+                                        else
+                                        {
+                                            <li>
+                                                <form method="post" asp-page-handler="EnableModel" class="m-0">
+                                                    <input type="hidden" name="model" value="@m.Name" />
+                                                    <input type="hidden" name="showDisabled" value="@(Model.ShowDisabled.ToString().ToLowerInvariant())" />
+                                                    <button type="submit" class="dropdown-item">Enable</button>
+                                                </form>
+                                            </li>
+                                        }
+                                        <li><hr class="dropdown-divider" /></li>
+                                        <li>
+                                            <button type="button" class="dropdown-item" onclick="openCostModal(this)" data-name="@m.Name" data-costin='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)' data-costout='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)'>Costs</button>
+                                        </li>
+                                        <li><hr class="dropdown-divider" /></li>
+                                        <li class="px-2">
+                                            <div class="d-flex flex-column" style="min-width:180px;">
+                                                <select class="form-select form-select-sm mb-2" id="group_select_@m.Name" aria-label="Select group for @m.Name">
+                                                    <option value="">Select group</option>
+                                                    @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
+                                                    {
+                                                        <option value="@g">@g</option>
+                                                    }
+                                                </select>
+                                                <button type="button" class="btn btn-sm btn-primary" onclick="runGroup('@m.Name', this)">Run</button>
+                                            </div>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <div id="progress_@m.Name" style="font-size:0.85rem;color:#333;min-height:18px;"></div>
+                            <div class="details-template" style="display:none;">
+                                <div style="background:#fafafa;padding:8px 12px;">
+                                    <div style="display:flex;gap:18px;align-items:flex-start;">
+                                        <div style="min-width:240px;flex:0 0 240px;">
+                                            <h6 style="margin:0 0 8px 0;">Model info</h6>
+                                            <dl style="margin:0;font-size:0.95rem;">
+                                                <dt style="float:left;width:110px;font-weight:600;">ContextToUse</dt><dd style="margin:0 0 6px 120px;">@m.ContextToUse</dd>
+                                                <dt style="float:left;width:110px;font-weight:600;">MaxContext</dt><dd style="margin:0 0 6px 120px;">@m.MaxContext</dd>
+                                                <dt style="float:left;width:110px;font-weight:600;">Duration</dt><dd style="margin:0 0 6px 120px;">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##} s", m.TestDurationSeconds.Value) : "-")</dd>
+                                                <dt style="float:left;width:110px;font-weight:600;">Cost In</dt><dd style="margin:0 0 6px 120px;">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</dd>
+                                                <dt style="float:left;width:110px;font-weight:600;">Cost Out</dt><dd style="margin:0 0 6px 120px;">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</dd>
+                                            </dl>
+                                        </div>
+                                    </div>
+                                    <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                                        <h6 style="margin:0 8px 0 0;min-width:140px;">Last artifacts</h6>
+                                        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                                            @if (!string.IsNullOrWhiteSpace(m.LastMusicTestFile))
+                                            {
+                                                <div style="min-width:220px;">
+                                                    <div style="font-size:0.9rem;font-weight:600;">Music</div>
+                                                    <audio controls preload="none" style="width:220px;">
+                                                        <source src="/@m.LastMusicTestFile" />
+                                                        Your browser does not support the audio element.
+                                                    </audio>
+                                                    <div><a class="small" href="/@m.LastMusicTestFile" download>Download</a></div>
+                                                </div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(m.LastSoundTestFile))
+                                            {
+                                                <div style="min-width:160px;">
+                                                    <div style="font-size:0.9rem;font-weight:600;">Sound</div>
+                                                    <audio controls preload="none" style="width:160px;">
+                                                        <source src="/@m.LastSoundTestFile" />
+                                                        Your browser does not support the audio element.
+                                                    </audio>
+                                                    <div><a class="small" href="/@m.LastSoundTestFile" download>Download</a></div>
+                                                </div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(m.LastTtsTestFile))
+                                            {
+                                                <div style="min-width:220px;">
+                                                    <div style="font-size:0.9rem;font-weight:600;">TTS</div>
+                                                    <audio controls preload="none" style="width:220px;">
+                                                        <source src="/@m.LastTtsTestFile" />
+                                                        Your browser does not support the audio element.
+                                                    </audio>
+                                                    <div><a class="small" href="/@m.LastTtsTestFile" download>Download</a></div>
+                                                </div>
+                                            }
+                                            @if (string.IsNullOrWhiteSpace(m.LastMusicTestFile) && string.IsNullOrWhiteSpace(m.LastSoundTestFile) && string.IsNullOrWhiteSpace(m.LastTtsTestFile))
+                                            {
+                                                <div class="text-muted">No generated artifacts</div>
+                                            }
+                                        </div>
+                                    </div>
+                                    <hr />
+                                    <div style="margin-top:12px;">
+                                        <h6 style="margin:0 0 8px 0;">Last group run results</h6>
+                                        <div>
+                                            @{ 
+                                                var groupsDetail = Model.TestGroups ?? new System.Collections.Generic.List<string>();
+                                                foreach (var g in groupsDetail.Take(4))
+                                                {
+                                                    var score = m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var s) && s.HasValue ? s.Value.ToString() : "-";
+                                                    var json = m.LastGroupResultsJson != null && m.LastGroupResultsJson.TryGetValue(g, out var j) ? j : null;
+                                            <details style="margin-bottom:10px;">
+                                                <summary style="font-weight:600;cursor:pointer;">@g (@score)</summary>
+                                                <div style="margin-top:8px;">
+                                                    @Html.Raw(RenderTestResults(json))
+                                                </div>
+                                            </details>
+                                                }
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                        <div id="progress_@m.Name" style="margin-top:6px;font-size:0.85rem;color:#333;min-height:18px;"></div>
                     </td>
-                    <td>@m.Name</td>
+                    <td>
+                        @m.Name
+                        @if (m.NoTools)
+                        {
+                            <span class="badge rounded-pill bg-secondary ms-2" title="Questo modello non supporta tool/function-calling" aria-label="No tools">No tools</span>
+                        }
+                    </td>
                     <td>@m.Provider</td>
                     <td>@(m.IsLocal ? "Yes" : "No")</td>
-                    <td>
-                        @if (string.Equals(m.Provider, "ollama", StringComparison.OrdinalIgnoreCase) || m.IsLocal)
-                        {
-                            <form method="post" class="d-inline" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Saving...';}})(this)">
-                                <input type="hidden" name="model" value="@m.Name" />
-                                <input type="number" name="contextToUse" value="@m.ContextToUse" min="1" step="1" style="width:6.5rem;display:inline-block;margin-right:6px;" />
-                                <button type="submit" formaction="?handler=UpdateContext" class="btn btn-sm btn-outline-primary">Save</button>
-                            </form>
-                        }
-                        else
-                        {
-                            @m.ContextToUse
-                        }
-                    </td>
+                    <td>@m.ContextToUse</td>
                     <td class="score">@m.FunctionCallingScore</td>
+                    <td class="text-center"><input type="checkbox" disabled @(m.NoTools ? "checked" : "") /></td>
                     <td class="text-center">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}", m.TestDurationSeconds.Value) : "-")</td>
-                    @{
-                        var groupsRow = Model.TestGroups ?? new System.Collections.Generic.List<string>();
-                        foreach (var g in groupsRow.Take(4))
-                        {
-                            var val = "-";
-                            if (m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var sc) && sc.HasValue) val = sc.Value.ToString();
-                            <td class="text-center">@val</td>
-                        }
-                    }
+                    @{ foreach (var g in visibleGroups) { var val = "-"; if (m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var sc) && sc.HasValue) val = sc.Value.ToString(); <td class="text-center">@val</td>; } }
                     <td class="align-middle text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</td>
                     <td class="align-middle text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</td>
                 </tr>
-                <tr class="test-details" style="display:none;">
-                    <td colspan="13" style="background:#fafafa;padding:8px 12px;">
-                        <div style="display:flex;gap:18px;align-items:flex-start;">
-                            <div style="min-width:240px;flex:0 0 240px;">
-                                <h6 style="margin:0 0 8px 0;">Model info</h6>
-                                <dl style="margin:0;font-size:0.95rem;">
-                                    <dt style="float:left;width:110px;font-weight:600;">ContextToUse</dt><dd style="margin:0 0 6px 120px;">@m.ContextToUse</dd>
-                                    <dt style="float:left;width:110px;font-weight:600;">MaxContext</dt><dd style="margin:0 0 6px 120px;">@m.MaxContext</dd>
-                                    <dt style="float:left;width:110px;font-weight:600;">Duration</dt><dd style="margin:0 0 6px 120px;">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##} s", m.TestDurationSeconds.Value) : "-")</dd>
-                                    <dt style="float:left;width:110px;font-weight:600;">Cost In</dt><dd style="margin:0 0 6px 120px;">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</dd>
-                                    <dt style="float:left;width:110px;font-weight:600;">Cost Out</dt><dd style="margin:0 0 6px 120px;">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</dd>
-                                </dl>
-                            </div>
-                            @* Skill flags section removed from collapsible details per request *@
-                        </div>
-                        <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                            <h6 style="margin:0 8px 0 0;min-width:140px;">Last artifacts</h6>
-                            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-                                @if (!string.IsNullOrWhiteSpace(m.LastMusicTestFile))
-                                {
-                                    <div style="min-width:220px;">
-                                        <div style="font-size:0.9rem;font-weight:600;">Music</div>
-                                        <audio controls preload="none" style="width:220px;">
-                                            <source src="/@m.LastMusicTestFile" />
-                                            Your browser does not support the audio element.
-                                        </audio>
-                                        <div><a class="small" href="/@m.LastMusicTestFile" download>Download</a></div>
-                                    </div>
-                                }
-                                @if (!string.IsNullOrWhiteSpace(m.LastSoundTestFile))
-                                {
-                                    <div style="min-width:160px;">
-                                        <div style="font-size:0.9rem;font-weight:600;">Sound</div>
-                                        <audio controls preload="none" style="width:160px;">
-                                            <source src="/@m.LastSoundTestFile" />
-                                            Your browser does not support the audio element.
-                                        </audio>
-                                        <div><a class="small" href="/@m.LastSoundTestFile" download>Download</a></div>
-                                    </div>
-                                }
-                                @if (!string.IsNullOrWhiteSpace(m.LastTtsTestFile))
-                                {
-                                    <div style="min-width:220px;">
-                                        <div style="font-size:0.9rem;font-weight:600;">TTS</div>
-                                        <audio controls preload="none" style="width:220px;">
-                                            <source src="/@m.LastTtsTestFile" />
-                                            Your browser does not support the audio element.
-                                        </audio>
-                                        <div><a class="small" href="/@m.LastTtsTestFile" download>Download</a></div>
-                                    </div>
-                                }
-                                @if (string.IsNullOrWhiteSpace(m.LastMusicTestFile) && string.IsNullOrWhiteSpace(m.LastSoundTestFile) && string.IsNullOrWhiteSpace(m.LastTtsTestFile))
-                                {
-                                    <div class="text-muted">No generated artifacts</div>
-                                }
-                            </div>
-                        </div>
-                        <hr />
-                        <div style="margin-top:12px;">
-                            <h6 style="margin:0 0 8px 0;">Last group run results</h6>
-                            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
-                                @{
-                                    var groupsDetail = Model.TestGroups ?? new System.Collections.Generic.List<string>();
-                                    foreach (var g in groupsDetail.Take(4))
-                                    {
-                                        var score = m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var s) && s.HasValue ? s.Value.ToString() : "-";
-                                        var json = m.LastGroupResultsJson != null && m.LastGroupResultsJson.TryGetValue(g, out var j) ? j : null;
-                                        <div>
-                                            <div style="font-weight:600;margin-bottom:6px;">@g (@score)</div>
-                                            @Html.Raw(RenderTestResults(json))
-                                        </div>
-                                    }
-                                }
-                            </div>
-                        </div>
-                       
-                    </td>
-                </tr>
+                
             }
             </tbody>
         </table>
@@ -425,74 +722,33 @@
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             if (!doc.RootElement.ValueKind.Equals(System.Text.Json.JsonValueKind.Array)) return "<em class='text-muted'>No results</em>";
             var sb = new System.Text.StringBuilder();
-            sb.Append("<div style='font-size:0.95rem'><table class='table table-sm mb-0' style='min-width:420px;'><thead><tr><th>Test</th><th style='width:80px;'>Result</th><th style='width:80px;'>Time</th><th>Message</th></tr></thead><tbody>");
-            double totalMs = 0.0;
+            sb.Append("<div style='font-size:0.95rem'><table class='table table-sm mb-0' style='min-width:420px;'><thead><tr><th>Domanda</th><th>Risposta</th></tr></thead><tbody>");
             foreach (var el in doc.RootElement.EnumerateArray())
             {
-                var name = el.TryGetProperty("name", out var pn) ? pn.GetString() ?? "" : "";
-                var ok = el.TryGetProperty("ok", out var pok) ? (pok.ValueKind == System.Text.Json.JsonValueKind.True) : false;
-                var msg = el.TryGetProperty("message", out var pm) ? pm.GetString() ?? "" : "";
-                long? durMs = null;
-                if (el.TryGetProperty("durationMs", out var pd) && pd.ValueKind == System.Text.Json.JsonValueKind.Number)
-                {
-                    try { durMs = pd.GetInt64(); } catch { try { durMs = (long?)pd.GetDouble(); } catch { durMs = null; } }
-                }
-                var icon = ok ? "<span style='color:green'>&#10003;</span>" : "<span style='color:red'>&#10007;</span>";
-                var timeStr = durMs.HasValue ? string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.###} s", (durMs.Value / 1000.0)) : "-";
-                if (durMs.HasValue) totalMs += durMs.Value;
-
-                // Render persisted input/prompt (if present)
-                var inputHtml = string.Empty;
+                string? promptText = null;
                 if (el.TryGetProperty("input", out var pi) && pi.ValueKind != System.Text.Json.JsonValueKind.Null)
                 {
-                    try
+                    if (pi.ValueKind == System.Text.Json.JsonValueKind.Object && pi.TryGetProperty("prompt", out var pval) && pval.ValueKind == System.Text.Json.JsonValueKind.String)
                     {
-                        string? promptText = null;
-                        if (pi.ValueKind == System.Text.Json.JsonValueKind.Object && pi.TryGetProperty("prompt", out var pval) && pval.ValueKind == System.Text.Json.JsonValueKind.String)
-                        {
-                            promptText = pval.GetString();
-                        }
-                        else if (pi.ValueKind == System.Text.Json.JsonValueKind.String)
-                        {
-                            promptText = pi.GetString();
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(promptText))
-                        {
-                            inputHtml = $"<div style='margin-top:6px;font-size:0.9rem;color:#333'><strong>Prompt:</strong> {System.Web.HttpUtility.HtmlEncode(promptText)}</div>";
-                        }
+                        promptText = pval.GetString();
                     }
-                    catch
+                    else if (pi.ValueKind == System.Text.Json.JsonValueKind.String)
                     {
-                        inputHtml = "";
+                        promptText = pi.GetString();
                     }
                 }
-
-                // Render persisted model output (if present) as a collapsible, pretty-printed JSON block
-                var outputHtml = string.Empty;
-                if (el.TryGetProperty("output", out var po) && po.ValueKind != System.Text.Json.JsonValueKind.Null)
+                string? responseText = null;
+                if (el.TryGetProperty("output", out var po) && po.ValueKind == System.Text.Json.JsonValueKind.String)
                 {
-                    try
-                    {
-                        var pretty = System.Text.Json.JsonSerializer.Serialize(po, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                        outputHtml = $"<details style='margin-top:6px'><summary style='cursor:pointer'>Model output</summary>{inputHtml}<pre style='white-space:pre-wrap;max-height:240px;overflow:auto'>{System.Web.HttpUtility.HtmlEncode(pretty)}</pre></details>";
-                    }
-                    catch
-                    {
-                        outputHtml = inputHtml + "<div class='text-muted'>[unserializable output]</div>";
-                    }
+                    responseText = po.GetString();
                 }
-                else
+                else if (el.TryGetProperty("output", out var po2) && po2.ValueKind == System.Text.Json.JsonValueKind.Object && po2.TryGetProperty("response", out var resp) && resp.ValueKind == System.Text.Json.JsonValueKind.String)
                 {
-                    // If no structured output, still show the prompt above the message
-                    if (!string.IsNullOrWhiteSpace(inputHtml)) outputHtml = inputHtml;
+                    responseText = resp.GetString();
                 }
-
-                sb.Append($"<tr><td>{System.Web.HttpUtility.HtmlEncode(name)}</td><td style='text-align:center'>{icon}</td><td style='text-align:right'>{System.Web.HttpUtility.HtmlEncode(timeStr)}</td><td>{System.Web.HttpUtility.HtmlEncode(msg)}{outputHtml}</td></tr>");
+                sb.Append($"<tr><td style='background:#e3f2fd;color:#1565c0;font-size:0.97em'>{System.Web.HttpUtility.HtmlEncode(promptText ?? "")}</td><td style='background:#fff3e0;color:#e65100;font-size:0.97em'>{System.Web.HttpUtility.HtmlEncode(responseText ?? "")}</td></tr>");
             }
-            // Footer with total
-            var totalSec = totalMs / 1000.0;
-            sb.Append($"</tbody><tfoot><tr><td style='font-weight:600'>Total</td><td></td><td style='text-align:right;font-weight:600'>{System.Web.HttpUtility.HtmlEncode(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.###} s", totalSec))}</td><td></td></tr></tfoot></table></div>");
+            sb.Append("</tbody></table></div>");
             return sb.ToString();
         }
         catch

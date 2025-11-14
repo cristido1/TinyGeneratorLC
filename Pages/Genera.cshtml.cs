@@ -10,12 +10,14 @@ public class GeneraModel : PageModel
     private readonly StoryGeneratorService _generator;
     private readonly ILogger<GeneraModel> _logger;
     private readonly ProgressService _progress;
+    private readonly NotificationService _notifications;
 
-    public GeneraModel(StoryGeneratorService generator, ILogger<GeneraModel> logger, ProgressService progress)
+    public GeneraModel(StoryGeneratorService generator, ILogger<GeneraModel> logger, ProgressService progress, NotificationService notifications)
     {
         _generator = generator;
         _logger = logger;
         _progress = progress;
+        _notifications = notifications;
     }
 
     [BindProperty]
@@ -50,6 +52,7 @@ public class GeneraModel : PageModel
                 // mark completed and store an indicative final result (approved or candidate)
                 var finalText = result?.Approved ?? result?.StoryA ?? result?.StoryB;
                 _progress.MarkCompleted(genId, finalText);
+                try { await _notifications.NotifyGroupAsync(genId, "Completed", "Generation completed", "success"); } catch { }
             }
             catch (Exception ex)
             {
@@ -58,6 +61,8 @@ public class GeneraModel : PageModel
                 _logger.LogError(ex, "Errore background generazione");
             }
         });
+
+        try { await _notifications.NotifyGroupAsync(genId, "Started", "Generation started", "info"); } catch { }
 
         return new JsonResult(new { id = genId });
     }

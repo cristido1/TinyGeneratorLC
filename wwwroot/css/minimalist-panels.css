@@ -1,0 +1,212 @@
+/* ===== MINIMALIST PANEL DESIGN WITH PASTEL COLORS ===== */
+
+/* Pastel color palette: soft yellow, soft green, soft blue-gray, soft rose, soft accent purple */
+:root {
+  --pastel-yellow: #f5f0e8;
+  --pastel-green: #e8f5f0;
+  --pastel-blue: #e8f0f8;
+  --pastel-rose: #f8e8f0;
+  --pastel-accent: #ece5f5;
+}
+
+/* Main content panel wrapper - used on all grid pages */
+.panel-container {
+  background-color: var(--pastel-yellow);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  margin: 0 auto;
+  max-width: 1200px;
+}
+
+/* Header area (title + home icon) stays outside the panel - use flex layout */
+.page-header-outside {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 0 6px;
+}
+
+.page-header-outside h1 {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #2c3e50;
+}
+
+/* Larger home icon, positioned outside the panel */
+.page-home-icon {
+  font-size: 2.4rem;
+  color: #ff7a00;
+  cursor: pointer;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.page-home-icon:hover {
+  color: #e66b00;
+  transform: scale(1.08);
+}
+
+/* Minimalist grid table inside a panel - only horizontal dividers */
+.grid-minimal {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.grid-minimal thead th {
+  background-color: rgba(0, 0, 0, 0.03);
+  border: none;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  padding: 12px 14px;
+  text-align: left;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.grid-minimal tbody tr {
+  border: none;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.grid-minimal tbody tr:last-child {
+  border-bottom: none;
+}
+
+.grid-minimal tbody td {
+  padding: 12px 14px;
+  vertical-align: middle;
+  color: #34495e;
+}
+
+.grid-minimal tbody tr:hover {
+  background-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Alternate row colors (subtle) */
+.grid-minimal tbody tr:nth-child(even) {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Panel variant classes for different color themes */
+.panel-yellow {
+  background-color: var(--pastel-yellow);
+}
+
+.panel-green {
+  background-color: var(--pastel-green);
+}
+
+.panel-blue {
+  background-color: var(--pastel-blue);
+}
+
+.panel-rose {
+  background-color: var(--pastel-rose);
+}
+
+.panel-accent {
+  background-color: var(--pastel-accent);
+}
+
+/* Note-card variant for Agents on the home page: light pastel green */
+.note-card.agent-card {
+  background-color: var(--pastel-green);
+  border: 1px solid rgba(0,0,0,0.04);
+}
+
+.note-card.agent-card .note-title {
+  color: #1f5a44; /* slightly darker green for contrast */
+}
+
+/* Buttons inside panels - compact sizing and styling */
+.panel-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.btn-panel {
+  padding: 6px 14px;
+  font-size: 0.875rem;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background-color: #ffffff;
+  color: #2c3e50;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-panel:hover {
+  background-color: #f8f9fa;
+  border-color: rgba(0, 0, 0, 0.25);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.btn-panel:active {
+  background-color: #efefef;
+  transform: scale(0.98);
+}
+
+.btn-panel.btn-primary {
+  background-color: #4a7bd2;
+  color: #ffffff;
+  border-color: #4a7bd2;
+}
+
+.btn-panel.btn-primary:hover {
+  background-color: #3f6ec0;
+  border-color: #3f6ec0;
+  box-shadow: 0 2px 6px rgba(74, 123, 210, 0.25);
+}
+
+.btn-panel.btn-danger {
+  background-color: #d9534f;
+  color: #ffffff;
+  border-color: #d9534f;
+}
+
+.btn-panel.btn-danger:hover {
+  background-color: #c9302c;
+  border-color: #c9302c;
+}
+
+.btn-panel.btn-success {
+  background-color: #5cb85c;
+  color: #ffffff;
+  border-color: #5cb85c;
+}
+
+.btn-panel.btn-success:hover {
+  background-color: #4cae4c;
+  border-color: #4cae4c;
+}
+
+/* Icon buttons for action columns (edit, delete) */
+.btn-icon-small {
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  background-color: transparent;
+  border: none;
+  color: #4a7bd2;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-icon-small:hover {
+  color: #3f6ec0;
+  transform: scale(1.15);
+}
+
+.btn-icon-small.danger {
+  color: #d9534f;
+}
+
+.btn-icon-small.danger:hover {
+  color: #c9302c;
+}
+
+/* ===== END MINIMALIST PANEL DESIGN ===== */

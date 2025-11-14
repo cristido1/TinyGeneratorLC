@@ -18,6 +18,7 @@ namespace TinyGenerator.Services
     }
     public class KernelFactory : IKernelFactory
     {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, KernelWithPlugins> _agentKernels = new();
         private readonly IConfiguration _config;
         private readonly ILogger<KernelFactory>? _logger;
         private readonly ILoggerFactory? _loggerFactory;
@@ -36,6 +37,7 @@ namespace TinyGenerator.Services
         public TinyGenerator.Skills.MemorySkill MemorySkill { get; }
         public TinyGenerator.Skills.AudioCraftSkill AudioCraftSkill { get; }
             public TinyGenerator.Skills.TtsApiSkill TtsApiSkill { get; }
+        public TinyGenerator.Skills.StoryEvaluatorSkill StoryEvaluatorSkill { get; }
 
         public KernelFactory(
             IConfiguration config,
@@ -69,9 +71,41 @@ namespace TinyGenerator.Services
             MemorySkill = new TinyGenerator.Skills.MemorySkill(_memoryService);
             AudioCraftSkill = new TinyGenerator.Skills.AudioCraftSkill(_httpClient, _forceAudioCpu);
             TtsApiSkill = new TinyGenerator.Skills.TtsApiSkill(_ttsHttpClient);
+            StoryEvaluatorSkill = new TinyGenerator.Skills.StoryEvaluatorSkill();
         }
 
-        public Kernel CreateKernel(string? modelId = null)
+        // Ensure a kernel is created and cached for a given agent id. Allowed plugin aliases control which plugins are registered.
+        public void EnsureKernelForAgent(int agentId, string? modelId, System.Collections.Generic.IEnumerable<string>? allowedPlugins = null)
+        {
+            try
+            {
+                // Create kernel using same factory method (which will attach plugin instances from this factory)
+                var kernel = CreateKernel(modelId, allowedPlugins);
+                var kw = new KernelWithPlugins
+                {
+                    Kernel = kernel,
+                    TextPlugin = this.TextPlugin,
+                    MathPlugin = this.MathPlugin,
+                    TimePlugin = this.TimePlugin,
+                    FileSystemPlugin = this.FileSystemPlugin,
+                    HttpPlugin = this.HttpPlugin,
+                    MemorySkill = this.MemorySkill
+                };
+                _agentKernels[agentId] = kw;
+            }
+            catch
+            {
+                // best-effort: do not throw on startup failure
+            }
+        }
+
+        public KernelWithPlugins? GetKernelForAgent(int agentId)
+        {
+            if (_agentKernels.TryGetValue(agentId, out var kw)) return kw;
+            return null;
+        }
+
+        public Microsoft.SemanticKernel.Kernel CreateKernel(string? modelId = null, System.Collections.Generic.IEnumerable<string>? allowedPlugins = null)
         {
             var builder = Kernel.CreateBuilder();
             // Abilita l’auto-invocazione delle funzioni registrate
@@ -134,42 +168,65 @@ namespace TinyGenerator.Services
             //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.TimePlugin>();
             //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.HttpPlugin>();
             //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.ConversationSummaryPlugin>();
-            // Istanze plugin registrate nel kernel
-            builder.Plugins.AddFromObject(TextPlugin, "text");
-            _logger?.LogDebug("Registered plugin: {plugin}", TextPlugin?.GetType().FullName);
-            builder.Plugins.AddFromObject(MathPlugin, "math");
-            _logger?.LogDebug("Registered plugin: {plugin}", MathPlugin?.GetType().FullName);
-            builder.Plugins.AddFromObject(TimePlugin, "time");
-            _logger?.LogDebug("Registered plugin: {plugin}", TimePlugin?.GetType().FullName);
-            builder.Plugins.AddFromObject(FileSystemPlugin, "filesystem");
-            _logger?.LogDebug("Registered plugin: {plugin}", FileSystemPlugin?.GetType().FullName);
-            builder.Plugins.AddFromObject(HttpPlugin, "http");
-            _logger?.LogDebug("Registered plugin: {plugin}", HttpPlugin?.GetType().FullName);
-            builder.Plugins.AddFromObject(MemorySkill, "memory");
-            _logger?.LogDebug("Registered plugin: {plugin}", MemorySkill?.GetType().FullName);
-            builder.Plugins.AddFromObject(AudioCraftSkill, "audiocraft");
-            _logger?.LogDebug("Registered plugin: {plugin}", AudioCraftSkill?.GetType().FullName);
-            builder.Plugins.AddFromObject(TtsApiSkill, "tts");
-            _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName);
+            // Istanze plugin registrate nel kernel. If allowedPlugins is provided, only register
+            // the plugins whose alias is present in the list (best-effort matching using lowercase).
+            System.Func<string, bool> allowed = (alias) =>
+            {
+                if (allowedPlugins == null) return true;
+                try { foreach (var a in allowedPlugins) { if (string.Equals(a?.Trim(), alias, StringComparison.OrdinalIgnoreCase)) return true; } } catch { }
+                return false;
+            };
+
+            var registeredAliases = new System.Collections.Generic.List<string>();
+            if (allowed("text")) { builder.Plugins.AddFromObject(TextPlugin, "text"); _logger?.LogDebug("Registered plugin: {plugin}", TextPlugin?.GetType().FullName); registeredAliases.Add("text"); }
+            if (allowed("math")) { builder.Plugins.AddFromObject(MathPlugin, "math"); _logger?.LogDebug("Registered plugin: {plugin}", MathPlugin?.GetType().FullName); registeredAliases.Add("math"); }
+            if (allowed("time")) { builder.Plugins.AddFromObject(TimePlugin, "time"); _logger?.LogDebug("Registered plugin: {plugin}", TimePlugin?.GetType().FullName); registeredAliases.Add("time"); }
+            if (allowed("filesystem")) { builder.Plugins.AddFromObject(FileSystemPlugin, "filesystem"); _logger?.LogDebug("Registered plugin: {plugin}", FileSystemPlugin?.GetType().FullName); registeredAliases.Add("filesystem"); }
+            if (allowed("http")) { builder.Plugins.AddFromObject(HttpPlugin, "http"); _logger?.LogDebug("Registered plugin: {plugin}", HttpPlugin?.GetType().FullName); registeredAliases.Add("http"); }
+            if (allowed("memory")) { builder.Plugins.AddFromObject(MemorySkill, "memory"); _logger?.LogDebug("Registered plugin: {plugin}", MemorySkill?.GetType().FullName); registeredAliases.Add("memory"); }
+            if (allowed("audiocraft")) { builder.Plugins.AddFromObject(AudioCraftSkill, "audiocraft"); _logger?.LogDebug("Registered plugin: {plugin}", AudioCraftSkill?.GetType().FullName); registeredAliases.Add("audiocraft"); }
+            if (allowed("tts")) { builder.Plugins.AddFromObject(TtsApiSkill, "tts"); _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName); registeredAliases.Add("tts"); }
+            // Register the StoryEvaluatorSkill which exposes evaluation functions used by texteval tests
+            if (allowed("evaluator")) { builder.Plugins.AddFromObject(StoryEvaluatorSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", StoryEvaluatorSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
 
             var kernel = builder.Build();
             // Best-effort verification: log that kernel was created and which plugin instances we attached.
             try
             {
-                _logger?.LogInformation("Kernel created for model {model}. Plugins attached: {plugins}", model, string.Join(", ", new[] {
-                    TextPlugin?.GetType().Name,
-                    MathPlugin?.GetType().Name,
-                    TimePlugin?.GetType().Name,
-                    FileSystemPlugin?.GetType().Name,
-                    HttpPlugin?.GetType().Name,
-                    MemorySkill?.GetType().Name,
-                    AudioCraftSkill?.GetType().Name
-                }));
+                // Log the aliases that were actually registered for this kernel (more accurate than listing all plugin instances)
+                _logger?.LogInformation("Kernel created for model {model}. Registered plugin aliases: {plugins}", model, string.Join(", ", registeredAliases));
             }
             catch
             {
                 // ignore any logging/inspection failures
             }
+
+            // Best-effort: write a small debug JSON that records which plugins we attempted to allow and
+            // which aliases were actually registered for this kernel. Non-throwing and best-effort.
+            try
+            {
+                // Only write kernel debug JSON when enabled via configuration.
+                var enabled = _config?.GetValue<bool?>("Debug:EnableOutboundGeneration") ?? true;
+                if (enabled)
+                {
+                    try { System.IO.Directory.CreateDirectory(System.IO.Path.Combine(Directory.GetCurrentDirectory(), "data")); } catch { }
+                    var dbg = new
+                    {
+                        Timestamp = DateTime.UtcNow.ToString("o"),
+                        Model = model,
+                        Provider = provider,
+                        AllowedPlugins = allowedPlugins == null ? null : allowedPlugins.ToArray(),
+                        Registered = registeredAliases.ToArray(),
+                        Endpoint = modelInfo?.Endpoint
+                    };
+                    var fname = $"sk_kernel_{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid():N}.json";
+                    var full = System.IO.Path.Combine(Directory.GetCurrentDirectory(), "data", fname);
+                    var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+                    var json = System.Text.Json.JsonSerializer.Serialize(dbg, opts);
+                    System.IO.File.WriteAllText(full, json);
+                }
+            }
+            catch { /* never fail kernel creation because of debug write */ }
 
             return kernel;
         }

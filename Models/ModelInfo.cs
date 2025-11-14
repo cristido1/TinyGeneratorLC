@@ -18,40 +18,10 @@ public class ModelInfo
     public long LimitTokensMonth { get; set; }
     public string Metadata { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
+    // Indicates the model does NOT support tools/function-calling (true = no tools supported)
+    public bool NoTools { get; set; } = false;
     public string? CreatedAt { get; set; }
     public string? UpdatedAt { get; set; }
-    public bool? SkillToUpper { get; set; }
-    public bool? SkillToLower { get; set; }
-    public bool? SkillTrim { get; set; }
-    public bool? SkillLength { get; set; }
-    public bool? SkillSubstring { get; set; }
-    public bool? SkillJoin { get; set; }
-    public bool? SkillSplit { get; set; }
-    public bool? SkillAdd { get; set; }
-    public bool? SkillSubtract { get; set; }
-    public bool? SkillMultiply { get; set; }
-    public bool? SkillDivide { get; set; }
-    public bool? SkillSqrt { get; set; }
-    public bool? SkillNow { get; set; }
-    public bool? SkillToday { get; set; }
-    public bool? SkillAddDays { get; set; }
-    public bool? SkillAddHours { get; set; }
-    public bool? SkillRemember { get; set; }
-    public bool? SkillRecall { get; set; }
-    public bool? SkillForget { get; set; }
-    public bool? SkillFileExists { get; set; }
-    public bool? SkillHttpGet { get; set; }
-    // AudioCraft skill test flags
-    public bool? SkillAudioCheckHealth { get; set; }
-    public bool? SkillAudioListModels { get; set; }
-    public bool? SkillAudioGenerateMusic { get; set; }
-    public bool? SkillAudioGenerateSound { get; set; }
-    public bool? SkillAudioDownloadFile { get; set; }
-
-    // TTS skill test flags
-    public bool? SkillTtsCheckHealth { get; set; }
-    public bool? SkillTtsListVoices { get; set; }
-    public bool? SkillTtsSynthesize { get; set; }
 
     // Duration in seconds taken to run the full battery of tests
     public double? TestDurationSeconds { get; set; }
@@ -61,4 +31,21 @@ public class ModelInfo
     public string? LastMusicTestFile { get; set; }
     public string? LastSoundTestFile { get; set; }
     public string? LastTtsTestFile { get; set; }
+
+    // Per-group latest score columns (UI-only, populated at page render)
+    public int? LastScore_Base { get; set; }
+    public int? LastScore_Tts { get; set; }
+    public int? LastScore_Music { get; set; }
+    public int? LastScore_Write { get; set; }
+
+    // Per-group last run results JSON (array) for detail view
+    public string? LastResults_BaseJson { get; set; }
+    public string? LastResults_TtsJson { get; set; }
+    public string? LastResults_MusicJson { get; set; }
+    public string? LastResults_WriteJson { get; set; }
+
+    // Flexible per-group maps for dynamic UI (group name -> score / json)
+    // Populated at page render time by the PageModel.
+    public System.Collections.Generic.Dictionary<string, int?>? LastGroupScores { get; set; }
+    public System.Collections.Generic.Dictionary<string, string?>? LastGroupResultsJson { get; set; }
 }

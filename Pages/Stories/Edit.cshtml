@@ -1,0 +1,33 @@
+@page "{id:long}"
+@model TinyGenerator.Pages.Stories.EditModel
+@{
+    ViewData["Title"] = "Modifica storia";
+}
+
+<div class="card">
+    <div class="card-body">
+        <h3>Modifica storia</h3>
+        <form method="post">
+            <div class="mb-3">
+                <label class="form-label">Id</label>
+                <input class="form-control" asp-for="Id" disabled />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Prompt</label>
+                <input class="form-control" asp-for="Prompt" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Testo</label>
+                <textarea class="form-control" rows="10" asp-for="StoryText"></textarea>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Status</label>
+                <input class="form-control" asp-for="Status" />
+            </div>
+            <div class="mb-3">
+                <button type="submit" class="btn btn-primary">Salva</button>
+                <a class="btn btn-secondary" asp-page="/Stories/Index">Annulla</a>
+            </div>
+        </form>
+    </div>
+</div>

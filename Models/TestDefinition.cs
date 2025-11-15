@@ -22,4 +22,7 @@ public sealed class TestDefinition
     public int TimeoutMs { get; set; }
     public int Priority { get; set; }
     public string? Description { get; set; }
+    public string? ExecutionPlan { get; set; }
+    // Active flag (soft delete / enable/disable)
+    public bool Active { get; set; } = true;
 }

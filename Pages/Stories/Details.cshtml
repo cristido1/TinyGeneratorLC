@@ -1,0 +1,78 @@
+@page "{id:long}"
+@model TinyGenerator.Pages.Stories.DetailsModel
+@{
+    ViewData["Title"] = "Dettaglio storia";
+}
+
+<div class="card">
+    <div class="card-body">
+        <h4 class="card-title">Storia ID: @Model.Story?.Id</h4>
+        <div class="d-flex justify-content-between align-items-start mb-3">
+            <div>
+                <div class="small text-muted">Prompt: @Model.Story?.Prompt</div>
+                <div class="small text-muted">Timestamp: @Model.Story?.Timestamp</div>
+            </div>
+            <div>
+                <a class="btn btn-sm btn-outline-secondary me-1" asp-page="/Stories/Edit" asp-route-id="@Model.Story?.Id">Modifica</a>
+                <a class="btn btn-sm btn-outline-primary" id="ttsPlay">Ascolta</a>
+            </div>
+        </div>
+        <details open>
+            <summary class="fw-bold">Valutazioni</summary>
+            <div id="evaluations" class="mt-2">
+                @if (Model.Evaluations != null && Model.Evaluations.Count > 0)
+                {
+                    foreach (var e in Model.Evaluations)
+                    {
+                        <div class="card my-2">
+                            <div class="card-body">
+                                <div><strong>@e.Model</strong> — @e.Ts — Score: @e.Score</div>
+                                <pre style="white-space:pre-wrap">@e.RawJson</pre>
+                            </div>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="text-muted">Nessuna valutazione</div>
+                }
+            </div>
+        </details>
+
+        <details class="mt-2" open>
+            <summary class="fw-bold">Testo della storia</summary>
+            <div class="mt-2">
+                <pre style="white-space: pre-wrap;">@Model.StoryText</pre>
+            </div>
+        </details>
+
+        <audio id="ttsAudio" controls style="width:100%; display:none;" />
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        document.addEventListener('DOMContentLoaded', function(){
+            var btn = document.getElementById('ttsPlay');
+            btn?.addEventListener('click', async function(){
+                try {
+                    btn.disabled = true;
+                    btn.innerText = 'Generating...';
+                    var id = '@Model.Story?.Id';
+                    var res = await fetch(`/Stories/Details/${id}?handler=tts`, { method: 'POST' });
+                    if (!res.ok) { alert('Errore TTS'); return; }
+                    var j = await res.json();
+                    var audio = document.getElementById('ttsAudio');
+                    if (j && j.audio_url) {
+                        audio.src = j.audio_url; audio.style.display = ''; audio.play();
+                    } else if (j && j.audio_base64) {
+                        audio.src = 'data:audio/wav;base64,' + j.audio_base64; audio.style.display = ''; audio.play();
+                    } else {
+                        alert('No audio produced');
+                    }
+                } catch (e) { console.error(e); alert('Errore TTS'); }
+                finally { btn.disabled = false; btn.innerText = 'Ascolta'; }
+            })
+        })
+    </script>
+}

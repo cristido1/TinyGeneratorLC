@@ -10,7 +10,7 @@ namespace TinyGenerator.Services
     {
         private readonly string _dbPath;
 
-        public PersistentMemoryService(string dbPath = "Data/memory.sqlite")
+        public PersistentMemoryService(string dbPath = "data/storage.db")
         {
             _dbPath = dbPath;
             Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
@@ -21,6 +21,13 @@ namespace TinyGenerator.Services
         {
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             connection.Open();
+            try
+            {
+                using var fkCmd = connection.CreateCommand();
+                fkCmd.CommandText = "PRAGMA foreign_keys = ON;";
+                fkCmd.ExecuteNonQuery();
+            }
+            catch { }
 
             var cmd = connection.CreateCommand();
             cmd.CommandText = @"
@@ -29,10 +36,85 @@ namespace TinyGenerator.Services
                 Collection TEXT NOT NULL,
                 TextValue TEXT NOT NULL,
                 Metadata TEXT,
+                model_id INTEGER NULL,
+                agent_id INTEGER NULL,
                 CreatedAt TEXT NOT NULL
             );
             ";
             cmd.ExecuteNonQuery();
+
+            // Ensure required columns exist and perform best-effort migration if legacy 'agent' column exists.
+            var cols = new List<string>();
+            using (var colCmd = connection.CreateCommand())
+            {
+                colCmd.CommandText = "PRAGMA table_info(Memory);";
+                using var rdr = colCmd.ExecuteReader();
+                while (rdr.Read()) cols.Add(rdr.GetString(1));
+            }
+
+            // If model_id or agent_id missing, add them
+            var colsLower = cols.Select(c => c.ToLowerInvariant()).ToList();
+            if (!colsLower.Contains("model_id"))
+            {
+                try
+                {
+                    using var addModel = connection.CreateCommand();
+                    addModel.CommandText = "ALTER TABLE Memory ADD COLUMN model_id INTEGER NULL;";
+                    addModel.ExecuteNonQuery();
+                }
+                catch { }
+            }
+            if (!colsLower.Contains("agent_id"))
+            {
+                try
+                {
+                    using var addAgentId = connection.CreateCommand();
+                    addAgentId.CommandText = "ALTER TABLE Memory ADD COLUMN agent_id INTEGER NULL;";
+                    addAgentId.ExecuteNonQuery();
+                }
+                catch { }
+            }
+
+            // If legacy 'agent' column exists, migrate rows into a new table without 'agent' column.
+            // Detect legacy 'agent' column case-insensitively and migrate it out
+            if (colsLower.Contains("agent"))
+            {
+                try
+                {
+                    using var create = connection.CreateCommand();
+                    create.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS Memory_new (
+                        Id TEXT PRIMARY KEY,
+                        Collection TEXT NOT NULL,
+                        TextValue TEXT NOT NULL,
+                        Metadata TEXT,
+                        model_id INTEGER NULL,
+                        agent_id INTEGER NULL,
+                        CreatedAt TEXT NOT NULL,
+                        FOREIGN KEY (model_id) REFERENCES models(rowid) ON DELETE SET NULL ON UPDATE CASCADE,
+                        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL ON UPDATE CASCADE
+                    );
+                    ";
+                    create.ExecuteNonQuery();
+
+                    // Copy data; attempt to convert agent to integer if possible, otherwise set NULL. (agent is legacy column)
+                    using var copy = connection.CreateCommand();
+                    copy.CommandText = @"
+                    INSERT OR REPLACE INTO Memory_new (Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt)
+                    SELECT Id, Collection, TextValue, Metadata, model_id, CASE WHEN CAST(agent AS INTEGER) > 0 THEN CAST(agent AS INTEGER) ELSE NULL END, CreatedAt FROM Memory;
+                    ";
+                    copy.ExecuteNonQuery();
+
+                    using var drop = connection.CreateCommand();
+                    drop.CommandText = "DROP TABLE IF EXISTS Memory;";
+                    drop.ExecuteNonQuery();
+
+                    using var rename = connection.CreateCommand();
+                    rename.CommandText = "ALTER TABLE Memory_new RENAME TO Memory;";
+                    rename.ExecuteNonQuery();
+                }
+                catch { }
+            }
         }
 
         private static string ComputeHash(string text)
@@ -44,44 +126,51 @@ namespace TinyGenerator.Services
         }
 
         // ➕ Salva informazione testuale
-        public async Task SaveAsync(string collection, string text, object? metadata = null)
+        public async Task SaveAsync(string collection, string text, object? metadata = null, long? modelId = null, int? agentId = null)
         {
             var id = ComputeHash(collection + text);
             var json = metadata != null ? JsonSerializer.Serialize(metadata) : null;
 
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
+            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
 
             var cmd = connection.CreateCommand();
             cmd.CommandText = @"
-                INSERT OR REPLACE INTO Memory (Id, Collection, TextValue, Metadata, CreatedAt)
-                VALUES ($id, $collection, $text, $metadata, datetime('now'))
+                INSERT OR REPLACE INTO Memory (Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt)
+                VALUES ($id, $collection, $text, $metadata, $model_id, $agent_id, datetime('now'))
             ";
             cmd.Parameters.AddWithValue("$id", id);
             cmd.Parameters.AddWithValue("$collection", collection);
             cmd.Parameters.AddWithValue("$text", text);
             cmd.Parameters.AddWithValue("$metadata", json ?? (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("$model_id", modelId.HasValue ? (object)modelId.Value : (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("$agent_id", agentId.HasValue ? (object)agentId.Value : (object)DBNull.Value);
 
             await cmd.ExecuteNonQueryAsync();
         }
 
         // 🔍 Cerca testo simile (ricerca semplice full-text LIKE)
-        public async Task<List<string>> SearchAsync(string collection, string query, int limit = 5)
+        public async Task<List<string>> SearchAsync(string collection, string query, int limit = 5, long? modelId = null, int? agentId = null)
         {
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
+            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
 
             var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
+                cmd.CommandText = @"
                 SELECT TextValue FROM Memory
                 WHERE Collection = $collection
                 AND TextValue LIKE $query
+                " + (modelId.HasValue ? "AND model_id = $model_id " : "") + (agentId.HasValue ? "AND agent_id = $agent_id " : "") + @"
                 ORDER BY CreatedAt DESC
                 LIMIT $limit;
             ";
             cmd.Parameters.AddWithValue("$collection", collection);
             cmd.Parameters.AddWithValue("$query", $"%{query}%");
             cmd.Parameters.AddWithValue("$limit", limit);
+            if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
+            if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
 
             var results = new List<string>();
             using var reader = await cmd.ExecuteReaderAsync();
@@ -94,11 +183,12 @@ namespace TinyGenerator.Services
         }
 
         // 🧹 Cancella una voce
-        public async Task DeleteAsync(string collection, string text)
+        public async Task DeleteAsync(string collection, string text, long? modelId = null, int? agentId = null)
         {
             var id = ComputeHash(collection + text);
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
+            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
 
             var cmd = connection.CreateCommand();
             cmd.CommandText = @"DELETE FROM Memory WHERE Id = $id";
@@ -112,6 +202,7 @@ namespace TinyGenerator.Services
         {
             using var connection = new SqliteConnection($"Data Source={_dbPath}");
             await connection.OpenAsync();
+            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
 
             var cmd = connection.CreateCommand();
             cmd.CommandText = @"SELECT DISTINCT Collection FROM Memory ORDER BY Collection;";

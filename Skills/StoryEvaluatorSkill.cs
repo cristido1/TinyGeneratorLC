@@ -1,6 +1,7 @@
 using Microsoft.SemanticKernel;
 using System.ComponentModel;
 using System.Text.Json;
+using TinyGenerator.Services;
 
 namespace TinyGenerator.Skills
 {
@@ -9,20 +10,30 @@ namespace TinyGenerator.Skills
     {
         public string? LastCalled { get; set; }
         public string? LastResult { get; set; }
+        private readonly DatabaseService? _db;
+        private readonly long? _modelId;
+        private readonly int? _agentId;
 
         public StoryEvaluatorSkill()
         {
         }
+        public StoryEvaluatorSkill(DatabaseService db, long? modelId = null, int? agentId = null)
+        {
+            _db = db;
+            _modelId = modelId;
+            _agentId = agentId;
+        }
 
         // Function expected to be invoked by the model via function-calling.
         // The model must supply 'score' (1-10) and 'defects' (string). Optionally the caller may include 'feature' to identify which feature was evaluated.
-        [KernelFunction("evaluate_single_feature"), Description("Records a single feature evaluation. Parameters: score (int), defects (string), feature (optional string).")]
-        public string EvaluateSingleFeature(int score, string defects, string? feature = null)
+        [KernelFunction("evaluate_single_feature"), Description("Records a single feature evaluation. Parameters: score (int), defects (string), feature (optional string). Accepts alternate score fields (e.g., 'structure_score').")]
+        public string EvaluateSingleFeature(int? score = null, int? structure_score = null, string defects = "", string? feature = null, long story_id = 0)
         {
             LastCalled = nameof(EvaluateSingleFeature);
+            var finalScore = score ?? structure_score ?? 0;
             var obj = new
             {
-                score = score,
+                score = finalScore,
                 defects = defects ?? string.Empty,
                 feature = feature ?? string.Empty
             };
@@ -30,6 +41,19 @@ namespace TinyGenerator.Skills
             // Persist the serialized result so external callers (test runner) can inspect the last evaluation
             LastResult = JsonSerializer.Serialize(obj);
             // Return the accepted parameters as a compact JSON string so callers (and tests) can inspect them.
+            if (_db != null && story_id > 0)
+            {
+                try
+                {
+                    // store as a quick evaluation row — wrap a minimal evaluator object
+                    var json = LastResult!;
+                    var total = finalScore; // single feature total is the value
+                    var evaluatorModelName = _modelId.HasValue ? _db.GetModelNameById(_modelId.Value) : null;
+                    // Store evaluation using model_id / agent_id for scoping; embed any feature info inside raw JSON.
+                    _db.AddStoryEvaluation(story_id, json, total, _modelId, _agentId);
+                }
+                catch { }
+            }
             return LastResult!;
         }
 
@@ -37,17 +61,17 @@ namespace TinyGenerator.Skills
         // All parameter names are in English to match the function-calling contract.
         [KernelFunction("evaluate_full_story"), Description("Records a full story evaluation across all categories. The function returns the provided parameters as JSON.")]
         public string EvaluateFullStory(
-            int narrative_coherence_score, string narrative_coherence_defects,
-            int structure_score, string structure_defects,
-            int characterization_score, string characterization_defects,
-            int dialogues_score, string dialogues_defects,
-            int pacing_score, string pacing_defects,
-            int originality_score, string originality_defects,
-            int style_score, string style_defects,
-            int worldbuilding_score, string worldbuilding_defects,
-            int thematic_coherence_score, string thematic_coherence_defects,
-            int emotional_impact_score, string emotional_impact_defects,
-            string overall_evaluation)
+            int narrative_coherence_score = 0, string narrative_coherence_defects = "",
+            int structure_score = 0, string structure_defects = "",
+            int characterization_score = 0, string characterization_defects = "",
+            int dialogues_score = 0, string dialogues_defects = "",
+            int pacing_score = 0, string pacing_defects = "",
+            int originality_score = 0, string originality_defects = "",
+            int style_score = 0, string style_defects = "",
+            int worldbuilding_score = 0, string worldbuilding_defects = "",
+            int thematic_coherence_score = 0, string thematic_coherence_defects = "",
+            int emotional_impact_score = 0, string emotional_impact_defects = "",
+            string overall_evaluation = "", long story_id = 0)
         {
             LastCalled = nameof(EvaluateFullStory);
 
@@ -68,6 +92,18 @@ namespace TinyGenerator.Skills
             };
 
             LastResult = JsonSerializer.Serialize(obj);
+            if (_db != null && story_id > 0)
+            {
+                try
+                {
+                    // store parsed details in DB as story evaluation
+                    var json = LastResult!;
+                    var total = obj.total;
+                    var evaluatorModelName = _modelId.HasValue ? _db.GetModelNameById(_modelId.Value) : null;
+                    _db.AddStoryEvaluation(story_id, json, total, _modelId, _agentId);
+                }
+                catch { }
+            }
             return LastResult!;
         }
     }

@@ -1,0 +1,64 @@
+@page
+@model TinyGenerator.Pages.Stories.IndexModel
+@{
+    ViewData["Title"] = "Storie";
+}
+
+<div class="d-flex justify-content-between mb-3">
+    <h3>Storie salvate</h3>
+    <div>
+        <a class="btn btn-primary" asp-page="/Stories/Create">Nuova storia</a>
+    </div>
+</div>
+
+<table id="storiesTable" class="table table-striped table-bordered" style="width:100%">
+    <thead>
+        <tr>
+            <th>Id</th>
+            <th>Timestamp</th>
+            <th>Prompt</th>
+            <th>Modello</th>
+            <th>Score</th>
+            <th>Approved</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    @foreach(var s in Model.Stories) {
+        <tr>
+            <td>@s.Id</td>
+            <td>@s.Timestamp</td>
+            <td style="max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">@s.Prompt</td>
+            <td>@(string.IsNullOrWhiteSpace(s.ModelA) ? s.ModelB : s.ModelA)</td>
+            <td>@(s.ScoreA > s.ScoreB ? s.ScoreA : s.ScoreB)</td>
+            <td>@(s.Approved ? "✅" : "❌")</td>
+            <td>
+                <div class="btn-group" role="group">
+                    <a class="btn btn-sm btn-outline-primary" asp-page="/Stories/Details" asp-route-id="@s.Id">Dettagli</a>
+                    <a class="btn btn-sm btn-outline-secondary" asp-page="/Stories/Edit" asp-route-id="@s.Id">Modifica</a>
+                    <form method="post" asp-page-handler="Delete" asp-route-id="@s.Id" onsubmit="return confirm('Eliminare la storia?');" style="display:inline">
+                        <button type="submit" class="btn btn-sm btn-danger">Elimina</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+@section Scripts {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <script src="~/lib/jquery/jquery.min.js"></script>
+    <script src="~/lib/datatables/js/jquery.dataTables.min.js"></script>
+    <script src="~/lib/datatables/js/dataTables.bootstrap5.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            $('#storiesTable').DataTable({
+                pageLength: 25,
+                lengthChange: true,
+                stateSave: true,
+                columnDefs: [{ orderable: false, targets: -1 }]
+            });
+        });
+    </script>
+}

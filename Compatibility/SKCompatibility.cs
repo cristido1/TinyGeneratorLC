@@ -124,7 +124,24 @@ namespace Microsoft.SemanticKernel.Agents
             }
 
             // If kernel is a real Semantic Kernel instance, instrument the call.
-            if (_kernel is Microsoft.SemanticKernel.Kernel kernel)
+            Microsoft.SemanticKernel.Kernel? kernelObj = null;
+            if (_kernel is Microsoft.SemanticKernel.Kernel k1) kernelObj = k1;
+            else
+            {
+                // Some callers wrap the actual Kernel inside a helper/leasing object (e.g., KernelWithPlugins).
+                // Attempt a best-effort reflection to obtain a property named "Kernel" which holds the real Kernel.
+                try
+                {
+                    var prop = _kernel?.GetType().GetProperty("Kernel");
+                    if (prop != null)
+                    {
+                        var val = prop.GetValue(_kernel);
+                        kernelObj = val as Microsoft.SemanticKernel.Kernel;
+                    }
+                }
+                catch { kernelObj = null; }
+            }
+            if (kernelObj != null)
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 object? runObj = null;
@@ -156,7 +173,7 @@ namespace Microsoft.SemanticKernel.Agents
                     try
                     {
                         var funcs = new List<string>();
-                        var ktype = kernel.GetType();
+                        var ktype = kernelObj.GetType();
                         debug["KernelType"] = ktype.FullName;
 
                         // Inspect properties and fields for enumerable containers that may hold skills/functions
@@ -166,7 +183,7 @@ namespace Microsoft.SemanticKernel.Agents
                             foreach (var p in ktype.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
                             {
                                 object? val = null;
-                                try { val = p.GetValue(kernel); } catch { val = null; }
+                                try { val = p.GetValue(kernelObj); } catch { val = null; }
                                 if (val == null) continue;
                                 members.Add(val);
                             }
@@ -178,7 +195,7 @@ namespace Microsoft.SemanticKernel.Agents
                             foreach (var f in ktype.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
                             {
                                 object? val = null;
-                                try { val = f.GetValue(kernel); } catch { val = null; }
+                                try { val = f.GetValue(kernelObj); } catch { val = null; }
                                 if (val == null) continue;
                                 members.Add(val);
                             }
@@ -269,7 +286,7 @@ namespace Microsoft.SemanticKernel.Agents
 
                 try
                 {
-                    var run = await kernel.InvokePromptAsync(finalPrompt ?? string.Empty, _args);
+                    var run = await kernelObj.InvokePromptAsync(finalPrompt ?? string.Empty, _args);
                     runObj = run;
                     sw.Stop();
 

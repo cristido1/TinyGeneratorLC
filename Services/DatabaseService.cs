@@ -189,6 +189,19 @@ public sealed class DatabaseService
         }
     }
 
+    public long? GetModelIdByName(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName)) return null;
+        using var conn = CreateConnection();
+        conn.Open();
+        try
+        {
+            var id = conn.ExecuteScalar<long?>("SELECT id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+            return id;
+        }
+        catch { return null; }
+    }
+
     public void UpsertModel(ModelInfo model)
     {
         if (model == null || string.IsNullOrWhiteSpace(model.Name)) return;
@@ -372,6 +385,20 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
         return conn.QueryFirstOrDefault<TinyGenerator.Models.Agent>(sql, new { id });
     }
 
+    public int? GetAgentIdByName(string name)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        try
+        {
+            var sql = "SELECT id FROM agents WHERE name = @name LIMIT 1";
+            var id = conn.ExecuteScalar<long?>(sql, new { name });
+            if (id == null || id == 0) return null;
+            return (int)id;
+        }
+        catch { return null; }
+    }
+
     public int InsertAgent(TinyGenerator.Models.Agent a)
     {
         using var conn = CreateConnection();
@@ -470,16 +497,17 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
         conn.Open();
         // Include allowed_plugins column if present in the schema
         var hasAllowed = false;
+        var hasExecutionPlan = false;
         try
         {
             using var check = conn.CreateCommand();
             check.CommandText = "PRAGMA table_info('test_definitions');";
             using var rdr = check.ExecuteReader();
-            while (rdr.Read()) { var col = rdr.IsDBNull(1) ? string.Empty : rdr.GetString(1); if (string.Equals(col, "allowed_plugins", StringComparison.OrdinalIgnoreCase)) { hasAllowed = true; break; } }
+            while (rdr.Read()) { var col = rdr.IsDBNull(1) ? string.Empty : rdr.GetString(1); if (string.Equals(col, "allowed_plugins", StringComparison.OrdinalIgnoreCase)) { hasAllowed = true; } if (string.Equals(col, "execution_plan", StringComparison.OrdinalIgnoreCase)) { hasExecutionPlan = true; } }
         }
         catch { }
 
-    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue" + (hasAllowed ? ", allowed_plugins AS AllowedPlugins" : "") + @"
+    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue" + (hasAllowed ? ", allowed_plugins AS AllowedPlugins" : "") + (hasExecutionPlan ? ", execution_plan AS ExecutionPlan" : "") + @"
 FROM test_definitions WHERE group_name = @g AND active = 1 ORDER BY priority, id";
         return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
     }
@@ -499,7 +527,7 @@ FROM test_definitions WHERE group_name = @g AND active = 1 ORDER BY priority, id
             using var rdr = check.ExecuteReader();
             if (rdr.Read())
             {
-                    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins
+                    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, active AS Active
 FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
                 return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
             }
@@ -539,7 +567,7 @@ FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
             order = col + (ascending ? " ASC" : " DESC");
         }
 
-    var sql = $@"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins
+    var sql = $@"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, active AS Active
 FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
 
         return conn.Query<TestDefinition>(sql, parameters).ToList();
@@ -549,7 +577,7 @@ FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
     {
         using var conn = CreateConnection();
         conn.Open();
-    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins
+    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, active AS Active
 FROM test_definitions WHERE id = @id LIMIT 1";
         return conn.QueryFirstOrDefault<TestDefinition>(sql, new { id });
     }
@@ -558,8 +586,8 @@ FROM test_definitions WHERE id = @id LIMIT 1";
     {
         using var conn = CreateConnection();
         conn.Open();
-    var sql = @"INSERT INTO test_definitions(group_name, library, function_name, expected_behavior, expected_asset, prompt, timeout_ms, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, active)
-VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Prompt,@TimeoutMs,@Priority,@ValidScoreRange,@TestType,@ExpectedPromptValue,@AllowedPlugins,1); SELECT last_insert_rowid();";
+    var sql = @"INSERT INTO test_definitions(group_name, library, function_name, expected_behavior, expected_asset, prompt, timeout_ms, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, execution_plan, active)
+VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Prompt,@TimeoutMs,@Priority,@ValidScoreRange,@TestType,@ExpectedPromptValue,@AllowedPlugins,@ExecutionPlan,@Active); SELECT last_insert_rowid();";
         var id = conn.ExecuteScalar<long>(sql, td);
         return (int)id;
     }
@@ -568,7 +596,7 @@ VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Promp
     {
         using var conn = CreateConnection();
         conn.Open();
-    var sql = @"UPDATE test_definitions SET group_name=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_ms=@TimeoutMs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins WHERE id = @Id";
+    var sql = @"UPDATE test_definitions SET group_name=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_ms=@TimeoutMs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins, execution_plan=@ExecutionPlan, active=@Active WHERE id = @Id";
         conn.Execute(sql, td);
     }
 
@@ -779,13 +807,117 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         }
     }
 
-    public int AddTestAsset(int stepId, string fileType, string filePath, string? description = null, double? durationSec = null, long? sizeBytes = null)
+    public int AddTestAsset(int stepId, string fileType, string filePath, string? description = null, double? durationSec = null, long? sizeBytes = null, long? storyId = null)
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"INSERT INTO model_test_assets(step_id, file_type, file_path, description, duration_sec, size_bytes) VALUES(@step_id, @file_type, @file_path, @description, @duration_sec, @size_bytes); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, new { step_id = stepId, file_type = fileType, file_path = filePath, description, duration_sec = durationSec, size_bytes = sizeBytes });
+        var sql = @"INSERT INTO model_test_assets(step_id, file_type, file_path, description, duration_sec, size_bytes, story_id) VALUES(@step_id, @file_type, @file_path, @description, @duration_sec, @size_bytes, @story_id); SELECT last_insert_rowid();";
+        var id = conn.ExecuteScalar<long>(sql, new { step_id = stepId, file_type = fileType, file_path = filePath, description, duration_sec = durationSec, size_bytes = sizeBytes, story_id = storyId });
         return (int)id;
+    }
+
+    public long AddStoryEvaluation(long storyId, string rawJson, double totalScore, long? modelId = null, int? agentId = null)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        // Try parse JSON to extract category fields - best effort
+        // Parsing helper logic inline below
+
+        // Default values
+        var values = new {
+            narrative_coherence_score = 0,
+            narrative_coherence_defects = string.Empty,
+            structure_score = 0,
+            structure_defects = string.Empty,
+            characterization_score = 0,
+            characterization_defects = string.Empty,
+            dialogues_score = 0,
+            dialogues_defects = string.Empty,
+            pacing_score = 0,
+            pacing_defects = string.Empty,
+            originality_score = 0,
+            originality_defects = string.Empty,
+            style_score = 0,
+            style_defects = string.Empty,
+            worldbuilding_score = 0,
+            worldbuilding_defects = string.Empty,
+            thematic_coherence_score = 0,
+            thematic_coherence_defects = string.Empty,
+            emotional_impact_score = 0,
+            emotional_impact_defects = string.Empty,
+            overall_evaluation = string.Empty
+        };
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+            // try to extract fields (e.g. root.narrative_coherence.score or root.narrative_coherence)
+            int GetScoreFromCategory(string cat)
+            {
+                try
+                {
+                    if (root.TryGetProperty(cat, out var catEl) && catEl.ValueKind == System.Text.Json.JsonValueKind.Object && catEl.TryGetProperty("score", out var s) && s.ValueKind == System.Text.Json.JsonValueKind.Number) return s.GetInt32();
+                    // Also try root[cat + "_score"]
+                    var alt = cat + "_score";
+                    if (root.TryGetProperty(alt, out var altEl) && altEl.ValueKind == System.Text.Json.JsonValueKind.Number) return altEl.GetInt32();
+                }
+                catch { }
+                return 0;
+            }
+            string GetDefectsFromCategory(string cat)
+            {
+                try
+                {
+                    if (root.TryGetProperty(cat, out var catEl) && catEl.ValueKind == System.Text.Json.JsonValueKind.Object && catEl.TryGetProperty("defects", out var d) && d.ValueKind == System.Text.Json.JsonValueKind.String) return d.GetString() ?? string.Empty;
+                    var alt = cat + "_defects";
+                    if (root.TryGetProperty(alt, out var altEl) && altEl.ValueKind == System.Text.Json.JsonValueKind.String) return altEl.GetString() ?? string.Empty;
+                }
+                catch { }
+                return string.Empty;
+            }
+            var nc = GetScoreFromCategory("narrative_coherence");
+            var ncdef = GetDefectsFromCategory("narrative_coherence");
+            var st = GetScoreFromCategory("structure");
+            var stdef = GetDefectsFromCategory("structure");
+            var ch = GetScoreFromCategory("characterization");
+            var chdef = GetDefectsFromCategory("characterization");
+            var dlg = GetScoreFromCategory("dialogues");
+            var dlgdef = GetDefectsFromCategory("dialogues");
+            var pc = GetScoreFromCategory("pacing");
+            var pcdef = GetDefectsFromCategory("pacing");
+            var org = GetScoreFromCategory("originality");
+            var orgdef = GetDefectsFromCategory("originality");
+            var stl = GetScoreFromCategory("style");
+            var stldef = GetDefectsFromCategory("style");
+            var wb = GetScoreFromCategory("worldbuilding");
+            var wbdef = GetDefectsFromCategory("worldbuilding");
+            var th = GetScoreFromCategory("thematic_coherence");
+            var thdef = GetDefectsFromCategory("thematic_coherence");
+            var em = GetScoreFromCategory("emotional_impact");
+            var emdef = GetDefectsFromCategory("emotional_impact");
+            string overall = string.Empty;
+            try { if (root.TryGetProperty("overall_evaluation", out var ov) && ov.ValueKind == System.Text.Json.JsonValueKind.String) overall = ov.GetString() ?? string.Empty; } catch { }
+
+            var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, structure_score, structure_defects, characterization_score, characterization_defects, dialogues_score, dialogues_defects, pacing_score, pacing_defects, originality_score, originality_defects, style_score, style_defects, worldbuilding_score, worldbuilding_defects, thematic_coherence_score, thematic_coherence_defects, emotional_impact_score, emotional_impact_defects, total_score, overall_evaluation, raw_json, model_id, agent_id, ts) VALUES(@story_id, @ncs, @ncd, @ss, @sd, @chs, @chd, @dlg, @dlgdef, @pc, @pcdef, @org, @orgdef, @stl, @stldef, @wb, @wbdef, @th, @thdef, @em, @emdef, @total, @overall, @raw, @model_id, @agent_id, @ts); SELECT last_insert_rowid();";
+            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, ncs = nc, ncd = ncdef, ss = st, sd = stdef, chs = ch, chd = chdef, dlg = dlg, dlgdef = dlgdef, pc = pc, pcdef = pcdef, org = org, orgdef = orgdef, stl = stl, stldef = stldef, wb = wb, wbdef = wbdef, th = th, thdef = thdef, em = em, emdef = emdef, total = totalScore, overall = overall, raw = rawJson, model_id = modelId ?? (long?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
+            return id;
+        }
+        catch (Exception)
+        {
+            var sql = @"INSERT INTO stories_evaluations(story_id, total_score, raw_json, model_id, agent_id, ts) VALUES(@story_id, @total, @raw, @model_id, @agent_id, @ts); SELECT last_insert_rowid();";
+            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, total = totalScore, raw = rawJson, model_id = modelId ?? (long?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
+            return id;
+        }
+    }
+
+    public List<TinyGenerator.Models.LogEntry> GetStoryEvaluationsByStoryId(long storyId)
+    {
+        // For now return as a LogEntry-like structure or a dedicated DTO. Simpler approach: return raw rows with JSON in raw_json.
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT se.id AS Id, se.ts AS Ts, COALESCE(m.Name,'') AS Model, COALESCE(a.name,'') AS Category, se.total_score AS Score, se.raw_json AS Message FROM stories_evaluations se LEFT JOIN models m ON se.model_id = m.rowid LEFT JOIN agents a ON se.agent_id = a.id WHERE se.story_id = @sid ORDER BY se.id";
+        return conn.Query<TinyGenerator.Models.LogEntry>(sql, new { sid = storyId }).ToList();
     }
 
     // TTS voices: list and upsert
@@ -828,7 +960,7 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         conn.Open();
         var now = DateTime.UtcNow.ToString("o");
         var metadata = JsonSerializer.Serialize(v);
-        string tagsJson = null;
+        string? tagsJson = null;
         try { tagsJson = v.Tags != null ? JsonSerializer.Serialize(v.Tags) : null; } catch { tagsJson = null; }
         var sql = @"INSERT INTO tts_voices(voice_id, name, model, language, gender, age, confidence, tags, sample_path, template_wav, metadata, created_at, updated_at)
 VALUES(@VoiceId,@Name,@Model,@Language,@Gender,@Age,@Confidence,@Tags,@SamplePath,@TemplateWav,@Metadata,@CreatedAt,@UpdatedAt)
@@ -1103,6 +1235,193 @@ CREATE TABLE IF NOT EXISTS models (
         logCmd.ExecuteNonQuery();
         Console.WriteLine("[DB] Created Log table");
 
+        // Ensure stories_evaluations table exists (newly added feature to persist story evaluations)
+        using var storiesEvalCmd = conn.CreateCommand();
+        storiesEvalCmd.CommandText = @"
+    CREATE TABLE IF NOT EXISTS stories_evaluations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        story_id INTEGER NOT NULL,
+        narrative_coherence_score INTEGER DEFAULT 0,
+        narrative_coherence_defects TEXT,
+        structure_score INTEGER DEFAULT 0,
+        structure_defects TEXT,
+        characterization_score INTEGER DEFAULT 0,
+        characterization_defects TEXT,
+        dialogues_score INTEGER DEFAULT 0,
+        dialogues_defects TEXT,
+        pacing_score INTEGER DEFAULT 0,
+        pacing_defects TEXT,
+        originality_score INTEGER DEFAULT 0,
+        originality_defects TEXT,
+        style_score INTEGER DEFAULT 0,
+        style_defects TEXT,
+        worldbuilding_score INTEGER DEFAULT 0,
+        worldbuilding_defects TEXT,
+        thematic_coherence_score INTEGER DEFAULT 0,
+        thematic_coherence_defects TEXT,
+        emotional_impact_score INTEGER DEFAULT 0,
+        emotional_impact_defects TEXT,
+        total_score REAL DEFAULT 0,
+        overall_evaluation TEXT,
+        raw_json TEXT,
+        model_id INTEGER NULL,
+        agent_id INTEGER NULL,
+        ts TEXT
+    );";
+        storiesEvalCmd.ExecuteNonQuery();
+        Console.WriteLine("[DB] Created stories_evaluations table (if not exists)");
+
+        // Ensure stories_evaluations has model_id and agent_id columns (if upgrading from older schema)
+        try
+        {
+            using var checkEval = conn.CreateCommand();
+            checkEval.CommandText = "PRAGMA table_info('stories_evaluations');";
+            using var rdrEval = checkEval.ExecuteReader();
+            var cols = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            while (rdrEval.Read()) { var cn = rdrEval.IsDBNull(1) ? string.Empty : rdrEval.GetString(1); if (!string.IsNullOrWhiteSpace(cn)) cols.Add(cn); }
+            if (!cols.Contains("model_id"))
+            {
+                try { using var alter = conn.CreateCommand(); alter.CommandText = "ALTER TABLE stories_evaluations ADD COLUMN model_id INTEGER NULL;"; alter.ExecuteNonQuery(); } catch { }
+            }
+            if (!cols.Contains("agent_id"))
+            {
+                try { using var alter = conn.CreateCommand(); alter.CommandText = "ALTER TABLE stories_evaluations ADD COLUMN agent_id INTEGER NULL;"; alter.ExecuteNonQuery(); } catch { }
+            }
+            // If legacy textual evaluator_model / evaluator_name columns exist, migrate their values into numeric model_id and agent_id
+            if (cols.Contains("evaluator_model") || cols.Contains("evaluator_name"))
+            {
+                try
+                {
+                    using var checkNew = conn.CreateCommand();
+                    checkNew.CommandText = "PRAGMA table_info('stories_evaluations_new');";
+                    var hasNew = false;
+                    try { using var rdrNew = checkNew.ExecuteReader(); hasNew = rdrNew.Read(); } catch { hasNew = false; }
+                    if (!hasNew)
+                    {
+                        using var createNew = conn.CreateCommand();
+                        createNew.CommandText = @"
+    CREATE TABLE stories_evaluations_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        story_id INTEGER NOT NULL,
+        narrative_coherence_score INTEGER DEFAULT 0,
+        narrative_coherence_defects TEXT,
+        structure_score INTEGER DEFAULT 0,
+        structure_defects TEXT,
+        characterization_score INTEGER DEFAULT 0,
+        characterization_defects TEXT,
+        dialogues_score INTEGER DEFAULT 0,
+        dialogues_defects TEXT,
+        pacing_score INTEGER DEFAULT 0,
+        pacing_defects TEXT,
+        originality_score INTEGER DEFAULT 0,
+        originality_defects TEXT,
+        style_score INTEGER DEFAULT 0,
+        style_defects TEXT,
+        worldbuilding_score INTEGER DEFAULT 0,
+        worldbuilding_defects TEXT,
+        thematic_coherence_score INTEGER DEFAULT 0,
+        thematic_coherence_defects TEXT,
+        emotional_impact_score INTEGER DEFAULT 0,
+        emotional_impact_defects TEXT,
+        total_score REAL DEFAULT 0,
+        overall_evaluation TEXT,
+        raw_json TEXT,
+        model_id INTEGER NULL,
+        agent_id INTEGER NULL,
+        ts TEXT
+    );";
+                        createNew.ExecuteNonQuery();
+                    }
+                    // Copy rows converting textual evaluator fields into numeric IDs when possible
+                    using var copyCmd = conn.CreateCommand();
+                    copyCmd.CommandText = @"INSERT INTO stories_evaluations_new(story_id, narrative_coherence_score, narrative_coherence_defects, structure_score, structure_defects, characterization_score, characterization_defects, dialogues_score, dialogues_defects, pacing_score, pacing_defects, originality_score, originality_defects, style_score, style_defects, worldbuilding_score, worldbuilding_defects, thematic_coherence_score, thematic_coherence_defects, emotional_impact_score, emotional_impact_defects, total_score, overall_evaluation, raw_json, model_id, agent_id, ts)
+SELECT se.story_id, se.narrative_coherence_score, se.narrative_coherence_defects, se.structure_score, se.structure_defects, se.characterization_score, se.characterization_defects, se.dialogues_score, se.dialogues_defects, se.pacing_score, se.pacing_defects, se.originality_score, se.originality_defects, se.style_score, se.style_defects, se.worldbuilding_score, se.worldbuilding_defects, se.thematic_coherence_score, se.thematic_coherence_defects, se.emotional_impact_score, se.emotional_impact_defects, se.total_score, se.overall_evaluation, se.raw_json, (CASE WHEN se.model_id IS NOT NULL THEN se.model_id WHEN se.evaluator_model IS NOT NULL THEN (SELECT rowid FROM models WHERE Name = se.evaluator_model LIMIT 1) ELSE NULL END) AS model_id, (CASE WHEN se.agent_id IS NOT NULL THEN se.agent_id WHEN se.evaluator_name IS NOT NULL THEN (SELECT id FROM agents WHERE Name = se.evaluator_name LIMIT 1) ELSE NULL END) AS agent_id, se.ts FROM stories_evaluations se";
+                    copyCmd.ExecuteNonQuery();
+                    // Replace old table
+                    using var dropOld = conn.CreateCommand();
+                    dropOld.CommandText = "DROP TABLE IF EXISTS stories_evaluations";
+                    dropOld.ExecuteNonQuery();
+                    using var renameNew = conn.CreateCommand();
+                    renameNew.CommandText = "ALTER TABLE stories_evaluations_new RENAME TO stories_evaluations";
+                    renameNew.ExecuteNonQuery();
+                }
+                catch { }
+            }
+        }
+        catch { }
+
+        // Ensure model_test_* tables exist (basic schema). These are used by the test runner.
+        using var runsCmd = conn.CreateCommand();
+        runsCmd.CommandText = @"
+    CREATE TABLE IF NOT EXISTS model_test_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        model_id INTEGER NULL,
+        test_code TEXT,
+        description TEXT,
+        passed INTEGER DEFAULT 0,
+        duration_ms INTEGER NULL,
+        notes TEXT,
+        run_date TEXT
+    );
+    ";
+        runsCmd.ExecuteNonQuery();
+        Console.WriteLine("[DB] Ensured model_test_runs table exists");
+
+        using var stepsCmd = conn.CreateCommand();
+        stepsCmd.CommandText = @"
+    CREATE TABLE IF NOT EXISTS model_test_steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER,
+        step_number INTEGER,
+        step_name TEXT,
+        input_json TEXT,
+        output_json TEXT,
+        passed INTEGER DEFAULT 0,
+        error TEXT,
+        duration_ms INTEGER NULL
+    );
+    ";
+        stepsCmd.ExecuteNonQuery();
+        Console.WriteLine("[DB] Ensured model_test_steps table exists");
+
+        using var assetsCmd2 = conn.CreateCommand();
+        assetsCmd2.CommandText = @"
+    CREATE TABLE IF NOT EXISTS model_test_assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        step_id INTEGER,
+        file_type TEXT,
+        file_path TEXT,
+        description TEXT,
+        duration_sec REAL,
+        size_bytes INTEGER,
+        story_id INTEGER NULL
+    );
+    ";
+        assetsCmd2.ExecuteNonQuery();
+        Console.WriteLine("[DB] Ensured model_test_assets table exists");
+
+        // Ensure model_test_assets.story_id column exists (add if missing) to link assets to saved stories
+        try
+        {
+            using var checkAssetsPost = conn.CreateCommand();
+            checkAssetsPost.CommandText = "PRAGMA table_info('model_test_assets');";
+            using var rdrA = checkAssetsPost.ExecuteReader();
+            var colsA = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            while (rdrA.Read()) { var cn = rdrA.IsDBNull(1) ? string.Empty : rdrA.GetString(1); if (!string.IsNullOrWhiteSpace(cn)) colsA.Add(cn); }
+            if (!colsA.Contains("story_id"))
+            {
+                try
+                {
+                    using var alterA = conn.CreateCommand();
+                    alterA.CommandText = "ALTER TABLE model_test_assets ADD COLUMN story_id INTEGER NULL;";
+                    alterA.ExecuteNonQuery();
+                    Console.WriteLine("[DB] Added missing column model_test_assets.story_id (post-create)");
+                }
+                catch { }
+            }
+        }
+        catch { }
+
         // NOTE: The `tts_voices` table is expected to exist in this installation
         // (the table may be created by an earlier migration step or manually). To
         // prevent accidental re-creation or schema drift we no longer create the
@@ -1141,6 +1460,27 @@ SELECT ts, level, category, message, exception, state FROM logs;";
         {
             // ignore migration check errors
         }
+        // Ensure model_test_assets table has story_id column if the table exists
+        try
+        {
+            using var checkAssets = conn.CreateCommand();
+            checkAssets.CommandText = "PRAGMA table_info('model_test_assets');";
+            using var rdrAssets = checkAssets.ExecuteReader();
+            var cols = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            while (rdrAssets.Read()) { var cn = rdrAssets.IsDBNull(1) ? string.Empty : rdrAssets.GetString(1); if (!string.IsNullOrWhiteSpace(cn)) cols.Add(cn); }
+            if (!cols.Contains("story_id"))
+            {
+                try
+                {
+                    using var alter = conn.CreateCommand();
+                    alter.CommandText = "ALTER TABLE model_test_assets ADD COLUMN story_id INTEGER NULL;";
+                    alter.ExecuteNonQuery();
+                    Console.WriteLine("[DB] Added missing column model_test_assets.story_id");
+                }
+                catch { }
+            }
+        }
+        catch { }
         sw.Stop();
         Console.WriteLine($"[DB] InitializeSchema completed in {sw.ElapsedMilliseconds}ms");
     }
@@ -1268,6 +1608,21 @@ SELECT ts, level, category, message, exception, state FROM logs;";
                 alter2.CommandText = "ALTER TABLE test_definitions ADD COLUMN valid_score_range TEXT";
                 try { alter2.ExecuteNonQuery(); } catch { /* ignore if cannot alter */ }
             }
+            if (!cols.Contains("execution_plan"))
+            {
+                using var alter3 = conn.CreateCommand();
+                alter3.CommandText = "ALTER TABLE test_definitions ADD COLUMN execution_plan TEXT";
+                try { alter3.ExecuteNonQuery(); } catch { /* ignore if cannot alter */ }
+            }
+
+            // Populate allowed_plugins for texteval or evaluator libraries when empty
+            try
+            {
+                using var upd = conn.CreateCommand();
+                upd.CommandText = @"UPDATE test_definitions SET allowed_plugins = 'evaluator' WHERE (allowed_plugins IS NULL OR trim(allowed_plugins)='') AND (lower(group_name) = 'texteval' OR lower(library) IN ('coerenza_narrativa','struttura','caratterizzazione_personaggi','dialoghi','ritmo','originalita','stile','worldbuilding','coerenza_tematica','impatto_emotivo'));";
+                upd.ExecuteNonQuery();
+            }
+            catch { }
         }
         catch { }
     }

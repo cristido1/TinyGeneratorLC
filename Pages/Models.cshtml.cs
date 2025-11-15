@@ -1100,29 +1100,30 @@ namespace TinyGenerator.Pages
             {
                 try
                 {
-                    return t.AllowedPlugins
-                        .Split(',')
-                        .Select(s => (s ?? string.Empty).Trim().ToLowerInvariant())
-                        .Where(s => !string.IsNullOrWhiteSpace(s))
-                        .ToArray();
+                    // Parse CSV and normalize names to kernel aliases
+                    var names = t.AllowedPlugins.Split(',').Select(s => (s ?? string.Empty).Trim()).Where(s => !string.IsNullOrWhiteSpace(s));
+                    var mapped = TinyGenerator.Services.PluginHelpers.NormalizeList(names);
+                    return mapped.ToArray();
                 }
                 catch
                 {
-                    // fall through and use library
+                    // fall through and return empty (no plugins)
                 }
             }
 
-            var lib = (t.Library ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(lib)) lib = "text";
+            // If AllowedPlugins is empty or null, do not load any plugin (explicit no-plugin policy)
+            return Array.Empty<string>();
             // Special-case: tests imported from the "texteval" group or known narrative evaluation
             // categories should use the evaluator skill (function-calling) rather than a plugin
             var evaluatorLibs = new[] { "coerenza_narrativa", "struttura", "caratterizzazione_personaggi", "dialoghi", "ritmo", "originalita", "stile", "worldbuilding", "coerenza_tematica", "impatto_emotivo" };
-            if (string.Equals(t.GroupName, "texteval", StringComparison.OrdinalIgnoreCase) || evaluatorLibs.Contains(lib.ToLowerInvariant()))
+            // This branch should only be reached if earlier parsing didn't return anything.
+            if (string.Equals(t.GroupName, "texteval", StringComparison.OrdinalIgnoreCase) || evaluatorLibs.Contains((t.Library ?? string.Empty).ToLowerInvariant()))
             {
                 return new[] { "evaluator" };
             }
 
-            return new[] { lib.ToLowerInvariant() };
+            // Default: no plugins
+            return Array.Empty<string>();
         }
 
         private ChatCompletionAgent? CreateDefaultAgent(TinyGenerator.Services.KernelFactory factory, string model, string[] allowedPlugins, string agentInstructions)

@@ -6,7 +6,6 @@
 
 <div class="mb-3 d-flex justify-content-between align-items-center">
     <div class="d-flex">
-        <input type="search" id="searchBox" class="form-control form-control-sm me-2" placeholder="Search test definitions..." />
         <a class="btn btn-sm btn-primary" asp-page="./Create">Create Test Definition</a>
     </div>
 </div>
@@ -20,6 +19,8 @@
             <th>Priority</th>
             <th>Timeout (ms)</th>
             <th>Test Type</th>
+            <th>Allowed Plugins</th>
+            <th>Active</th>
             <th class="d-none">Prompt</th>
             <th>Actions</th>
         </tr>
@@ -36,6 +37,8 @@
                 <td class="priority" data-priority="@d.Priority">@d.Priority</td>
                 <td class="timeout">@d.TimeoutMs</td>
                 <td class="testtype">@(string.IsNullOrWhiteSpace(d.TestType) ? "" : d.TestType)</td>
+                <td class="allowedplugins">@(string.IsNullOrWhiteSpace(d.AllowedPlugins) ? "" : d.AllowedPlugins)</td>
+                <td class="active">@(d.Active ? "Yes" : "No")</td>
                 <td class="prompt d-none">@System.Net.WebUtility.HtmlEncode(d.Prompt)</td>
                 <td class="actions">
                     <button type="button" class="btn btn-sm btn-outline-secondary dt-expand me-1">+</button>
@@ -48,7 +51,7 @@
     else
     {
         <tr>
-            <td colspan="8">No test definitions found.</td>
+            <td colspan="10">No test definitions found.</td>
         </tr>
     }
     </tbody>

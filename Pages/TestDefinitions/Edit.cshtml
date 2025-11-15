@@ -38,10 +38,52 @@
         <span asp-validation-for="Definition.Prompt" class="text-danger"></span>
     </div>
     <div class="row mb-3">
-        <div class="col-md-6">
+        <div class="col-md-4">
             <label asp-for="Definition.TestType" class="form-label">Test Type</label>
-            <input asp-for="Definition.TestType" class="form-control" />
+            <select asp-for="Definition.TestType" class="form-control">
+                <option value="">(None)</option>
+                @foreach (var t in Model.TestTypes ?? new string[] {})
+                {
+                    <option value="@t">@t</option>
+                }
+            </select>
             <span asp-validation-for="Definition.TestType" class="text-danger"></span>
+        </div>
+        <div class="col-md-4">
+            <label asp-for="SelectedAllowedPlugins" class="form-label">Allowed Plugins</label>
+            <select asp-for="SelectedAllowedPlugins" multiple class="form-control chosen-select" id="allowed_plugins">
+                <option value="">(None)</option>
+                @foreach (var p in Model.AvailablePlugins ?? new string[] {})
+                {
+                    if (Model.SelectedAllowedPlugins?.Contains(p) == true)
+                    {
+                        <option value="@p" selected>@p</option>
+                    }
+                    else
+                    {
+                        <option value="@p">@p</option>
+                    }
+                }
+            </select>
+            <span asp-validation-for="SelectedAllowedPlugins" class="text-danger"></span>
+            <small class="form-text text-muted">Seleziona gli addin consentiti per il test. Lascia vuoto per non permettere alcun addin (il kernel sarà avviato senza plugin).</small>
+        </div>
+        <div class="col-md-4 d-flex align-items-center">
+            <div class="form-check">
+                <input asp-for="Definition.Active" class="form-check-input" />
+                <label asp-for="Definition.Active" class="form-check-label">Active</label>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="Definition.ExecutionPlan" class="form-label">Execution Plan</label>
+            <select asp-for="Definition.ExecutionPlan" class="form-control">
+                <option value="">(None)</option>
+                @foreach (var f in Model.PlanFiles ?? new List<string>())
+                {
+                    <option value="@f">@f</option>
+                }
+            </select>
+            <span asp-validation-for="Definition.ExecutionPlan" class="text-danger"></span>
         </div>
         <div class="col-md-6">
             <label asp-for="Definition.ValidScoreRange" class="form-label">Valid Score Range</label>
@@ -69,4 +111,18 @@
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/chosen/1.8.7/chosen.min.css" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chosen/1.8.7/chosen.jquery.min.js"></script>
+    <script>
+        (function () {
+            $(function () {
+                // Initialize chosen on the allowed_plugins select.
+                $('#allowed_plugins').chosen({
+                    placeholder_text_multiple: 'Select allowed plugins or leave empty',
+                    no_results_text: 'No plugin found',
+                    width: '100%'
+                });
+            });
+        })();
+    </script>
 }

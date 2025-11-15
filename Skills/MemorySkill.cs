@@ -9,13 +9,17 @@ namespace TinyGenerator.Skills
     public class MemorySkill
     {
         private readonly PersistentMemoryService _memory;
+        private readonly long? _modelId;
+        private readonly int? _agentId;
         public string? LastCalled { get; set; }
         public string? LastCollection { get; set; }
         public string? LastText { get; set; }
 
-        public MemorySkill(PersistentMemoryService memory)
+        public MemorySkill(PersistentMemoryService memory, long? modelId = null, int? agentId = null)
         {
             _memory = memory;
+            _modelId = modelId;
+            _agentId = agentId;
         }
 
         [KernelFunction("remember"), Description("Remembers a piece of text in a specific collection.")]
@@ -24,7 +28,7 @@ namespace TinyGenerator.Skills
             LastCalled = nameof(RememberAsync);
             LastCollection = collection;
             LastText = text;
-            await _memory.SaveAsync(collection, text);
+            await _memory.SaveAsync(collection, text, metadata: null, modelId: _modelId, agentId: _agentId);
             return $"🧠 Ricordato in '{collection}': {text}";
         }
 
@@ -34,7 +38,7 @@ namespace TinyGenerator.Skills
             LastCalled = nameof(RecallAsync);
             LastCollection = collection;
             LastText = query;
-            var results = await _memory.SearchAsync(collection, query);
+            var results = await _memory.SearchAsync(collection, query, limit: 5, modelId: _modelId, agentId: _agentId);
             return results.Count == 0
                 ? "Nessun ricordo trovato."
                 : string.Join("\n- ", results);
@@ -46,7 +50,7 @@ namespace TinyGenerator.Skills
             LastCalled = nameof(ForgetAsync);
             LastCollection = collection;
             LastText = text;
-            await _memory.DeleteAsync(collection, text);
+            await _memory.DeleteAsync(collection, text, modelId: _modelId, agentId: _agentId);
             return $"❌ Ricordo cancellato da '{collection}': {text}";
         }
         [KernelFunction("describe"), Description("Describes the available memory functions.")]

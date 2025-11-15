@@ -44,6 +44,8 @@ if (File.Exists(secretsPath))
 
 // === Razor Pages ===
 builder.Services.AddRazorPages();
+// Controllers for API endpoints (e.g. /api/stories/..)
+builder.Services.AddControllers();
 
 // SignalR for live progress updates
 builder.Services.AddSignalR();
@@ -58,8 +60,8 @@ builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_bas
 // Stories persistence service
 builder.Services.AddSingleton<StoriesService>();
 
-// Persistent memory service (sqlite) - defer construction until DI resolves it so Build() doesn't instantiate it synchronously.
-builder.Services.AddSingleton<PersistentMemoryService>(sp => new PersistentMemoryService("Data/memory.sqlite"));
+// Persistent memory service (sqlite) using consolidated storage DB
+builder.Services.AddSingleton<PersistentMemoryService>(sp => new PersistentMemoryService("data/storage.db"));
 // Progress tracking for live UI updates (will broadcast over SignalR)
 builder.Services.AddSingleton<ProgressService>();
 // Notification service (broadcast to clients via SignalR)
@@ -164,5 +166,9 @@ app.UseAuthorization();
 app.MapHub<ProgressHub>("/progressHub");
 
 app.MapRazorPages();
+app.MapControllers();
+
+// Minimal API endpoint for story evaluations (convenience for AJAX/UI)
+app.MapGet("/api/v1/stories/{id:int}/evaluations", (int id, TinyGenerator.Services.StoriesService s) => Results.Json(s.GetEvaluationsForStory(id)));
 
 app.Run();

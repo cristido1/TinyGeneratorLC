@@ -1,12 +1,10 @@
 @page
-@model TinyGenerator.Pages.StoriesModel
+@model TinyGenerator.Pages.Stories.IndexModel
 @{
-    ViewData["Title"] = "Storie salvate";
+    // temporary redirect to the new Stories Index page
+    Response.Redirect("/Stories/Index");
+    return;
 }
-
-@* Title rendered by layout using ViewData["Title"] *@
-
-<table id="storiesTable" class="table" style="width:100%">
     <thead>
         <tr>
             <th>Id</th>
@@ -45,11 +43,13 @@
                         <div class="card mb-3">
                             <h6>Valutazioni A</h6>
                             <pre style="white-space: pre-wrap">@s.EvalA</pre>
+                            <div class="story-evals" data-story-id="@s.Id"></div>
                         </div>
                         <h5>Storia B (model: @s.ModelB, score: @s.ScoreB)</h5>
                         <pre style="white-space: pre-wrap">@s.StoryB</pre>
                         <h6>Valutazioni B</h6>
                         <pre style="white-space: pre-wrap">@s.EvalB</pre>
+                        <div class="story-evals" data-story-id="@s.Id"></div>
                     </div>
                 </div>
             </td>
@@ -95,14 +95,36 @@
         } catch(e) { console.error('Stories DataTables init failed', e); }
     });
 
-    function toggleStoryDetails(id) {
+    async function toggleStoryDetails(id) {
         try {
             var tr = document.querySelector('tr[data-story-id="' + id + '"]');
             if (!tr) return;
             var table = window.storiesTable || (window.jQuery && jQuery().DataTable ? $('#storiesTable').DataTable() : null);
             if (table) {
                 var row = table.row(tr);
-                if (row.child.isShown()) row.child.hide(); else { var tpl = tr.querySelector('.details-template'); if (!tpl) return; row.child(tpl.innerHTML).show(); }
+                if (row.child.isShown()) row.child.hide(); else { var tpl = tr.querySelector('.details-template'); if (!tpl) return; row.child(tpl.innerHTML).show();
+                    // fetch evaluations and populate
+                    try {
+                        var res = await fetch('/api/v1/stories/' + encodeURIComponent(id) + '/evaluations');
+                        if (res.ok) {
+                            var data = await res.json();
+                            var child = row.child();
+                            var evalContainers = child.node().querySelectorAll('.story-evals');
+                            evalContainers.forEach(function (el) { el.innerHTML = ''; });
+                            if (data && data.length) {
+                                data.forEach(function(e) {
+                                    var container = document.createElement('div');
+                                    container.className = 'alert alert-light p-2 mb-1';
+                                    container.innerHTML = `<div><strong>${e.Model}</strong> — Score: ${e.Score}</div><pre style='white-space:pre-wrap'>${e.RawJson}</pre>`;
+                                    // append to all evaluation containers (A/B/C) - future improvement: separate per writer
+                                    evalContainers.forEach(function (el) { el.appendChild(container.cloneNode(true)); });
+                                });
+                            } else {
+                                evalContainers.forEach(function (el) { el.innerHTML = '<em class="text-muted">No evaluations</em>'; });
+                            }
+                        }
+                    } catch (ex) { console.error(ex); }
+                }
             } else {
                 var tpl = tr.querySelector('.details-template'); if (!tpl) return; tpl.style.display = tpl.style.display === 'none' ? '' : 'none';
             }

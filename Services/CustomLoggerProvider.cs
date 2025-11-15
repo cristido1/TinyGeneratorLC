@@ -5,18 +5,43 @@ namespace TinyGenerator.Services
 {
     public class CustomLoggerProvider : ILoggerProvider
     {
-        private readonly ICustomLogger _customLogger;
+        private readonly ICustomLogger? _customLogger;
         private readonly NotificationService? _notifications;
+        private readonly IServiceProvider? _serviceProvider;
 
+        // Existing constructor preserved for backward compatibility (direct injection)
         public CustomLoggerProvider(ICustomLogger customLogger, NotificationService? notifications = null)
         {
             _customLogger = customLogger ?? throw new ArgumentNullException(nameof(customLogger));
             _notifications = notifications;
+            try { System.Console.WriteLine("[Startup] CustomLoggerProvider constructed with direct ICustomLogger"); } catch { }
+        }
+
+        // Lazy-constructor: accept IServiceProvider and resolve dependencies when needed (avoids cycles during DI ValidateOnBuild)
+        public CustomLoggerProvider(IServiceProvider serviceProvider)
+        {
+            _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+            try { System.Console.WriteLine("[Startup] CustomLoggerProvider constructed with IServiceProvider (lazy)"); } catch { }
         }
 
         public ILogger CreateLogger(string categoryName)
         {
-            return new AdapterLogger(categoryName, _customLogger, _notifications);
+            // Resolve dependencies lazily to avoid cycles during startup validation
+            ICustomLogger? custom = _customLogger;
+            NotificationService? notifications = _notifications; // Do NOT resolve via _serviceProvider here to avoid circular DI calls during logger creation
+            try
+            {
+                if (custom == null && _serviceProvider != null)
+                {
+                    custom = _serviceProvider.GetService<ICustomLogger>();
+                }
+            }
+            catch { }
+            // NOTE: resolving NotificationService here may trigger logger creation again and cause a recursive loop during DI initialization.
+            // We intentionally do not resolve the NotificationService via IServiceProvider to avoid this circular dependency.
+
+            try { System.Console.WriteLine($"[Startup] CustomLoggerProvider.CreateLogger(category={categoryName}) customPresent={custom != null} notificationsPresent={notifications != null}"); } catch { }
+            return new AdapterLogger(categoryName, custom, notifications);
         }
 
         public void Dispose()
@@ -27,16 +52,17 @@ namespace TinyGenerator.Services
         private class AdapterLogger : ILogger
         {
             private readonly string _category;
-            private readonly ICustomLogger _custom;
+            private readonly ICustomLogger? _custom;
             private readonly NotificationService? _notifications;
 
-            public AdapterLogger(string category, ICustomLogger custom, NotificationService? notifications)
+            public AdapterLogger(string category, ICustomLogger? custom, NotificationService? notifications)
             {
                 _category = category;
                 _custom = custom;
                 _notifications = notifications;
             }
 
+            IDisposable ILogger.BeginScope<TState>(TState state) => NullScope.Instance;
             public IDisposable BeginScope<TState>(TState state) => NullScope.Instance;
 
             public bool IsEnabled(LogLevel logLevel) => true;
@@ -48,7 +74,15 @@ namespace TinyGenerator.Services
                     var message = formatter != null ? formatter(state, exception) : state?.ToString() ?? string.Empty;
                     var level = logLevel.ToString();
                     var stateStr = state?.ToString();
-                    _custom.Log(level, _category, message, exception?.ToString(), stateStr);
+                    if (_custom == null)
+                    {
+                        // Best-effort: if a custom DB logger is not available, fall back to console logging
+                        System.Console.WriteLine($"{DateTime.UtcNow:o} [{_category}] {level}: {message} {exception?.ToString()}");
+                    }
+                    else
+                    {
+                        _custom.Log(level, _category, message, exception?.ToString(), stateStr);
+                    }
                     // Broadcast log entry to all clients as a notification (fire-and-forget)
                     // Only forward information/warning/error/critical (ignore Trace/Debug spam)
                     // Skip ProgressService category because it already broadcasts via ProgressHub to avoid duplicate AppNotification

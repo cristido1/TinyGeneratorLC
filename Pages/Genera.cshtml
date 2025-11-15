@@ -36,7 +36,7 @@
 <hr />
 <h2>Stato generazione (live):</h2>
 <div id="statusArea">
-    <pre id="statusPre">Pronto.</pre>
+    <div id="statusPre" class="status-list"><div class="status-msg">Pronto.</div></div>
 </div>
 
 <script src="~/lib/signalr/signalr.min.js"></script>
@@ -52,10 +52,10 @@
             const p = await fetch(`?handler=progress&id=${encodeURIComponent(id)}`);
             if (!p.ok) return;
             const js = await p.json();
-            statusPre.textContent = js.messages.join('\n');
+            renderMessages(js.messages);
             if (js.completed) {
-                statusPre.textContent += '\n\n✅ Completato.';
-                if (js.result) statusPre.textContent += '\n\nRisultato finale (estratto):\n' + js.result.substring(0,1000);
+                appendMessage('✅ Completato.');
+                if (js.result) appendMessage('Risultato finale (estratto):\n' + js.result.substring(0,1000), 'result');
             }
         } catch (e) { console.error(e); }
     }
@@ -68,12 +68,12 @@
                 connection = window.appSignalR.connection;
                 connection.on('ProgressAppended', (id, message) => {
                     if (id !== genId) return;
-                    statusPre.textContent += (statusPre.textContent ? '\n' : '') + message;
+                    appendMessage(message);
                 });
                 connection.on('ProgressCompleted', (id, finalResult) => {
                     if (id !== genId) return;
-                    statusPre.textContent += '\n\n✅ Completato.';
-                    if (finalResult) statusPre.textContent += '\n\nRisultato finale (estratto):\n' + (finalResult.substring ? finalResult.substring(0,1000) : finalResult);
+                    appendMessage('✅ Completato.');
+                    if (finalResult) appendMessage('Risultato finale (estratto):\n' + (finalResult.substring ? finalResult.substring(0,1000) : finalResult), 'result');
                 });
                 await window.appSignalR.joinGroup(genId);
                 return;
@@ -87,12 +87,12 @@
             connection.on('ProgressAppended', (id, message) => {
                 if (id !== genId) return;
                 // append message
-                statusPre.textContent += (statusPre.textContent ? '\n' : '') + message;
+                appendMessage(message);
             });
             connection.on('ProgressCompleted', (id, finalResult) => {
                 if (id !== genId) return;
-                statusPre.textContent += '\n\n✅ Completato.';
-                if (finalResult) statusPre.textContent += '\n\nRisultato finale (estratto):\n' + (finalResult.substring ? finalResult.substring(0,1000) : finalResult);
+                appendMessage('✅ Completato.');
+                if (finalResult) appendMessage('Risultato finale (estratto):\n' + (finalResult.substring ? finalResult.substring(0,1000) : finalResult), 'result');
             });
 
             await connection.start();
@@ -115,21 +115,22 @@
             genError.style.display = 'none';
         }
 
-        statusPre.textContent = '🟡 Avvio...';
+        clearMessages();
+        appendMessage('🟡 Avvio...');
     // send start request (include antiforgery token automatically by using the form)
     const form = document.getElementById('genForm');
     const fd = new FormData(form);
     const res = await fetch('?handler=start', { method: 'POST', body: fd });
         if (!res.ok) {
             const text = await res.text();
-            statusPre.textContent = 'Errore avvio: ' + text;
+            appendMessage('Errore avvio: ' + text, 'error');
             return;
         }
         const data = await res.json();
         const id = data.id;
         // persist last gen id so user can come back to page and reconnect
         try { localStorage.setItem('lastGenId', id); } catch { }
-        statusPre.textContent = '🟢 Generazione avviata. id: ' + id + '\n\n';
+        appendMessage('🟢 Generazione avviata. id: ' + id);
         // load history and start SignalR for live updates
         await loadHistory(id);
         await connectSignalRAndJoin(id);
@@ -140,12 +141,23 @@
         try {
             const existing = localStorage.getItem('lastGenId');
             if (existing) {
-                statusPre.textContent = '🔄 Ricollegamento alla generazione ' + existing + '...\n\n';
+                clearMessages();
+                appendMessage('🔄 Ricollegamento alla generazione ' + existing + '...');
                 await loadHistory(existing);
                 await connectSignalRAndJoin(existing);
             }
         } catch (e) { console.error(e); }
     })();
+    // message helpers
+    function clearMessages() { statusPre.innerHTML = ''; }
+    function appendMessage(msg, extraClass) {
+        const el = document.createElement('div');
+        el.className = 'status-msg' + (extraClass ? (' ' + extraClass) : '');
+        el.textContent = msg;
+        statusPre.appendChild(el);
+    }
+    function renderMessages(messages) { clearMessages(); if (!messages) return; messages.forEach(m => appendMessage(m)); }
+
     // hide error when user edits prompt
     const promptInput = document.getElementById('Prompt');
     if (promptInput) {

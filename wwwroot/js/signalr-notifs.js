@@ -89,15 +89,8 @@
                 var modelName = runIdToModel[genId + ''] || null;
                 if (modelName) {
                     try {
-                        var el = document.getElementById('progress_' + modelName);
-                        if (el) {
-                            var text = (el.textContent || '').trim();
-                            var appended = (text && text.length ? text + '\n' + message : message);
-                            // Keep the last ~8 lines to avoid huge DOM
-                            var lines = appended.split('\n');
-                            if (lines.length > 8) lines = lines.slice(lines.length - 8);
-                            el.textContent = lines.join('\n');
-                        }
+                        // Per-row progress removed: don't update per-row DOM element anymore.
+                        // If needed, a side panel or dedicated status area should be used for model-specific logs.
                     } catch (e) { /* ignore DOM errors */ }
                 }
                 // Show every progress message as a toast
@@ -107,20 +100,7 @@
 
         connection.on('ProgressCompleted', function(genId, result){
             try {
-                // Update per-row element if available
-                var modelName = runIdToModel[genId + ''] || null;
-                if (modelName) {
-                    try {
-                        var el = document.getElementById('progress_' + modelName);
-                        if (el) {
-                            var text = (el.textContent || '').trim();
-                            var appended = (text && text.length ? text + '\n' + ('Completed: ' + (result || '')) : ('Completed: ' + (result || '')));
-                            var lines = appended.split('\n');
-                            if (lines.length > 8) lines = lines.slice(lines.length - 8);
-                            el.textContent = lines.join('\n');
-                        }
-                    } catch (e) { /* ignore DOM errors */ }
-                }
+                // Completed progress: display toasts only (per-row element removed)
                 createToast(result || 'Completed', 'Progress completed', 'success');
             } catch(e) { console.warn('ProgressCompleted handler failed', e); }
         });

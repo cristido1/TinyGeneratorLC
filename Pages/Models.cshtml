@@ -95,7 +95,8 @@
 
                 // Poll progress
                 // Start a SignalR connection to receive live updates for this runId (best-effort).
-                var popupLogEl = document.getElementById('progress_' + modelName);
+                // per-row progress element removed - keep popupLogEl null
+                var popupLogEl = null;
                 var hubConnection = null;
                 try {
                     if (window.appSignalR && window.appSignalR.connection) {
@@ -313,7 +314,7 @@
                         var rid = runIds[p];
                         var modelName = null;
                         try { if (runMap && runMap.forEach) { for (var qi = 0; qi < runMap.length; qi++) { if ('' + runMap[qi].runId === ('' + rid)) { modelName = runMap[qi].model; break; } } } } catch(e) {}
-                        var el = modelName ? document.getElementById('progress_' + modelName) : null;
+                        var el = null; // per-row element removed
                         await pollProgress(rid, el);
                     }
                 }
@@ -584,7 +585,7 @@
                                     </ul>
                                 </div>
                             </div>
-                            <div id="progress_@m.Name" style="font-size:0.85rem;color:#333;min-height:18px;"></div>
+                            @* progress per-row removed: messages now shown via toasts and side status. *@
                             <div class="details-template" style="display:none;">
                                 <div style="background:#fafafa;padding:8px 12px;">
                                     <div style="display:flex;gap:18px;align-items:flex-start;">

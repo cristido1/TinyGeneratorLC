@@ -1,0 +1,15 @@
+{
+  "name": "writer_base",
+  "description": "Writer leggero che produce testo in un'unica generazione.",
+  "execution_plan": [
+    {
+      "step": "generate",
+      "instructions": "Genera il testo seguendo il prompt e rispettando solo lunghezza e coerenza."
+    }
+  ],
+  "constraints": {
+    "min_words": 200,
+    "max_words": 800,
+    "avoid_repetition": true
+  }
+}

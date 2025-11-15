@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
@@ -84,10 +85,38 @@ public sealed class DatabaseService
 
     public DatabaseService(string dbPath = "data/storage.db")
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(dbPath) ?? ".");
+        Console.WriteLine($"[DB] DatabaseService ctor start (dbPath={dbPath})");
+        var ctorSw = Stopwatch.StartNew();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dbPath) ?? ".");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Error creating data directory: {ex.Message}");
+        }
         // Enable foreign key enforcement for SQLite connections
         _connectionString = $"Data Source={dbPath};Foreign Keys=True";
-        InitializeSchema();
+        // Defer heavy initialization to the explicit Initialize() method so the
+        // service can be registered without blocking `builder.Build()`.
+        ctorSw.Stop();
+        Console.WriteLine($"[DB] DatabaseService ctor completed in {ctorSw.ElapsedMilliseconds}ms");
+    }
+
+    // Public method to initialize schema and run migrations - call after
+    // DI container is built in Program.cs to avoid blocking builder.Build().
+    public void Initialize()
+    {
+        try
+        {
+            Console.WriteLine("[DB] Initialize() called");
+            InitializeSchema();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Initialize() error: {ex.Message}\n{ex.StackTrace}");
+            throw;
+        }
     }
 
     private IDbConnection CreateConnection() => new SqliteConnection(_connectionString);
@@ -912,8 +941,13 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
 
     private void InitializeSchema()
     {
+        Console.WriteLine("[DB] InitializeSchema start");
+        var sw = Stopwatch.StartNew();
         using var conn = CreateConnection();
+        var openSw = Stopwatch.StartNew();
         conn.Open();
+        openSw.Stop();
+        Console.WriteLine($"[DB] Connection opened in {openSw.ElapsedMilliseconds}ms");
 
     var skillColumnsSql = SkillColumns.Length > 0 ? ",\n    " + string.Join(",\n    ", SkillColumns.Select(c => $"{c} INTEGER DEFAULT NULL")) : string.Empty;
 
@@ -959,6 +993,7 @@ CREATE TABLE IF NOT EXISTS models (
     {skillColumnsSql}
 );";
         cmd.ExecuteNonQuery();
+        Console.WriteLine("[DB] Created usage_state/calls/models tables");
 
     // Agents table for reusable agent configurations
     using var agentsCmd = conn.CreateCommand();
@@ -982,10 +1017,12 @@ CREATE TABLE IF NOT EXISTS models (
 );
 ";
     agentsCmd.ExecuteNonQuery();
+    Console.WriteLine("[DB] Created agents table (if not exists)");
 
     // Ensure agents table has new columns if upgrading from older schema
     try
     {
+        var agentsPragmaSw = Stopwatch.StartNew();
         using var checkAgents = conn.CreateCommand();
         checkAgents.CommandText = "PRAGMA table_info('agents');";
         using var rdr = checkAgents.ExecuteReader();
@@ -1000,6 +1037,9 @@ CREATE TABLE IF NOT EXISTS models (
         {
             try { using var cmdAdd = conn.CreateCommand(); cmdAdd.CommandText = a; cmdAdd.ExecuteNonQuery(); } catch { }
         }
+        if (toAdd.Count > 0) Console.WriteLine($"[DB] Added {toAdd.Count} missing agent columns");
+        agentsPragmaSw.Stop();
+        Console.WriteLine($"[DB] PRAGMA agents processed in {agentsPragmaSw.ElapsedMilliseconds}ms");
 
         // If there is a legacy text 'voice_id' column, try to migrate values to voice_rowid
         try
@@ -1013,9 +1053,12 @@ CREATE TABLE IF NOT EXISTS models (
             {
                 try
                 {
+                    var migrateSw = Stopwatch.StartNew();
                     using var migrate = conn.CreateCommand();
                     migrate.CommandText = @"UPDATE agents SET voice_rowid = (SELECT id FROM tts_voices WHERE tts_voices.voice_id = agents.voice_id) WHERE voice_id IS NOT NULL;";
                     migrate.ExecuteNonQuery();
+                    migrateSw.Stop();
+                    Console.WriteLine($"[DB] Migrated legacy agents.voice_id values to voice_rowid in {migrateSw.ElapsedMilliseconds}ms");
                 }
                 catch { }
             }
@@ -1024,11 +1067,18 @@ CREATE TABLE IF NOT EXISTS models (
     }
     catch { }
 
+        var ensureModelSw = Stopwatch.StartNew();
         EnsureModelColumns((SqliteConnection)conn);
+        ensureModelSw.Stop();
+        Console.WriteLine($"[DB] EnsureModelColumns completed in {ensureModelSw.ElapsedMilliseconds}ms");
         // Seed some commonly used, lower-cost OpenAI chat models so they appear in the models table
         try
         {
+            Console.WriteLine("[DB] Seeding default OpenAI models (if missing)...");
+            var seedSw = Stopwatch.StartNew();
             SeedDefaultOpenAiModels();
+            seedSw.Stop();
+            Console.WriteLine($"[DB] SeedDefaultOpenAiModels completed in {seedSw.ElapsedMilliseconds}ms");
         }
         catch
         {
@@ -1051,27 +1101,13 @@ CREATE TABLE IF NOT EXISTS models (
 );
 ";
         logCmd.ExecuteNonQuery();
+        Console.WriteLine("[DB] Created Log table");
 
-        // TTS voices table - store voices discovered from the local TTS service
-        using var ttsCmd = conn.CreateCommand();
-        ttsCmd.CommandText = @"CREATE TABLE IF NOT EXISTS tts_voices (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    voice_id TEXT UNIQUE,
-    name TEXT,
-    model TEXT,
-    language TEXT,
-    gender TEXT,
-    age TEXT,
-    confidence REAL,
-    tags TEXT,
-    sample_path TEXT,
-    template_wav TEXT,
-    metadata TEXT,
-    created_at TEXT,
-    updated_at TEXT
-);
-";
-        ttsCmd.ExecuteNonQuery();
+        // NOTE: The `tts_voices` table is expected to exist in this installation
+        // (the table may be created by an earlier migration step or manually). To
+        // prevent accidental re-creation or schema drift we no longer create the
+        // table at runtime here. Migration/creation should be performed via a
+        // dedicated migration step or SQL script if needed.
 
         // Migration steps were already executed for this installation. No runtime migration performed.
         // Migrate legacy `logs` table (if present) into the new `Log` table and remove the old table.
@@ -1105,6 +1141,8 @@ SELECT ts, level, category, message, exception, state FROM logs;";
         {
             // ignore migration check errors
         }
+        sw.Stop();
+        Console.WriteLine($"[DB] InitializeSchema completed in {sw.ElapsedMilliseconds}ms");
     }
 
     // Async batch insert for log entries. Will insert all provided entries in a single INSERT statement when possible.

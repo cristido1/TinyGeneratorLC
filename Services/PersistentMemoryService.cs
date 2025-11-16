@@ -91,7 +91,6 @@ namespace TinyGenerator.Services
                         model_id INTEGER NULL,
                         agent_id INTEGER NULL,
                         CreatedAt TEXT NOT NULL,
-                        FOREIGN KEY (model_id) REFERENCES models(rowid) ON DELETE SET NULL ON UPDATE CASCADE,
                         FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL ON UPDATE CASCADE
                     );
                     ";
@@ -115,6 +114,51 @@ namespace TinyGenerator.Services
                 }
                 catch { }
             }
+
+            // Ensure the Memory table's foreign keys reference the current `agents` table
+            try
+            {
+                using var fkCheck = connection.CreateCommand();
+                fkCheck.CommandText = "PRAGMA foreign_key_list('Memory');";
+                using var fkR = fkCheck.ExecuteReader();
+                var needsFix = false;
+                while (fkR.Read())
+                {
+                    var refTable = fkR.IsDBNull(2) ? string.Empty : fkR.GetString(2);
+                    if (!string.Equals(refTable, "agents", StringComparison.OrdinalIgnoreCase)) { needsFix = true; break; }
+                }
+
+                if (needsFix)
+                {
+                    try
+                    {
+                        using var off = connection.CreateCommand(); off.CommandText = "PRAGMA foreign_keys = OFF;"; off.ExecuteNonQuery();
+                        using var createFix = connection.CreateCommand();
+                        createFix.CommandText = @"CREATE TABLE IF NOT EXISTS Memory_new_fix (
+                            Id TEXT PRIMARY KEY,
+                            Collection TEXT NOT NULL,
+                            TextValue TEXT NOT NULL,
+                            Metadata TEXT,
+                            model_id INTEGER NULL,
+                            agent_id INTEGER NULL,
+                            CreatedAt TEXT NOT NULL,
+                            FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL ON UPDATE CASCADE
+                        );";
+                        createFix.ExecuteNonQuery();
+
+                        using var copyFix = connection.CreateCommand();
+                        copyFix.CommandText = @"INSERT OR REPLACE INTO Memory_new_fix (Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt)
+                            SELECT Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt FROM Memory;";
+                        copyFix.ExecuteNonQuery();
+
+                        using var dropOld = connection.CreateCommand(); dropOld.CommandText = "DROP TABLE IF EXISTS Memory;"; dropOld.ExecuteNonQuery();
+                        using var renameFix = connection.CreateCommand(); renameFix.CommandText = "ALTER TABLE Memory_new_fix RENAME TO Memory;"; renameFix.ExecuteNonQuery();
+                        using var on = connection.CreateCommand(); on.CommandText = "PRAGMA foreign_keys = ON;"; on.ExecuteNonQuery();
+                    }
+                    catch { /* best-effort: ignore failures here */ }
+                }
+            }
+            catch { }
         }
 
         private static string ComputeHash(string text)

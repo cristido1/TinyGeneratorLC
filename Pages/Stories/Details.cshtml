@@ -1,5 +1,6 @@
 @page "{id:long}"
 @model TinyGenerator.Pages.Stories.DetailsModel
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Antiforgery
 @{
     ViewData["Title"] = "Dettaglio storia";
 }
@@ -59,7 +60,14 @@
                     btn.disabled = true;
                     btn.innerText = 'Generating...';
                     var id = '@Model.Story?.Id';
-                    var res = await fetch(`/Stories/Details/${id}?handler=tts`, { method: 'POST' });
+                    var token = '@Antiforgery.GetAndStoreTokens(HttpContext).RequestToken';
+                    var res = await fetch(`/Stories/Details/${id}?handler=tts`, {
+                        method: 'POST',
+                        headers: {
+                            'RequestVerificationToken': token,
+                            'Accept': 'application/json'
+                        }
+                    });
                     if (!res.ok) { alert('Errore TTS'); return; }
                     var j = await res.json();
                     var audio = document.getElementById('ttsAudio');

@@ -2,6 +2,7 @@ using System.IO;
 using System.Diagnostics;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Connectors.Ollama;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.Memory;
 using TinyGenerator;
 using TinyGenerator.Services;
@@ -57,8 +58,8 @@ builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_bas
 // RIMOSSA la registrazione di IKernel: ora si usa solo Kernel reale tramite KernelFactory
 
 // === Servizio di generazione storie ===
-// Stories persistence service
-builder.Services.AddSingleton<StoriesService>();
+// Stories persistence service (requires DatabaseService)
+builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(sp.GetRequiredService<DatabaseService>(), sp.GetService<ILogger<StoriesService>>()));
 
 // Persistent memory service (sqlite) using consolidated storage DB
 builder.Services.AddSingleton<PersistentMemoryService>(sp => new PersistentMemoryService("data/storage.db"));
@@ -69,6 +70,8 @@ builder.Services.AddSingleton<NotificationService>();
 
 // Kernel factory (nuova DI)
 builder.Services.AddSingleton<IKernelFactory, KernelFactory>();
+// Also register concrete KernelFactory so services can depend on implementation-specific features
+builder.Services.AddSingleton<KernelFactory>(sp => (KernelFactory)sp.GetRequiredService<IKernelFactory>());
 builder.Services.AddTransient<StoryGeneratorService>();
 builder.Services.AddTransient<PlannerExecutor>();
 // Test execution service (per-step execution encapsulation)
@@ -84,15 +87,20 @@ builder.Services.AddSingleton<ICustomLogger>(sp => new CustomLogger(sp.GetRequir
 // Register logger provider without resolving ICustomLogger immediately to avoid startup cycles.
 builder.Services.AddSingleton<ILoggerProvider>(sp => new CustomLoggerProvider(sp));
 // TTS service configuration: read HOST/PORT from environment with defaults
-var ttsHost = Environment.GetEnvironmentVariable("HOST") ?? "0.0.0.0";
-var ttsPortRaw = Environment.GetEnvironmentVariable("PORT") ?? Environment.GetEnvironmentVariable("TTS_PORT") ?? "8004";
+// Use localhost as default so HttpClient can reach the local TTS server.
+var ttsHost = Environment.GetEnvironmentVariable("TTS_HOST") ?? Environment.GetEnvironmentVariable("HOST") ?? "127.0.0.1";
+var ttsPortRaw = Environment.GetEnvironmentVariable("TTS_PORT") ?? Environment.GetEnvironmentVariable("PORT") ?? "8004";
 if (!int.TryParse(ttsPortRaw, out var ttsPort)) ttsPort = 8004;
 var ttsOptions = new TtsOptions { Host = ttsHost, Port = ttsPort };
+// Allow overriding timeout via environment variable TTS_TIMEOUT_SECONDS (seconds)
+var ttsTimeoutRaw = Environment.GetEnvironmentVariable("TTS_TIMEOUT_SECONDS");
+if (!int.TryParse(ttsTimeoutRaw, out var ttsTimeout)) ttsTimeout = ttsOptions.TimeoutSeconds;
+ttsOptions.TimeoutSeconds = ttsTimeout;
 builder.Services.AddSingleton(ttsOptions);
 builder.Services.AddHttpClient<TtsService>(client =>
 {
     client.BaseAddress = new Uri(ttsOptions.BaseUrl);
-    client.Timeout = TimeSpan.FromSeconds(30);
+    client.Timeout = TimeSpan.FromSeconds(ttsOptions.TimeoutSeconds);
 });
 
 builder.Services.AddSingleton<CostController>(sp =>

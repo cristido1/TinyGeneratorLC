@@ -112,6 +112,8 @@ namespace Microsoft.SemanticKernel.Agents
             _args = new KernelArguments(execSettings);
         }
 
+    
+
         public async Task<IEnumerable<ChatResult>> InvokeAsync(string prompt)
         {
             var finalPrompt = string.IsNullOrWhiteSpace(Instructions) ? prompt : Instructions + "\n\n" + prompt;

@@ -1,0 +1,2 @@
+/* Local wrapper CSS that imports official chosen styles from CDN. Replace this file with the full CSS to vendor it locally. */
+@import url('https://cdnjs.cloudflare.com/ajax/libs/chosen/1.8.7/chosen.min.css');

@@ -86,6 +86,18 @@
             <span asp-validation-for="Definition.ExecutionPlan" class="text-danger"></span>
         </div>
         <div class="col-md-6">
+            <label asp-for="Definition.JsonResponseFormat" class="form-label">JSON Response Format</label>
+            <select asp-for="Definition.JsonResponseFormat" class="form-control">
+                <option value="">(None)</option>
+                @foreach (var f in Model.ResponseFormatFiles ?? new List<string>())
+                {
+                    <option value="@f">@f</option>
+                }
+            </select>
+            <span asp-validation-for="Definition.JsonResponseFormat" class="text-danger"></span>
+            <small class="form-text text-muted">Seleziona lo schema JSON (cartella <code>response_formats/</code>) per il formato di risposta atteso.</small>
+        </div>
+        <div class="col-md-6">
             <label asp-for="Definition.ValidScoreRange" class="form-label">Valid Score Range</label>
             <input asp-for="Definition.ValidScoreRange" class="form-control" />
             <span asp-validation-for="Definition.ValidScoreRange" class="text-danger"></span>
@@ -111,17 +123,27 @@
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/chosen/1.8.7/chosen.min.css" rel="stylesheet" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chosen/1.8.7/chosen.jquery.min.js"></script>
+    <link href="/lib/chosen/chosen.min.css" rel="stylesheet" />
+    <script src="/lib/chosen/chosen.jquery.min.js"></script>
     <script>
         (function () {
             $(function () {
-                // Initialize chosen on the allowed_plugins select.
-                $('#allowed_plugins').chosen({
-                    placeholder_text_multiple: 'Select allowed plugins or leave empty',
-                    no_results_text: 'No plugin found',
-                    width: '100%'
-                });
+                // Initialize chosen on the allowed_plugins select if the plugin is available.
+                try {
+                    if (window.jQuery && $.fn && $.fn.chosen) {
+                        $('#allowed_plugins').chosen({
+                            placeholder_text_multiple: 'Select allowed plugins or leave empty',
+                            no_results_text: 'No plugin found',
+                            width: '100%'
+                        });
+                    }
+                    else {
+                        console.warn('chosen plugin not available: skipping chosen initialization for #allowed_plugins');
+                    }
+                }
+                catch (e) {
+                    console.error('Error while initializing chosen for #allowed_plugins', e);
+                }
             });
         })();
     </script>

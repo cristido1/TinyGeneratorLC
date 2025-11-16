@@ -87,5 +87,35 @@
 
 @section Scripts {
     <script src="~/js/agents-index.js" asp-append-version="true"></script>
+    <script>
+        (function(){
+            function initAgentsTable() {
+                try {
+                    var table = $('#tabAgents').DataTable({
+                        responsive: true,
+                        colReorder: true,
+                        dom: 'Bfrtip',
+                        buttons: [
+                            'colvis'
+                        ],
+                        columnDefs: [ { orderable: false, targets: -1 } ],
+                        order: [[0, 'asc']],
+                        pageLength: 25
+                    });
+
+                    // If server-side pagination controls exist, hide them when DataTables is active
+                    $('nav.pagination').hide();
+
+                    // Wire existing search box to DataTables search
+                    $('#searchBox').on('input', function(){ table.search(this.value).draw(); });
+                } catch (e) {
+                    console.warn('Failed to initialize Agents DataTable', e);
+                }
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initAgentsTable);
+            } else { initAgentsTable(); }
+        })();
+    </script>
 }
 

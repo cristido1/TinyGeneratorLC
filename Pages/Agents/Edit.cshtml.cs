@@ -12,6 +12,12 @@ namespace TinyGenerator.Pages.Agents
         [BindProperty]
         public Agent Agent { get; set; } = new();
         public List<TinyGenerator.Models.TtsVoice> Voices { get; set; } = new();
+        public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
+        [BindProperty]
+        public string? SelectedModelName { get; set; }
+        [BindProperty]
+        public string[] SelectedSkills { get; set; } = new string[] { };
+        public string[] AvailableSkills { get; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "evaluator", "story" };
 
         public EditModel(DatabaseService database)
         {
@@ -26,6 +32,20 @@ namespace TinyGenerator.Pages.Agents
                 if (a == null) return RedirectToPage("/Agents/Index");
                 Agent = a;
                 Voices = _database.ListTtsVoices();
+                Models = _database.ListModels();
+                // Resolve selected model name from numeric ModelId
+                try { SelectedModelName = Agent.ModelId.HasValue ? _database.GetModelNameById(Agent.ModelId.Value) : null; } catch { SelectedModelName = null; }
+                // Load selected skills from JSON array stored in Agent.Skills
+                try {
+                    if (!string.IsNullOrWhiteSpace(Agent.Skills)) {
+                        using var doc = System.Text.Json.JsonDocument.Parse(Agent.Skills);
+                        if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array) {
+                            var list = new System.Collections.Generic.List<string>();
+                            foreach (var el in doc.RootElement.EnumerateArray()) { if (el.ValueKind == System.Text.Json.JsonValueKind.String) list.Add(el.GetString() ?? string.Empty); }
+                            SelectedSkills = list.ToArray();
+                        }
+                    }
+                } catch { }
                 return Page();
             }
             catch
@@ -36,10 +56,18 @@ namespace TinyGenerator.Pages.Agents
 
         public IActionResult OnPost()
         {
+            // Ensure lists are available when re-displaying the page after validation errors
+            Voices = _database.ListTtsVoices();
+            Models = _database.ListModels();
             if (!ModelState.IsValid) return Page();
             // Validate JSON fields
             try
             {
+                // Ensure Agent.Skills is serialised from SelectedSkills
+                try { Agent.Skills = System.Text.Json.JsonSerializer.Serialize(SelectedSkills ?? new string[] {}); } catch { Agent.Skills = "[]"; }
+
+                // If a model name was selected, resolve it to numeric id
+                try { if (!string.IsNullOrWhiteSpace(SelectedModelName)) { var mid = _database.GetModelIdByName(SelectedModelName); Agent.ModelId = mid.HasValue ? (int?)mid.Value : null; } else { Agent.ModelId = null; } } catch { }
                 if (!string.IsNullOrWhiteSpace(Agent.Skills))
                 {
                     var doc = System.Text.Json.JsonDocument.Parse(Agent.Skills);
@@ -75,6 +103,7 @@ namespace TinyGenerator.Pages.Agents
             {
                 ModelState.AddModelError(string.Empty, ex.Message);
                 Voices = _database.ListTtsVoices();
+                Models = _database.ListModels();
                 return Page();
             }
         }

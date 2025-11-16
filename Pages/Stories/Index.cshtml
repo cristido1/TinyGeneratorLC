@@ -36,7 +36,7 @@
                 <div class="btn-group" role="group">
                     <a class="btn btn-sm btn-outline-primary" asp-page="/Stories/Details" asp-route-id="@s.Id">Dettagli</a>
                     <a class="btn btn-sm btn-outline-secondary" asp-page="/Stories/Edit" asp-route-id="@s.Id">Modifica</a>
-                    <form method="post" asp-page-handler="Delete" asp-route-id="@s.Id" onsubmit="return confirm('Eliminare la storia?');" style="display:inline">
+                    <form method="post" asp-page-handler="Delete" asp-route-id="@s.Id" class="delete-story-form" style="display:inline">
                         <button type="submit" class="btn btn-sm btn-danger">Elimina</button>
                     </form>
                 </div>
@@ -48,9 +48,76 @@
 
 @section Scripts {
     <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <!-- SweetAlert2 (compact confirmation) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" />
+    <style>
+        /* SweetAlert2 compact popup styled to match Bootstrap */
+        .swal2-popup.swal2-small {
+            width: 420px !important;
+            padding: 1rem 1.25rem !important;
+            border-radius: .375rem !important;
+            font-size: .95rem !important;
+            box-shadow: 0 .5rem 1rem rgba(0,0,0,.15) !important;
+        }
+        /* Layout: icon in left column, title+content stacked in right column */
+        .swal2-popup.swal2-small {
+            display: grid !important;
+            grid-template-columns: 40px 1fr !important;
+            grid-template-rows: auto auto auto !important;
+            gap: 6px 12px !important;
+            align-items: start !important;
+        }
+        .swal2-popup.swal2-small .swal2-icon {
+            grid-column: 1 / 2 !important;
+            grid-row: 1 / 3 !important;
+            justify-self: center !important;
+            align-self: start !important;
+            width: 32px !important;
+            height: 32px !important;
+            font-size: 14px !important;
+            margin: 0 !important;
+        }
+        .swal2-popup.swal2-small .swal2-title {
+            grid-column: 2 / 3 !important;
+            grid-row: 1 / 2 !important;
+            text-align: left !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .swal2-popup.swal2-small .swal2-content {
+            grid-column: 2 / 3 !important;
+            grid-row: 2 / 3 !important;
+            text-align: left !important;
+            margin: 0 !important;
+            padding-top: 4px !important;
+        }
+        /* Place action buttons on a dedicated row, centered horizontally */
+        .swal2-popup.swal2-small .swal2-actions {
+            grid-column: 1 / -1 !important;
+            grid-row: 3 / 4 !important;
+            display: flex !important;
+            justify-content: center !important;
+            gap: .5rem !important;
+            padding-top: .5rem !important;
+        }
+        .swal2-popup.swal2-small .swal2-actions .swal2-confirm,
+        .swal2-popup.swal2-small .swal2-actions .swal2-cancel {
+            margin: 0 !important;
+        }
+        .swal2-popup.swal2-small .swal2-title {
+            font-size: 1rem !important;
+            margin-bottom: .25rem !important;
+        }
+        .swal2-popup.swal2-small .swal2-actions .btn {
+            min-width: 86px;
+            margin: 0 .25rem;
+        }
+    </style>
+
     <script src="~/lib/jquery/jquery.min.js"></script>
     <script src="~/lib/datatables/js/jquery.dataTables.min.js"></script>
     <script src="~/lib/datatables/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script>
         $(document).ready(function() {
             $('#storiesTable').DataTable({
@@ -58,6 +125,27 @@
                 lengthChange: true,
                 stateSave: true,
                 columnDefs: [{ orderable: false, targets: -1 }]
+            });
+
+            // Intercept submit on delete forms and show SweetAlert2 confirmation
+            $('form.delete-story-form').on('submit', function (e) {
+                e.preventDefault();
+                var form = this;
+                Swal.fire({
+                    title: 'Eliminare la storia?',
+                    text: 'Questa azione non è reversibile.',
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonText: 'Elimina',
+                    cancelButtonText: 'Annulla',
+                    customClass: { popup: 'swal2-small', confirmButton: 'btn btn-danger', cancelButton: 'btn btn-secondary' },
+                    buttonsStyling: false,
+                    width: 420
+                }).then(function(result) {
+                    if (result.isConfirmed) {
+                        form.submit();
+                    }
+                });
             });
         });
     </script>

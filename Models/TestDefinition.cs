@@ -25,4 +25,6 @@ public sealed class TestDefinition
     public string? ExecutionPlan { get; set; }
     // Active flag (soft delete / enable/disable)
     public bool Active { get; set; } = true;
+    // Optional: filename under response_formats/ that defines expected JSON response schema
+    public string? JsonResponseFormat { get; set; }
 }

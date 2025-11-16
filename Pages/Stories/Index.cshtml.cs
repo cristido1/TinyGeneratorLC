@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Collections.Generic;
 using TinyGenerator.Services;
+using TinyGenerator.Models;
 
 namespace TinyGenerator.Pages.Stories
 {
@@ -13,7 +14,7 @@ namespace TinyGenerator.Pages.Stories
             _stories = stories;
         }
 
-        public IEnumerable<StoriesService.StoryRecord> Stories { get; set; } = new List<StoriesService.StoryRecord>();
+        public IEnumerable<StoryRecord> Stories { get; set; } = new List<StoryRecord>();
 
         public void OnGet()
         {

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 
@@ -13,6 +14,9 @@ namespace TinyGenerator.Services
         public string Host { get; set; } = "0.0.0.0";
         public int Port { get; set; } = 8004;
         public string BaseUrl => $"http://{Host}:{Port}";
+        // Timeout in seconds for TTS HTTP requests (configurable via TTS_TIMEOUT_SECONDS env var)
+        public int TimeoutSeconds { get; set; } = 300;
+        public TimeSpan Timeout => TimeSpan.FromSeconds(TimeoutSeconds);
     }
 
     // Minimal DTOs matching typical FastAPI responses described by the user
@@ -77,8 +81,9 @@ namespace TinyGenerator.Services
             return new List<VoiceInfo>();
         }
 
-        // POST /synthesize (body: { voice, text, sentiment? }) -> returns SynthesisResult
-        public async Task<SynthesisResult?> SynthesizeAsync(string voiceId, string text, string? sentiment = null)
+        // POST /synthesize (body: { voice, text, language?, sentiment? }) -> returns SynthesisResult
+        // If no language is provided, default to Italian ("it").
+        public async Task<SynthesisResult?> SynthesizeAsync(string voiceId, string text, string? language = null, string? sentiment = null)
         {
             if (string.IsNullOrWhiteSpace(voiceId)) throw new ArgumentException("voiceId required", nameof(voiceId));
             if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("text required", nameof(text));
@@ -88,6 +93,12 @@ namespace TinyGenerator.Services
                 ["voice"] = voiceId,
                 ["text"] = text
             };
+            // Ensure we always send a language; default to Italian if not specified
+            if (string.IsNullOrWhiteSpace(language))
+            {
+                language = "it";
+            }
+            payload["language"] = language;
             if (!string.IsNullOrWhiteSpace(sentiment)) payload["sentiment"] = sentiment;
 
             // try common endpoints
@@ -97,15 +108,110 @@ namespace TinyGenerator.Services
             {
                 try
                 {
+                    var payloadJson = JsonSerializer.Serialize(payload);
+                    Console.WriteLine($"[TtsService] Attempt POST {path} -> payload: {payloadJson}");
+
                     var resp = await _http.PostAsJsonAsync(path, payload);
+
+                    var respText = "";
+                    try
+                    {
+                        respText = await resp.Content.ReadAsStringAsync();
+                    }
+                    catch { /* ignore read errors */ }
+
+                    Console.WriteLine($"[TtsService] Response {path} -> Status: {(int)resp.StatusCode} {resp.StatusCode}; BodyLen={respText?.Length ?? 0}");
+                    if (!string.IsNullOrWhiteSpace(respText) && respText.Length < 2000)
+                    {
+                        Console.WriteLine($"[TtsService] Response body: {respText}");
+                    }
+
                     if (!resp.IsSuccessStatusCode) continue;
-                    var result = await resp.Content.ReadFromJsonAsync<SynthesisResult>();
-                    if (result != null) return result;
+
+                    // Handle JSON or raw audio responses
+                    var media = resp.Content.Headers.ContentType?.MediaType ?? string.Empty;
+                    if (media.StartsWith("application/json") || media.Contains("json"))
+                    {
+                        var result = await resp.Content.ReadFromJsonAsync<SynthesisResult>();
+                        if (result != null) return result;
+                    }
+                    else if (media.StartsWith("audio/") || media == "application/octet-stream" || string.IsNullOrEmpty(media))
+                    {
+                        // Treat body as raw audio bytes -> return base64
+                        try
+                        {
+                            var bytes = await resp.Content.ReadAsByteArrayAsync();
+                            var b64 = Convert.ToBase64String(bytes);
+                            return new SynthesisResult { AudioBase64 = b64 };
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[TtsService] Error reading binary response for {path}: {ex}");
+                        }
+                    }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Console.WriteLine($"[TtsService] Exception posting to {path}: {ex}");
                     // ignore and try next
                 }
+            }
+
+            // If initial attempts fail, try alternative payload shape used by some TTS servers
+            // e.g. { model: "voice_templates", speaker: "<id>", text: "...", language: "it" }
+            try
+            {
+                var altPayload = new Dictionary<string, object?>
+                {
+                    ["text"] = text,
+                    ["language"] = language
+                };
+
+                // If voiceId looks like 'model:speaker' split it, otherwise use as speaker
+                if (voiceId.Contains(":"))
+                {
+                    var parts = voiceId.Split(new[] { ':' }, 2);
+                    altPayload["model"] = parts[0];
+                    altPayload["speaker"] = parts[1];
+                }
+                else
+                {
+                    altPayload["model"] = "voice_templates";
+                    altPayload["speaker"] = voiceId;
+                }
+
+                var altJson = JsonSerializer.Serialize(altPayload);
+                Console.WriteLine($"[TtsService] Attempting alt payload for synth: {altJson}");
+
+                foreach (var path in candidates)
+                {
+                    try
+                    {
+                        var resp = await _http.PostAsJsonAsync(path, altPayload);
+                        var media = resp.Content.Headers.ContentType?.MediaType ?? string.Empty;
+                        Console.WriteLine($"[TtsService] Alt Response {path} -> Status: {(int)resp.StatusCode} {resp.StatusCode}; Media={media}");
+                        if (!resp.IsSuccessStatusCode) continue;
+
+                        if (media.Contains("json"))
+                        {
+                            var result = await resp.Content.ReadFromJsonAsync<SynthesisResult>();
+                            if (result != null) return result;
+                        }
+                        else
+                        {
+                            var bytes = await resp.Content.ReadAsByteArrayAsync();
+                            return new SynthesisResult { AudioBase64 = Convert.ToBase64String(bytes) };
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[TtsService] Alt payload exception posting to {path}: {ex}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TtsService] Exception building/sending alt payload: {ex}");
             }
 
             return null;

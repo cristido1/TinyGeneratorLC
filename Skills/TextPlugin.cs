@@ -21,7 +21,17 @@ namespace TinyGenerator.Skills
         public int Length([Description("The string to get the length of.")] string input) { LastCalled = nameof(Length); return input?.Length ?? 0; }
 
         [KernelFunction("substring"), Description("Extracts a substring from a string.")]
-        public string Substring([Description("The string to extract the substring from.")] string input, [Description("The zero-based starting index of the substring.")] int startIndex, [Description("The length of the substring.")] int length) { LastCalled = nameof(Substring); return input.Substring(startIndex, length); }
+        public string Substring([Description("The string to extract the substring from.")] string input, [Description("The zero-based starting index of the substring.")] int startIndex, [Description("The length of the substring.")] int length)
+        {
+            LastCalled = nameof(Substring);
+            if (string.IsNullOrEmpty(input)) return string.Empty;
+            if (startIndex < 0) startIndex = 0;
+            if (length <= 0) return string.Empty;
+            if (startIndex >= input.Length) return string.Empty;
+            // Clamp length to available characters
+            if (startIndex + length > input.Length) length = input.Length - startIndex;
+            return input.Substring(startIndex, length);
+        }
 
         [KernelFunction("join"), Description("Joins an array of strings into a single string with a separator.")]
         public string Join([Description("The array of strings to join.")] string[] input, [Description("The separator to use.")] string separator) { LastCalled = nameof(Join); return string.Join(separator, input); }

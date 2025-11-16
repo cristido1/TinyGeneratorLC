@@ -20,6 +20,7 @@
             <th>Timeout (ms)</th>
             <th>Test Type</th>
             <th>Allowed Plugins</th>
+            <th>Response Format</th>
             <th>Active</th>
             <th class="d-none">Prompt</th>
             <th>Actions</th>
@@ -38,6 +39,7 @@
                 <td class="timeout">@d.TimeoutMs</td>
                 <td class="testtype">@(string.IsNullOrWhiteSpace(d.TestType) ? "" : d.TestType)</td>
                 <td class="allowedplugins">@(string.IsNullOrWhiteSpace(d.AllowedPlugins) ? "" : d.AllowedPlugins)</td>
+                <td class="responseformat">@(string.IsNullOrWhiteSpace(d.JsonResponseFormat) ? "" : d.JsonResponseFormat)</td>
                 <td class="active">@(d.Active ? "Yes" : "No")</td>
                 <td class="prompt d-none">@System.Net.WebUtility.HtmlEncode(d.Prompt)</td>
                 <td class="actions">
@@ -51,7 +53,7 @@
     else
     {
         <tr>
-            <td colspan="10">No test definitions found.</td>
+            <td colspan="11">No test definitions found.</td>
         </tr>
     }
     </tbody>

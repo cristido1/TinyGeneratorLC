@@ -1231,7 +1231,7 @@ namespace TinyGenerator.Pages
                 idx++;
                 try
                 {
-                    await _testService.ExecuteTestAsync(runId, idx, t, factory, model, modelInfo, agentInstructions, defaultAgent);
+                    await _testService.ExecuteTestAsync(runId, idx, t, model, modelInfo, agentInstructions, defaultAgent);
                 }
                 catch (Exception ex)
                 {

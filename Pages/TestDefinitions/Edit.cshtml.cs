@@ -9,6 +9,7 @@ namespace TinyGenerator.Pages.TestDefinitions
     {
         private readonly DatabaseService _db;
         public List<string> PlanFiles { get; set; } = new List<string>();
+        public List<string> ResponseFormatFiles { get; set; } = new List<string>();
         public string[] AvailablePlugins { get; set; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "evaluator", "story" };
         public string[] TestTypes { get; set; } = new string[] { "functioncall", "writer", "question" };
         public EditModel(DatabaseService db)
@@ -31,6 +32,12 @@ namespace TinyGenerator.Pages.TestDefinitions
                 {
                     var files = Directory.GetFiles(dir, "*.json").Select(Path.GetFileName).ToList();
                     PlanFiles = files;
+                }
+                var rfDir = Path.Combine(Directory.GetCurrentDirectory(), "response_formats");
+                if (Directory.Exists(rfDir))
+                {
+                    var rfiles = Directory.GetFiles(rfDir, "*.json").Select(Path.GetFileName).ToList();
+                    ResponseFormatFiles = rfiles;
                 }
             }
             catch { }

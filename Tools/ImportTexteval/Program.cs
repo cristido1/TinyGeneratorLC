@@ -3,12 +3,9 @@ using System;
 
 namespace ImportTextevalCleanup
 {
-	internal class Program
+	internal static class Program
 	{
-		private static int Main(string[] args)
-		{
-			Console.WriteLine("ImportTexteval tool removed. No action performed.");
-			return 0;
-		}
+		// Intentionally left without an entry point to avoid warning CS7022
+		public static void Info() => Console.WriteLine("ImportTexteval tool removed. No action performed.");
 	}
 }

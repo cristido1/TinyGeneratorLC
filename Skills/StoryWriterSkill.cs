@@ -32,7 +32,7 @@ namespace TinyGenerator.Skills
             var id = _stories.InsertSingleStory(string.Empty, story, _modelId, _agentId, 0.0, null, 0, null, memoryKey: null);
             var obj = new { id = id, story = story, model = modelName, model_id = _modelId, agent_id = _agentId };
             LastResult = JsonSerializer.Serialize(obj);
-            return LastResult;
+            return id.ToString();;
         }
 
         [KernelFunction("read_story"), Description("Read a single story by id. Returns JSON with story fields.")]
@@ -43,13 +43,15 @@ namespace TinyGenerator.Skills
             var obj = new
             {
                 id = row.Id,
+                generation_id = row.GenerationId,
                 memory_key = row.MemoryKey,
                 ts = row.Timestamp,
                 prompt = row.Prompt,
-                story = row.StoryA,
-                model = row.ModelA,
-                eval = row.EvalA,
-                score = row.ScoreA,
+                story = row.Story,
+                model = row.Model,
+                agent = row.Agent,
+                eval = row.Eval,
+                score = row.Score,
                 approved = row.Approved,
                 status = row.Status
             };
@@ -68,7 +70,7 @@ namespace TinyGenerator.Skills
             // We will add a small method to StoriesService for updating a single row by id (if not present yet).
             try
             {
-                var newStory = story ?? existing.StoryA;
+                var newStory = story ?? existing.Story;
                 var newStatus = status ?? existing.Status;
                 // Writer skill must not modify the model field — update only story and status
                 var ok = _stories.UpdateStoryById(id, newStory, null, null, newStatus);

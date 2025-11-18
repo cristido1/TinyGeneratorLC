@@ -1,5 +1,6 @@
 {
-  "type": "number",
+  "type": "integer",
   "minimum": 1,
-  "maximum": 10
+  "maximum": 10,
+  "description": "An evaluation score between 1 and 10"
 }

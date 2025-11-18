@@ -6,27 +6,29 @@ namespace TinyGenerator.Models
     public class StoryRecord
     {
         public long Id { get; set; }
+        public string GenerationId { get; set; } = string.Empty;
         public string MemoryKey { get; set; } = string.Empty;
         public string Timestamp { get; set; } = string.Empty;
         public string Prompt { get; set; } = string.Empty;
-        public string StoryA { get; set; } = string.Empty;
-        public string EvalA { get; set; } = string.Empty;
-        public double ScoreA { get; set; }
-        public string ModelA { get; set; } = string.Empty;
-        public string StoryB { get; set; } = string.Empty;
-        public string EvalB { get; set; } = string.Empty;
-        public double ScoreB { get; set; }
-        public string ModelB { get; set; } = string.Empty;
-        public string StoryC { get; set; } = string.Empty;
-        public string EvalC { get; set; } = string.Empty;
-        public double ScoreC { get; set; }
-        public string ModelC { get; set; } = string.Empty;
+        public string Story { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty;
+        public string Agent { get; set; } = string.Empty;
+        public string Eval { get; set; } = string.Empty;
+        public double Score { get; set; }
         public bool Approved { get; set; }
         public string Status { get; set; } = string.Empty;
-        // Optional generation id (grouping for A/B/C variants)
-        public string GenerationId { get; set; } = string.Empty;
 
         // Evaluations attached to the story (one for each saved evaluation)
         public List<StoryEvaluation> Evaluations { get; set; } = new List<StoryEvaluation>();
+        
+        // Legacy properties for backward compatibility (mapped to Story field)
+        [Obsolete("Use Story property instead")]
+        public string StoryA { get => Story; set => Story = value; }
+        [Obsolete("Use Model property instead")]
+        public string ModelA { get => Model; set => Model = value; }
+        [Obsolete("Use Eval property instead")]
+        public string EvalA { get => Eval; set => Eval = value; }
+        [Obsolete("Use Score property instead")]
+        public double ScoreA { get => Score; set => Score = value; }
     }
 }

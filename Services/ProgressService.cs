@@ -29,7 +29,7 @@ namespace TinyGenerator.Services
             _result[id] = null;
         }
 
-        public async Task AppendAsync(string id, string message)
+        public async Task AppendAsync(string id, string message, string? extraClass = null)
         {
             if (!_store.ContainsKey(id)) Start(id);
             var ts = DateTime.UtcNow.ToString("o");
@@ -47,14 +47,14 @@ namespace TinyGenerator.Services
                 if (_hubContext != null)
                 {
                     // Broadcast to all clients so progress messages appear on any page
-                    await _hubContext.Clients.All.SendAsync("ProgressAppended", id, stamped);
+                    await _hubContext.Clients.All.SendAsync("ProgressAppended", id, stamped, extraClass);
                 }
             }
             catch { }
         }
 
         // backward-compatible synchronous wrapper
-        public void Append(string id, string message) => AppendAsync(id, message).ConfigureAwait(false).GetAwaiter().GetResult();
+        public void Append(string id, string message, string? extraClass = null) => AppendAsync(id, message, extraClass).ConfigureAwait(false).GetAwaiter().GetResult();
 
         public List<string> Get(string id)
         {

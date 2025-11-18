@@ -30,13 +30,21 @@ namespace TinyGenerator.Pages.TestDefinitions
                 var dir = Path.Combine(Directory.GetCurrentDirectory(), "execution_plans");
                 if (Directory.Exists(dir))
                 {
-                    var files = Directory.GetFiles(dir, "*.json").Select(Path.GetFileName).ToList();
+                    var files = Directory.GetFiles(dir, "*.json")
+                        .Select(Path.GetFileName)
+                        .Where(f => !string.IsNullOrEmpty(f))
+                        .Select(f => f!)
+                        .ToList();
                     PlanFiles = files;
                 }
                 var rfDir = Path.Combine(Directory.GetCurrentDirectory(), "response_formats");
                 if (Directory.Exists(rfDir))
                 {
-                    var rfiles = Directory.GetFiles(rfDir, "*.json").Select(Path.GetFileName).ToList();
+                    var rfiles = Directory.GetFiles(rfDir, "*.json")
+                        .Select(Path.GetFileName)
+                        .Where(f => !string.IsNullOrEmpty(f))
+                        .Select(f => f!)
+                        .ToList();
                     ResponseFormatFiles = rfiles;
                 }
             }

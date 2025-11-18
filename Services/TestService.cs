@@ -1,18 +1,29 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
-using System.Threading.Tasks;
 using System.Text.Json;
-using Microsoft.SemanticKernel.Agents;
-using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
+using OpenAI.Chat;
 using TinyGenerator.Models;
 
 namespace TinyGenerator.Services
 {
     public interface ITestService
     {
-        Task ExecuteTestAsync(int runId, int idx, TestDefinition t, string model, ModelInfo modelInfo, string agentInstructions, ChatCompletionAgent? defaultAgent);
+        Task ExecuteTestAsync(int runId, int idx, TestDefinition t, string model, ModelInfo modelInfo, string agentInstructions, object? defaultAgent);
+        Task<object?> RunGroupAsync(string model, string group);
+        Task<List<object>> RunAllEnabledModelsAsync(string? group);
     }
 
+    /// <summary>
+    /// Simplified TestService using OpenAI connector for all models (including Ollama).
+    /// Uses ResponseFormat for structured outputs, eliminating manual parsing.
+    /// Creates new kernels dynamically when skills change.
+    /// </summary>
     public class TestService : ITestService
     {
         private readonly DatabaseService _database;
@@ -20,7 +31,11 @@ namespace TinyGenerator.Services
         private readonly StoriesService _stories;
         private readonly KernelFactory _factory;
 
-        public TestService(DatabaseService database, ProgressService progress, StoriesService stories, KernelFactory factory)
+        public TestService(
+            DatabaseService database,
+            ProgressService progress,
+            StoriesService stories,
+            KernelFactory factory)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _progress = progress ?? throw new ArgumentNullException(nameof(progress));
@@ -28,855 +43,868 @@ namespace TinyGenerator.Services
             _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         }
 
-        private static string? FlattenResultToText(object? result)
+        public async Task<object?> RunGroupAsync(string model, string group)
         {
-            if (result == null) return null;
-            try
+            var modelInfo = _database.GetModelInfo(model);
+            if (modelInfo == null) return null;
+
+            var tests = _database.GetPromptsByGroup(group) ?? new List<TestDefinition>();
+            var runId = _database.CreateTestRun(
+                modelInfo.Name,
+                group,
+                $"Group run {group}",
+                false,
+                null,
+                "Started from TestService.RunGroupAsync");
+
+            _progress?.Start(runId.ToString());
+
+            // Warmup call only for Ollama models to exclude cold start from measurements
+            if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
             {
-                // If result is a string, try to parse it as JSON; otherwise return trimmed string
-                if (result is string s)
+                try
                 {
-                    if (string.IsNullOrWhiteSpace(s)) return null;
-                    var trimmed = s.Length > 16000 ? s.Substring(0, 16000) + "..." : s;
-                    try
+                    _progress?.Append(runId.ToString(), $"[{model}] Performing warmup call for Ollama model...");
+                    var warmupKernel = _factory.CreateKernel(model, Array.Empty<string>());
+                    if (warmupKernel?.Kernel != null)
                     {
-                        using var doc = JsonDocument.Parse(trimmed);
-                        var extracted = ExtractTextFromElement(doc.RootElement);
-                        return string.IsNullOrWhiteSpace(extracted) ? trimmed : extracted;
-                    }
-                    catch (JsonException)
-                    {
-                        return trimmed;
-                    }
-                }
-
-                // If it's a JsonElement
-                if (result is JsonElement je)
-                {
-                    if (je.ValueKind == JsonValueKind.String) return je.GetString();
-                    var extracted = ExtractTextFromElement(je);
-                    if (!string.IsNullOrWhiteSpace(extracted)) return extracted;
-                    try { return JsonSerializer.Serialize(je); } catch { return je.ToString(); }
-                }
-
-                // IEnumerable (array of results)
-                if (result is System.Collections.IEnumerable ie && !(result is System.Collections.IDictionary))
-                {
-                    var parts = new System.Collections.Generic.List<string>();
-                    foreach (var item in ie)
-                    {
-                        var part = FlattenResultToText(item);
-                        if (!string.IsNullOrWhiteSpace(part)) parts.Add(part);
-                    }
-                    if (parts.Count > 0) return string.Join("\n---\n", parts);
-                }
-
-                // If object has a Content property, handle it (Content may itself be a string containing JSON)
-                var typ = result.GetType();
-                var contentProp = typ.GetProperty("Content");
-                if (contentProp != null)
-                {
-                    var contentVal = contentProp.GetValue(result);
-                    if (contentVal != null)
-                    {
-                        // If Content is a string that contains JSON
-                        if (contentVal is string cvs)
+                        var warmupService = warmupKernel.Kernel.GetRequiredService<IChatCompletionService>();
+                        var warmupSettings = new OpenAIPromptExecutionSettings
                         {
-                            try
-                            {
-                                using var doc = JsonDocument.Parse(cvs);
-                                var ext = ExtractTextFromElement(doc.RootElement);
-                                if (!string.IsNullOrWhiteSpace(ext)) return ext;
-                            }
-                            catch { /* not JSON, fallthrough */ }
-                        }
-
-                        var itemsProp = contentVal.GetType().GetProperty("Items");
-                        if (itemsProp != null)
-                        {
-                            var itemsVal = itemsProp.GetValue(contentVal) as System.Collections.IEnumerable;
-                            if (itemsVal != null)
-                            {
-                                var sb = new System.Text.StringBuilder();
-                                foreach (var item in itemsVal)
-                                {
-                                    var textProp = item.GetType().GetProperty("Text");
-                                    if (textProp != null)
-                                    {
-                                        var textVal = textProp.GetValue(item) as string;
-                                        if (!string.IsNullOrWhiteSpace(textVal))
-                                        {
-                                            // If the text itself is JSON, try to extract known keys
-                                            var extracted = TryExtractFromPossiblyJsonText(textVal);
-                                            if (!string.IsNullOrWhiteSpace(extracted))
-                                            {
-                                                if (sb.Length > 0) sb.Append('\n');
-                                                sb.Append(extracted);
-                                            }
-                                            else
-                                            {
-                                                if (sb.Length > 0) sb.Append('\n');
-                                                sb.Append(textVal);
-                                            }
-                                        }
-                                    }
-                                }
-                                if (sb.Length > 0) return sb.ToString();
-                            }
-                        }
+                            Temperature = model.Contains("gpt-5-nano", StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0,
+                            MaxTokens = 10
+                        };
+                        var warmupHistory = new ChatHistory();
+                        warmupHistory.AddUserMessage("Hello");
+                        
+                        await InvokeWithTimeoutAsync(
+                            warmupService.GetChatMessageContentAsync(warmupHistory, warmupSettings, warmupKernel.Kernel),
+                            10000);
+                        
+                        _progress?.Append(runId.ToString(), $"[{model}] Warmup completed");
                     }
                 }
-
-                // Direct Text property on object
-                var textDirect = typ.GetProperty("Text");
-                if (textDirect != null)
+                catch (Exception ex)
                 {
-                    var tv = textDirect.GetValue(result) as string;
-                    if (!string.IsNullOrWhiteSpace(tv)) return tv;
+                    _progress?.Append(runId.ToString(), $"[{model}] Warmup failed (continuing anyway): {ex.Message}");
                 }
-
-                // Fallback: serialize object
-                try { return JsonSerializer.Serialize(result); } catch { return null; }
             }
-            catch { return null; }
+
+            // Start timing after warmup (if executed)
+            var testStartUtc = DateTime.UtcNow;
+
+            int idx = 0;
+            foreach (var test in tests)
+            {
+                idx++;
+                await ExecuteTestAsync(runId, idx, test, model, modelInfo, string.Empty, null);
+            }
+
+            var testEndUtc = DateTime.UtcNow;
+            var durationMs = (long?)(testEndUtc - testStartUtc).TotalMilliseconds;
+            var counts = _database.GetRunStepCounts(runId);
+            var passedCount = counts.passed;
+            var steps = counts.total;
+            var score = steps > 0 ? (int)Math.Round((double)passedCount / steps * 10) : 0;
+            var passedFlag = steps > 0 && passedCount == steps;
+
+            _database.UpdateTestRunResult(runId, passedFlag, durationMs);
+            _database.UpdateModelTestResults(
+                modelInfo.Name,
+                score,
+                new Dictionary<string, bool?>(),
+                durationMs.HasValue ? (double?)(durationMs.Value / 1000.0) : null);
+
+            // Recalculate overall model score based on all latest group results
+            _database.RecalculateModelScore(modelInfo.Name);
+
+            // Send completion notification with success/error status
+            if (passedFlag)
+            {
+                _progress?.Append(runId.ToString(), $"✅ [{model}] Test completato con successo: {passedCount}/{steps} test passati, score {score}/10, durata {durationMs/1000.0:0.##}s", "success");
+            }
+            else
+            {
+                _progress?.Append(runId.ToString(), $"❌ [{model}] Test fallito: {passedCount}/{steps} test passati, score {score}/10", "error");
+            }
+
+            return new { runId, score, steps, passed = passedCount, duration = durationMs };
         }
 
-        private static long? TryExtractIdFromJsonString(string? raw)
+        public async Task<List<object>> RunAllEnabledModelsAsync(string? group)
         {
-            if (string.IsNullOrWhiteSpace(raw)) return null;
-            try
+            var groups = _database.GetTestGroups() ?? new List<string>();
+            var selectedGroup = !string.IsNullOrWhiteSpace(group) ? group : groups.FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(selectedGroup))
+                return new List<object>();
+
+            var models = _database.ListModels().Where(m => m.Enabled).ToList();
+            var runResults = new List<object>();
+
+            foreach (var modelInfo in models)
             {
-                using var doc = JsonDocument.Parse(raw);
-                var found = FindIdInJsonElement(doc.RootElement);
-                if (found.HasValue) return found.Value;
-            }
-            catch { }
-            try
-            {
-                // Some providers might double-encode JSON inside a string value. Try to find a JSON substring and parse.
-                var m = Regex.Match(raw, @"\{[\s\S]*?\}");
-                if (m.Success && !string.IsNullOrWhiteSpace(m.Value))
+                try
                 {
-                    using var doc2 = JsonDocument.Parse(m.Value);
-                    var found2 = FindIdInJsonElement(doc2.RootElement);
-                    if (found2.HasValue) return found2.Value;
+                    var result = await RunGroupAsync(modelInfo.Name, selectedGroup);
+                    if (result != null)
+                        runResults.Add(result);
+                }
+                catch
+                {
+                    // ignore per-model failures
                 }
             }
-            catch { }
-            try
-            {
-                // Fallback: try regex to find numeric id property
-                var m2 = Regex.Match(raw, @"""id""\s*:\s*(\d+)");
-                if (m2.Success && long.TryParse(m2.Groups[1].Value, out var v)) return v;
-            }
-            catch { }
-            return null;
+
+            return runResults;
         }
 
-        private static long? FindIdInJsonElement(JsonElement el)
+        public async Task ExecuteTestAsync(
+            int runId,
+            int idx,
+            TestDefinition test,
+            string model,
+            ModelInfo modelInfo,
+            string agentInstructions,
+            object? defaultAgent)
         {
-            try
-            {
-                if (el.ValueKind == JsonValueKind.Object)
-                {
-                    if (el.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number)
-                    {
-                        if (idEl.TryGetInt64(out var v)) return v;
-                    }
-                    if (el.TryGetProperty("Result", out var resultEl))
-                    {
-                        var inner = FindIdInJsonElement(resultEl);
-                        if (inner.HasValue) return inner.Value;
-                    }
-                    foreach (var prop in el.EnumerateObject())
-                    {
-                        var nested = FindIdInJsonElement(prop.Value);
-                        if (nested.HasValue) return nested.Value;
-                    }
-                }
-                else if (el.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var item in el.EnumerateArray())
-                    {
-                        var nested = FindIdInJsonElement(item);
-                        if (nested.HasValue) return nested.Value;
-                    }
-                }
-                else if (el.ValueKind == JsonValueKind.String)
-                {
-                    var s = el.GetString();
-                    if (!string.IsNullOrWhiteSpace(s))
-                    {
-                        try
-                        {
-                            using var doc = JsonDocument.Parse(s);
-                            return FindIdInJsonElement(doc.RootElement);
-                        }
-                        catch { }
-                    }
-                }
-                return null;
-            }
-            catch { return null; }
-        }
+            var stepId = _database.AddTestStep(
+                runId,
+                idx,
+                test.FunctionName ?? $"test_{test.Id}",
+                JsonSerializer.Serialize(new { prompt = test.Prompt }));
 
-        private static string? TryExtractFromPossiblyJsonText(string textVal)
-        {
-            if (string.IsNullOrWhiteSpace(textVal)) return null;
-            var t = textVal.Trim();
-            if (!t.StartsWith("{") && !t.StartsWith("[")) return null;
-            try
-            {
-                using var doc = JsonDocument.Parse(t);
-                // prefer common keys
-                if (doc.RootElement.ValueKind == JsonValueKind.Object)
-                {
-                    if (doc.RootElement.TryGetProperty("overall_evaluation", out var eval) && eval.ValueKind == JsonValueKind.String) return eval.GetString();
-                    if (doc.RootElement.TryGetProperty("score", out var score) && (score.ValueKind == JsonValueKind.Number || score.ValueKind == JsonValueKind.String)) return score.ToString();
-                    if (doc.RootElement.TryGetProperty("response", out var resp) && resp.ValueKind == JsonValueKind.String) return resp.GetString();
-                }
-                // else fallback to the full text
-                return doc.RootElement.ToString();
-            }
-            catch { return null; }
-        }
-
-        private static string ExtractTextFromElement(JsonElement el)
-        {
-            try
-            {
-                if (el.ValueKind == JsonValueKind.String) return el.GetString() ?? string.Empty;
-                // If object has Content
-                if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("Content", out var contentEl))
-                {
-                    // Content may be a string containing JSON
-                    if (contentEl.ValueKind == JsonValueKind.String)
-                    {
-                        var inner = contentEl.GetString();
-                        if (!string.IsNullOrWhiteSpace(inner))
-                        {
-                            try
-                            {
-                                using var innerDoc = JsonDocument.Parse(inner);
-                                return ExtractTextFromElement(innerDoc.RootElement);
-                            }
-                            catch { return inner; }
-                        }
-                    }
-                    // If Content.Items exists
-                    if (contentEl.ValueKind == JsonValueKind.Object && contentEl.TryGetProperty("Items", out var itemsEl) && itemsEl.ValueKind == JsonValueKind.Array)
-                    {
-                        var sb = new System.Text.StringBuilder();
-                        foreach (var item in itemsEl.EnumerateArray())
-                        {
-                            if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("Text", out var t) && t.ValueKind == JsonValueKind.String)
-                            {
-                                if (sb.Length > 0) sb.Append('\n');
-                                sb.Append(t.GetString());
-                            }
-                        }
-                        return sb.ToString();
-                    }
-                }
-
-                // If object has Items at root
-                if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("Items", out var itemsRoot) && itemsRoot.ValueKind == JsonValueKind.Array)
-                {
-                    var sb = new System.Text.StringBuilder();
-                    foreach (var item in itemsRoot.EnumerateArray())
-                    {
-                        if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("Text", out var t) && t.ValueKind == JsonValueKind.String)
-                        {
-                            if (sb.Length > 0) sb.Append('\n');
-                            sb.Append(t.GetString());
-                        }
-                    }
-                    return sb.ToString();
-                }
-
-                // Try direct properties
-                if (el.ValueKind == JsonValueKind.Object)
-                {
-                    if (el.TryGetProperty("response", out var resp) && resp.ValueKind == JsonValueKind.String) return resp.GetString() ?? string.Empty;
-                    if (el.TryGetProperty("output", out var outp) && outp.ValueKind == JsonValueKind.Object && outp.TryGetProperty("response", out var resp2) && resp2.ValueKind == JsonValueKind.String) return resp2.GetString() ?? string.Empty;
-                }
-
-                return el.ToString();
-            }
-            catch { return el.ToString(); }
-        }
-
-        private async Task<(bool completed, string? error, double elapsedSeconds, string? raw, object? resultObj)> InvokeAgentSafeAsync(ChatCompletionAgent? agent, string prompt, int timeoutMs)
-        {
             try
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                if (agent == null) return (false, "No kernel/agent", 0.0, null, null);
-                var task = agent.InvokeAsync(prompt);
-                var finished = await Task.WhenAny(task, Task.Delay(timeoutMs));
-                if (finished != task)
-                {
-                    sw.Stop();
-                    return (false, $"Timeout after {timeoutMs / 1000}s", sw.Elapsed.TotalSeconds, null, null);
-                }
-                var result = await task;
-                sw.Stop();
-                string? raw = null;
-                try
-                {
-                    raw = FlattenResultToText(result);
-                    if (raw == null && result != null)
-                    {
-                        try { raw = System.Text.Json.JsonSerializer.Serialize(result); } catch { raw = null; }
-                    }
-                }
-                catch { raw = null; }
 
-                return (true, null, sw.Elapsed.TotalSeconds, raw, result);
-            }
-            catch (Exception ex)
-            {
-                return (false, ex?.Message ?? ex?.GetType()?.Name ?? string.Empty, 0.0, null, null);
-            }
-        }
+                var testType = (test.TestType ?? string.Empty).ToLowerInvariant();
 
-        public async Task ExecuteTestAsync(int runId, int idx, TestDefinition t, string model, ModelInfo modelInfo, string agentInstructions, ChatCompletionAgent? defaultAgent)
-        {
-            // Execute a single test step based on the TestDefinition type (question, functioncall, writer)
-            var stepId = _database.AddTestStep(runId, idx, t.FunctionName ?? ("test_" + t.Id.ToString()), System.Text.Json.JsonSerializer.Serialize(new { prompt = t.Prompt }));
-            try
-            {
-                _progress?.Append(runId.ToString(), $"Running step {idx}: {t.FunctionName ?? ("id_" + t.Id.ToString())}");
-                var swStep = System.Diagnostics.Stopwatch.StartNew();
-
-                var testType = (t.TestType ?? string.Empty).ToLowerInvariant();
                 switch (testType)
                 {
                     case "question":
-                        await HandleQuestionAsync(t, stepId, swStep, runId, idx, defaultAgent);
+                        await ExecuteQuestionTestAsync(test, stepId, sw, runId, idx, model);
                         break;
-                    case "writer":
+
                     case "functioncall":
-                        // Setup for functioncall and writer
-                        var stepAllowed = PluginHelpers.NormalizeList((t.AllowedPlugins ?? string.Empty).Split(',').Select(s => (s ?? string.Empty).Trim()).Where(s => !string.IsNullOrWhiteSpace(s))).ToList();
-                        if (stepAllowed.Count == 0)
-                        {
-                            // Do not add any plugins if AllowedPlugins is missing. If the caller intentionally uses 'library' fallback they should set AllowedPlugins explicitly.
-                            // However, preserve behavior for texteval group; if this is a texteval and no allowed plugin, use 'evaluator'.
-                            var libLower = (t.Library ?? string.Empty).ToLowerInvariant();
-                            var evaluatorLibsLocal = new[] { "coerenza_narrativa", "struttura", "caratterizzazione_personaggi", "dialoghi", "ritmo", "originalita", "stile", "worldbuilding", "coerenza_tematica", "impatto_emotivo" };
-                            if (string.Equals(t.GroupName, "texteval", StringComparison.OrdinalIgnoreCase) || evaluatorLibsLocal.Contains(libLower))
-                            {
-                                stepAllowed.Add("evaluator");
-                            }
-                        }
-                        // Ensure writer tests have story plugin available
-                        if (testType == "writer" && !stepAllowed.Contains("story")) stepAllowed.Add("story");
-                        // Ensure texteval/evaluator tests use the evaluator skill when allowed_plugins is empty or unspecified
-                        var libLowerTemp = (t.Library ?? string.Empty).ToLowerInvariant();
-                        var evaluatorLibsTemp = new[] { "coerenza_narrativa", "struttura", "caratterizzazione_personaggi", "dialoghi", "ritmo", "originalita", "stile", "worldbuilding", "coerenza_tematica", "impatto_emotivo" };
-                        if ((string.Equals(t.GroupName, "texteval", StringComparison.OrdinalIgnoreCase) || evaluatorLibsTemp.Contains(libLowerTemp)) && !stepAllowed.Contains("evaluator")) stepAllowed.Add("evaluator");
-                        ChatCompletionAgent? stepAgent = null;
-                        KernelWithPlugins? stepKernel = null;
-                        try
-                        {
-                            stepKernel = _factory.CreateKernel(model, stepAllowed);
-                            if (stepKernel != null) stepAgent = new ChatCompletionAgent("tester", stepKernel, agentInstructions, model ?? string.Empty);
-                        }
-                        catch (Exception ex)
-                        {
-                            // mark no tools if provider complains
-                            try { if (ex?.GetType()?.Name == "ModelDoesNotSupportToolsException" || (ex?.Message?.IndexOf("does not support tools", StringComparison.OrdinalIgnoreCase) >= 0)) { modelInfo.NoTools = true; _database.UpsertModel(modelInfo); _progress?.Append(runId.ToString(), "Marked model as NoTools (provider reports no tool support)"); } } catch { }
-                        }
-
-                        var useAgent = stepAgent ?? defaultAgent;
-                        // Reset evaluator skill state to avoid stale values
-                        try { if (_factory?.StoryEvaluatorSkill != null) { _factory.StoryEvaluatorSkill.LastCalled = null; _factory.StoryEvaluatorSkill.LastResult = null; } } catch { }
-
-                        var timeoutFc = t.TimeoutMs > 0 ? t.TimeoutMs : 30000;
-                        // If test defines a JSON response format, instruct the agent to use it
-                        try
-                        {
-                            if (!string.IsNullOrWhiteSpace(t.JsonResponseFormat))
-                            {
-                                var schemaPath = System.IO.Path.Combine(Directory.GetCurrentDirectory(), "response_formats", t.JsonResponseFormat);
-                                if (System.IO.File.Exists(schemaPath))
-                                {
-                                    var schemaJson = System.IO.File.ReadAllText(schemaPath);
-                                    try
-                                    {
-                                        // Prefer a direct method if available
-                                        var mi = useAgent?.GetType().GetMethod("SetResponseFormatSchema", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                                        if (mi != null)
-                                        {
-                                            mi.Invoke(useAgent, new object[] { schemaJson });
-                                        }
-                                        else
-                                        {
-                                            // Fallback: try reflection into internal KernelArguments
-                                            var argsField = useAgent?.GetType().GetField("_args", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                                            var argsVal = argsField?.GetValue(useAgent);
-                                            var execProp = argsVal?.GetType().GetProperty("ExecutionSettings");
-                                            var execVal = execProp?.GetValue(argsVal);
-                                            if (execVal != null)
-                                            {
-                                                var asm = execVal.GetType().Assembly;
-                                                var rfType = asm.GetType("Microsoft.SemanticKernel.Prompt.ResponseFormat") ?? asm.GetType("Microsoft.SemanticKernel.ResponseFormat");
-                                                if (rfType != null)
-                                                {
-                                                    var create = rfType.GetMethod("CreateJsonSchema", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                                                    var rf = create?.Invoke(null, new object[] { schemaJson });
-                                                    var rfProp = execVal.GetType().GetProperty("ResponseFormat");
-                                                    rfProp?.SetValue(execVal, rf);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    catch { }
-                                }
-                            }
-                        }
-                        catch { }
-
-                        // Build prompt to send to agent. If a JSON response schema is defined, append
-                        // an explicit instruction forcing the model to return only valid JSON matching
-                        // the schema. We keep the original prompt unchanged and use a local variable.
-                        var promptToUse = t.Prompt ?? string.Empty;
-                        var inv = await InvokeAgentSafeAsync(useAgent, promptToUse, timeoutFc);
-                        // If invocation completed but indicates lack of tool support, mark NoTools
-                        try { if (!string.IsNullOrWhiteSpace(inv.error)) { if (inv.error.IndexOf("does not support tools", StringComparison.OrdinalIgnoreCase) >= 0) { modelInfo.NoTools = true; _database.UpsertModel(modelInfo); _progress?.Append(runId.ToString(), "Marked model as NoTools (provider reports no tool support)"); } } } catch { }
-                        swStep.Stop();
-
-                        if (testType == "writer")
-                        {
-                            await HandleWriterAsync(t, stepId, swStep, runId, idx, useAgent, inv, stepKernel, timeoutFc, agentInstructions, model ?? string.Empty);
-                        }
-                        else
-                        {
-                            await HandleFunctionCallAsync(t, stepId, swStep, runId, idx, inv);
-                        }
+                        await ExecuteFunctionCallTestAsync(test, stepId, sw, runId, idx, model, modelInfo);
                         break;
+
+                    case "writer":
+                        await ExecuteWriterTestAsync(test, stepId, sw, runId, idx, model, modelInfo);
+                        break;
+
                     default:
-                        // Unknown test type, treat as error
-                        _database.UpdateTestStepResult(stepId, false, null, $"Unknown test type: {t.TestType}", null);
+                        _database.UpdateTestStepResult(
+                            stepId,
+                            false,
+                            null,
+                            $"Unknown test type: {test.TestType}",
+                            null);
                         break;
                 }
             }
             catch (Exception ex)
             {
                 _database.UpdateTestStepResult(stepId, false, null, ex.Message, null);
-                _progress?.Append(runId.ToString(), $"Step {idx} ERROR: {ex.Message}");
+                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}");
             }
         }
 
-        /// <summary>
-        /// Validates if the agent text matches the valid score range criteria.
-        /// Supports numeric ranges (min-max), single values, or comma-separated lists.
-        /// </summary>
-        private static bool ValidateRange(string? agentText, string validScoreRange, out string? failReason)
+        private async Task ExecuteQuestionTestAsync(
+            TestDefinition test,
+            int stepId,
+            System.Diagnostics.Stopwatch sw,
+            int runId,
+            int idx,
+            string model)
+        {
+            var kernel = CreateKernelForTest(model, test);
+            var chatService = kernel.GetRequiredService<IChatCompletionService>();
+
+            var settings = CreateExecutionSettings(test, model);
+            var timeout = test.TimeoutMs > 0 ? test.TimeoutMs : 30000;
+
+            var history = new ChatHistory();
+            history.AddUserMessage(test.Prompt ?? string.Empty);
+
+            try
+            {
+                var response = await InvokeWithTimeoutAsync(
+                    chatService.GetChatMessageContentAsync(history, settings, kernel),
+                    timeout);
+
+                sw.Stop();
+
+                var responseText = response?.Content ?? string.Empty;
+                bool passed = ValidateResponse(responseText, test, out var failReason);
+
+                var resultJson = JsonSerializer.Serialize(new
+                {
+                    response = responseText,
+                    expected = test.ExpectedPromptValue,
+                    range = test.ValidScoreRange
+                });
+
+                _database.UpdateTestStepResult(
+                    stepId,
+                    passed,
+                    resultJson,
+                    passed ? null : failReason,
+                    (long?)sw.ElapsedMilliseconds);
+
+                _progress?.Append(runId.ToString(),
+                    $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: {test.FunctionName ?? $"id_{test.Id}"} ({sw.ElapsedMilliseconds}ms)");
+            }
+            catch (TimeoutException)
+            {
+                sw.Stop();
+                _database.UpdateTestStepResult(
+                    stepId,
+                    false,
+                    null,
+                    $"Timeout after {timeout / 1000}s",
+                    (long?)sw.ElapsedMilliseconds);
+                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} TIMEOUT");
+            }
+        }
+
+        private async Task ExecuteFunctionCallTestAsync(
+            TestDefinition test,
+            int stepId,
+            System.Diagnostics.Stopwatch sw,
+            int runId,
+            int idx,
+            string model,
+            ModelInfo modelInfo)
+        {
+            var kernel = CreateKernelForTest(model, test);
+            var chatService = kernel.GetRequiredService<IChatCompletionService>();
+
+            var settings = CreateExecutionSettings(test, model);
+            settings.ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions;
+
+            var timeout = test.TimeoutMs > 0 ? test.TimeoutMs : 30000;
+            var history = new ChatHistory();
+            history.AddUserMessage(test.Prompt ?? string.Empty);
+
+            try
+            {
+                var response = await InvokeWithTimeoutAsync(
+                    chatService.GetChatMessageContentAsync(history, settings, kernel),
+                    timeout);
+
+                sw.Stop();
+
+                var responseText = response?.Content ?? string.Empty;
+                bool passed = ValidateFunctionCallResponse(responseText, test, out var failReason);
+
+                var resultJson = JsonSerializer.Serialize(new
+                {
+                    response = responseText,
+                    functionCalled = test.ExpectedBehavior
+                });
+
+                _database.UpdateTestStepResult(
+                    stepId,
+                    passed,
+                    resultJson,
+                    passed ? null : failReason,
+                    (long?)sw.ElapsedMilliseconds);
+
+                _progress?.Append(runId.ToString(),
+                    $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: {test.FunctionName ?? $"id_{test.Id}"} ({sw.ElapsedMilliseconds}ms)");
+            }
+            catch (TimeoutException)
+            {
+                sw.Stop();
+                _database.UpdateTestStepResult(
+                    stepId,
+                    false,
+                    null,
+                    $"Timeout after {timeout / 1000}s",
+                    (long?)sw.ElapsedMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                // Check for "no tools support" errors
+                if (ex.Message.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
+                {
+                    modelInfo.NoTools = true;
+                    _database.UpsertModel(modelInfo);
+                    _progress?.Append(runId.ToString(), $"[{model}] Marked model as NoTools");
+                }
+
+                _database.UpdateTestStepResult(
+                    stepId,
+                    false,
+                    null,
+                    ex.Message,
+                    (long?)sw.ElapsedMilliseconds);
+            }
+        }
+
+        private async Task ExecuteWriterTestAsync(
+            TestDefinition test,
+            int stepId,
+            System.Diagnostics.Stopwatch sw,
+            int runId,
+            int idx,
+            string model,
+            ModelInfo modelInfo)
+        {
+            var kernel = CreateKernelForTest(model, test);
+            var chatService = kernel.GetRequiredService<IChatCompletionService>();
+
+            var settings = CreateExecutionSettings(test, model);
+            // No need for ToolCallBehavior - writer just returns text
+
+            // Load execution plan if specified
+            var instructions = string.Empty;
+            if (!string.IsNullOrWhiteSpace(test.ExecutionPlan))
+            {
+                var planPath = Path.Combine(Directory.GetCurrentDirectory(), "execution_plans", test.ExecutionPlan);
+                if (File.Exists(planPath))
+                    instructions = File.ReadAllText(planPath);
+            }
+
+            var timeout = test.TimeoutMs > 0 ? test.TimeoutMs : 60000; // Longer timeout for story generation
+            var history = new ChatHistory();
+
+            if (!string.IsNullOrWhiteSpace(instructions))
+                history.AddSystemMessage(instructions);
+
+            history.AddUserMessage(test.Prompt ?? string.Empty);
+
+            try
+            {
+                var response = await InvokeWithTimeoutAsync(
+                    chatService.GetChatMessageContentAsync(history, settings, kernel),
+                    timeout);
+
+                sw.Stop();
+
+                var storyText = response?.Content ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(storyText))
+                {
+                    _database.UpdateTestStepResult(
+                        stepId,
+                        false,
+                        string.Empty,
+                        "No story text returned from writer",
+                        (long?)sw.ElapsedMilliseconds);
+                    return;
+                }
+
+                // Extract story content from JSON wrapper if present
+                var cleanStoryText = storyText;
+                if (storyText.Trim().StartsWith("{"))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(storyText);
+                        if (doc.RootElement.TryGetProperty("result", out var resultProp))
+                        {
+                            cleanStoryText = resultProp.GetString() ?? storyText;
+                        }
+                        else if (doc.RootElement.TryGetProperty("story", out var storyProp))
+                        {
+                            cleanStoryText = storyProp.GetString() ?? storyText;
+                        }
+                    }
+                    catch
+                    {
+                        // Not JSON or parsing failed, use as-is
+                    }
+                }
+
+                // Save the story to database
+                var storyId = _stories.InsertSingleStory(
+                    test.Prompt ?? string.Empty,
+                    cleanStoryText,
+                    _database.GetModelIdByName(model),
+                    null, // agentId
+                    0.0, // score - will be set by evaluation
+                    null, // eval
+                    0, // approved
+                    "generated", // status
+                    null // memoryKey
+                );
+
+                _database.AddTestAsset(
+                    stepId,
+                    "story",
+                    $"/stories/{storyId}",
+                    "Generated story",
+                    durationSec: sw.Elapsed.TotalSeconds,
+                    sizeBytes: cleanStoryText.Length,
+                    storyId: storyId);
+
+                // Evaluate story with evaluator agents
+                var evaluationScore = await EvaluateStoryWithAgentsAsync(storyId, cleanStoryText, runId, model);
+
+                var passed = evaluationScore >= 4.0; // Pass if score is 4 or higher
+                
+                _database.UpdateTestStepResult(
+                    stepId,
+                    passed,
+                    JsonSerializer.Serialize(new { storyId = storyId, length = cleanStoryText.Length, evaluationScore }),
+                    passed ? null : $"Evaluation score too low: {evaluationScore:F1}/10",
+                    (long?)sw.ElapsedMilliseconds);
+
+                _progress?.Append(runId.ToString(),
+                    $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: story ID {storyId}, evaluation score {evaluationScore:F1}/10");
+            }
+            catch (TimeoutException)
+            {
+                sw.Stop();
+                _database.UpdateTestStepResult(
+                    stepId,
+                    false,
+                    null,
+                    $"Timeout after {timeout / 1000}s",
+                    (long?)sw.ElapsedMilliseconds);
+            }
+        }
+
+        private Kernel CreateKernelForTest(string model, TestDefinition test)
+        {
+            // Parse allowed plugins from test definition
+            var allowedPlugins = string.IsNullOrWhiteSpace(test.AllowedPlugins)
+                ? Array.Empty<string>()
+                : test.AllowedPlugins
+                    .Split(',')
+                    .Select(s => s.Trim())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .ToArray();
+
+            // Create kernel with specified plugins (no special handling for writer tests)
+            var kernelWithPlugins = _factory.CreateKernel(model, allowedPlugins);
+            return kernelWithPlugins?.Kernel ?? throw new InvalidOperationException("Failed to create kernel");
+        }
+
+        private OpenAIPromptExecutionSettings CreateExecutionSettings(TestDefinition test, string model)
+        {
+            var settings = new OpenAIPromptExecutionSettings
+            {
+                Temperature = model.Contains("gpt-5-nano", StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0,
+                MaxTokens = 4000
+            };
+
+            // Apply JSON response format ONLY for OpenAI models using official ResponseFormat property
+            if (!string.IsNullOrWhiteSpace(test.JsonResponseFormat))
+            {
+                var schemaPath = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "response_formats",
+                    test.JsonResponseFormat);
+
+                if (File.Exists(schemaPath))
+                {
+                    try
+                    {
+                        var schemaJson = File.ReadAllText(schemaPath);
+                        
+                        // Parse the schema to validate it
+                        using var doc = JsonDocument.Parse(schemaJson);
+                        var root = doc.RootElement;
+                        
+                        string finalSchemaJson;
+                        
+                        // Only wrap if schema is not already an object type
+                        if (root.TryGetProperty("type", out var typeProperty) && 
+                            typeProperty.GetString() != "object")
+                        {
+                            // Wrap simple schemas (integer, boolean, etc.) in an object structure
+                            finalSchemaJson = $$"""
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "result": {{schemaJson}}
+                                },
+                                "required": ["result"],
+                                "additionalProperties": false
+                            }
+                            """;
+                        }
+                        else
+                        {
+                            // Use schema as-is if it's already an object
+                            finalSchemaJson = schemaJson;
+                        }
+                        
+                        // Use official ChatResponseFormat.CreateJsonSchemaFormat from OpenAI SDK
+                        settings.ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
+                            jsonSchemaFormatName: "response_schema",
+                            jsonSchema: BinaryData.FromString(finalSchemaJson),
+                            jsonSchemaIsStrict: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Warning: Failed to set response format: {ex.Message}");
+                        // Don't use fallback for OpenAI - let it fail naturally
+                    }
+                }
+            }
+
+            return settings;
+        }
+
+        private async Task<T> InvokeWithTimeoutAsync<T>(Task<T> task, int timeoutMs)
+        {
+            var completedTask = await Task.WhenAny(task, Task.Delay(timeoutMs));
+
+            if (completedTask != task)
+                throw new TimeoutException($"Operation timed out after {timeoutMs}ms");
+
+            return await task;
+        }
+
+        private bool ValidateResponse(string? responseText, TestDefinition test, out string? failReason)
+        {
+            failReason = null;
+
+            // Extract value from {"result": value} wrapper if present, or use direct value
+            var valueToValidate = responseText?.Trim();
+            
+            if (!string.IsNullOrWhiteSpace(valueToValidate) && valueToValidate.StartsWith("{"))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(valueToValidate);
+                    
+                    // Try to extract from {"result": value} wrapper
+                    if (doc.RootElement.TryGetProperty("result", out var resultProperty))
+                    {
+                        valueToValidate = resultProperty.ValueKind switch
+                        {
+                            JsonValueKind.String => resultProperty.GetString(),
+                            JsonValueKind.Number => resultProperty.GetInt32().ToString(),
+                            JsonValueKind.True => "true",
+                            JsonValueKind.False => "false",
+                            _ => resultProperty.GetRawText()
+                        };
+                    }
+                    // If no "result" property, try to extract direct value from root
+                    else if (doc.RootElement.ValueKind == JsonValueKind.Number)
+                    {
+                        valueToValidate = doc.RootElement.GetInt32().ToString();
+                    }
+                    else if (doc.RootElement.ValueKind == JsonValueKind.String)
+                    {
+                        valueToValidate = doc.RootElement.GetString();
+                    }
+                    else if (doc.RootElement.ValueKind == JsonValueKind.True || doc.RootElement.ValueKind == JsonValueKind.False)
+                    {
+                        valueToValidate = doc.RootElement.GetBoolean().ToString().ToLower();
+                    }
+                }
+                catch
+                {
+                    // If JSON parsing fails, use original response (it's a plain value)
+                }
+            }
+
+            // Check ExpectedPromptValue
+            if (!string.IsNullOrWhiteSpace(test.ExpectedPromptValue))
+            {
+                if (valueToValidate == test.ExpectedPromptValue)
+                    return true;
+
+                failReason = $"Expected '{test.ExpectedPromptValue}' but got '{valueToValidate}'";
+                return false;
+            }
+
+            // Check ValidScoreRange
+            if (!string.IsNullOrWhiteSpace(test.ValidScoreRange))
+            {
+                return ValidateRange(valueToValidate, test.ValidScoreRange, out failReason);
+            }
+
+            // Default: pass if response is not empty
+            if (string.IsNullOrWhiteSpace(valueToValidate))
+            {
+                failReason = "Response is empty";
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool ValidateFunctionCallResponse(
+            string? responseText,
+            TestDefinition test,
+            out string? failReason)
+        {
+            failReason = null;
+
+            // For function call tests, we rely on the structured response format
+            // If ResponseFormat is used, the model will return valid JSON
+            if (!string.IsNullOrWhiteSpace(test.JsonResponseFormat))
+            {
+                try
+                {
+                    // Validate JSON structure
+                    using var doc = JsonDocument.Parse(responseText ?? "{}");
+                    return true;
+                }
+                catch (JsonException ex)
+                {
+                    failReason = $"Invalid JSON response: {ex.Message}";
+                    return false;
+                }
+            }
+
+            // Fallback validation
+            return !string.IsNullOrWhiteSpace(responseText);
+        }
+
+        private bool ValidateRange(string? value, string validScoreRange, out string? failReason)
         {
             failReason = null;
             var range = validScoreRange.Trim();
+
             // Numeric range: min-max
             if (range.Contains("-") && !range.Contains(","))
             {
                 var parts = range.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                if (parts.Length == 2 && int.TryParse(parts[0], out var min) && int.TryParse(parts[1], out var max))
+                if (parts.Length == 2 &&
+                    int.TryParse(parts[0], out var min) &&
+                    int.TryParse(parts[1], out var max))
                 {
-                    if (int.TryParse(agentText, out var val) && val >= min && val <= max)
+                    if (int.TryParse(value, out var val) && val >= min && val <= max)
                         return true;
-                    else
-                        failReason = $"Agent response '{agentText}' is not in numeric range {min}-{max}";
-                }
-                else if (parts.Length == 1 && int.TryParse(parts[0], out var single))
-                {
-                    if (int.TryParse(agentText, out var val) && val == single)
-                        return true;
-                    else
-                        failReason = $"Agent response '{agentText}' is not equal to {single}";
+
+                    failReason = $"Value '{value}' is not in range {min}-{max}";
+                    return false;
                 }
             }
+
             // List of values: A,B,C
-            else if (range.Contains(","))
+            if (range.Contains(","))
             {
                 var values = range.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                foreach (var v in values)
-                {
-                    if (agentText != null && agentText.Equals(v, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-                failReason = $"Agent response '{agentText}' is not in allowed list [{string.Join(", ", values)}]";
+                if (values.Any(v => v.Equals(value, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+
+                failReason = $"Value '{value}' is not in allowed list [{string.Join(", ", values)}]";
+                return false;
             }
+
+            // Single value
+            if (value != null && value.Equals(range, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            failReason = $"Value '{value}' does not match expected '{range}'";
             return false;
         }
 
-        private async Task HandleWriterAsync(TestDefinition t, int stepId, System.Diagnostics.Stopwatch swStep, int runId, int idx, ChatCompletionAgent? useAgent, (bool completed, string? error, double elapsedSeconds, string? raw, object? resultObj) inv, KernelWithPlugins? stepKernel, int timeoutFc, string agentInstructions, string model)
+        private async Task<double> EvaluateStoryWithAgentsAsync(long storyId, string storyText, int runId, string writerModel)
         {
-            try
+            // Get evaluator agents from database
+            var allAgents = _database.ListAgents();
+            var evaluators = allAgents.Where(a => 
+                a.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) == true && 
+                a.IsActive).ToList();
+
+            if (evaluators.Count == 0)
             {
-                // Build prompt from execution plan if provided
-                var planText = string.Empty;
+                _progress?.Append(runId.ToString(), $"[{writerModel}] No active story evaluator agents found, skipping evaluation");
+                return 10.0; // Default score if no evaluators
+            }
+
+            _progress?.Append(runId.ToString(), $"[{writerModel}] Evaluating story with {evaluators.Count} evaluator agent(s)");
+
+            var totalScoreSum = 0;
+            var evaluatorCount = 0;
+
+            foreach (var evaluator in evaluators)
+            {
                 try
                 {
-                    if (!string.IsNullOrWhiteSpace(t.ExecutionPlan))
-                    {
-                        var path = System.IO.Path.Combine(Directory.GetCurrentDirectory(), "execution_plans", t.ExecutionPlan);
-                        if (System.IO.File.Exists(path)) planText = System.IO.File.ReadAllText(path);
-                    }
-                }
-                catch { }
-                var writerPrompt = t.Prompt ?? string.Empty;
+                    _progress?.Append(runId.ToString(), $"[{writerModel}] Running evaluation with agent: {evaluator.Name}");
 
-                // Append execution plan to agent instructions if present
-                var originalInstructions = useAgent?.Instructions;
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(planText) && useAgent != null)
+                    // Get model name for this evaluator
+                    var evaluatorModelName = evaluator.ModelId.HasValue 
+                        ? _database.GetModelNameById(evaluator.ModelId.Value) 
+                        : null;
+
+                    if (string.IsNullOrWhiteSpace(evaluatorModelName))
                     {
-                        var baseInstr = (!string.IsNullOrWhiteSpace(useAgent.Instructions) ? useAgent.Instructions : (agentInstructions ?? string.Empty));
-                        useAgent.Instructions = baseInstr + "\n\n" + planText;
-                    }
-                    var writerInv = await InvokeAgentSafeAsync(useAgent, writerPrompt, timeoutFc);
-                    // Debug: log basic writer response statuses (truncated)
-                    try
-                    {
-                        var rawPreview = writerInv.raw ?? (writerInv.resultObj?.ToString());
-                        if (!string.IsNullOrWhiteSpace(rawPreview) && rawPreview.Length > 1500) rawPreview = rawPreview.Substring(0, 1500) + "...";
-                        _progress?.Append(runId.ToString(), $"WriterInv error: {writerInv.error ?? ""} - raw preview: {rawPreview}");
-                        _progress?.Append(runId.ToString(), $"Writer skill LastResult: {stepKernel?.StoryWriterSkill?.LastResult}");
-                    }
-                    catch { }
-                    swStep.Stop();
-                    var storyText = FlattenResultToText(writerInv.raw) ?? FlattenResultToText(writerInv.resultObj) ?? string.Empty;
-                    long savedId = 0;
-                    try
-                    {
-                        var last = stepKernel?.StoryWriterSkill?.LastResult;
-                        if (!string.IsNullOrWhiteSpace(last))
-                        {
-                            try
-                            {
-                                using var doc = JsonDocument.Parse(last);
-                                if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number)
-                                {
-                                    savedId = idEl.GetInt64();
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                    catch { }
-                    if (savedId == 0)
-                    {
-                        try
-                        {
-                            var resultObj = writerInv.resultObj;
-                            if (resultObj != null)
-                            {
-                                var fcProp = resultObj.GetType().GetProperty("FunctionCalls");
-                                if (fcProp != null)
-                                {
-                                    var fcVal = fcProp.GetValue(resultObj) as System.Collections.IEnumerable;
-                                    if (fcVal != null)
-                                    {
-                                        var enumIt = fcVal.GetEnumerator();
-                                        if (enumIt.MoveNext())
-                                        {
-                                            var call = enumIt.Current;
-                                            if (call != null)
-                                            {
-                                                var callType = call.GetType();
-                                                var getArgMI = callType.GetMethods().FirstOrDefault(m => m.Name == "GetArgument" && m.GetParameters().Length == 1);
-                                                if (getArgMI != null && getArgMI.IsGenericMethodDefinition)
-                                                {
-                                                    try
-                                                    {
-                                                        var mStr = getArgMI.MakeGenericMethod(typeof(string));
-                                                        var storyArg = mStr.Invoke(call, new object[] { "story" }) as string;
-                                                        if (!string.IsNullOrWhiteSpace(storyArg))
-                                                        {
-                                                            var genRes2 = new StoryGeneratorService.GenerationResult { StoryC = storyArg ?? string.Empty, ModelC = model ?? string.Empty, ScoreC = 0.0, EvalC = string.Empty };
-                                                            savedId = _stories.SaveGeneration(t.Prompt ?? string.Empty, genRes2, Guid.NewGuid().ToString());
-                                                        }
-                                                    }
-                                                    catch { }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-                    // If we still didn't get an id from LastResult or FunctionCalls, try extracting the id from raw JSON
-                    if (savedId == 0)
-                    {
-                        try
-                        {
-                            var parsedFromRaw = TryExtractIdFromJsonString(writerInv.raw);
-                            if (parsedFromRaw.HasValue)
-                            {
-                                savedId = parsedFromRaw.Value;
-                                _progress?.Append(runId.ToString(), $"Writer: extracted savedId={savedId} from raw JSON");
-                            }
-                        }
-                        catch { }
+                        _progress?.Append(runId.ToString(), $"[{writerModel}] Evaluator {evaluator.Name} has no valid model, skipping");
+                        continue;
                     }
 
-                    if (!string.IsNullOrWhiteSpace(storyText))
+                    // Create kernel for evaluator with skills from agent configuration
+                    var agentSkills = new List<string> { "evaluator" }; // Always include evaluator skill
+                    
+                    // Parse and add skills from agent's Skills JSON field
+                    if (!string.IsNullOrWhiteSpace(evaluator.Skills))
                     {
-                        var genRes = new StoryGeneratorService.GenerationResult { StoryC = storyText ?? string.Empty, ModelC = model ?? string.Empty, ScoreC = 0.0, EvalC = string.Empty };
                         try
                         {
-                            if (savedId == 0)
+                            var skillsArray = JsonSerializer.Deserialize<string[]>(evaluator.Skills);
+                            if (skillsArray != null)
                             {
-                                savedId = _stories.SaveGeneration(t.Prompt ?? string.Empty, genRes, Guid.NewGuid().ToString());
+                                agentSkills.AddRange(skillsArray);
                             }
+                            agentSkills = agentSkills.Distinct().ToList();
                         }
-                        catch { }
-                        try { _database.AddTestAsset(stepId, "story", $"/stories/{savedId}", "Generated story", durationSec: swStep.Elapsed.TotalSeconds, sizeBytes: storyText?.Length ?? 0, storyId: savedId); } catch { }
-                        try
+                        catch (Exception ex)
                         {
-                            var topModels = _database.ListModels().Where(m => m.Enabled).OrderByDescending(m => m.FunctionCallingScore).Take(3).Select(m => m.Name).ToList();
-                            foreach (var evalModel in topModels)
-                            {
-                                try
-                                {
-                                            var evalKw = _factory.CreateKernel(evalModel ?? string.Empty, new[] { "evaluator" });
-                                    if (evalKw == null || evalKw.Kernel == null) continue;
-                                    var evalAgent = new ChatCompletionAgent("evaluator", evalKw.Kernel, "Valuta la storia e invoca la funzione evaluate_full_story con i parametri e includi story_id.", evalModel ?? string.Empty);
-                                    var evalPrompt = $"Valuta questa storia e invoca 'evaluate_full_story' con i valori richiesti. Imposta story_id: {savedId}.\n\nStoria:\n{storyText}";
-                                    var invEval = await InvokeAgentSafeAsync(evalAgent, evalPrompt, timeoutFc);
-                                    try
-                                    {
-                                        var raw = invEval.raw ?? invEval.resultObj?.ToString() ?? string.Empty;
-                                        _database.UpdateTestStepResult(stepId, true, raw, null, (long)swStep.Elapsed.TotalMilliseconds);
-                                    }
-                                    catch { }
-                                }
-                                catch { }
-                            }
+                            _progress?.Append(runId.ToString(), $"[{writerModel}] Warning: Failed to parse skills for evaluator {evaluator.Name}: {ex.Message}");
                         }
-                        catch { }
                     }
-                    else
+                    
+                    var evaluatorKernel = _factory.CreateKernel(evaluatorModelName, agentSkills, evaluator.Id);
+
+                    if (evaluatorKernel?.Kernel == null)
                     {
-                        _database.UpdateTestStepResult(stepId, false, "", "No story produced", (long)swStep.Elapsed.TotalMilliseconds);
+                        _progress?.Append(runId.ToString(), $"[{writerModel}] Failed to create kernel for evaluator {evaluator.Name}");
+                        continue;
+                    }
+
+                    var chatService = evaluatorKernel.Kernel.GetRequiredService<IChatCompletionService>();
+                    var settings = new OpenAIPromptExecutionSettings
+                    {
+                        Temperature = evaluatorModelName.Contains("gpt-5-nano", StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0,
+                        MaxTokens = 4000
+                    };
+
+                    // Apply full_evaluation.json response format
+                    var schemaPath = Path.Combine(Directory.GetCurrentDirectory(), "response_formats", "full_evaluation.json");
+                    if (File.Exists(schemaPath))
+                    {
+                        try
+                        {
+                            var schemaJson = File.ReadAllText(schemaPath);
+                            settings.ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
+                                jsonSchemaFormatName: "full_evaluation_schema",
+                                jsonSchema: BinaryData.FromString(schemaJson),
+                                jsonSchemaIsStrict: true);
+                        }
+                        catch (Exception ex)
+                        {
+                            _progress?.Append(runId.ToString(), $"[{writerModel}] Warning: Failed to set response format for evaluator: {ex.Message}");
+                        }
+                    }
+
+                    var history = new ChatHistory();
+                    
+                    // Add evaluator instructions if available
+                    if (!string.IsNullOrWhiteSpace(evaluator.Instructions))
+                    {
+                        history.AddSystemMessage(evaluator.Instructions);
+                    }
+
+                    // Add prompt to evaluate the story
+                    var evaluationPrompt = $@"Please evaluate the following story across all 10 categories. For each category, provide:
+- A score from 1 to 10
+- A description of any defects found
+
+Categories: narrative_coherence, structure, characterization, dialogues, pacing, originality, style, worldbuilding, thematic_coherence, emotional_impact
+
+Also provide:
+- total_score: sum of all category scores (0-100)
+- overall_evaluation: a brief summary of the story's strengths and weaknesses
+
+Story:
+{storyText}";
+
+                    history.AddUserMessage(evaluationPrompt);
+
+                    var response = await InvokeWithTimeoutAsync(
+                        chatService.GetChatMessageContentAsync(history, settings, evaluatorKernel.Kernel),
+                        60000); // 60 second timeout for evaluation
+
+                    // Parse structured evaluation response
+                    var responseText = response?.Content ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(responseText))
+                    {
+                        try
+                        {
+                            var evalDoc = JsonDocument.Parse(responseText);
+                            var root = evalDoc.RootElement;
+
+                            // Extract all evaluation fields
+                            var narrativeScore = root.GetProperty("narrative_coherence_score").GetInt32();
+                            var narrativeDefects = root.GetProperty("narrative_coherence_defects").GetString() ?? "";
+                            var structureScore = root.GetProperty("structure_score").GetInt32();
+                            var structureDefects = root.GetProperty("structure_defects").GetString() ?? "";
+                            var characterizationScore = root.GetProperty("characterization_score").GetInt32();
+                            var characterizationDefects = root.GetProperty("characterization_defects").GetString() ?? "";
+                            var dialoguesScore = root.GetProperty("dialogues_score").GetInt32();
+                            var dialoguesDefects = root.GetProperty("dialogues_defects").GetString() ?? "";
+                            var pacingScore = root.GetProperty("pacing_score").GetInt32();
+                            var pacingDefects = root.GetProperty("pacing_defects").GetString() ?? "";
+                            var originalityScore = root.GetProperty("originality_score").GetInt32();
+                            var originalityDefects = root.GetProperty("originality_defects").GetString() ?? "";
+                            var styleScore = root.GetProperty("style_score").GetInt32();
+                            var styleDefects = root.GetProperty("style_defects").GetString() ?? "";
+                            var worldbuildingScore = root.GetProperty("worldbuilding_score").GetInt32();
+                            var worldbuildingDefects = root.GetProperty("worldbuilding_defects").GetString() ?? "";
+                            var thematicScore = root.GetProperty("thematic_coherence_score").GetInt32();
+                            var thematicDefects = root.GetProperty("thematic_coherence_defects").GetString() ?? "";
+                            var emotionalScore = root.GetProperty("emotional_impact_score").GetInt32();
+                            var emotionalDefects = root.GetProperty("emotional_impact_defects").GetString() ?? "";
+                            var totalScore = root.GetProperty("total_score").GetDouble();
+                            var overallEvaluation = root.GetProperty("overall_evaluation").GetString() ?? "";
+
+                            // Get model and agent IDs
+                            var evaluatorModelId = _database.GetModelIdByName(evaluatorModelName);
+
+                            // Save to database
+                            _database.AddStoryEvaluation(
+                                storyId,
+                                narrativeScore, narrativeDefects,
+                                structureScore, structureDefects,
+                                characterizationScore, characterizationDefects,
+                                dialoguesScore, dialoguesDefects,
+                                pacingScore, pacingDefects,
+                                originalityScore, originalityDefects,
+                                styleScore, styleDefects,
+                                worldbuildingScore, worldbuildingDefects,
+                                thematicScore, thematicDefects,
+                                emotionalScore, emotionalDefects,
+                                totalScore,
+                                overallEvaluation,
+                                responseText,
+                                evaluatorModelId,
+                                evaluator.Id
+                            );
+
+                            totalScoreSum += (int)totalScore;
+                            evaluatorCount++;
+                            _progress?.Append(runId.ToString(), $"[{writerModel}] Evaluator {evaluator.Name} scored: {totalScore}/100");
+                        }
+                        catch (Exception ex)
+                        {
+                            _progress?.Append(runId.ToString(), $"[{writerModel}] Failed to parse evaluation from {evaluator.Name}: {ex.Message}");
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _database.UpdateTestStepResult(stepId, false, null, ex.Message, (long)swStep.Elapsed.TotalMilliseconds);
+                    _progress?.Append(runId.ToString(), $"[{writerModel}] Error evaluating with {evaluator.Name}: {ex.Message}");
                 }
-                finally
-                {
-                    // restore original instructions
-                    try { if (useAgent != null) useAgent.Instructions = originalInstructions; } catch { }
-                }
-                _progress?.Append(runId.ToString(), $"Step {idx} WRITER executed: {t.FunctionName ?? ("writer step" + t.Id)}");
             }
-            catch { }
-        }
 
-        private async Task HandleQuestionAsync(TestDefinition t, int stepId, System.Diagnostics.Stopwatch swStep, int runId, int idx, ChatCompletionAgent? defaultAgent)
-        {
-            var timeout = t.TimeoutMs > 0 ? t.TimeoutMs : 30000;
-            var invQ = await InvokeAgentSafeAsync(defaultAgent, t.Prompt ?? string.Empty, timeout);
-            swStep.Stop();
-            // Always extract clean text from raw or result object
-            var agentTextQ = FlattenResultToText(invQ.raw) ?? FlattenResultToText(invQ.resultObj);
-            bool passedQ = false;
-            string? failReasonQ = null;
-            // Verifica ExpectedPromptValue
-            if (!string.IsNullOrWhiteSpace(t.ExpectedPromptValue))
+            if (evaluatorCount == 0)
             {
-                if (agentTextQ != null && agentTextQ == t.ExpectedPromptValue)
-                    passedQ = true;
-                else
-                    failReasonQ = "Agent response does not match ExpectedPromptValue";
-            }
-            // Verifica ValidScoreRange
-            else if (!string.IsNullOrWhiteSpace(t.ValidScoreRange))
-            {
-                passedQ = ValidateRange(agentTextQ, t.ValidScoreRange, out failReasonQ);
-            }
-            else
-            {
-                // Se nessun criterio, passa solo se la risposta non è vuota
-                passedQ = !string.IsNullOrWhiteSpace(agentTextQ);
-                if (!passedQ) failReasonQ = "Agent response is empty";
-            }
-            var outJsonQ = System.Text.Json.JsonSerializer.Serialize(new { response = agentTextQ, raw = agentTextQ, expected = t.ExpectedPromptValue, range = t.ValidScoreRange });
-            _database.UpdateTestStepResult(stepId, passedQ, outJsonQ, passedQ ? null : failReasonQ, (long?)(swStep.ElapsedMilliseconds));
-            // Invio prompt e risposta come messaggio di progresso
-            _progress?.Append(runId.ToString(), $"PROMPT: {t.Prompt}\nRESPONSE: {agentTextQ}");
-            _progress?.Append(runId.ToString(), $"Step {idx} {(passedQ ? "PASSED" : "FAILED")}: {t.FunctionName ?? ("id_" + t.Id.ToString())} ({swStep.ElapsedMilliseconds}ms)");
-        }
-
-        private async Task HandleFunctionCallAsync(TestDefinition t, int stepId, System.Diagnostics.Stopwatch swStep, int runId, int idx, (bool completed, string? error, double elapsedSeconds, string? raw, object? resultObj) inv)
-        {
-            // Determine which plugin was called via LastCalled mapping (best-effort)
-            var calledLocal = string.Empty;
-            try
-            {
-                calledLocal = (t.Library ?? string.Empty).ToLowerInvariant() switch
-                {
-                    var s when s.Contains("tts") => _factory?.TtsApiSkill?.LastCalled,
-                    var s when s.Contains("audiocraft") => _factory?.AudioCraftSkill?.LastCalled,
-                    var s when s.Contains("text") => _factory?.TextPlugin?.LastCalled,
-                    var s when s.Contains("math") => _factory?.MathPlugin?.LastCalled,
-                    var s when s.Contains("time") => _factory?.TimePlugin?.LastCalled,
-                    var s when s.Contains("filesystem") => _factory?.FileSystemPlugin?.LastCalled,
-                    var s when s.Contains("http") => _factory?.HttpPlugin?.LastCalled,
-                    var s when s.Contains("memory") => _factory?.MemorySkill?.LastCalled,
-                    _ => _factory?.TextPlugin?.LastCalled
-                } ?? string.Empty;
-            }
-            catch { }
-
-            var libLowerLocal = (t.Library ?? string.Empty).ToLowerInvariant();
-            var isTextevalLocal = string.Equals(t.GroupName, "texteval", StringComparison.OrdinalIgnoreCase);
-            var evaluatorLibsLocal = new[] { "coerenza_narrativa", "struttura", "caratterizzazione_personaggi", "dialoghi", "ritmo", "originalita", "stile", "worldbuilding", "coerenza_tematica", "impatto_emotivo" };
-            if (isTextevalLocal || evaluatorLibsLocal.Contains(libLowerLocal))
-            {
-                object? resultObj = inv.resultObj;
-                bool parsedOk = false;
-                int parsedScore = -1;
-                string parsedDefects = string.Empty;
-                try
-                {
-                    if (resultObj != null)
-                    {
-                        var fcProp = resultObj.GetType().GetProperty("FunctionCalls");
-                        if (fcProp != null)
-                        {
-                            var fcVal = fcProp.GetValue(resultObj) as System.Collections.IEnumerable;
-                            if (fcVal != null)
-                            {
-                                var enumIt = fcVal.GetEnumerator();
-                                if (enumIt.MoveNext())
-                                {
-                                    var call = enumIt.Current;
-                                    if (call != null)
-                                    {
-                                        try
-                                        {
-                                            var callType = call.GetType();
-                                            var getArgMI = callType.GetMethods().FirstOrDefault(m => m.Name == "GetArgument" && m.GetParameters().Length == 1);
-                                            if (getArgMI != null && getArgMI.IsGenericMethodDefinition)
-                                            {
-                                                try
-                                                {
-                                                    var mInt = getArgMI.MakeGenericMethod(typeof(int));
-                                                    var val = mInt.Invoke(call, new object[] { "score" });
-                                                    if (val is int vi) parsedScore = vi;
-                                                    else if (val is long vl) parsedScore = (int)vl;
-                                                }
-                                                catch { }
-                                                try
-                                                {
-                                                    var mStr = getArgMI.MakeGenericMethod(typeof(string));
-                                                    var dv = mStr.Invoke(call, new object[] { "difetti" });
-                                                    if (dv == null) dv = mStr.Invoke(call, new object[] { "defects" });
-                                                    if (dv == null) dv = mStr.Invoke(call, new object[] { "defect" });
-                                                    if (dv is string ds) parsedDefects = ds ?? string.Empty;
-                                                }
-                                                catch { }
-                                                parsedOk = parsedScore >= 0 || !string.IsNullOrWhiteSpace(parsedDefects);
-                                            }
-                                        }
-                                        catch { }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                catch { }
-
-                if (!parsedOk)
-                {
-                    var cleanedMissing = FlattenResultToText(inv.raw) ?? FlattenResultToText(inv.resultObj);
-                    var outMissing = cleanedMissing != null ? System.Text.Json.JsonSerializer.Serialize(new { response = cleanedMissing, raw = cleanedMissing }) : (inv.raw != null ? System.Text.Json.JsonSerializer.Serialize(new { raw = inv.raw }) : null);
-                    _database.UpdateTestStepResult(stepId, false, outMissing, "Model did not invoke evaluator function (required: function-calling with FunctionCalls)", (long?)(swStep.Elapsed.TotalMilliseconds));
-                    _progress?.Append(runId.ToString(), $"Step {idx} FAILED: evaluator function not invoked ({t.FunctionName ?? ("id_" + t.Id.ToString())})");
-                    return;
-                }
-
-                bool passedEval = false;
-                if (!string.IsNullOrWhiteSpace(t.ExpectedBehavior) && !string.IsNullOrWhiteSpace(parsedDefects))
-                {
-                    if (parsedDefects.IndexOf(t.ExpectedBehavior, StringComparison.OrdinalIgnoreCase) >= 0) passedEval = true;
-                }
-                if (!passedEval && parsedOk && !string.IsNullOrWhiteSpace(t.ValidScoreRange))
-                {
-                    try
-                    {
-                        var range = t.ValidScoreRange.Trim();
-                        // Range numerico: min-max
-                        if (range.Contains("-") && !range.Contains(","))
-                        {
-                            var parts = range.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                            if (parts.Length == 2 && int.TryParse(parts[0], out var min) && int.TryParse(parts[1], out var max))
-                            {
-                                if (parsedScore >= min && parsedScore <= max) passedEval = true;
-                            }
-                            else if (parts.Length == 1 && int.TryParse(parts[0], out var single))
-                            {
-                                if (parsedScore == single) passedEval = true;
-                            }
-                        }
-                        // Lista di valori: A,B,C
-                        else if (range.Contains(","))
-                        {
-                            var values = range.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                            var scoreStr = parsedScore.ToString();
-                            foreach (var v in values)
-                            {
-                                if (scoreStr.Equals(v, StringComparison.OrdinalIgnoreCase) || (!string.IsNullOrWhiteSpace(parsedDefects) && parsedDefects.Equals(v, StringComparison.OrdinalIgnoreCase)))
-                                {
-                                    passedEval = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    catch { }
-                }
-
-                var cleaned = FlattenResultToText(inv.raw) ?? FlattenResultToText(inv.resultObj);
-                var rawForPersist = cleaned ?? (resultObj != null ? System.Text.Json.JsonSerializer.Serialize(resultObj) : inv.raw);
-                var outJson3 = System.Text.Json.JsonSerializer.Serialize(new { parsed = new { score = parsedScore, defects = parsedDefects }, response = cleaned, raw = rawForPersist });
-                _database.UpdateTestStepResult(stepId, passedEval, outJson3, passedEval ? null : inv.error, (long?)(swStep.Elapsed.TotalMilliseconds));
-                _progress?.Append(runId.ToString(), $"Evaluated texteval step (score={parsedScore})");
-                return;
+                _progress?.Append(runId.ToString(), $"[{writerModel}] No successful evaluations, using default score");
+                return 10.0;
             }
 
-            // Non-evaluator steps: LastCalled checks
-            if (!string.IsNullOrWhiteSpace(t.ExpectedBehavior) && t.ExpectedBehavior.Contains("LastCalled") && string.IsNullOrWhiteSpace(calledLocal))
-            {
-                var err = "Model responded without invoking the expected addin/function" + (inv.error != null ? $": {inv.error}" : string.Empty);
-                var cleanedChat = FlattenResultToText(inv.raw) ?? FlattenResultToText(inv.resultObj);
-                var outJson = cleanedChat != null ? System.Text.Json.JsonSerializer.Serialize(new { response = cleanedChat, raw = inv.raw, chat = cleanedChat }) : (inv.raw != null ? System.Text.Json.JsonSerializer.Serialize(new { raw = inv.raw }) : null);
-                _database.UpdateTestStepResult(stepId, false, outJson, err, (long?)(swStep.Elapsed.TotalMilliseconds));
-                _progress?.Append(runId.ToString(), $"Step {idx} FAILED (no addin invocation): {t.FunctionName ?? ("id_" + t.Id.ToString())} ({swStep.ElapsedMilliseconds}ms)");
-                return;
-            }
+            // Calculate final score: (sum of scores / max possible) * 10
+            // Each evaluator gives 0-100 points (10 categories × 10 points)
+            var maxPossible = evaluatorCount * 100;
+            var finalScore = (double)totalScoreSum / maxPossible * 10.0;
 
-            var passed = false;
-            if (!string.IsNullOrWhiteSpace(t.ExpectedBehavior) && t.ExpectedBehavior.Contains("LastCalled") && !string.IsNullOrWhiteSpace(calledLocal))
-            {
-                var expected = t.ExpectedBehavior.Split('"').ElementAtOrDefault(1) ?? string.Empty;
-                passed = string.Equals(expected, calledLocal, StringComparison.OrdinalIgnoreCase);
-            }
+            _progress?.Append(runId.ToString(), $"[{writerModel}] Final evaluation score: {finalScore:F2}/10 (total: {totalScoreSum}/{maxPossible})");
 
-            var cleanedChat2 = FlattenResultToText(inv.raw) ?? FlattenResultToText(inv.resultObj);
-            var outJson2 = cleanedChat2 != null ? System.Text.Json.JsonSerializer.Serialize(new { response = cleanedChat2, raw = inv.raw, chat = cleanedChat2 }) : (inv.raw != null ? System.Text.Json.JsonSerializer.Serialize(new { raw = inv.raw }) : null);
-            _database.UpdateTestStepResult(stepId, passed, outJson2, passed ? null : inv.error, (long?)(swStep.Elapsed.TotalMilliseconds));
-            _progress?.Append(runId.ToString(), $"Step {idx} {(passed ? "PASSED" : "FAILED")}: {t.FunctionName ?? ("id_" + t.Id.ToString())} ({swStep.ElapsedMilliseconds}ms)");
+            return finalScore;
         }
     }
 }

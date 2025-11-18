@@ -108,6 +108,9 @@ builder.Services.AddSingleton<CostController>(sp =>
         sp.GetRequiredService<DatabaseService>(),
         sp.GetService<ITokenizer>()));
 
+// Ollama management service
+builder.Services.AddSingleton<IOllamaManagementService, OllamaManagementService>();
+
 Console.WriteLine($"[Startup] About to call builder.Build() at {DateTime.UtcNow:o}");
 var app = builder.Build();
 Console.WriteLine($"[Startup] builder.Build() completed at {DateTime.UtcNow:o}");

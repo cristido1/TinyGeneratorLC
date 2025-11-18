@@ -1,3 +1,4 @@
 {
-  "type": "boolean"
+  "type": "boolean",
+  "description": "A true or false value"
 }

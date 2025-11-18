@@ -1,3 +1,4 @@
 {
-  "type": "number"
+  "type": "number",
+  "description": "A numeric result"
 }

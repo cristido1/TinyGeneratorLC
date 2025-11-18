@@ -17,69 +17,7 @@ namespace TinyGenerator.Services;
 
 public sealed class DatabaseService
 {
-    private static readonly string[] SkillColumns =
-    {
-        // Skill columns removed from models table; kept empty to avoid runtime ALTERs
-    };
 
-    private static readonly HashSet<string> SkillColumnSet = new(SkillColumns, StringComparer.OrdinalIgnoreCase);
-
-    private static readonly IReadOnlyDictionary<string, string> LegacyColumnMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["name"] = "Name",
-        ["provider"] = "Provider",
-        ["endpoint"] = "Endpoint",
-        ["is_local"] = "IsLocal",
-        ["max_context"] = "MaxContext",
-        ["context_to_use"] = "ContextToUse",
-        ["function_calling_score"] = "FunctionCallingScore",
-        ["cost_in_per_token"] = "CostInPerToken",
-        ["cost_out_per_token"] = "CostOutPerToken",
-        ["limit_tokens_day"] = "LimitTokensDay",
-        ["limit_tokens_week"] = "LimitTokensWeek",
-        ["limit_tokens_month"] = "LimitTokensMonth",
-        ["metadata"] = "Metadata",
-        ["enabled"] = "Enabled",
-        ["created_at"] = "CreatedAt",
-        ["updated_at"] = "UpdatedAt",
-        ["skill_toupper"] = "SkillToUpper",
-        ["skill_tolower"] = "SkillToLower",
-        ["skill_trim"] = "SkillTrim",
-        ["skill_length"] = "SkillLength",
-        ["skill_substring"] = "SkillSubstring",
-        ["skill_join"] = "SkillJoin",
-        ["skill_split"] = "SkillSplit",
-        ["skill_add"] = "SkillAdd",
-        ["skill_subtract"] = "SkillSubtract",
-        ["skill_multiply"] = "SkillMultiply",
-        ["skill_divide"] = "SkillDivide",
-        ["skill_sqrt"] = "SkillSqrt",
-        ["skill_now"] = "SkillNow",
-        ["skill_today"] = "SkillToday",
-        ["skill_adddays"] = "SkillAddDays",
-        ["skill_addhours"] = "SkillAddHours",
-        ["skill_remember"] = "SkillRemember",
-        ["skill_recall"] = "SkillRecall",
-        ["skill_forget"] = "SkillForget",
-        ["skill_fileexists"] = "SkillFileExists",
-        ["skill_httpget"] = "SkillHttpGet"
-    };
-
-    private static readonly IReadOnlyDictionary<string, string> ColumnDefinitions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["FunctionCallingScore"] = "INTEGER DEFAULT 0",
-        ["CreatedAt"] = "TEXT",
-        ["UpdatedAt"] = "TEXT",
-        ["TestDurationSeconds"] = "REAL",
-        ["NoTools"] = "INTEGER DEFAULT 0",
-        // Last* columns removed from this installation; keep core metadata only
-    };
-
-    // Add LastTestResults to column definitions (TEXT JSON)
-    static DatabaseService()
-    {
-        // No legacy Last* columns in models table for this installation.
-    }
 
     private readonly string _connectionString;
 
@@ -133,7 +71,7 @@ public sealed class DatabaseService
     {
         using var conn = CreateConnection();
         conn.Open();
-    var cols = SelectModelColumns();
+        var cols = SelectModelColumns();
         var sql = $"SELECT {cols} FROM models";
         return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
     }
@@ -159,6 +97,30 @@ public sealed class DatabaseService
             long? duration = row.DurationMs == null ? (long?)null : Convert.ToInt64(row.DurationMs);
             string? runDate = row.RunDate;
             return (runId, testCode, passed, duration, runDate);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Get the duration in milliseconds of the latest test run for a specific group.
+    /// </summary>
+    public long? GetGroupTestDuration(string modelName, string groupName)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        try
+        {
+            var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+            if (!modelId.HasValue) return null;
+            
+            var sql = @"SELECT duration_ms FROM model_test_runs 
+                        WHERE model_id = @mid AND test_code = @group 
+                        ORDER BY id DESC LIMIT 1";
+            var duration = conn.ExecuteScalar<long?>(sql, new { mid = modelId.Value, group = groupName });
+            return duration;
         }
         catch
         {
@@ -230,7 +192,7 @@ public sealed class DatabaseService
         model.CreatedAt ??= existing?.CreatedAt ?? now;
         model.UpdatedAt = now;
 
-    var sql = @"INSERT INTO models(Name, Provider, Endpoint, IsLocal, MaxContext, ContextToUse, FunctionCallingScore, CostInPerToken, CostOutPerToken, LimitTokensDay, LimitTokensWeek, LimitTokensMonth, Metadata, Enabled, CreatedAt, UpdatedAt, NoTools)
+        var sql = @"INSERT INTO models(Name, Provider, Endpoint, IsLocal, MaxContext, ContextToUse, FunctionCallingScore, CostInPerToken, CostOutPerToken, LimitTokensDay, LimitTokensWeek, LimitTokensMonth, Metadata, Enabled, CreatedAt, UpdatedAt, NoTools)
 VALUES(@Name,@Provider,@Endpoint,@IsLocal,@MaxContext,@ContextToUse,@FunctionCallingScore,@CostInPerToken,@CostOutPerToken,@LimitTokensDay,@LimitTokensWeek,@LimitTokensMonth,@Metadata,@Enabled,@CreatedAt,@UpdatedAt,@NoTools)
 ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=@IsLocal, MaxContext=@MaxContext, ContextToUse=@ContextToUse, FunctionCallingScore=@FunctionCallingScore, CostInPerToken=@CostInPerToken, CostOutPerToken=@CostOutPerToken, LimitTokensDay=@LimitTokensDay, LimitTokensWeek=@LimitTokensWeek, LimitTokensMonth=@LimitTokensMonth, Metadata=@Metadata, Enabled=@Enabled, UpdatedAt=@UpdatedAt, NoTools=@NoTools;";
 
@@ -325,7 +287,7 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
                         var tail = prompt.Substring(idx + "using ".Length);
                         // token is up to whitespace or punctuation
                         var end = 0;
-                        while (end < tail.Length && (char.IsLetterOrDigit(tail[end]) || tail[end] == '_' )) end++;
+                        while (end < tail.Length && (char.IsLetterOrDigit(tail[end]) || tail[end] == '_')) end++;
                         if (end == 0) continue;
                         var func = tail.Substring(0, end);
                         if (string.IsNullOrWhiteSpace(func)) continue;
@@ -500,24 +462,13 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
     /// <summary>
     /// Retrieve test definitions for a given group name ordered by priority and id.
     /// </summary>
-        public List<TestDefinition> GetTestsByGroup(string groupName)
+    public List<TestDefinition> GetTestsByGroup(string groupName)
     {
         using var conn = CreateConnection();
         conn.Open();
-        // Include allowed_plugins column if present in the schema
-        var hasAllowed = false;
-        var hasExecutionPlan = false;
-        try
-        {
-            using var check = conn.CreateCommand();
-            check.CommandText = "PRAGMA table_info('test_definitions');";
-            using var rdr = check.ExecuteReader();
-            while (rdr.Read()) { var col = rdr.IsDBNull(1) ? string.Empty : rdr.GetString(1); if (string.Equals(col, "allowed_plugins", StringComparison.OrdinalIgnoreCase)) { hasAllowed = true; } if (string.Equals(col, "execution_plan", StringComparison.OrdinalIgnoreCase)) { hasExecutionPlan = true; } }
-        }
-        catch { }
 
-    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue" + (hasAllowed ? ", allowed_plugins AS AllowedPlugins" : "") + (hasExecutionPlan ? ", execution_plan AS ExecutionPlan" : "") + @"
-FROM test_definitions WHERE group_name = @g AND active = 1 ORDER BY priority, id";
+        var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat
+                FROM test_definitions WHERE group_name = @g AND active = 1 ORDER BY priority, id";
         return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
     }
 
@@ -536,7 +487,7 @@ FROM test_definitions WHERE group_name = @g AND active = 1 ORDER BY priority, id
             using var rdr = check.ExecuteReader();
             if (rdr.Read())
             {
-                    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, active AS Active
+                var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, active AS Active
 FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
                 return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
             }
@@ -576,7 +527,7 @@ FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
             order = col + (ascending ? " ASC" : " DESC");
         }
 
-    var sql = $@"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, active AS Active
+        var sql = $@"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, active AS Active
 FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
 
         return conn.Query<TestDefinition>(sql, parameters).ToList();
@@ -586,7 +537,7 @@ FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
     {
         using var conn = CreateConnection();
         conn.Open();
-    var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, active AS Active
+        var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, active AS Active
 FROM test_definitions WHERE id = @id LIMIT 1";
         return conn.QueryFirstOrDefault<TestDefinition>(sql, new { id });
     }
@@ -595,7 +546,7 @@ FROM test_definitions WHERE id = @id LIMIT 1";
     {
         using var conn = CreateConnection();
         conn.Open();
-    var sql = @"INSERT INTO test_definitions(group_name, library, function_name, expected_behavior, expected_asset, prompt, timeout_ms, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, execution_plan, json_response_format, active)
+        var sql = @"INSERT INTO test_definitions(group_name, library, function_name, expected_behavior, expected_asset, prompt, timeout_ms, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, execution_plan, json_response_format, active)
 VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Prompt,@TimeoutMs,@Priority,@ValidScoreRange,@TestType,@ExpectedPromptValue,@AllowedPlugins,@ExecutionPlan,@JsonResponseFormat,@Active); SELECT last_insert_rowid();";
         var id = conn.ExecuteScalar<long>(sql, td);
         return (int)id;
@@ -605,7 +556,7 @@ VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Promp
     {
         using var conn = CreateConnection();
         conn.Open();
-    var sql = @"UPDATE test_definitions SET group_name=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_ms=@TimeoutMs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins, execution_plan=@ExecutionPlan, json_response_format=@JsonResponseFormat, active=@Active WHERE id = @Id";
+        var sql = @"UPDATE test_definitions SET group_name=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_ms=@TimeoutMs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins, execution_plan=@ExecutionPlan, json_response_format=@JsonResponseFormat, active=@Active WHERE id = @Id";
         conn.Execute(sql, td);
     }
 
@@ -825,37 +776,72 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         return (int)id;
     }
 
+    // Overload with all evaluation fields parsed directly
+    public long AddStoryEvaluation(
+        long storyId,
+        int narrativeScore, string narrativeDefects,
+        int structureScore, string structureDefects,
+        int characterizationScore, string characterizationDefects,
+        int dialoguesScore, string dialoguesDefects,
+        int pacingScore, string pacingDefects,
+        int originalityScore, string originalityDefects,
+        int styleScore, string styleDefects,
+        int worldbuildingScore, string worldbuildingDefects,
+        int thematicScore, string thematicDefects,
+        int emotionalScore, string emotionalDefects,
+        double totalScore,
+        string overallEvaluation,
+        string rawJson,
+        long? modelId = null,
+        int? agentId = null)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+
+        var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, structure_score, structure_defects, characterization_score, characterization_defects, dialogues_score, dialogues_defects, pacing_score, pacing_defects, originality_score, originality_defects, style_score, style_defects, worldbuilding_score, worldbuilding_defects, thematic_coherence_score, thematic_coherence_defects, emotional_impact_score, emotional_impact_defects, total_score, overall_evaluation, raw_json, model_id, agent_id, ts) 
+                    VALUES(@story_id, @ncs, @ncd, @ss, @sd, @chs, @chd, @dlg, @dlgdef, @pc, @pcdef, @org, @orgdef, @stl, @stldef, @wb, @wbdef, @th, @thdef, @em, @emdef, @total, @overall, @raw, @model_id, @agent_id, @ts); 
+                    SELECT last_insert_rowid();";
+        
+        var id = conn.ExecuteScalar<long>(sql, new
+        {
+            story_id = storyId,
+            ncs = narrativeScore,
+            ncd = narrativeDefects,
+            ss = structureScore,
+            sd = structureDefects,
+            chs = characterizationScore,
+            chd = characterizationDefects,
+            dlg = dialoguesScore,
+            dlgdef = dialoguesDefects,
+            pc = pacingScore,
+            pcdef = pacingDefects,
+            org = originalityScore,
+            orgdef = originalityDefects,
+            stl = styleScore,
+            stldef = styleDefects,
+            wb = worldbuildingScore,
+            wbdef = worldbuildingDefects,
+            th = thematicScore,
+            thdef = thematicDefects,
+            em = emotionalScore,
+            emdef = emotionalDefects,
+            total = totalScore,
+            overall = overallEvaluation,
+            raw = rawJson,
+            model_id = modelId,
+            agent_id = agentId,
+            ts = DateTime.UtcNow.ToString("o")
+        });
+        
+        return id;
+    }
+
     public long AddStoryEvaluation(long storyId, string rawJson, double totalScore, long? modelId = null, int? agentId = null)
     {
         using var conn = CreateConnection();
         conn.Open();
         // Try parse JSON to extract category fields - best effort
         // Parsing helper logic inline below
-
-        // Default values
-        var values = new {
-            narrative_coherence_score = 0,
-            narrative_coherence_defects = string.Empty,
-            structure_score = 0,
-            structure_defects = string.Empty,
-            characterization_score = 0,
-            characterization_defects = string.Empty,
-            dialogues_score = 0,
-            dialogues_defects = string.Empty,
-            pacing_score = 0,
-            pacing_defects = string.Empty,
-            originality_score = 0,
-            originality_defects = string.Empty,
-            style_score = 0,
-            style_defects = string.Empty,
-            worldbuilding_score = 0,
-            worldbuilding_defects = string.Empty,
-            thematic_coherence_score = 0,
-            thematic_coherence_defects = string.Empty,
-            emotional_impact_score = 0,
-            emotional_impact_defects = string.Empty,
-            overall_evaluation = string.Empty
-        };
 
         try
         {
@@ -972,84 +958,25 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
 
     public List<TinyGenerator.Models.StoryRecord> GetAllStories()
     {
-        var list = new List<TinyGenerator.Models.StoryRecord>();
         using var conn = CreateConnection();
         conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-SELECT generation_id,
-             MAX(s.memory_key) as memory_key,
-             MIN(s.id) as min_id,
-             MIN(s.ts) as ts,
-             MIN(s.prompt) as prompt,
-            MAX(CASE WHEN a.name='WriterA' THEN s.story END) as story_a,
-            MAX(CASE WHEN a.name='WriterA' THEN s.eval END) as eval_a,
-            MAX(CASE WHEN a.name='WriterA' THEN s.score END) as score_a,
-            MAX(CASE WHEN a.name='WriterA' THEN m.name END) as model_a,
-            MAX(CASE WHEN a.name='WriterB' THEN s.story END) as story_b,
-            MAX(CASE WHEN a.name='WriterB' THEN s.eval END) as eval_b,
-            MAX(CASE WHEN a.name='WriterB' THEN s.score END) as score_b,
-            MAX(CASE WHEN a.name='WriterB' THEN m.name END) as model_b,
-        MAX(CASE WHEN a.name='WriterC' THEN s.story END) as story_c,
-        MAX(CASE WHEN a.name='WriterC' THEN s.eval END) as eval_c,
-        MAX(CASE WHEN a.name='WriterC' THEN s.score END) as score_c,
-        MAX(CASE WHEN a.name='WriterC' THEN m.name END) as model_c,
-             MAX(s.approved) as approved,
-             MAX(s.status) as status
-FROM stories s
-LEFT JOIN agents a ON s.agent_id = a.id
-LEFT JOIN models m ON s.model_id = m.id
-GROUP BY generation_id
-ORDER BY min_id DESC
-";
-        using var r = cmd.ExecuteReader();
-        while (r.Read())
-        {
-            list.Add(new TinyGenerator.Models.StoryRecord
-            {
-                Id = r.IsDBNull(2) ? 0 : r.GetInt64(2),
-                MemoryKey = r.IsDBNull(1) ? string.Empty : r.GetString(1),
-                Timestamp = r.IsDBNull(3) ? string.Empty : r.GetString(3),
-                Prompt = r.IsDBNull(4) ? string.Empty : r.GetString(4),
-                StoryA = r.IsDBNull(5) ? string.Empty : r.GetString(5),
-                EvalA = r.IsDBNull(6) ? string.Empty : r.GetString(6),
-                ScoreA = r.IsDBNull(7) ? 0 : r.GetDouble(7),
-                ModelA = r.IsDBNull(8) ? string.Empty : r.GetString(8),
-                StoryB = r.IsDBNull(9) ? string.Empty : r.GetString(9),
-                EvalB = r.IsDBNull(10) ? string.Empty : r.GetString(10),
-                ScoreB = r.IsDBNull(11) ? 0 : r.GetDouble(11),
-                ModelB = r.IsDBNull(12) ? string.Empty : r.GetString(12),
-                StoryC = r.IsDBNull(13) ? string.Empty : r.GetString(13),
-                EvalC = r.IsDBNull(14) ? string.Empty : r.GetString(14),
-                ScoreC = r.IsDBNull(15) ? 0 : r.GetDouble(15),
-                ModelC = r.IsDBNull(16) ? string.Empty : r.GetString(16),
-                Approved = !r.IsDBNull(17) && r.GetInt32(17) == 1,
-                Status = r.IsDBNull(18) ? string.Empty : r.GetString(18)
-            });
-        }
-        return list;
+        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Timestamp, s.prompt AS Prompt, s.story AS Story, m.name AS Model, a.name AS Agent, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status AS Status 
+                    FROM stories s 
+                    LEFT JOIN models m ON s.model_id = m.id 
+                    LEFT JOIN agents a ON s.agent_id = a.id 
+                    ORDER BY s.id DESC";
+        return conn.Query<TinyGenerator.Models.StoryRecord>(sql).ToList();
     }
 
     public TinyGenerator.Models.StoryRecord? GetStoryById(long id)
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Ts, s.prompt AS Prompt, s.story AS Story, m.name AS Model, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status AS Status, a.name AS Agent FROM stories s LEFT JOIN models m ON s.model_id = m.id LEFT JOIN agents a ON s.agent_id = a.id WHERE s.id = @id LIMIT 1";
-        var row = conn.QueryFirstOrDefault<dynamic>(sql, new { id = id });
+        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Timestamp, s.prompt AS Prompt, s.story AS Story, m.name AS Model, a.name AS Agent, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status AS Status FROM stories s LEFT JOIN models m ON s.model_id = m.id LEFT JOIN agents a ON s.agent_id = a.id WHERE s.id = @id LIMIT 1";
+        var row = conn.QueryFirstOrDefault<TinyGenerator.Models.StoryRecord>(sql, new { id = id });
         if (row == null) return null;
-        return new TinyGenerator.Models.StoryRecord
-        {
-            Id = (long)row.Id,
-            MemoryKey = row.MemoryKey ?? string.Empty,
-            Timestamp = row.Ts ?? string.Empty,
-            Prompt = row.Prompt ?? string.Empty,
-            StoryA = row.Story ?? string.Empty,
-            ModelA = row.Model ?? string.Empty,
-            EvalA = row.Eval ?? string.Empty,
-            ScoreA = row.Score ?? 0.0,
-            Approved = (int)(row.Approved ?? 0) == 1,
-            Status = row.Status ?? string.Empty
-        };
+        if (row.Approved) row.Approved = true; // Ensure boolean conversion
+        return row;
     }
 
     public void DeleteStoryById(long id)
@@ -1134,7 +1061,8 @@ ORDER BY min_id DESC
 VALUES(@VoiceId,@Name,@Model,@Language,@Gender,@Age,@Confidence,@Tags,@SamplePath,@TemplateWav,@Metadata,@CreatedAt,@UpdatedAt)
 ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language, gender=@Gender, age=@Age, confidence=@Confidence, tags=@Tags, sample_path=@SamplePath, template_wav=@TemplateWav, metadata=@Metadata, updated_at=@UpdatedAt;";
 
-        conn.Execute(sql, new {
+        conn.Execute(sql, new
+        {
             VoiceId = v.Id,
             Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name,
             Model = model,
@@ -1219,7 +1147,7 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
                         Language = language,
                         Gender = gender,
                         Age = age,
-                        Tags = new System.Collections.Generic.Dictionary<string,string>()
+                        Tags = new System.Collections.Generic.Dictionary<string, string>()
                     };
 
                     if (!string.IsNullOrWhiteSpace(sample)) v.Tags["sample"] = sample!;
@@ -1248,8 +1176,6 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
         conn.Open();
         openSw.Stop();
         Console.WriteLine($"[DB] Connection opened in {openSw.ElapsedMilliseconds}ms");
-
-    var skillColumnsSql = SkillColumns.Length > 0 ? ",\n    " + string.Join(",\n    ", SkillColumns.Select(c => $"{c} INTEGER DEFAULT NULL")) : string.Empty;
 
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $@"CREATE TABLE IF NOT EXISTS usage_state (
@@ -1290,14 +1216,13 @@ CREATE TABLE IF NOT EXISTS models (
     CreatedAt TEXT,
     UpdatedAt TEXT,
     TestDurationSeconds REAL
-    {skillColumnsSql}
 );";
         cmd.ExecuteNonQuery();
         Console.WriteLine("[DB] Created usage_state/calls/models tables");
 
-    // Agents table for reusable agent configurations
-    using var agentsCmd = conn.CreateCommand();
-    agentsCmd.CommandText = @"CREATE TABLE IF NOT EXISTS agents (
+        // Agents table for reusable agent configurations
+        using var agentsCmd = conn.CreateCommand();
+        agentsCmd.CommandText = @"CREATE TABLE IF NOT EXISTS agents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     voice_rowid INTEGER NULL,
     name TEXT NOT NULL,
@@ -1315,62 +1240,58 @@ CREATE TABLE IF NOT EXISTS models (
     FOREIGN KEY (voice_rowid) REFERENCES tts_voices(id)
 );
 ";
-    agentsCmd.ExecuteNonQuery();
-    Console.WriteLine("[DB] Created agents table (if not exists)");
-    EnsureAgentModelForeignKey((SqliteConnection)conn);
+        agentsCmd.ExecuteNonQuery();
+        Console.WriteLine("[DB] Created agents table (if not exists)");
+        EnsureAgentModelForeignKey((SqliteConnection)conn);
 
-    // Ensure agents table has new columns if upgrading from older schema
-    try
-    {
-        var agentsPragmaSw = Stopwatch.StartNew();
-        using var checkAgents = conn.CreateCommand();
-        checkAgents.CommandText = "PRAGMA table_info('agents');";
-        using var rdr = checkAgents.ExecuteReader();
-        var cols = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
-        while (rdr.Read()) { var col = rdr.IsDBNull(1) ? string.Empty : rdr.GetString(1); if (!string.IsNullOrWhiteSpace(col)) cols.Add(col); }
-        var toAdd = new System.Collections.Generic.List<string>();
-        if (!cols.Contains("prompt")) toAdd.Add("ALTER TABLE agents ADD COLUMN prompt TEXT NULL;");
-        if (!cols.Contains("instructions")) toAdd.Add("ALTER TABLE agents ADD COLUMN instructions TEXT NULL;");
-        if (!cols.Contains("execution_plan")) toAdd.Add("ALTER TABLE agents ADD COLUMN execution_plan TEXT NULL;");
-        if (!cols.Contains("voice_rowid") && !cols.Contains("voice_id")) toAdd.Add("ALTER TABLE agents ADD COLUMN voice_rowid INTEGER NULL;");
-        foreach (var a in toAdd)
-        {
-            try { using var cmdAdd = conn.CreateCommand(); cmdAdd.CommandText = a; cmdAdd.ExecuteNonQuery(); } catch { }
-        }
-        if (toAdd.Count > 0) Console.WriteLine($"[DB] Added {toAdd.Count} missing agent columns");
-        agentsPragmaSw.Stop();
-        Console.WriteLine($"[DB] PRAGMA agents processed in {agentsPragmaSw.ElapsedMilliseconds}ms");
-
-        // If there is a legacy text 'voice_id' column, try to migrate values to voice_rowid
+        // Ensure agents table has new columns if upgrading from older schema
         try
         {
-            if (cols.Contains("voice_id") && !cols.Contains("voice_rowid"))
+            var agentsPragmaSw = Stopwatch.StartNew();
+            using var checkAgents = conn.CreateCommand();
+            checkAgents.CommandText = "PRAGMA table_info('agents');";
+            using var rdr = checkAgents.ExecuteReader();
+            var cols = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+            while (rdr.Read()) { var col = rdr.IsDBNull(1) ? string.Empty : rdr.GetString(1); if (!string.IsNullOrWhiteSpace(col)) cols.Add(col); }
+            var toAdd = new System.Collections.Generic.List<string>();
+            if (!cols.Contains("prompt")) toAdd.Add("ALTER TABLE agents ADD COLUMN prompt TEXT NULL;");
+            if (!cols.Contains("instructions")) toAdd.Add("ALTER TABLE agents ADD COLUMN instructions TEXT NULL;");
+            if (!cols.Contains("execution_plan")) toAdd.Add("ALTER TABLE agents ADD COLUMN execution_plan TEXT NULL;");
+            if (!cols.Contains("voice_rowid") && !cols.Contains("voice_id")) toAdd.Add("ALTER TABLE agents ADD COLUMN voice_rowid INTEGER NULL;");
+            foreach (var a in toAdd)
             {
-                // voice_rowid wasn't added above (if missing) - ensure it's present
-                try { using var addCol = conn.CreateCommand(); addCol.CommandText = "ALTER TABLE agents ADD COLUMN voice_rowid INTEGER NULL;"; addCol.ExecuteNonQuery(); } catch { }
+                try { using var cmdAdd = conn.CreateCommand(); cmdAdd.CommandText = a; cmdAdd.ExecuteNonQuery(); } catch { }
             }
-            if (cols.Contains("voice_id"))
+            if (toAdd.Count > 0) Console.WriteLine($"[DB] Added {toAdd.Count} missing agent columns");
+            agentsPragmaSw.Stop();
+            Console.WriteLine($"[DB] PRAGMA agents processed in {agentsPragmaSw.ElapsedMilliseconds}ms");
+
+            // If there is a legacy text 'voice_id' column, try to migrate values to voice_rowid
+            try
             {
-                try
+                if (cols.Contains("voice_id") && !cols.Contains("voice_rowid"))
                 {
-                    var migrateSw = Stopwatch.StartNew();
-                    using var migrate = conn.CreateCommand();
-                    migrate.CommandText = @"UPDATE agents SET voice_rowid = (SELECT id FROM tts_voices WHERE tts_voices.voice_id = agents.voice_id) WHERE voice_id IS NOT NULL;";
-                    migrate.ExecuteNonQuery();
-                    migrateSw.Stop();
-                    Console.WriteLine($"[DB] Migrated legacy agents.voice_id values to voice_rowid in {migrateSw.ElapsedMilliseconds}ms");
+                    // voice_rowid wasn't added above (if missing) - ensure it's present
+                    try { using var addCol = conn.CreateCommand(); addCol.CommandText = "ALTER TABLE agents ADD COLUMN voice_rowid INTEGER NULL;"; addCol.ExecuteNonQuery(); } catch { }
                 }
-                catch { }
+                if (cols.Contains("voice_id"))
+                {
+                    try
+                    {
+                        var migrateSw = Stopwatch.StartNew();
+                        using var migrate = conn.CreateCommand();
+                        migrate.CommandText = @"UPDATE agents SET voice_rowid = (SELECT id FROM tts_voices WHERE tts_voices.voice_id = agents.voice_id) WHERE voice_id IS NOT NULL;";
+                        migrate.ExecuteNonQuery();
+                        migrateSw.Stop();
+                        Console.WriteLine($"[DB] Migrated legacy agents.voice_id values to voice_rowid in {migrateSw.ElapsedMilliseconds}ms");
+                    }
+                    catch { }
+                }
             }
+            catch { }
         }
         catch { }
-    }
-    catch { }
 
-        var ensureModelSw = Stopwatch.StartNew();
-        EnsureModelColumns((SqliteConnection)conn);
-        ensureModelSw.Stop();
-        Console.WriteLine($"[DB] EnsureModelColumns completed in {ensureModelSw.ElapsedMilliseconds}ms");
         // Seed some commonly used, lower-cost OpenAI chat models so they appear in the models table
         try
         {
@@ -1778,104 +1699,9 @@ FROM agents_old;
         }
     }
 
-    private void EnsureModelColumns(SqliteConnection conn)
-    {
-        var existingCols = GetExistingColumns(conn);
 
-        foreach (var mapping in LegacyColumnMap)
-        {
-            if (existingCols.Contains(mapping.Value)) continue;
-            if (!existingCols.Contains(mapping.Key)) continue;
 
-            try
-            {
-                using var rename = conn.CreateCommand();
-                rename.CommandText = $"ALTER TABLE models RENAME COLUMN {mapping.Key} TO {mapping.Value};";
-                rename.ExecuteNonQuery();
-                existingCols.Remove(mapping.Key);
-                existingCols.Add(mapping.Value);
-            }
-            catch
-            {
-                // ignore failures
-            }
-        }
 
-    existingCols = GetExistingColumns(conn);
-
-        // Ensure CreatedAt/UpdatedAt present
-        foreach (var def in ColumnDefinitions)
-        {
-            if (existingCols.Contains(def.Key)) continue;
-            using var alter = conn.CreateCommand();
-            alter.CommandText = $"ALTER TABLE models ADD COLUMN {def.Key} {def.Value};";
-            alter.ExecuteNonQuery();
-        }
-
-        // Ensure skill columns
-        // Skill columns removed from models table for this installation; no ALTER needed.
-
-        // Ensure allowed_plugins column exists in test_definitions (best-effort migration)
-        try
-        {
-            using var check = conn.CreateCommand();
-            check.CommandText = "PRAGMA table_info('test_definitions');";
-            using var rdr = check.ExecuteReader();
-            var cols = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
-            while (rdr.Read()) { var col = rdr.IsDBNull(1) ? string.Empty : rdr.GetString(1); if (!string.IsNullOrWhiteSpace(col)) cols.Add(col); }
-            if (!cols.Contains("allowed_plugins"))
-            {
-                using var alter = conn.CreateCommand();
-                alter.CommandText = "ALTER TABLE test_definitions ADD COLUMN allowed_plugins TEXT";
-                try { alter.ExecuteNonQuery(); } catch { /* ignore if cannot alter */ }
-            }
-            if (!cols.Contains("valid_score_range"))
-            {
-                using var alter2 = conn.CreateCommand();
-                alter2.CommandText = "ALTER TABLE test_definitions ADD COLUMN valid_score_range TEXT";
-                try { alter2.ExecuteNonQuery(); } catch { /* ignore if cannot alter */ }
-            }
-            if (!cols.Contains("execution_plan"))
-            {
-                using var alter3 = conn.CreateCommand();
-                alter3.CommandText = "ALTER TABLE test_definitions ADD COLUMN execution_plan TEXT";
-                try { alter3.ExecuteNonQuery(); } catch { /* ignore if cannot alter */ }
-            }
-            if (!cols.Contains("json_response_format"))
-            {
-                using var alter4 = conn.CreateCommand();
-                alter4.CommandText = "ALTER TABLE test_definitions ADD COLUMN json_response_format TEXT";
-                try { alter4.ExecuteNonQuery(); } catch { /* ignore if cannot alter */ }
-            }
-
-            // Populate allowed_plugins for texteval or evaluator libraries when empty
-            try
-            {
-                using var upd = conn.CreateCommand();
-                upd.CommandText = @"UPDATE test_definitions SET allowed_plugins = 'evaluator' WHERE (allowed_plugins IS NULL OR trim(allowed_plugins)='') AND (lower(group_name) = 'texteval' OR lower(library) IN ('coerenza_narrativa','struttura','caratterizzazione_personaggi','dialoghi','ritmo','originalita','stile','worldbuilding','coerenza_tematica','impatto_emotivo'));";
-                upd.ExecuteNonQuery();
-            }
-            catch { }
-        }
-        catch { }
-    }
-
-    private static HashSet<string> GetExistingColumns(SqliteConnection conn)
-    {
-        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA table_info(models);";
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            var colName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-            if (!string.IsNullOrWhiteSpace(colName)) columns.Add(colName);
-        }
-
-        return columns;
-    }
-
-    
 
     private static void EnsureUsageRow(IDbConnection connRaw, string monthKey)
     {
@@ -1888,8 +1714,8 @@ FROM agents_old;
 
     private static string SelectModelColumns()
     {
-    // Return only core model columns (Skill* and Last* columns removed)
-    return string.Join(", ", new[] { "Name","Provider","Endpoint","IsLocal","MaxContext","ContextToUse","FunctionCallingScore","CostInPerToken","CostOutPerToken","LimitTokensDay","LimitTokensWeek","LimitTokensMonth","Metadata","Enabled","CreatedAt","UpdatedAt","TestDurationSeconds","NoTools" });
+        // Return only core model columns (Skill* and Last* columns removed)
+        return string.Join(", ", new[] { "Name", "Provider", "Endpoint", "IsLocal", "MaxContext", "ContextToUse", "FunctionCallingScore", "CostInPerToken", "CostOutPerToken", "LimitTokensDay", "LimitTokensWeek", "LimitTokensMonth", "Metadata", "Enabled", "CreatedAt", "UpdatedAt", "TestDurationSeconds", "NoTools" });
     }
 
     // Retrieve recent log entries with optional filtering by level or category and support offset for pagination.
@@ -1931,4 +1757,192 @@ FROM agents_old;
         conn.Open();
         conn.Execute("DELETE FROM Log");
     }
+
+    // Helper methods for model updates
+    public void UpdateModelContext(string modelName, int contextToUse)
+    {
+        if (string.IsNullOrWhiteSpace(modelName)) return;
+
+        var existing = GetModelInfo(modelName) ?? new ModelInfo { Name = modelName };
+        existing.ContextToUse = contextToUse;
+
+        // Also update MaxContext if it was default or lower than submitted value (safe heuristic)
+        if (existing.MaxContext <= 0 || existing.MaxContext < contextToUse)
+        {
+            existing.MaxContext = contextToUse;
+        }
+
+        UpsertModel(existing);
+    }
+
+    public void UpdateModelCosts(string modelName, double? costInPer1k, double? costOutPer1k)
+    {
+        if (string.IsNullOrWhiteSpace(modelName)) return;
+
+        var existing = GetModelInfo(modelName) ?? new ModelInfo { Name = modelName };
+
+        if (costInPer1k.HasValue)
+        {
+            existing.CostInPerToken = costInPer1k.Value;
+        }
+
+        if (costOutPer1k.HasValue)
+        {
+            existing.CostOutPerToken = costOutPer1k.Value;
+        }
+
+        UpsertModel(existing);
+    }
+
+    /// <summary>
+    /// Get all test groups with their latest results for a specific model.
+    /// Returns a list of objects with: group name, score, timestamp, steps summary.
+    /// </summary>
+    public List<TestGroupSummary> GetModelTestGroupsSummary(string modelName)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+
+        var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        if (!modelId.HasValue) return new List<TestGroupSummary>();
+
+        var groups = conn.Query<string>("SELECT DISTINCT test_code FROM model_test_runs WHERE model_id = @mid ORDER BY test_code", new { mid = modelId.Value }).ToList();
+
+        var results = new List<TestGroupSummary>();
+        foreach (var group in groups)
+        {
+            var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_code = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = group });
+            if (!runId.HasValue) continue;
+
+            var run = conn.QueryFirstOrDefault("SELECT run_date AS RunDate, passed AS Passed FROM model_test_runs WHERE id = @id", new { id = runId.Value });
+            var counts = GetRunStepCounts(runId.Value);
+            var score = counts.total > 0 ? (int)Math.Round((double)counts.passed / counts.total * 10) : 0;
+
+            results.Add(new TestGroupSummary
+            {
+                Group = group,
+                RunId = runId.Value,
+                Score = score,
+                Passed = counts.passed,
+                Total = counts.total,
+                Timestamp = run?.RunDate,
+                Success = run != null && Convert.ToInt32(run?.Passed ?? 0) != 0
+            });
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Get detailed test steps for a specific model and group.
+    /// Returns list with: stepNumber, stepName, passed, prompt, response, error, durationMs.
+    /// </summary>
+    public List<object> GetModelTestStepsDetail(string modelName, string groupName)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+
+        var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        if (!modelId.HasValue) return new List<object>();
+
+        var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_code = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = groupName });
+        if (!runId.HasValue) return new List<object>();
+
+        var steps = conn.Query(@"
+            SELECT 
+                step_number AS StepNumber,
+                step_name AS StepName,
+                passed AS Passed,
+                input_json AS InputJson,
+                output_json AS OutputJson,
+                error AS Error,
+                duration_ms AS DurationMs
+            FROM model_test_steps 
+            WHERE run_id = @r 
+            ORDER BY step_number", new { r = runId.Value });
+
+        var results = new List<object>();
+        foreach (var step in steps)
+        {
+            string? prompt = null;
+            string? response = null;
+
+            // Extract prompt from input_json
+            if (!string.IsNullOrWhiteSpace(step.InputJson))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(step.InputJson);
+                    if (doc.RootElement.TryGetProperty("prompt", out System.Text.Json.JsonElement promptEl))
+                        prompt = promptEl.GetString();
+                }
+                catch { }
+            }
+
+            // Extract response from output_json
+            if (!string.IsNullOrWhiteSpace(step.OutputJson))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(step.OutputJson);
+                    if (doc.RootElement.TryGetProperty("response", out System.Text.Json.JsonElement respEl))
+                        response = respEl.GetString();
+                    else
+                        response = step.OutputJson; // Fallback to raw JSON
+                }
+                catch
+                {
+                    response = step.OutputJson;
+                }
+            }
+
+            results.Add(new
+            {
+                stepNumber = step.StepNumber,
+                stepName = step.StepName ?? $"Step {step.StepNumber}",
+                passed = Convert.ToInt32(step.Passed) != 0,
+                prompt = prompt,
+                response = response,
+                error = step.Error,
+                durationMs = step.DurationMs
+            });
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Recalculate and update the FunctionCallingScore for a model based on all latest group test results.
+    /// Score = sum of (1 point per passed test) across all groups' most recent runs.
+    /// </summary>
+    public void RecalculateModelScore(string modelName)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+
+        var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        if (!modelId.HasValue) return;
+
+        // Get all unique test groups for this model
+        var groups = conn.Query<string>("SELECT DISTINCT test_code FROM model_test_runs WHERE model_id = @mid", new { mid = modelId.Value }).ToList();
+
+        int totalPassed = 0;
+
+        foreach (var group in groups)
+        {
+            // Get latest run for this group
+            var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_code = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = group });
+            if (!runId.HasValue) continue;
+
+            // Count passed tests in this run
+            var passed = conn.ExecuteScalar<int>("SELECT COUNT(*) FROM model_test_steps WHERE run_id = @r AND passed = 1", new { r = runId.Value });
+            totalPassed += passed;
+        }
+
+        // Update model's FunctionCallingScore
+        conn.Execute("UPDATE models SET FunctionCallingScore = @score, UpdatedAt = @now WHERE Id = @id",
+            new { score = totalPassed, id = modelId.Value, now = DateTime.UtcNow.ToString("o") });
+    }
 }
+
+

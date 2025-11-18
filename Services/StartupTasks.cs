@@ -146,6 +146,9 @@ namespace TinyGenerator
                     {
                         string? modelName = null;
                         if (a.ModelId.HasValue) modelName = db.GetModelNameById(a.ModelId.Value);
+                        var modelInfo = !string.IsNullOrWhiteSpace(modelName) ? db.GetModelInfo(modelName!) : null;
+                        var provider = modelInfo?.Provider ?? "(unknown)";
+                        var endpoint = modelInfo?.Endpoint ?? "(default)";
 
                         var aliases = new System.Collections.Generic.List<string>();
                         try
@@ -183,7 +186,7 @@ namespace TinyGenerator
 
                         if (!aliases.Contains("memory")) aliases.Add("memory");
 
-                        logger?.LogInformation("[Startup] Initializing kernel for agent {agentId} ({name}) with model {model}...", a.Id, a.Name, modelName ?? "(default)");
+                        logger?.LogInformation("[Startup] Initializing kernel for agent {agentId} ({name}) with model {model} | provider={provider} endpoint={endpoint}", a.Id, a.Name, modelName ?? "(default)", provider, endpoint);
                         kernelFactory.EnsureKernelForAgent(a.Id, modelName, aliases);
                         logger?.LogInformation("[Startup] Kernel initialized for agent {agentId} ({name}).", a.Id, a.Name);
 

@@ -35,7 +35,7 @@ namespace TinyGenerator.Pages.Stories
         {
             Id = id;
             Story = _stories.GetStoryById(id);
-            if (Story != null) StoryText = Story.StoryA ?? Story.StoryB ?? Story.StoryC ?? string.Empty;
+            if (Story != null) StoryText = Story.Story;
             Evaluations = _stories.GetEvaluationsForStory(id);
         }
 
@@ -45,7 +45,7 @@ namespace TinyGenerator.Pages.Stories
             {
                 var story = _stories.GetStoryById(id);
                 if (story == null) return NotFound();
-                var text = story.StoryA ?? story.StoryB ?? story.StoryC ?? string.Empty;
+                var text = story.Story;
                 if (string.IsNullOrWhiteSpace(text)) return BadRequest("No story text");
 
                 var voices = _db.ListTtsVoices();

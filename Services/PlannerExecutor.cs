@@ -5,8 +5,8 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.Agents;
-using Microsoft.SemanticKernel.Planning;
+using Microsoft.SemanticKernel.ChatCompletion;
+using TinyGenerator.Models;
 
 namespace TinyGenerator.Services
 {
@@ -25,14 +25,14 @@ namespace TinyGenerator.Services
             _stories = stories;
         }
 
-        public async Task<string> ExecutePlanForAgentAsync(ChatCompletionAgent agent, Plan plan, string agentMemoryKey, Action<string>? progress = null)
+        public async Task<string> ExecutePlanForAgentAsync(Kernel kernel, string agentName, string systemPrompt, string modelId, Plan plan, string agentMemoryKey, Action<string>? progress = null)
         {
             var parts = new List<string>();
 
-            var kernel = _kernelFactory.CreateKernel(agent.Model);
+            var chatService = kernel.GetRequiredService<IChatCompletionService>();
             foreach (var step in plan.Steps)
             {
-                progress?.Invoke($"{agent.Name}: eseguo passo: {step.Description}");
+                progress?.Invoke($"{agentName}: eseguo passo: {step.Description}");
                 var stepKey = GetKeyForStep(step.Description);
                 var prompt = BuildPromptForStep(step.Description, plan.Goal);
 
@@ -43,16 +43,21 @@ namespace TinyGenerator.Services
                     "---END-MEMORY---\n\n" +
                     "Rispondi prima il testo destinato all'utente (capitolo/descrizione) e poi il blocco MEMORY-JSON esattamente come sopra.\n";
 
-                try { Console.WriteLine($"[PlannerExecutor] Sending prompt to {agent.Name} (model={agent.Model}): {askPrompt.Substring(0, Math.Min(400, askPrompt.Length)).Replace('\n',' ')}"); } catch { }
-                try { TinyGenerator.Services.OllamaMonitorService.RecordPrompt(agent.Model ?? string.Empty, askPrompt); } catch { }
-                var invokeResult = await agent.InvokeAsync(askPrompt);
-                var content = string.Join("\n", invokeResult.Select(r => r.Content));
+                try { Console.WriteLine($"[PlannerExecutor] Sending prompt to {agentName} (model={modelId}): {askPrompt.Substring(0, Math.Min(400, askPrompt.Length)).Replace('\n',' ')}"); } catch { }
+                try { TinyGenerator.Services.OllamaMonitorService.RecordPrompt(modelId, askPrompt); } catch { }
+                
+                var chatHistory = new ChatHistory();
+                if (!string.IsNullOrWhiteSpace(systemPrompt))
+                    chatHistory.AddSystemMessage(systemPrompt);
+                chatHistory.AddUserMessage(askPrompt);
+                var chatResult = await chatService.GetChatMessageContentAsync(chatHistory, kernel: kernel);
+                var content = chatResult?.Content ?? string.Empty;
 
                 // report that step produced output (first a short snippet)
                 try
                 {
                     var snippet = content.Length > 300 ? content.Substring(0, 300) + "..." : content;
-                    progress?.Invoke($"{agent.Name}|{stepKey}|START\n{snippet}");
+                    progress?.Invoke($"{agentName}|{stepKey}|START\n{snippet}");
                 }
                 catch { }
 
@@ -75,7 +80,7 @@ namespace TinyGenerator.Services
 
                         try
                         {
-                            await _persistentMemory.SaveAsync(_collection, $"{agent.Name}:{key}: {saved}");
+                            await _persistentMemory.SaveAsync(_collection, $"{agentName}:{key}: {saved}");
                         }
                         catch { }
 
@@ -86,7 +91,7 @@ namespace TinyGenerator.Services
                         }
 
                         // publish the full saved content for UI
-                        try { progress?.Invoke($"{agent.Name}|{key}|{saved}"); } catch { }
+                        try { progress?.Invoke($"{agentName}|{key}|{saved}"); } catch { }
                     }
                     catch { }
                 }
@@ -101,7 +106,7 @@ namespace TinyGenerator.Services
                     {
                         try
                         {
-                            await _persistentMemory.SaveAsync(_collection, $"{agent.Name}:{stepKey}: {content}");
+                            await _persistentMemory.SaveAsync(_collection, $"{agentName}:{stepKey}: {content}");
                         }
                         catch { }
                     }
@@ -175,7 +180,7 @@ namespace TinyGenerator.Services
         _persistentMemory = persistentMemory;
     }
 
-    public async Task<string> RunAsync(string prompt, string storyId, Microsoft.SemanticKernel.Agents.ChatCompletionAgent agent, Action<string>? progress = null)
+    public async Task<string> RunAsync(string prompt, string storyId, Kernel kernel, string agentName, string systemPrompt, string modelId, Action<string>? progress = null)
     {
         // Stubbed kernel memory may not support search in offline mode; keep memoria empty come best-effort.
         var memoria = string.Empty;
@@ -196,7 +201,7 @@ namespace TinyGenerator.Services
             "Poi decidi il prossimo passo da solo (nuovo capitolo, modifica, riassunto...).\n" +
             "Istruzioni utente: " + prompt + "\n";
 
-    var kernel = _kernelFactory.CreateKernel(agent.Model);
+        var chatService = kernel.GetRequiredService<IChatCompletionService>();
 
         string result = string.Empty;
         for (int i = 0; i < 6; i++)
@@ -204,10 +209,15 @@ namespace TinyGenerator.Services
             progress?.Invoke($"🪶 Step {i + 1}: generazione autonoma…");
 
             // Primary generation
-                try { Console.WriteLine($"[FreeWriterPlanner] Sending metaPrompt to {agent.Name} (model={agent.Model}): {metaPrompt.Substring(0, Math.Min(400, metaPrompt.Length)).Replace('\n',' ')}"); } catch { }
-                try { TinyGenerator.Services.OllamaMonitorService.RecordPrompt(agent.Model ?? string.Empty, metaPrompt); } catch { }
-                var invoke = await agent.InvokeAsync(metaPrompt);
-            var reply = string.Join("\n", invoke.Select(r => r.Content));
+                try { Console.WriteLine($"[FreeWriterPlanner] Sending metaPrompt to {agentName} (model={modelId}): {metaPrompt.Substring(0, Math.Min(400, metaPrompt.Length)).Replace('\n',' ')}"); } catch { }
+                try { TinyGenerator.Services.OllamaMonitorService.RecordPrompt(modelId, metaPrompt); } catch { }
+                
+                var chatHistory = new ChatHistory();
+                if (!string.IsNullOrWhiteSpace(systemPrompt))
+                    chatHistory.AddSystemMessage(systemPrompt);
+                chatHistory.AddUserMessage(metaPrompt);
+                var chatResult = await chatService.GetChatMessageContentAsync(chatHistory, kernel: kernel);
+            var reply = chatResult?.Content ?? string.Empty;
 
             // If the reply looks like gibberish, attempt up to 2 regeneration retries with explicit instructions
             int retries = 0;
@@ -216,8 +226,13 @@ namespace TinyGenerator.Services
                 retries++;
                 progress?.Invoke($"🛠️ Step {i + 1}: output probabilmente non valido, tentativo di rigenerazione #{retries}...#\n{reply}");
                 var regenHint = metaPrompt + "\n\nRIGENERA il testo precedente evitando ripetizioni, usa frasi complete, mantieni coerenza narrativa e produci paragrafi; non ripetere singole parole o sequenze.\n";
-                var reinvoke = await agent.InvokeAsync(regenHint);
-                reply = string.Join("\n", reinvoke.Select(r => r.Content));
+                
+                var regenChatHistory = new ChatHistory();
+                if (!string.IsNullOrWhiteSpace(systemPrompt))
+                    regenChatHistory.AddSystemMessage(systemPrompt);
+                regenChatHistory.AddUserMessage(regenHint);
+                var reinvokeChatResult = await chatService.GetChatMessageContentAsync(regenChatHistory, kernel: kernel);
+                reply = reinvokeChatResult?.Content ?? string.Empty;
             }
 
             result += reply + "\n";

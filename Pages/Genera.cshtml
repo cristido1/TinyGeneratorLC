@@ -66,9 +66,9 @@
             // prefer to reuse the global appSignalR connection if available
             if (window.appSignalR && window.appSignalR.connection) {
                 connection = window.appSignalR.connection;
-                connection.on('ProgressAppended', (id, message) => {
+                connection.on('ProgressAppended', (id, message, extraClass) => {
                     if (id !== genId) return;
-                    appendMessage(message);
+                    appendMessage(message, extraClass);
                 });
                 connection.on('ProgressCompleted', (id, finalResult) => {
                     if (id !== genId) return;
@@ -84,10 +84,10 @@
             }
             connection = new signalR.HubConnectionBuilder().withUrl('/progressHub').withAutomaticReconnect().build();
 
-            connection.on('ProgressAppended', (id, message) => {
+            connection.on('ProgressAppended', (id, message, extraClass) => {
                 if (id !== genId) return;
                 // append message
-                appendMessage(message);
+                appendMessage(message, extraClass);
             });
             connection.on('ProgressCompleted', (id, finalResult) => {
                 if (id !== genId) return;
@@ -153,6 +153,22 @@
     function appendMessage(msg, extraClass) {
         const el = document.createElement('div');
         el.className = 'status-msg' + (extraClass ? (' ' + extraClass) : '');
+        
+        // Apply pastel colors for success/error
+        if (extraClass === 'success') {
+            el.style.backgroundColor = '#d4edda';
+            el.style.color = '#155724';
+            el.style.padding = '8px';
+            el.style.borderRadius = '4px';
+            el.style.marginBottom = '4px';
+        } else if (extraClass === 'error') {
+            el.style.backgroundColor = '#f8d7da';
+            el.style.color = '#721c24';
+            el.style.padding = '8px';
+            el.style.borderRadius = '4px';
+            el.style.marginBottom = '4px';
+        }
+        
         el.textContent = msg;
         statusPre.appendChild(el);
     }

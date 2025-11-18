@@ -2,759 +2,509 @@
 @model TinyGenerator.Pages.ModelsModel
 @{
     ViewData["Title"] = "Models";
+    var groupsHeader = Model.TestGroups ?? new System.Collections.Generic.List<string>();
+    var visibleGroups = groupsHeader.Take(4).ToList();
 }
 
-<!-- Modal for editing costs -->
-<div id="costModal" class="tg-modal" aria-hidden="true" style="display:none;">
-    <div class="tg-modal-backdrop"></div>
-    <div class="tg-modal-panel">
-        <h5>Modifica costi</h5>
-        <form method="post" action="?handler=UpdateCost" onsubmit="(function(f){ var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.innerText='Saving...'; } })(this)">
-            <input type="hidden" name="model" id="costModal_model" value="" />
-            <div class="mb-2">
-                <label class="form-label">Cost In $/1k</label>
-                <input name="costInPer1k" id="costModal_in" class="form-control form-control-sm" />
-            </div>
-            <div class="mb-2">
-                <label class="form-label">Cost Out $/1k</label>
-                <input name="costOutPer1k" id="costModal_out" class="form-control form-control-sm" />
-            </div>
-            <div class="text-end">
-                <button type="button" class="btn btn-sm btn-light me-2" onclick="closeCostModal()">Annulla</button>
-                <button type="submit" class="btn btn-sm btn-primary">Salva</button>
-            </div>
-        </form>
-    </div>
-</div>
+<h2>Models</h2>
 
-@* Removed overlay progress popup; using persistent small toasts instead *@
+<div class="mb-3 d-flex gap-2 align-items-center">
+    <a class="btn btn-sm btn-primary" href="/Models/Edit">Nuovo modello</a>
 
-@section Scripts {
-    <style>
-        /* simple modal styles (lightweight, no bootstrap js required) */
-        .tg-modal { position:fixed; inset:0; z-index:1050; display:none; }
-        .tg-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.45); }
-        .tg-modal-panel { position:relative; width:420px; max-width:92%; margin:6% auto; background:#fff; padding:16px; border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,0.2); z-index:1060; }
-        /* Popup removed; we use toasts only */
-    </style>
-    <script>
-        function openCostModal(btn) {
-            var name = btn.getAttribute('data-name');
-            var inCost = btn.getAttribute('data-costin') || '';
-            var outCost = btn.getAttribute('data-costout') || '';
-            document.getElementById('costModal_model').value = name || '';
-            document.getElementById('costModal_in').value = inCost;
-            document.getElementById('costModal_out').value = outCost;
-            var m = document.getElementById('costModal');
-            if (!m) return;
-            m.style.display = 'block';
-            m.setAttribute('aria-hidden', 'false');
-        }
-        function closeCostModal() {
-            var m = document.getElementById('costModal');
-            if (!m) return;
-            m.style.display = 'none';
-            m.setAttribute('aria-hidden', 'true');
-        }
-        // Close modal on ESC
-        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeCostModal(); });
-
-        // Keep a reference to the element that opened the popup so we can restore focus when closing.
-        let _tg_lastRunInvoker = null;
-        // Replaced overlay PRG popup with toast notifications only.
-        // showRunProgressPopup/hideRunProgressPopup removed; toast notifications via window.appNotify will be used.
-
-        // Run a test group for a model via AJAX and poll progress
-        async function runGroup(modelName, btn) {
-            try {
-                var sel = document.getElementById('group_select_' + modelName);
-                if (!sel) return;
-                var group = sel.value;
-                if (!group) {
-                    alert('Select a group to run');
-                    return;
-                }
-                btn.disabled = true;
-                btn.textContent = 'Starting...';
-                try { if (window.appNotify) window.appNotify.info('Run started', (modelName || '') + (group ? ' — ' + group : '')); } catch(e) {}
-
-                var res = await fetch(window.location.pathname + '?handler=RunGroup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: modelName, group: group }) });
-                var j = await res.json();
-                var runId = j && j.runId ? j.runId : null;
-                if (!runId) {
-                    btn.disabled = false;
-                    btn.textContent = 'Run Group';
-                    try { if (window.appNotify) window.appNotify.error('Run failed', modelName); } catch(e) {}
-                    return;
-                }
-
-                // Register mapping for this run so signalr-notifs can update per-row progress
-                try { if (window.appSignalR && window.appSignalR.registerRunMap) window.appSignalR.registerRunMap([{ runId: runId, model: modelName }]); } catch(e) {}
-                // Ask the global connection to join the group's run so updates are broadcast to us
-                try { if (window.appSignalR && window.appSignalR.joinGroup) await window.appSignalR.joinGroup(runId + ''); } catch (e) {}
-
-                // Poll progress
-                // Start a SignalR connection to receive live updates for this runId (best-effort).
-                // per-row progress element removed - keep popupLogEl null
-                var popupLogEl = null;
-                var hubConnection = null;
-                try {
-                    if (window.appSignalR && window.appSignalR.connection) {
-                        // Reuse the global connection if available
-                        hubConnection = window.appSignalR.connection;
-                        // no-op; handlers attached below
-                    }
-                    else if (window.signalR && typeof signalR.HubConnectionBuilder === 'function') {
-                        hubConnection = new signalR.HubConnectionBuilder().withUrl('/progressHub').withAutomaticReconnect().build();
-                        hubConnection.on('ProgressAppended', function (id, stamped) {
-                            try {
-                                if (!id || (id + '') !== (runId + '')) return;
-                                // update both the per-model container and the popup
-                                if (popupLogEl) {
-                                    // append the new stamped line
-                                    if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + stamped; else popupLogEl.textContent = stamped;
-                                    popupLogEl.scrollTop = popupLogEl.scrollHeight;
-                                }
-                            } catch (e) { console.error(e); }
-                        });
-                        hubConnection.on('ProgressCompleted', function (id, finalResult) {
-                            try {
-                                if (!id || (id + '') !== (runId + '')) return;
-                                if (popupLogEl) {
-                                    if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + ('Completed: ' + (finalResult || '')); else popupLogEl.textContent = 'Completed: ' + (finalResult || '');
-                                    popupLogEl.scrollTop = popupLogEl.scrollHeight;
-                                }
-                            } catch (e) { console.error(e); }
-                        });
-                        await hubConnection.start();
-                        try { await hubConnection.invoke('JoinGroup', runId + ''); } catch (e) { /* ignore join errors */ }
-                    }
-                } catch (e) { console.warn('SignalR not available or failed to connect', e); hubConnection = null; }
-
-                // If a hubConnection (global or local) was created, attach the standard handlers and join group
-                try {
-                    if (hubConnection) {
-                        // Prevent double-adding handlers by using a symbol on the connection
-                        try {
-                            hubConnection.__tg_models_handlers_attached = hubConnection.__tg_models_handlers_attached || false;
-                        } catch { hubConnection.__tg_models_handlers_attached = false; }
-                        if (!hubConnection.__tg_models_handlers_attached) {
-                            hubConnection.on('ProgressAppended', function (id, stamped) {
-                                try {
-                                    if (!id || (id + '') !== (runId + '')) return;
-                                    if (popupLogEl) {
-                                        if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + stamped; else popupLogEl.textContent = stamped;
-                                        popupLogEl.scrollTop = popupLogEl.scrollHeight;
-                                    }
-                                    // Progress toast handled by global signalr-notifs.js
-                                } catch (e) { console.error(e); }
-                            });
-                            hubConnection.on('ProgressCompleted', function (id, finalResult) {
-                                try {
-                                    if (!id || (id + '') !== (runId + '')) return;
-                                    if (popupLogEl) {
-                                        if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + ('Completed: ' + (finalResult || '')) ; else popupLogEl.textContent = 'Completed: ' + (finalResult || '');
-                                        popupLogEl.scrollTop = popupLogEl.scrollHeight;
-                                    }
-                                    // Completion toast handled by global signalr-notifs.js
-                                } catch (e) { console.error(e); }
-                            });
-                            hubConnection.__tg_models_handlers_attached = true;
-                        }
-                        // Ensure the connection is started then join the run group
-                        try { await hubConnection.start(); } catch (e) { }
-                        try {
-                            if (window.appSignalR && window.appSignalR.joinGroup) await window.appSignalR.joinGroup(runId + '');
-                            else await hubConnection.invoke('JoinGroup', runId + '');
-                        } catch (e) { /* ignore join errors */ }
-                    }
-                } catch (e) { console.warn('Failed to attach hub handlers or join group', e); }
-
-                // also poll as a fallback for environments without SignalR
-                var pollResult = await pollProgress(runId, popupLogEl);
-                // cleanup hub connection when done
-                try { if (hubConnection) await hubConnection.stop(); } catch (e) { }
-
-                // When completed, show a success toast and update the row progress instead of a full page reload
-                try { if (window.appNotify) window.appNotify.success('Run complete', (modelName || '')); } catch(e) {}
-                try { btn.disabled = false; btn.textContent = 'Run Group'; } catch(e) {}
-            } catch (e) {
-                try { btn.disabled = false; btn.textContent = 'Run Group'; } catch {}
-                console.error(e);
-                alert('Failed to start group run: ' + (e && e.message ? e.message : e));
-                try { if (window.appNotify) window.appNotify.error('Run all tests failed', (e && e.message ? e.message : '')); } catch(e) {}
-            }
-        }
-
-        async function pollProgress(runId, popupLog) {
-            try {
-                while (true) {
-                    var r = await fetch(window.location.pathname + '?handler=ProgressMessages&runId=' + encodeURIComponent(runId));
-                    var j = await r.json();
-                    if (j && j.messages) {
-                        var text = j.messages.join('\n');
-                        if (popupLog) {
-                            popupLog.textContent = text;
-                            popupLog.scrollTop = popupLog.scrollHeight;
-                        }
-                    }
-                    if (j && j.completed) return j;
-                    await new Promise(resolve => setTimeout(resolve, 1200));
-                }
-            } catch (e) {
-                console.error('pollProgress failed', e);
-                try { if (window.appNotify) window.appNotify.error('Poll failed', (e && e.message) ? e.message : ''); } catch(e) {}
-            }
-        }
-
-        // Start runs for all enabled models. Server will create a run per model and return an array of runIds.
-        async function runAllTests(btn) {
-            try {
-                btn.disabled = true;
-                btn.textContent = 'Starting...';
-                try { if (window.appNotify) window.appNotify.info('Run all tests started', 'Starting all tests'); } catch(e) {}
-
-                // Read selected group from the global dropdown and send it to the server
-                var groupSel = document.getElementById('runall_group_select');
-                var group = groupSel ? (groupSel.value || '') : '';
-                var res = await fetch(window.location.pathname + '?handler=RunAll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group: group }) });
-                var j = await res.json();
-                var runIds = j && j.runIds ? j.runIds : [];
-                var runMap = j && j.runMap ? j.runMap : [];
-
-                var popupLogEl = null; // No popup; using toasts
-                var hubConnection = null;
-                try {
-                    if (window.appSignalR && window.appSignalR.connection) {
-                        hubConnection = window.appSignalR.connection;
-                        // handlers to be attached below
-                    }
-                    else if (window.signalR && typeof signalR.HubConnectionBuilder === 'function') {
-                        hubConnection = new signalR.HubConnectionBuilder().withUrl('/progressHub').withAutomaticReconnect().build();
-                        hubConnection.on('ProgressAppended', function (id, stamped) {
-                            try {
-                                if (!id) return;
-                                // if this runId is one we started, append
-                                if (runIds && runIds.indexOf && runIds.indexOf(id + '') >= 0) {
-                                    if (popupLogEl) {
-                                        if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + stamped; else popupLogEl.textContent = stamped;
-                                        popupLogEl.scrollTop = popupLogEl.scrollHeight;
-                                    }
-                                }
-                            } catch (e) { console.error(e); }
-                        });
-                        hubConnection.on('ProgressCompleted', function (id, finalResult) {
-                            try {
-                                if (!id) return;
-                                if (runIds && runIds.indexOf && runIds.indexOf(id + '') >= 0) {
-                                    if (popupLogEl) {
-                                        if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + ('Completed: ' + (finalResult || '')) ; else popupLogEl.textContent = 'Completed: ' + (finalResult || '');
-                                        popupLogEl.scrollTop = popupLogEl.scrollHeight;
-                                    }
-                                }
-                            } catch (e) { console.error(e); }
-                        });
-                        await hubConnection.start();
-                        try {
-                            // Join all run groups so server pushes messages to us
-                            if (runMap && runMap.forEach) {
-                                runMap.forEach(function (pair) {
-                                    try { hubConnection.invoke('JoinGroup', pair.runId + ''); } catch (e) { }
-                                });
-                            }
-                        } catch (e) { /* ignore join errors */ }
-                    }
-                    // the connection and handlers are attached below in common block
-                } catch (e) { console.warn('SignalR not available or failed to connect', e); hubConnection = null; }
-
-                try {
-                    if (hubConnection) {
-                        var already = hubConnection.__tg_models_attached || false;
-                        if (!already) {
-                            hubConnection.on('ProgressAppended', function (id, stamped) {
-                                try {
-                                    if (!id) return;
-                                    if (runIds && runIds.indexOf && runIds.indexOf(id + '') >= 0) {
-                                        if (popupLogEl) {
-                                            if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + stamped; else popupLogEl.textContent = stamped;
-                                            popupLogEl.scrollTop = popupLogEl.scrollHeight;
-                                        }
-                                    }
-                                    // Progress toast handled by global signalr-notifs.js
-                                } catch(e) { console.error(e); }
-                            });
-                            hubConnection.on('ProgressCompleted', function (id, finalResult) {
-                                try {
-                                    if (!id) return;
-                                    if (runIds && runIds.indexOf && runIds.indexOf(id + '') >= 0) {
-                                        if (popupLogEl) {
-                                            if (popupLogEl.textContent && popupLogEl.textContent.length) popupLogEl.textContent += '\n' + ('Completed: ' + (finalResult || '')) ; else popupLogEl.textContent = 'Completed: ' + (finalResult || '');
-                                            popupLogEl.scrollTop = popupLogEl.scrollHeight;
-                                        }
-                                    }
-                                    // Completion toast handled by global signalr-notifs.js
-                                } catch(e) { console.error(e); }
-                            });
-                            hubConnection.__tg_models_attached = true;
-                        }
-                        try { await hubConnection.start(); } catch(e) {}
-                        try {
-                            if (window.appSignalR && window.appSignalR.joinGroup) {
-                                    runMap.forEach(function (pair) { try { window.appSignalR.joinGroup(pair.runId + ''); } catch(e) {} });
-                                    try { if (window.appSignalR.registerRunMap) window.appSignalR.registerRunMap(runMap); } catch(e) {}
-                                }
-                        } catch(e) {}
-                    }
-                } catch(e) { console.warn('Failed to attach hub handlers or join groups', e); }
-
-                // If no SignalR or as a fallback, poll the first run id
-                if ((!hubConnection || !hubConnection.connectionStarted) && runIds && runIds.length > 0) {
-                    // Poll each run for fallback, and try to attach to the per-row element when available
-                    for (var p = 0; p < runIds.length; p++) {
-                        var rid = runIds[p];
-                        var modelName = null;
-                        try { if (runMap && runMap.forEach) { for (var qi = 0; qi < runMap.length; qi++) { if ('' + runMap[qi].runId === ('' + rid)) { modelName = runMap[qi].model; break; } } } } catch(e) {}
-                        var el = null; // per-row element removed
-                        await pollProgress(rid, el);
-                    }
-                }
-
-                try { if (hubConnection) await hubConnection.stop(); } catch (e) { }
-
-                // Re-enable button and show a success toast instead of a full page refresh
-                try { btn.disabled = false; btn.textContent = 'Run all tests'; } catch(e) {}
-                try { if (window.appNotify) window.appNotify.success('All runs started', runIds && runIds.length ? (runIds.length + ' runs scheduled') : 'Runs started'); } catch(e) {}
-            } catch (e) {
-                try { btn.disabled = false; btn.textContent = 'Run all tests'; } catch { }
-                console.error(e);
-                alert('Failed to start runs: ' + (e && e.message ? e.message : e));
-                try { if (window.appNotify) window.appNotify.error('Run all tests failed', (e && e.message ? e.message : '')); } catch(e) {}
-            }
-        }
-
-    // Purge (remove) disabled Ollama models from the local Ollama installation.
-    window.purgeDisabledOllama = async function (btn) {
-            try {
-                if (!confirm('Confirm: remove all disabled models from the local Ollama installation?')) return;
-                btn.disabled = true;
-                btn.textContent = 'Purging...';
-                try { if (window.appNotify) window.appNotify.info('Purge', 'Purging disabled models'); } catch(e) {}
-                var popupLogEl = null;
-
-                var res = await fetch(window.location.pathname + '?handler=PurgeDisabledOllama', { method: 'POST' });
-                var j = await res.json();
-                if (j && j.results) {
-                    var lines = [];
-                    for (var i = 0; i < j.results.length; i++) {
-                        var r = j.results[i];
-                        var line = (r.deleted ? 'DELETED' : 'FAILED') + ': ' + (r.name || '') + (r.output ? (' — ' + r.output) : '');
-                        lines.push(line);
-                    }
-                    if (j && j.results) {
-                        for (var li = 0; li < lines.length; li++) {
-                            try { if (window.appNotify) window.appNotify.info('Purge', lines[li]); } catch(e) {}
-                        }
-                    }
-                } else {
-                    if (popupLogEl) popupLogEl.textContent = 'No results returned';
-                }
-
-                btn.disabled = false; btn.textContent = 'Purge disabled Ollama models';
-            } catch (e) {
-                try { btn.disabled = false; btn.textContent = 'Purge disabled Ollama models'; } catch {}
-                console.error(e);
-                alert('Purge failed: ' + (e && e.message ? e.message : e));
-                try { if (window.appNotify) window.appNotify.error('Purge failed', (e && e.message ? e.message : '')); } catch(e) {}
-            }
-        }
-    </script>
-}
-@* DataTables CSS/JS moved to _Layout.cshtml; keep initialization below *@
-<script>
-    document.addEventListener('DOMContentLoaded', function () {
-        try {
-                if (window.jQuery && jQuery().DataTable) {
-                var mdlTable = $('#modelsTable').DataTable({
-                    lengthChange: true,
-                    pageLength: 25,
-                    stateSave: true,
-                    colReorder: true,
-                    ordering: true,
-                    order: [[1, 'asc']],
-                    autoWidth: false,
-                    columnDefs: [
-                        // details control (col 0) and actions column (col 1) are not orderable
-                        { orderable: false, targets: 0 },
-                        { orderable: false, targets: 1 },
-                        { orderable: false, targets: -1 }
-                    ],
-                    // place Buttons on the left and the search on the right
-                    dom: "<'row mb-2'<'col-sm-6 d-flex align-items-center'B><'col-sm-6 d-flex justify-content-end align-items-center'f>>t<'row'<'col-sm-12'p>>",
-                    buttons: [ { extend: 'colvis', text: 'Columns', columns: ':not(.noVis)', postfixButtons: ['colvisRestore'], className: 'dt-btn-white btn btn-sm me-2' } ],
-                    language: { search: "_INPUT_", searchPlaceholder: "Search..." },
-                });
-
-                    // Row details toggle using the first column (details-control)
-                    $('#modelsTable tbody').on('click', 'td.details-control', function () {
-                        try {
-                            var tr = $(this).closest('tr')[0];
-                            if (!tr) return;
-                            var row = mdlTable.row(tr);
-                            var icon = $(this).find('i.details-icon');
-                            if (row.child.isShown()) {
-                                row.child.hide();
-                                if (icon.length) { icon.removeClass('bi-caret-down-fill').addClass('bi-caret-right-fill'); }
-                            } else {
-                                var tpl = tr.querySelector('.details-template');
-                                var html = tpl ? tpl.innerHTML : '';
-                                row.child(html).show();
-                                if (icon.length) { icon.removeClass('bi-caret-right-fill').addClass('bi-caret-down-fill'); }
-                            }
-                        } catch (e) { console.error(e); }
-                    });
-
-                    // When table redraws (paging/search), ensure all icons are collapsed
-                    mdlTable.on('draw', function () {
-                        try { $('#modelsTable tbody td.details-control i.details-icon').removeClass('bi-caret-down-fill').addClass('bi-caret-right-fill'); } catch(e){}
-                    });
-            }
-        } catch (e) { console.error('DataTables init failed', e); }
-    });
-</script>
-@section Styles {
-    <style>
-        /* Details control column styling */
-        td.details-control { cursor: pointer; width:36px; }
-        td.details-control .details-icon { transition: transform 0.12s ease; }
-          /* Align the models grid exactly 10px from the left menu.
-              Force no internal padding so the layout is consistent regardless of container or breakpoint. */
-                    /* Make the models page content span the full viewport width (full-bleed) while keeping 2% horizontal padding.
-                         This helps the table use the available space even when the parent .container has a max-width. */
-                                .models-page {
-                                    /* Center the full-bleed block while keeping 2% horizontal inset from the viewport edges.
-                                         Using transform + calc(width) avoids fractional-pixel overflow that the negative-margin technique
-                                         sometimes causes when combined with scrollbars or parent containers. */
-                                    position: relative;
-                                    left: 50%;
-                                    transform: translateX(-50%);
-                                    width: calc(100vw - 4%);
-                                    max-width: none;
-                                    padding-left: 2% !important;
-                                    padding-right: 2% !important;
-                                    box-sizing: border-box;
-                                    overflow-x: hidden; /* guard against tiny rounding overflow */
-                                }
-    .models-table-wrapper { overflow-x: auto; padding-bottom: 12px; -webkit-overflow-scrolling: touch; }
-    /* Make horizontal scrollbar thicker and easier to grab */
-    .models-table-wrapper::-webkit-scrollbar { height: 16px; }
-    .models-table-wrapper::-webkit-scrollbar-track { background: #f1f1f1; }
-    .models-table-wrapper::-webkit-scrollbar-thumb { background: #9aa0a6; border-radius: 8px; }
-    /* Firefox: use thicker scrollbar if supported (best-effort) */
-    .models-table-wrapper { scrollbar-width: auto; }
-    .models-table.table { font-size: 0.92rem; width:100%; }
-        .models-table td, .models-table th { padding: 0.35rem 0.5rem; vertical-align: middle; }
-        .models-table .first-col { width: 140px; white-space: nowrap; }
-        .models-table .score { font-weight:700; text-align:center; width:90px; }
-            /* Row coloring based on function-calling score (subtle, do not override Bootstrap defaults) */
-            /* Use lighter backgrounds and avoid !important so Bootstrap styles remain authoritative */
-            .models-table tr.score-low td { background-color: #fff6f6; }
-            .models-table tr.score-mid td { background-color: #fffdf0; }
-            .models-table tr.score-max td { background-color: #f6fff4; }
-            /* Optional subtle left accent border for easier scanning */
-            .models-table tr.score-low td:first-child { border-left: 4px solid #e25858; }
-            .models-table tr.score-mid td:first-child { border-left: 4px solid #e6c44d; }
-            .models-table tr.score-max td:first-child { border-left: 4px solid #39b54a; }
-            /* Disabled models: gray background with white text for better visibility */
-            .models-table tr.disabled-model td { background-color: #6c757d; color: #ffffff; }
-            .models-table tr.disabled-model td a,
-            .models-table tr.disabled-model td pre { color: #ffffff; }
-        /* reduce padding so the details icon is well centered */
-        td.details-control { padding: 0.25rem 0.5rem; }
-    </style>
-}
-
-<div class="models-page">
-    @* Title rendered by layout using ViewData["Title"] *@
-    <p>Premi il pulsante "Test" su un modello per eseguire i controlli di function-calling.</p>
-
-    <div class="mb-2">
-        <form method="post" class="d-inline" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Running...';}})(this)" asp-page-handler="AddOllamaModels">
-            <button type="submit" class="btn btn-sm btn-outline-success">Add ollama models</button>
-        </form>
-        <label class="ms-2 me-2" style="vertical-align:middle;font-size:0.9rem;">Group:</label>
-        <select id="runall_group_select" class="form-select form-select-sm d-inline-block" style="width:200px;vertical-align:middle;">
-            <option value="">(first available)</option>
-            @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
+    <div class="input-group input-group-sm" style="width:260px">
+        <select id="groupSelect" class="form-select">
+            @foreach(var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
             {
                 <option value="@g">@g</option>
             }
         </select>
-        <button type="button" class="btn btn-sm btn-outline-danger ms-2" onclick="runAllTests(this)">Run all tests</button>
-        <button type="button" class="btn btn-sm btn-outline-warning ms-2" onclick="purgeDisabledOllama(this)">Purge disabled Ollama models</button>
-        <form method="post" class="d-inline ms-2" onsubmit="(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true; b.textContent='Refreshing...';}})(this)" asp-page-handler="RefreshContexts">
-            <button type="submit" class="btn btn-sm btn-outline-info">Refresh contexts from running instances</button>
-        </form>
-        <form method="get" class="d-inline ms-2">
-            <label class="form-check form-check-inline" style="margin-bottom:0;">
-                <input type="checkbox" name="showDisabled" value="true" class="form-check-input" @(Model.ShowDisabled ? "checked" : "") onchange="this.form.submit()" />
-                <span class="form-check-label">Mostra disabilitati</span>
-            </label>
-        </form>
+        <button id="runGroupBtn" class="btn btn-outline-secondary">Run Group</button>
     </div>
 
-    @if (TempData["TestResultMessage"] != null)
-    {
-        <div class="alert alert-info" role="alert">@TempData["TestResultMessage"]</div>
-    }
+    <button id="runAllBtn" class="btn btn-sm btn-outline-success">Run All</button>
+    <button id="purgeOllamaBtn" class="btn btn-sm btn-outline-danger">Purge disabled Ollama</button>
+    <button id="refreshContextsBtn" class="btn btn-sm btn-outline-secondary">Refresh contexts</button>
+    <button id="discoverOllamaBtn" class="btn btn-sm btn-outline-secondary">Discover Ollama models</button>
 
-    @{ 
-        // Compute visible groups (max 4) and the total column count so detail rows use correct colspan
-        var groupsHeader = Model.TestGroups ?? new System.Collections.Generic.List<string>();
-        var visibleGroups = groupsHeader.Take(4).ToList();
-        // Now we have an extra details-control column at position 0, so increase fixed count by 1
-        var colCount = 9 + visibleGroups.Count + 2; // 9 fixed cols (details + Actions + ... + NoTools + Duration) + visible groups + 2 cost cols
-    }
+    <label class="form-check form-check-inline ms-2">
+        <input id="showDisabledCheckbox" class="form-check-input" type="checkbox" @(Model.ShowDisabled ? "checked" : "") />
+        <span class="form-check-label">Mostra anche disabilitati</span>
+    </label>
 
-    <div class="models-table-wrapper">
-        <table id="modelsTable" class="table table-bordered table-hover models-table" style="width:100%;">
-            <thead>
-                <tr>
-                    <th style="width:36px;"></th>
-                    <th class="first-col">Actions</th>
-                    <th>Name</th>
-                    <th>Provider</th>
-                    <th>Local</th>
-                    <th>ContextToUse</th>
-                    <th class="score" title="Function calling score">Score</th>
-                    <th class="text-center" title="No tools supported">NoTools</th>
-                    <th class="text-center" title="Test duration in seconds">Duration (s)</th>
-                    @{ foreach (var g in visibleGroups) { <th class="text-center">@g</th>; } }
-                    <th class="text-end">Cost In $/1k</th>
-                    <th class="text-end">Cost Out $/1k</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var m in Model.Models)
-            {
-                <tr class="@((GetScoreClass(m.FunctionCallingScore, m.TestDurationSeconds) + (m.Enabled ? "" : " disabled-model")).Trim())" data-name="@m.Name" data-costin='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)' data-costout='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)'>
-                    <td class="details-control text-center"><i class="bi bi-caret-right-fill details-icon" aria-hidden="true" style="font-size:1.05rem;color:#6c757d;"></i></td>
-                    <td class="first-col text-center">
-                        @* One dropdown with all actions (details control moved to the first column) *@
-                        <div class="d-flex flex-column align-items-center" style="gap:6px;">
-                            <div class="d-flex" style="gap:6px;align-items:center;">
-                                <div class="btn-group">
-                                    <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Actions">⋮</button>
-                                    <ul class="dropdown-menu dropdown-menu-end p-2">
-                                        @if (m.Enabled)
-                                        {
-                                            <li>
-                                                <form method="post" asp-page-handler="DisableModel" class="m-0">
-                                                    <input type="hidden" name="model" value="@m.Name" />
-                                                    <input type="hidden" name="showDisabled" value="@(Model.ShowDisabled.ToString().ToLowerInvariant())" />
-                                                    <button type="submit" class="dropdown-item">Disable</button>
-                                                </form>
-                                            </li>
-                                        }
-                                        else
-                                        {
-                                            <li>
-                                                <form method="post" asp-page-handler="EnableModel" class="m-0">
-                                                    <input type="hidden" name="model" value="@m.Name" />
-                                                    <input type="hidden" name="showDisabled" value="@(Model.ShowDisabled.ToString().ToLowerInvariant())" />
-                                                    <button type="submit" class="dropdown-item">Enable</button>
-                                                </form>
-                                            </li>
-                                        }
-                                        <li><hr class="dropdown-divider" /></li>
-                                        <li>
-                                            <button type="button" class="dropdown-item" onclick="openCostModal(this)" data-name="@m.Name" data-costin='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)' data-costout='@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)'>Costs</button>
-                                        </li>
-                                        <li><hr class="dropdown-divider" /></li>
-                                        <li class="px-2">
-                                            <div class="d-flex flex-column" style="min-width:180px;">
-                                                <select class="form-select form-select-sm mb-2" id="group_select_@m.Name" aria-label="Select group for @m.Name">
-                                                    <option value="">Select group</option>
-                                                    @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
-                                                    {
-                                                        <option value="@g">@g</option>
-                                                    }
-                                                </select>
-                                                <button type="button" class="btn btn-sm btn-primary" onclick="runGroup('@m.Name', this)">Run</button>
-                                            </div>
-                                        </li>
-                                    </ul>
-                                </div>
-                            </div>
-                            @* progress per-row removed: messages now shown via toasts and side status. *@
-                            <div class="details-template" style="display:none;">
-                                <div style="background:#fafafa;padding:8px 12px;">
-                                    <div style="display:flex;gap:18px;align-items:flex-start;">
-                                        <div style="min-width:240px;flex:0 0 240px;">
-                                            <h6 style="margin:0 0 8px 0;">Model info</h6>
-                                            <dl style="margin:0;font-size:0.95rem;">
-                                                <dt style="float:left;width:110px;font-weight:600;">ContextToUse</dt><dd style="margin:0 0 6px 120px;">@m.ContextToUse</dd>
-                                                <dt style="float:left;width:110px;font-weight:600;">MaxContext</dt><dd style="margin:0 0 6px 120px;">@m.MaxContext</dd>
-                                                <dt style="float:left;width:110px;font-weight:600;">Duration</dt><dd style="margin:0 0 6px 120px;">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##} s", m.TestDurationSeconds.Value) : "-")</dd>
-                                                <dt style="float:left;width:110px;font-weight:600;">Cost In</dt><dd style="margin:0 0 6px 120px;">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</dd>
-                                                <dt style="float:left;width:110px;font-weight:600;">Cost Out</dt><dd style="margin:0 0 6px 120px;">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</dd>
-                                            </dl>
-                                        </div>
-                                    </div>
-                                    <div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                                        <h6 style="margin:0 8px 0 0;min-width:140px;">Last artifacts</h6>
-                                        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-                                            @if (!string.IsNullOrWhiteSpace(m.LastMusicTestFile))
-                                            {
-                                                <div style="min-width:220px;">
-                                                    <div style="font-size:0.9rem;font-weight:600;">Music</div>
-                                                    <audio controls preload="none" style="width:220px;">
-                                                        <source src="/@m.LastMusicTestFile" />
-                                                        Your browser does not support the audio element.
-                                                    </audio>
-                                                    <div><a class="small" href="/@m.LastMusicTestFile" download>Download</a></div>
-                                                </div>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(m.LastSoundTestFile))
-                                            {
-                                                <div style="min-width:160px;">
-                                                    <div style="font-size:0.9rem;font-weight:600;">Sound</div>
-                                                    <audio controls preload="none" style="width:160px;">
-                                                        <source src="/@m.LastSoundTestFile" />
-                                                        Your browser does not support the audio element.
-                                                    </audio>
-                                                    <div><a class="small" href="/@m.LastSoundTestFile" download>Download</a></div>
-                                                </div>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(m.LastTtsTestFile))
-                                            {
-                                                <div style="min-width:220px;">
-                                                    <div style="font-size:0.9rem;font-weight:600;">TTS</div>
-                                                    <audio controls preload="none" style="width:220px;">
-                                                        <source src="/@m.LastTtsTestFile" />
-                                                        Your browser does not support the audio element.
-                                                    </audio>
-                                                    <div><a class="small" href="/@m.LastTtsTestFile" download>Download</a></div>
-                                                </div>
-                                            }
-                                            @if (string.IsNullOrWhiteSpace(m.LastMusicTestFile) && string.IsNullOrWhiteSpace(m.LastSoundTestFile) && string.IsNullOrWhiteSpace(m.LastTtsTestFile))
-                                            {
-                                                <div class="text-muted">No generated artifacts</div>
-                                            }
-                                        </div>
-                                    </div>
-                                    <hr />
-                                    <div style="margin-top:12px;">
-                                        <h6 style="margin:0 0 8px 0;">Last group run results</h6>
-                                        <div>
-                                            @{ 
-                                                var groupsDetail = Model.TestGroups ?? new System.Collections.Generic.List<string>();
-                                                foreach (var g in groupsDetail.Take(4))
-                                                {
-                                                    var score = m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var s) && s.HasValue ? s.Value.ToString() : "-";
-                                                    var json = m.LastGroupResultsJson != null && m.LastGroupResultsJson.TryGetValue(g, out var j) ? j : null;
-                                            <details style="margin-bottom:10px;">
-                                                <summary style="font-weight:600;cursor:pointer;">@g (@score)</summary>
-                                                <div style="margin-top:8px;">
-                                                    @Html.Raw(RenderTestResults(json))
-                                                </div>
-                                            </details>
-                                                }
-                                            }
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </td>
-                    <td>
-                        @m.Name
-                        @if (m.NoTools)
-                        {
-                            <span class="badge rounded-pill bg-secondary ms-2" title="Questo modello non supporta tool/function-calling" aria-label="No tools">No tools</span>
-                        }
-                    </td>
-                    <td>@m.Provider</td>
-                    <td>@(m.IsLocal ? "Yes" : "No")</td>
-                    <td>@m.ContextToUse</td>
-                    <td class="score">@m.FunctionCallingScore</td>
-                    <td class="text-center"><input type="checkbox" disabled @(m.NoTools ? "checked" : "") /></td>
-                    <td class="text-center">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}", m.TestDurationSeconds.Value) : "-")</td>
-                    @{ foreach (var g in visibleGroups) { var val = "-"; if (m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var sc) && sc.HasValue) val = sc.Value.ToString(); <td class="text-center">@val</td>; } }
-                    <td class="align-middle text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</td>
-                    <td class="align-middle text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</td>
-                </tr>
-                
-            }
-            </tbody>
-        </table>
+    <div class="ms-auto d-flex align-items-center gap-2">
+        <div class="dropdown">
+            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" id="columnToggle" data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-eye"></i> Colonne
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="columnToggle" id="columnToggleMenu">
+                <!-- Populated by JavaScript -->
+            </ul>
+        </div>
+        
     </div>
 </div>
 
-@functions {
-    // Rende un check colorato per il valore della skill (true=verde, false=rosso, null=grigio)
-    public static string RenderSkillCheck(bool? value)
-    {
-        if (value == true) return "<span style='color:green;font-size:1.2em' title='OK'>&#10003;</span>";
-        if (value == false) return "<span style='color:red;font-size:1.2em' title='FAIL'>&#10007;</span>";
-        return "<span style='color:#bbb;font-size:1.2em' title='N/A'>&#8212;</span>";
-    }
-
-    // Return a CSS class for the table row based on the function-calling score and whether a test was executed
-    public static string GetScoreClass(int score, double? duration)
-    {
-        // percentage on 0-100 based on 10-point scale
-        var pct = (score / 10.0) * 100.0;
-        // If score > 75% => green
-        if (pct > 75.0) return "score-max";
-        // If score > 0 and <=75% => yellow
-        if (pct > 0.0 && pct <= 75.0) return "score-mid";
-        // If score == 0 but a test was executed (duration present) => red
-        if (score == 0 && duration.HasValue) return "score-low";
-        // Otherwise no special class
-        return string.Empty;
-    }
-
-    // Render last test results JSON into HTML (returns safe HTML)
-    public static string RenderTestResults(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return "<em class='text-muted'>No recent test results</em>";
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            if (!doc.RootElement.ValueKind.Equals(System.Text.Json.JsonValueKind.Array)) return "<em class='text-muted'>No results</em>";
-            var sb = new System.Text.StringBuilder();
-            sb.Append("<div style='font-size:0.95rem'><table class='table table-sm mb-0' style='min-width:420px;'><thead><tr><th>Domanda</th><th>Risposta</th></tr></thead><tbody>");
-            foreach (var el in doc.RootElement.EnumerateArray())
+<div class="models-table-wrapper">
+    <table id="modelsTable" class="table table-sm table-striped">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Name</th>
+                <th>Provider</th>
+                <th>Local</th>
+                <th>ContextToUse</th>
+                <th class="text-center">Score</th>
+                <th class="text-center">NoTools</th>
+                <th class="text-center">Duration (s)</th>
+                @foreach (var g in visibleGroups) { <th class="text-center">@g</th> }
+                <th class="text-center">Writer</th>
+                <th class="text-end">Cost In $/1k</th>
+                <th class="text-end">Cost Out $/1k</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var m in Model.Models ?? new System.Collections.Generic.List<TinyGenerator.Models.ModelInfo>())
             {
-                string? promptText = null;
-                if (el.TryGetProperty("input", out var pi) && pi.ValueKind != System.Text.Json.JsonValueKind.Null)
-                {
-                    if (pi.ValueKind == System.Text.Json.JsonValueKind.Object && pi.TryGetProperty("prompt", out var pval) && pval.ValueKind == System.Text.Json.JsonValueKind.String)
-                    {
-                        promptText = pval.GetString();
-                    }
-                    else if (pi.ValueKind == System.Text.Json.JsonValueKind.String)
-                    {
-                        promptText = pi.GetString();
-                    }
-                }
-                string? responseText = null;
-                if (el.TryGetProperty("output", out var po) && po.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    responseText = po.GetString();
-                }
-                else if (el.TryGetProperty("output", out var po2) && po2.ValueKind == System.Text.Json.JsonValueKind.Object && po2.TryGetProperty("response", out var resp) && resp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    responseText = resp.GetString();
-                }
-                sb.Append($"<tr><td style='background:#e3f2fd;color:#1565c0;font-size:0.97em'>{System.Web.HttpUtility.HtmlEncode(promptText ?? "")}</td><td style='background:#fff3e0;color:#e65100;font-size:0.97em'>{System.Web.HttpUtility.HtmlEncode(responseText ?? "")}</td></tr>");
+                <tr data-model="@m.Name">
+                    <td class="dt-control"></td>
+                    <td>@m.Name</td>
+                    <td>
+                        @if (m.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
+                        {
+                            <span class="badge bg-success">@m.Provider</span>
+                        }
+                        else if (m.Provider?.Equals("openai", StringComparison.OrdinalIgnoreCase) == true)
+                        {
+                            <span class="badge bg-warning text-dark">@m.Provider</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary">@m.Provider</span>
+                        }
+                    </td>
+                    <td>@(m.IsLocal ? "Yes" : "No")</td>
+                    <td>@m.ContextToUse</td>
+                    <td class="text-center">@m.FunctionCallingScore</td>
+                    <td class="text-center">@(m.NoTools ? "✓" : "")</td>
+                    <td class="text-center">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}", m.TestDurationSeconds.Value) : "-")</td>
+                    @foreach (var g in visibleGroups) { <td class="text-center">@(m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var sc) && sc.HasValue ? sc.Value.ToString() : "-")</td> }
+                    <td class="text-center">@(m.LastGroupScores != null && m.LastGroupScores.TryGetValue("writer", out var writerSc) && writerSc.HasValue ? writerSc.Value.ToString() : "-")</td>
+                    <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</td>
+                    <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</td>
+                    <td class="text-end">
+                        <div class="btn-group" role="group">
+                            <a class="btn btn-sm btn-outline-secondary" href="/Models/Edit?name=@System.Net.WebUtility.UrlEncode(m.Name)">Edit</a>
+                            <div class="btn-group">
+                                <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">Run</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item run-model-all" href="#" data-model="@m.Name">All tests</a></li>
+                                    @foreach(var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
+                                    {
+                                        <li><a class="dropdown-item run-model-group" href="#" data-model="@m.Name" data-group="@g">@g</a></li>
+                                    }
+                                </ul>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
             }
-            sb.Append("</tbody></table></div>");
-            return sb.ToString();
+        </tbody>
+    </table>
+</div>
+
+    <!-- Include DataTables from CDN (CSS + JS). If your layout already provides these, duplicates are harmless in dev. -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css" />
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+
+    <script>
+        $(document).ready(function(){
+            // Function to format child row content
+            function formatChildRow(model) {
+                return '<div class="test-details-container p-3" style="background-color: #f8f9fa;" data-model="' + model + '">' +
+                       '<div class="test-groups-loading">Loading test results...</div>' +
+                       '</div>';
+            }
+
+            var table = $('#modelsTable').DataTable({
+                paging: true,
+                info: true,
+                searching: true,
+                ordering: true,
+                order: [[5, 'desc']], // Score column (now index 5 because of chevron column)
+                columnDefs: [ 
+                    { targets: 0, orderable: false, className: 'dt-control' },
+                    { targets: 'no-sort', orderable: false }
+                ]
+            });
+
+            // Populate column visibility toggle menu
+            var columnToggleMenu = $('#columnToggleMenu');
+            table.columns().every(function(index) {
+                var column = this;
+                var header = $(column.header());
+                var title = header.text().trim();
+                
+                // Skip first column (expand control) and actions column
+                if (index === 0 || title === '' || header.parent().children().last()[0] === header[0]) {
+                    return;
+                }
+                
+                var li = $('<li>');
+                var label = $('<label class="dropdown-item">');
+                var checkbox = $('<input type="checkbox" class="form-check-input me-2" checked>')
+                    .on('change', function() {
+                        column.visible(this.checked);
+                    });
+                
+                label.append(checkbox).append(title);
+                li.append(label);
+                columnToggleMenu.append(li);
+            });
+
+            // Handle click on td.dt-control to expand/collapse child row
+            $('#modelsTable tbody').on('click', 'td.dt-control', function () {
+                var tr = $(this).closest('tr');
+                var row = table.row(tr);
+                var model = tr.data('model');
+
+                if (row.child.isShown()) {
+                    // Close this row
+                    row.child.hide();
+                    tr.removeClass('shown');
+                } else {
+                    // Open this row
+                    row.child(formatChildRow(model)).show();
+                    tr.addClass('shown');
+                    
+                    // Load test groups
+                    var container = $(row.child()).find('.test-details-container');
+                    loadTestGroups(model, container);
+                }
+            });
+
+            function postHandler(handler, data) {
+                return fetch('?handler=' + handler, { method: 'POST', headers: { 'Accept': 'application/json' }, body: data });
+            }
+
+            $('#runGroupBtn').on('click', function(){
+                var group = $('#groupSelect').val();
+                var model = null; // run for all? We use RunGroup with model param when run per-model; for global group run we call RunAll
+                // For convenience run the selected group for all enabled models via RunAll with group param
+                var form = new FormData();
+                form.append('group', group);
+                postHandler('RunAll', form)
+                    .then(r => r.json())
+                    .then(j => { 
+                        // Monitor test completion and reload page when done
+                        if (j.runIds && j.runIds.length > 0) {
+                            monitorTestCompletion(j.runIds);
+                        }
+                    })
+                    .catch(e => { alert('Error starting run: ' + e); });
+            });
+
+            $('#runAllBtn').on('click', function(){
+                var group = $('#groupSelect').val();
+                var form = new FormData();
+                if(group) form.append('group', group);
+                postHandler('RunAll', form)
+                    .then(r => r.json())
+                    .then(j => { 
+                        if (j.runIds && j.runIds.length > 0) {
+                            monitorTestCompletion(j.runIds);
+                        }
+                    })
+                    .catch(e => { alert('Error starting run: ' + e); });
+            });
+
+            $('#purgeOllamaBtn').on('click', function(){
+                if(!confirm('Permanently purge disabled local Ollama models? This will attempt to delete installed models.')) return;
+                postHandler('PurgeDisabledOllama', new FormData())
+                    .then(r => r.json())
+                    .then(j => { alert('Purge completed. Check logs for details.'); })
+                    .catch(e => { alert('Error purging: ' + e); });
+            });
+
+            $('#refreshContextsBtn').on('click', function(){
+                postHandler('RefreshContexts', new FormData())
+                    .then(r => { if(r.redirected) window.location = r.url; else return r.json(); })
+                    .then(j => { if(j) alert('Refresh contexts result: ' + JSON.stringify(j)); })
+                    .catch(e => { alert('Error refreshing contexts: ' + e); });
+            });
+
+            $('#discoverOllamaBtn').on('click', function(){
+                postHandler('AddOllamaModels', new FormData())
+                    .then(r => { if(r.redirected) window.location = r.url; else return r.json(); })
+                    .then(j => { if(j) alert('Discover result: ' + JSON.stringify(j)); else window.location.reload(); })
+                    .catch(e => { alert('Error discovering: ' + e); });
+            });
+
+            // ShowDisabled checkbox: update querystring and reload while preserving other params
+            $('#showDisabledCheckbox').on('change', function(){
+                try {
+                    var params = new URLSearchParams(window.location.search);
+                    if(this.checked) params.set('showDisabled', 'true'); else params.delete('showDisabled');
+                    // Preserve selected group param if present in UI
+                    var group = $('#groupSelect').val();
+                    if(group) params.set('group', group);
+                    var qs = params.toString();
+                    window.location.search = qs;
+                } catch(e) { console.error(e); window.location.reload(); }
+            });
+
+            // Groups available from server
+            var allGroups = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.TestGroups ?? new System.Collections.Generic.List<string>()));
+
+            // Per-row dropdown: run a single group for the selected model
+            // Use delegated event handlers so bindings survive DataTables DOM manipulations
+            $('#modelsTable').on('click', '.run-model-group', function(e){
+                e.preventDefault();
+                var model = $(this).data('model');
+                var group = $(this).data('group');
+                var form = new FormData();
+                form.append('model', model);
+                if(group) form.append('group', group);
+                postHandler('RunGroup', form)
+                    .then(r => r.json())
+                    .then(j => { 
+                        if(j.runId) {
+                            monitorTestCompletion([j.runId]);
+                        }
+                    })
+                    .catch(e => { alert('Error starting run: ' + e); });
+            });
+
+            // Per-row dropdown: run ALL groups for the selected model (start one RunGroup per group)
+            $('#modelsTable').on('click', '.run-model-all', function(e){
+                e.preventDefault();
+                var model = $(this).data('model');
+                var groups = allGroups || [];
+                var runIds = [];
+                var promises = [];
+                try {
+                    for(var i=0;i<groups.length;i++){
+                        var g = groups[i];
+                        var form = new FormData();
+                        form.append('model', model);
+                        form.append('group', g);
+                        var promise = postHandler('RunGroup', form)
+                            .then(r => r.json())
+                            .then(j => { if(j.runId) runIds.push(j.runId); })
+                            .catch(()=>{});
+                        promises.push(promise);
+                    }
+                    Promise.all(promises).then(() => {
+                        if(runIds.length > 0) {
+                            monitorTestCompletion(runIds);
+                        }
+                    });
+                } catch(e) { console.error(e); }
+            });
+
+            function loadTestGroups(model, container) {
+                fetch('/Models?handler=TestGroups&model=' + encodeURIComponent(model))
+                    .then(r => {
+                        if(!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.json();
+                    })
+                    .then(groups => {
+                        if(!groups || !Array.isArray(groups) || groups.length === 0) {
+                            container.html('<div class="text-muted">No test results available for this model.</div>');
+                            return;
+                        }
+                        
+                        var html = '<div class="test-groups">';
+                        groups.forEach(function(group) {
+                            var passRate = group.total > 0 ? Math.round((group.passed / group.total) * 100) : 0;
+                            var statusColor = group.success ? 'success' : 'warning';
+                            
+                            html += '<div class="card mb-2">';
+                            html += '<div class="card-header bg-' + statusColor + ' bg-opacity-10">';
+                            html += '<button class="btn btn-link p-0 text-decoration-none w-100 text-start load-group-steps" data-model="' + model + '" data-group="' + group.group + '">';
+                            html += '<strong>' + group.group + '</strong> ';
+                            html += '<span class="badge bg-' + statusColor + '">' + group.score + '/10</span> ';
+                            html += '<span class="text-muted small">(' + group.passed + '/' + group.total + ' passed, ' + passRate + '%)</span>';
+                            html += '</button>';
+                            html += '</div>';
+                            html += '<div class="card-body collapse test-steps-container" data-model="' + model + '" data-group="' + group.group + '">';
+                            html += '<div class="text-muted">Click to load details...</div>';
+                            html += '</div>';
+                            html += '</div>';
+                        });
+                        html += '</div>';
+                        
+                        container.html(html);
+                    })
+                    .catch(e => {
+                        container.html('<div class="text-danger">Error loading test groups: ' + e.message + '</div>');
+                    });
+            }
+
+            // Load test steps for a specific group (now works within child rows)
+            $(document).on('click', '.load-group-steps', function(e){
+                e.preventDefault();
+                var model = $(this).data('model');
+                var group = $(this).data('group');
+                var stepsContainer = $('.test-steps-container[data-model="' + model + '"][data-group="' + group + '"]');
+                
+                if(stepsContainer.hasClass('show')) {
+                    stepsContainer.collapse('hide');
+                    return;
+                }
+                
+                stepsContainer.collapse('show');
+                
+                // Load steps if not already loaded
+                if(stepsContainer.find('.text-muted').length > 0) {
+                    stepsContainer.html('<div class="text-center"><div class="spinner-border spinner-border-sm"></div> Loading...</div>');
+                    
+                    fetch('/Models?handler=TestSteps&model=' + encodeURIComponent(model) + '&group=' + encodeURIComponent(group))
+                        .then(r => r.json())
+                        .then(steps => {
+                            if(!steps || steps.length === 0) {
+                                stepsContainer.html('<div class="text-muted">No steps found.</div>');
+                                return;
+                            }
+                            
+                            var html = '<div class="list-group list-group-flush">';
+                            steps.forEach(function(step) {
+                                var statusBadge = step.passed ? 
+                                    '<span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> PASSED</span>' : 
+                                    '<span class="badge bg-danger"><i class="bi bi-x-circle-fill"></i> FAILED</span>';
+                                
+                                var itemClass = step.passed ? 'list-group-item' : 'list-group-item border-start border-danger border-3';
+                                
+                                html += '<div class="' + itemClass + '">';
+                                html += '<div class="d-flex align-items-center mb-2">';
+                                html += statusBadge + ' ';
+                                html += '<strong class="ms-2">' + (step.stepName || 'Step ' + step.stepNumber) + '</strong>';
+                                if(step.durationMs) {
+                                    html += '<span class="ms-auto text-muted small">' + step.durationMs + 'ms</span>';
+                                }
+                                html += '</div>';
+                                
+                                if(step.prompt) {
+                                    html += '<div class="mb-2">';
+                                    html += '<small class="text-muted">Request:</small>';
+                                    html += '<div class="p-2 bg-light rounded small" style="max-height:150px;overflow-y:auto;">';
+                                    html += '<code>' + escapeHtml(step.prompt) + '</code>';
+                                    html += '</div>';
+                                    html += '</div>';
+                                }
+                                
+                                if(step.response) {
+                                    html += '<div class="mb-2">';
+                                    html += '<small class="text-muted">Response:</small>';
+                                    html += '<div class="p-2 bg-light rounded small" style="max-height:150px;overflow-y:auto;">';
+                                    html += '<code>' + escapeHtml(step.response) + '</code>';
+                                    html += '</div>';
+                                    html += '</div>';
+                                }
+                                
+                                if(step.error) {
+                                    html += '<div class="alert alert-danger mb-0 py-1 px-2 small">';
+                                    html += '<strong>Error:</strong> ' + escapeHtml(step.error);
+                                    html += '</div>';
+                                }
+                                
+                                html += '</div>';
+                            });
+                            html += '</div>';
+                            
+                            stepsContainer.html(html);
+                        })
+                        .catch(e => {
+                            stepsContainer.html('<div class="text-danger">Error loading steps: ' + e.message + '</div>');
+                        });
+                }
+            });
+
+            function escapeHtml(text) {
+                if(!text) return '';
+                var div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            // Monitor test completion via SignalR and reload page when done
+            function monitorTestCompletion(runIds) {
+                if(!window.signalR || !runIds || runIds.length === 0) return;
+                
+                var connection = new signalR.HubConnectionBuilder()
+                    .withUrl('/progressHub')
+                    .withAutomaticReconnect()
+                    .build();
+                
+                var completedRuns = new Set();
+                
+                connection.on('ProgressAppended', function(id, message, extraClass) {
+                    // Check if this is a completion message
+                    if(runIds.includes(parseInt(id)) && extraClass) {
+                        completedRuns.add(id);
+                        
+                        // Show notification
+                        var notification = $('<div class="alert alert-dismissible fade show" role="alert" style="position:fixed;top:20px;right:20px;z-index:9999;min-width:300px;max-width:500px;">');
+                        
+                        if(extraClass === 'success') {
+                            notification.addClass('alert-success');
+                            notification.css('background-color', '#d4edda');
+                        } else if(extraClass === 'error') {
+                            notification.addClass('alert-danger');
+                            notification.css('background-color', '#f8d7da');
+                        }
+                        
+                        notification.html(escapeHtml(message) + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>');
+                        $('body').append(notification);
+                        
+                        // Auto-dismiss after 5 seconds
+                        setTimeout(function() { notification.alert('close'); }, 5000);
+                        
+                        // If all runs completed, reload page after a short delay
+                        if(completedRuns.size === runIds.length) {
+                            setTimeout(function() {
+                                connection.stop();
+                                window.location.reload();
+                            }, 2000);
+                        }
+                    }
+                });
+                
+                connection.start().then(function() {
+                    runIds.forEach(function(id) {
+                        connection.invoke('JoinGroup', id.toString());
+                    });
+                }).catch(function(err) {
+                    console.error('SignalR connection error:', err);
+                });
+            }
+        });
+    </script>
+
+    <style>
+        .dt-control {
+            cursor: pointer;
+            text-align: center;
+            position: relative;
         }
-        catch
-        {
-            return "<em class='text-muted'>Invalid results</em>";
+        .dt-control:hover {
+            background-color: #f8f9fa;
         }
-    }
-}
+        .dt-control::before {
+            content: '▶';
+            font-size: 12px;
+            transition: transform 0.2s;
+            display: inline-block;
+            color: #666;
+        }
+        tr.shown .dt-control::before {
+            transform: rotate(90deg);
+        }
+        .test-details-container {
+            border-top: 2px solid #dee2e6;
+        }
+        .test-groups .card {
+            border-left: 3px solid #0d6efd;
+        }
+    </style>

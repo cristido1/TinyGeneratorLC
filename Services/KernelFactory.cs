@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Connectors.Sqlite;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
 
 namespace TinyGenerator.Services
 {
@@ -89,8 +90,23 @@ namespace TinyGenerator.Services
         {
             try
             {
+                // Se non viene passato un modelId esplicito, prova a risalire al modello dell'agente dal DB
+                string? resolvedModel = modelId;
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(resolvedModel))
+                    {
+                        var agent = _database?.GetAgentById(agentId);
+                        if (agent?.ModelId != null)
+                        {
+                            resolvedModel = _database?.GetModelNameById(agent.ModelId.Value);
+                        }
+                    }
+                }
+                catch { /* best-effort */ }
+
                 // Create kernel using same factory method (which will attach plugin instances from this factory)
-                var kw = CreateKernel(modelId, allowedPlugins, agentId);
+                var kw = CreateKernel(resolvedModel, allowedPlugins, agentId);
                 // Do not overwrite the per-kernel plugin instances returned by CreateKernel.
                 // The CreateKernel method already sets the plugin instances that were registered for this kernel.
                 _agentKernels[agentId] = kw;
@@ -160,17 +176,72 @@ namespace TinyGenerator.Services
                     builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey);
                 }
             }
+            else if (string.Equals(providerLower, "azure", StringComparison.OrdinalIgnoreCase)
+                  || string.Equals(providerLower, "azure-openai", StringComparison.OrdinalIgnoreCase))
+            {
+                var endpoint = _config["AzureOpenAI:Endpoint"]
+                               ?? Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")
+                               ?? modelInfo?.Endpoint;
+                var apiKey = _config["AzureOpenAI:ApiKey"]
+                             ?? Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY");
+                var deployment = model; // usa metadata per override se disponibile
+
+                if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(apiKey))
+                {
+                    throw new InvalidOperationException("Azure OpenAI non configurato. Imposta AzureOpenAI:Endpoint e AzureOpenAI:ApiKey o variabili AZURE_OPENAI_ENDPOINT/AZURE_OPENAI_API_KEY.");
+                }
+
+                _logger?.LogInformation("Creazione kernel Azure OpenAI con deployment {deployment} su {endpoint}", deployment, endpoint);
+                builder.AddAzureOpenAIChatCompletion(deploymentName: deployment, endpoint: endpoint!, apiKey: apiKey!);
+            }
             else
             {
-                var endpoint = modelInfo?.Endpoint ?? _config["AI:Endpoint"] ?? "http://localhost:11434";
-                _logger?.LogInformation("Creazione kernel Ollama con modello {model} su {endpoint}", model, endpoint);
-                builder.AddOllamaChatCompletion(modelId: model, endpoint: new Uri(endpoint));
+                // Fallback: use OpenAI connector even for models that previously used Ollama.
+                // For Ollama endpoints, we need to ensure the endpoint ends with /v1 and provide a dummy API key
+                var openAiEndpoint = modelInfo?.Endpoint ?? _config["OpenAI:Endpoint"] ?? _config["AI:Endpoint"];
+                var isOllamaEndpoint = !string.IsNullOrWhiteSpace(openAiEndpoint) && 
+                                       (openAiEndpoint.Contains("localhost:11434", StringComparison.OrdinalIgnoreCase) ||
+                                        openAiEndpoint.Contains("127.0.0.1:11434", StringComparison.OrdinalIgnoreCase) ||
+                                        providerLower == "ollama");
+
+                string apiKey;
+                if (isOllamaEndpoint)
+                {
+                    // Ollama doesn't need a real API key, use dummy value
+                    apiKey = "ollama-dummy-key";
+                    
+                    // Ensure Ollama endpoint ends with /v1
+                    if (!string.IsNullOrWhiteSpace(openAiEndpoint) && !openAiEndpoint.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                    {
+                        openAiEndpoint = openAiEndpoint.TrimEnd('/') + "/v1";
+                    }
+                }
+                else
+                {
+                    // Real OpenAI endpoint needs real API key
+                    apiKey = _config["Secrets:OpenAI:ApiKey"]
+                            ?? _config["OpenAI:ApiKey"]
+                            ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+                            ?? string.Empty;
+
+                    if (string.IsNullOrWhiteSpace(apiKey))
+                    {
+                        throw new InvalidOperationException("OpenAI API key not configured. Set Secrets:OpenAI:ApiKey or OPENAI_API_KEY.");
+                    }
+                }
+
+                _logger?.LogInformation("Creazione kernel OpenAI (fallback) con modello {model} (endpoint={endpoint}, isOllama={isOllama})", 
+                    model, openAiEndpoint ?? "default", isOllamaEndpoint);
+
+                if (!string.IsNullOrWhiteSpace(openAiEndpoint))
+                {
+                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey, endpoint: new Uri(openAiEndpoint));
+                }
+                else
+                {
+                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey);
+                }
             }
-            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.FileIOPlugin>();
-            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.TextPlugin>();
-            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.TimePlugin>();
-            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.HttpPlugin>();
-            //builder.Plugins.AddFromType<Microsoft.SemanticKernel.Plugins.Core.ConversationSummaryPlugin>();
             // Istanze plugin registrate nel kernel. If allowedPlugins is provided, only register
             // the plugins whose alias is present in the list (best-effort matching using lowercase).
             System.Func<string, bool> allowed = (alias) =>
@@ -195,7 +266,7 @@ namespace TinyGenerator.Services
             if (allowed("audioevaluator")) { audioEvalSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient); builder.Plugins.AddFromObject(audioEvalSkill, "audioevaluator"); _logger?.LogDebug("Registered plugin: {plugin}", audioEvalSkill?.GetType().FullName); registeredAliases.Add("audioevaluator"); }
             if (allowed("tts")) { builder.Plugins.AddFromObject(TtsApiSkill, "tts"); _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName); registeredAliases.Add("tts"); }
             // Register the StoryEvaluatorSkill which exposes evaluation functions used by texteval tests
-            if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database, numericModelId, agentId); builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
+            if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database!, numericModelId, agentId); builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
             if (allowed("story")) { writerSkill = new TinyGenerator.Skills.StoryWriterSkill(_storiesService, _database, numericModelId, agentId, model); builder.Plugins.AddFromObject(writerSkill, "story"); _logger?.LogDebug("Registered plugin: {plugin}", writerSkill?.GetType().FullName); registeredAliases.Add("story"); }
 
             var kernel = builder.Build();
@@ -254,7 +325,7 @@ namespace TinyGenerator.Services
         }
 
         // Backwards-compatible IKernelFactory implementation that returns the Kernel instance
-        Microsoft.SemanticKernel.Kernel IKernelFactory.CreateKernel(string? model = null, System.Collections.Generic.IEnumerable<string>? allowedPlugins = null)
+        Microsoft.SemanticKernel.Kernel IKernelFactory.CreateKernel(string? model, System.Collections.Generic.IEnumerable<string>? allowedPlugins)
         {
             var kw = CreateKernel(model, allowedPlugins, null);
             return kw?.Kernel!;

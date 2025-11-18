@@ -21,7 +21,7 @@ namespace TinyGenerator.Pages.Agents
         public string? Search { get; set; }
 
         [BindProperty(SupportsGet = true)]
-        public int Page { get; set; } = 1;
+        public new int Page { get; set; } = 1;
 
         public int PageSize { get; set; } = 20;
 

@@ -1,0 +1,84 @@
+@page
+@model TinyGenerator.Pages.Models.EditModel
+@{
+    ViewData["Title"] = "Edit Model";
+}
+
+<h3>@(string.IsNullOrEmpty(Model.Model?.Name) ? "Create model" : "Edit model: " + Model.Model.Name)</h3>
+
+<form method="post">
+    <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+
+    <div class="mb-3">
+        <label class="form-label">Nome</label>
+        <input asp-for="Model.Name" class="form-control" />
+        <span asp-validation-for="Model.Name" class="text-danger"></span>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Provider</label>
+        <select asp-for="Model.Provider" class="form-select">
+            <option value="ollama">ollama</option>
+            <option value="openai">openai</option>
+        </select>
+        <span asp-validation-for="Model.Provider" class="text-danger"></span>
+    </div>
+
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            <label class="form-label">MaxContext</label>
+            <input asp-for="Model.MaxContext" class="form-control" />
+            <span asp-validation-for="Model.MaxContext" class="text-danger"></span>
+        </div>
+        <div class="col-md-8 mb-3">
+            <label class="form-label">ContextToUse</label>
+            <input asp-for="Model.ContextToUse" class="form-control" />
+            <span asp-validation-for="Model.ContextToUse" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            <label class="form-label">CostInPerToken (dollars per token)</label>
+            <input asp-for="Model.CostInPerToken" class="form-control" />
+            <span asp-validation-for="Model.CostInPerToken" class="text-danger"></span>
+        </div>
+        <div class="col-md-6 mb-3">
+            <label class="form-label">CostOutPerToken (dollars per token)</label>
+            <input asp-for="Model.CostOutPerToken" class="form-control" />
+            <span asp-validation-for="Model.CostOutPerToken" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            <label class="form-label">LimitTokensDay</label>
+            <input asp-for="Model.LimitTokensDay" class="form-control" />
+            <span asp-validation-for="Model.LimitTokensDay" class="text-danger"></span>
+        </div>
+        <div class="col-md-4 mb-3">
+            <label class="form-label">LimitTokensWeek</label>
+            <input asp-for="Model.LimitTokensWeek" class="form-control" />
+            <span asp-validation-for="Model.LimitTokensWeek" class="text-danger"></span>
+        </div>
+        <div class="col-md-4 mb-3">
+            <label class="form-label">LimitTokensMonth</label>
+            <input asp-for="Model.LimitTokensMonth" class="form-control" />
+            <span asp-validation-for="Model.LimitTokensMonth" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="form-check mb-3">
+        <input asp-for="Model.Enabled" class="form-check-input" />
+        <label class="form-check-label">Enabled</label>
+    </div>
+
+    <div class="mb-3">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <a class="btn btn-secondary ms-2" asp-page="Index">Back</a>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

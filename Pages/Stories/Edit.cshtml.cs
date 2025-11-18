@@ -31,7 +31,7 @@ namespace TinyGenerator.Pages.Stories
             var s = _stories.GetStoryById(id);
             if (s == null) return NotFound();
             Prompt = s.Prompt;
-            StoryText = s.StoryA ?? s.StoryB ?? s.StoryC ?? string.Empty;
+            StoryText = s.Story;
             Status = s.Status;
             return Page();
         }

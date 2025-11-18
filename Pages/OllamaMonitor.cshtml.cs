@@ -42,7 +42,7 @@ namespace TinyGenerator.Pages
             return new JsonResult(list);
         }
 
-    public async Task<IActionResult> OnPostStartWithContextAsync([Microsoft.AspNetCore.Mvc.FromBody] StartContextRequest req)
+        public IActionResult OnPostStartWithContextAsync([Microsoft.AspNetCore.Mvc.FromBody] StartContextRequest req)
         {
             if (req == null || string.IsNullOrWhiteSpace(req.Model)) return new JsonResult(new { success = false, message = "Model missing" });
 

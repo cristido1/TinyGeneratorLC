@@ -1,11 +1,11 @@
 // File: Services/StoryGeneratorService.cs
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.Agents;
+using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.Ollama;
 using Microsoft.SemanticKernel.Memory;
-using Microsoft.SemanticKernel.Planning;
 using System.Diagnostics;
 using System.Linq;
+using TinyGenerator.Models;
 
 namespace TinyGenerator.Services
 {
@@ -98,15 +98,25 @@ namespace TinyGenerator.Services
             catch { }
             // Diagnostic: print configured models for agents to ensure correct mapping
             try { Console.WriteLine($"[StoryGen] Configured writerModelA={writerModelA}, writerModelB={writerModelB}"); } catch { }
-            var writerA = MakeAgent("WriterA", "Scrittore bilanciato", "Sei uno scrittore esperto. Scrivi in italiano, coerente e ben strutturata. Evita ripetizioni.", writerModelA);
-            var writerB = MakeAgent("WriterB", "Scrittore emotivo", "Sei un narratore emotivo. Scrivi in italiano coinvolgente, evita ripetizioni.", writerModelB);
+            
+            // Create kernels and system prompts
+            var writerAKernel = _kernelFactory.CreateKernel(writerModelA);
+            var writerAPrompt = "Sei uno scrittore esperto. Scrivi in italiano, coerente e ben strutturata. Evita ripetizioni.";
+            
+            var writerBKernel = _kernelFactory.CreateKernel(writerModelB);
+            var writerBPrompt = "Sei un narratore emotivo. Scrivi in italiano coinvolgente, evita ripetizioni.";
+            
             var writerModelC = "phi3:mini-128k";
-            var evaluator1 = MakeAgent("Evaluator1", "Coerenza", "Valuta coerenza e struttura. Rispondi JSON: {\"score\":<1-10>}", "qwen2.5:3b");
-            var evaluator2 = MakeAgent("Evaluator2", "Stile", "Valuta stile e ritmo. Rispondi JSON: {\"score\":<1-10>}", "llama3.2:3b");
+            var writerCKernel = _kernelFactory.CreateKernel(writerModelC);
+            var writerCPrompt = "Sei uno scrittore epico: scrivi storie lunghe, avvincenti e dettagliate in italiano.";
+            
+            var evaluator1Kernel = _kernelFactory.CreateKernel("qwen2.5:3b");
+            var evaluator1Prompt = "Valuta coerenza e struttura. Rispondi JSON: {\"score\":<1-10>}";
+            
+            var evaluator2Kernel = _kernelFactory.CreateKernel("llama3.2:3b");
+            var evaluator2Prompt = "Valuta stile e ritmo. Rispondi JSON: {\"score\":<1-10>}";
 
-            // Create plan for the theme
-            // var plan = await _planner.CreatePlanAsync($"Genera una storia completa sul tema: {theme}"); // TODO: Planner disabilitato temporaneamente
-            Microsoft.SemanticKernel.Planning.Plan? plan = default!; // TODO: reintegrare planner compatibile
+            // Planner disabilitato temporaneamente
 
             // Use PlannerExecutor which will run the plan for each writer and report per-step progress
             var memoryKey = Guid.NewGuid().ToString();
@@ -115,50 +125,48 @@ namespace TinyGenerator.Services
             // --- Writer C: single-shot epic writer (writes whole story in one shot: title + story only) ---
             if (sel == "ALL" || sel == "C")
             {
-                    var writer = MakeAgent("WriterC", "Scrittore epico", "Sei uno scrittore epico: scrivi storie lunghe, avvincenti e dettagliate in italiano.", writerModelC);
-                var agentMemoryKey = $"{writer.Name}_{memoryKey}";
-                progress?.Invoke($"{writer.Name}: avvio single-shot writer (titolo + storia)...");
+                var agentMemoryKey = $"WriterC_{memoryKey}";
+                progress?.Invoke($"WriterC: avvio single-shot writer (titolo + storia)...");
 
                 // Instruct the agent to reply ONLY with Title and Story in this exact format
                 var promptC = $"Genera una storia completa sul tema: {theme}\n\n" +
                               "Rispondi ESCLUSIVAMENTE nel seguente formato:\nTitolo: <Il titolo qui>\n\n<Corpo della storia qui>\n\n" +
                               "Niente altro: nessuna spiegazione, nessun metadata, solo il titolo e la storia. Scrivi la storia il più lunga e avvincente possibile.";
 
-                var raw = await Ask(writer, promptC);
+                var raw = await Ask(writerCKernel, writerCPrompt, promptC, writerModelC);
                 // keep raw as-is; ensure coherence/length
                 var assembledC = raw ?? string.Empty;
-                assembledC = await EnsureCoherent(assembledC, writer, $"Storia completa sul tema: {theme}");
-                assembledC = await ExtendUntil(assembledC, MIN_CHARS, writer);
-                candidateStories[writer.Name] = assembledC;
+                assembledC = await EnsureCoherent(assembledC, writerCKernel, writerCPrompt, $"Storia completa sul tema: {theme}");
+                assembledC = await ExtendUntil(assembledC, MIN_CHARS, writerCKernel, writerCPrompt);
+                candidateStories["WriterC"] = assembledC;
             }
 
             // --- Writer A: use PlannerExecutor (planner-driven steps) ---
             if (sel == "ALL" || sel == "A")
             {
-                var writer = writerA;
-                var agentMemoryKey = $"{writer.Name}_{memoryKey}";
-                progress?.Invoke($"{writer.Name}: avvio esecuzione piano...");
+                var agentMemoryKey = $"WriterA_{memoryKey}";
+                progress?.Invoke($"WriterA: avvio esecuzione piano...");
                 var assembled = string.Empty; // TODO: reintegrare planner compatibile
                 if (string.IsNullOrWhiteSpace(assembled)) assembled = string.Empty;
-                assembled = await EnsureCoherent(assembled, writer, $"Storia completa sul tema: {theme}");
-                assembled = await ExtendUntil(assembled, MIN_CHARS, writer);
-                candidateStories[writer.Name] = assembled;
+                assembled = await EnsureCoherent(assembled, writerAKernel, writerAPrompt, $"Storia completa sul tema: {theme}");
+                assembled = await ExtendUntil(assembled, MIN_CHARS, writerAKernel, writerAPrompt);
+                candidateStories["WriterA"] = assembled;
             }
 
             // --- Writer B: FreeWriterPlanner non trovato: sezione disabilitata ---
 
 
             // pick candidate stories produced by writers
-            var storiaA = candidateStories.ContainsKey(writerA.Name) ? candidateStories[writerA.Name] : string.Empty;
-            var storiaB = candidateStories.ContainsKey(writerB.Name) ? candidateStories[writerB.Name] : string.Empty;
+            var storiaA = candidateStories.ContainsKey("WriterA") ? candidateStories["WriterA"] : string.Empty;
+            var storiaB = candidateStories.ContainsKey("WriterB") ? candidateStories["WriterB"] : string.Empty;
 
             // Evaluate candidate stories only if they exist (skip empty ones to avoid evaluator calls)
             double scoreA = 0, scoreB = 0, scoreC = 0;
             string evalACombined = string.Empty, evalBCombined = string.Empty, evalCCombined = string.Empty;
             var storiaC = candidateStories.ContainsKey("WriterC") ? candidateStories["WriterC"] : string.Empty;
-            if (!string.IsNullOrWhiteSpace(storiaA)) (scoreA, evalACombined) = await EvaluateAsync(storiaA, evaluator1, evaluator2);
-            if (!string.IsNullOrWhiteSpace(storiaB)) (scoreB, evalBCombined) = await EvaluateAsync(storiaB, evaluator1, evaluator2);
-            if (!string.IsNullOrWhiteSpace(storiaC)) (scoreC, evalCCombined) = await EvaluateAsync(storiaC, evaluator1, evaluator2);
+            if (!string.IsNullOrWhiteSpace(storiaA)) (scoreA, evalACombined) = await EvaluateAsync(storiaA, (evaluator1Kernel, evaluator1Prompt), (evaluator2Kernel, evaluator2Prompt));
+            if (!string.IsNullOrWhiteSpace(storiaB)) (scoreB, evalBCombined) = await EvaluateAsync(storiaB, (evaluator1Kernel, evaluator1Prompt), (evaluator2Kernel, evaluator2Prompt));
+            if (!string.IsNullOrWhiteSpace(storiaC)) (scoreC, evalCCombined) = await EvaluateAsync(storiaC, (evaluator1Kernel, evaluator1Prompt), (evaluator2Kernel, evaluator2Prompt));
 
             var result = new GenerationResult
             {
@@ -211,16 +219,16 @@ namespace TinyGenerator.Services
             return result;
         }
 
-        private ChatCompletionAgent MakeAgent(string name, string desc, string sys, string? model = null)
+        private async Task<string> Ask(Kernel kernel, string systemPrompt, string input, string modelId = "unknown")
         {
-            var kernel = _kernelFactory.CreateKernel(model);
-            return new ChatCompletionAgent(name, kernel!, desc, model) { Instructions = sys };
-        }
+            var chatHistory = new ChatHistory();
+            if (!string.IsNullOrWhiteSpace(systemPrompt))
+                chatHistory.AddSystemMessage(systemPrompt);
+            chatHistory.AddUserMessage(input);
 
-        private async Task<string> Ask(ChatCompletionAgent agent, string input)
-        {
-            var result = await agent.InvokeAsync(input);
-            var content = string.Join("\n", result.Select(x => x.Content));
+            var chatService = kernel.GetRequiredService<IChatCompletionService>();
+            var chatResult = await chatService.GetChatMessageContentAsync(chatHistory, kernel: kernel);
+            var content = chatResult?.Content ?? string.Empty;
 
             try
             {
@@ -229,10 +237,8 @@ namespace TinyGenerator.Services
                 {
                     var reqTokens = _cost.EstimateTokensFromText(input);
                     var resTokens = _cost.EstimateTokensFromText(content);
-                    var model = agent.Model ?? "ollama";
-                    // use per-model cost estimation (input/output)
-                    var cost = _cost.EstimateCost(model, reqTokens, resTokens);
-                    _cost.RecordCall(model, reqTokens, resTokens, cost, input, content);
+                    var cost = _cost.EstimateCost(modelId, reqTokens, resTokens);
+                    _cost.RecordCall(modelId, reqTokens, resTokens, cost, input, content);
                 }
             }
             catch { /* don't fail on logging */ }
@@ -240,7 +246,7 @@ namespace TinyGenerator.Services
             return content;
         }
 
-        private async Task<string> ExtendUntil(string text, int minChars, ChatCompletionAgent writer)
+        private async Task<string> ExtendUntil(string text, int minChars, Kernel writerKernel, string systemPrompt)
         {
             int rounds = 0;
             while (text.Length < minChars && rounds++ < 6)
@@ -251,7 +257,7 @@ NO riassunti, NO ripetizioni.
 Contesto:
 {text[^Math.Min(4000, text.Length)..]}
 """;
-                var extra = await Ask(writer, prompt);
+                var extra = await Ask(writerKernel, systemPrompt, prompt);
                 // if the continuation looks gibberish/repetitive, stop extending
                 if (extra.Length < 500) break;
                 if (IsLikelyGibberish(extra)) break;
@@ -261,7 +267,7 @@ Contesto:
         }
 
         // attempt to detect high repetition / gibberish and retry generation with an explicit hint
-        private async Task<string> EnsureCoherent(string initial, ChatCompletionAgent writer, string originalPrompt)
+        private async Task<string> EnsureCoherent(string initial, Kernel writerKernel, string systemPrompt, string originalPrompt)
         {
             var text = initial ?? string.Empty;
             int attempts = 0;
@@ -270,7 +276,7 @@ Contesto:
                 if (!IsLikelyGibberish(text)) return text;
                 // ask to regenerate with explicit instruction avoiding repetition
                 var regenHint = originalPrompt + "\n\nRIGENERA la storia evitando ripetizioni, producendo frasi complete e un flusso narrativo coerente. Non ripetere parole o blocchi di testo.\n";
-                text = await Ask(writer, regenHint);
+                text = await Ask(writerKernel, systemPrompt, regenHint);
             }
             return text;
         }
@@ -293,10 +299,10 @@ Contesto:
             return false;
         }
 
-        private async Task<double> GetScore(string story, ChatCompletionAgent eval1, ChatCompletionAgent eval2)
+        private async Task<double> GetScore(string story, Kernel evalKernel1, string sysPrompt1, Kernel evalKernel2, string sysPrompt2)
         {
-            var j1 = await Ask(eval1, story);
-            var j2 = await Ask(eval2, story);
+            var j1 = await Ask(evalKernel1, sysPrompt1, story);
+            var j2 = await Ask(evalKernel2, sysPrompt2, story);
             return (ParseScore(j1) + ParseScore(j2)) / 2;
         }
 
@@ -317,25 +323,28 @@ Contesto:
         }
 
         // Helper: ask multiple evaluators and return average score and combined responses
-        private async Task<(double averageScore, string combinedResponses)> EvaluateAsync(string story, params ChatCompletionAgent[] evaluators)
+        private async Task<(double averageScore, string combinedResponses)> EvaluateAsync(string story, params (Kernel kernel, string systemPrompt)[] evaluators)
         {
             if (evaluators == null || evaluators.Length == 0) return (0.0, string.Empty);
             double total = 0.0;
             var parts = new List<string>();
-            foreach (var ev in evaluators)
+            int evalIndex = 0;
+            foreach (var (kernel, sysPrompt) in evaluators)
             {
+                evalIndex++;
+                var evalName = $"Evaluator{evalIndex}";
                 try
                 {
-                    var res = await Ask(ev, story);
+                    var res = await Ask(kernel, sysPrompt, story);
                     parts.Add(res);
                     var parsed = ParseScore(res);
                     total += parsed;
-                    try { Console.WriteLine($"[Evaluate] {ev.Name} -> score={parsed:F2} model={ev.Model ?? "?"} responsePreview={res.Substring(0, Math.Min(200, res.Length)).Replace('\n',' ')}"); } catch { }
+                    try { Console.WriteLine($"[Evaluate] {evalName} -> score={parsed:F2} responsePreview={res.Substring(0, Math.Min(200, res.Length)).Replace('\n',' ')}"); } catch { }
                 }
                 catch (Exception ex)
                 {
-                    parts.Add($"ERROR from {ev.Name}: {ex.Message}");
-                    try { Console.WriteLine($"[Evaluate] ERROR from {ev.Name}: {ex.Message}"); } catch { }
+                    parts.Add($"ERROR from {evalName}: {ex.Message}");
+                    try { Console.WriteLine($"[Evaluate] ERROR from {evalName}: {ex.Message}"); } catch { }
                 }
             }
             var avg = evaluators.Length > 0 ? total / evaluators.Length : 0.0;

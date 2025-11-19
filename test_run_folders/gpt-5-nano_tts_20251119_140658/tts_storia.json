@@ -1,0 +1,32 @@
+{
+  "personaggi": ["Comandante Rinaldi", "Tenente Serra", "Specialista Ortega"],
+  "narrazione": "Il ponte di comando dell’IDS Folgore era immerso in una luce blu soffusa quando il turno notturno venne interrotto da un brusco tremolio della struttura. I pannelli sul lato destro emisero una serie di bip d’allarme, e il Comandante Rinaldi alzò lo sguardo dallo schermo tattico. Una breve pausa si abbatté sul ponte. Il rumore continuo delle ventole sembrava amplificato dal silenzio improvviso.",
+  "dialoghi": [
+    {"speaker": "Comandante Rinaldi", "testo": "Che cosa diavolo è stato?", "emozione": {"tone": "tense", "intensity": 0.8}},
+    {"speaker": "Tenente Serra", "testo": "Un impulso gravitazionale, signore. Proveniente dal Settore 14. Non è naturale… e non è nei nostri registri.", "emozione": {"tone": "concerned", "intensity": 0.7}},
+    {"speaker": "Specialista Ortega", "testo": "Sto controllando, Comandante. Ci sono fluttuazioni di campo che non riesco a identificare. Non sembrano emissioni note.", "emozione": {"tone": "professional", "intensity": 0.6}},
+    {"speaker": "Comandante Rinaldi", "testo": "Ortega!", "emozione": {"tone": "authoritative", "intensity": 0.7}},
+    {"speaker": "Tenente Serra", "testo": "Sì, signore. Avvio la procedura.", "emozione": {"tone": "calm", "intensity": 0.6}},
+    {"speaker": "Specialista Ortega", "testo": "Comandante, ricevo un eco attivo. Non siamo soli.", "emozione": {"tone": "alert", "intensity": 0.7}},
+    {"speaker": "Comandante Rinaldi", "testo": "Origine?", "emozione": {"tone": "tense", "intensity": 0.8}},
+    {"speaker": "Specialista Ortega", "testo": "Settore 14. E si avvicina.", "emozione": {"tone": "alert", "intensity": 0.7}},
+    {"speaker": "Tenente Serra", "testo": "Sta per inviare un segnale.", "emozione": {"tone": "concerned", "intensity": 0.6}},
+    {"speaker": "Comandante Rinaldi", "testo": "Allora ascoltiamo.", "emozione": {"tone": "calm", "intensity": 0.5}}
+  ],
+  "pause": [
+    {"id": 1, "descrizione": "Pausa breve sul ponte.", "durata_seconds": 1.0, "notes": "Dopo il monologo: 'non è nei nostri registri'."},
+    {"id": 2, "descrizione": "Pausa descritta come 'una breve pausa, più lunga'.", "durata_seconds": 2.0, "notes": "Intervallo tra Serra e l'azione successiva."}
+  ],
+  "emozioni_vocali": [
+    {"dialogo_index": 0, "speaker": "Comandante Rinaldi", "emotion": {"tone": "tense", "intensity": 0.8}},
+    {"dialogo_index": 1, "speaker": "Tenente Serra", "emotion": {"tone": "concerned", "intensity": 0.7}},
+    {"dialogo_index": 2, "speaker": "Specialista Ortega", "emotion": {"tone": "professional", "intensity": 0.6}},
+    {"dialogo_index": 3, "speaker": "Comandante Rinaldi", "emotion": {"tone": "authoritative", "intensity": 0.7}},
+    {"dialogo_index": 4, "speaker": "Tenente Serra", "emotion": {"tone": "calm", "intensity": 0.6}},
+    {"dialogo_index": 5, "speaker": "Specialista Ortega", "emotion": {"tone": "alert", "intensity": 0.7}},
+    {"dialogo_index": 6, "speaker": "Comandante Rinaldi", "emotion": {"tone": "tense", "intensity": 0.8}},
+    {"dialogo_index": 7, "speaker": "Specialista Ortega", "emotion": {"tone": "alert", "intensity": 0.7}},
+    {"dialogo_index": 8, "speaker": "Tenente Serra", "emotion": {"tone": "concerned", "intensity": 0.6}},
+    {"dialogo_index": 9, "speaker": "Comandante Rinaldi", "emotion": {"tone": "calm", "intensity": 0.5}}
+  ]
+}

@@ -6,8 +6,6 @@
     var visibleGroups = groupsHeader.Take(4).ToList();
 }
 
-<h2>Models</h2>
-
 <div class="mb-3 d-flex gap-2 align-items-center">
     <a class="btn btn-sm btn-primary" href="/Models/Edit">Nuovo modello</a>
 
@@ -25,6 +23,7 @@
     <button id="purgeOllamaBtn" class="btn btn-sm btn-outline-danger">Purge disabled Ollama</button>
     <button id="refreshContextsBtn" class="btn btn-sm btn-outline-secondary">Refresh contexts</button>
     <button id="discoverOllamaBtn" class="btn btn-sm btn-outline-secondary">Discover Ollama models</button>
+    <button id="recalculateScoresBtn" class="btn btn-sm btn-outline-info"><i class="bi bi-calculator"></i> Ricalcola punteggi</button>
 
     <label class="form-check form-check-inline ms-2">
         <input id="showDisabledCheckbox" class="form-check-input" type="checkbox" @(Model.ShowDisabled ? "checked" : "") />
@@ -52,12 +51,14 @@
                 <th>Name</th>
                 <th>Provider</th>
                 <th>Local</th>
+                <th>MaxContext</th>
                 <th>ContextToUse</th>
                 <th class="text-center">Score</th>
                 <th class="text-center">NoTools</th>
                 <th class="text-center">Duration (s)</th>
                 @foreach (var g in visibleGroups) { <th class="text-center">@g</th> }
                 <th class="text-center">Writer</th>
+                <th class="text-center">TTS</th>
                 <th class="text-end">Cost In $/1k</th>
                 <th class="text-end">Cost Out $/1k</th>
                 <th></th>
@@ -84,12 +85,14 @@
                         }
                     </td>
                     <td>@(m.IsLocal ? "Yes" : "No")</td>
+                    <td>@m.MaxContext</td>
                     <td>@m.ContextToUse</td>
                     <td class="text-center">@m.FunctionCallingScore</td>
                     <td class="text-center">@(m.NoTools ? "✓" : "")</td>
                     <td class="text-center">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}", m.TestDurationSeconds.Value) : "-")</td>
                     @foreach (var g in visibleGroups) { <td class="text-center">@(m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var sc) && sc.HasValue ? sc.Value.ToString() : "-")</td> }
-                    <td class="text-center">@(m.LastGroupScores != null && m.LastGroupScores.TryGetValue("writer", out var writerSc) && writerSc.HasValue ? writerSc.Value.ToString() : "-")</td>
+                    <td class="text-center">@(m.WriterScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.WriterScore) : "-")</td>
+                    <td class="text-center">@(m.LastGroupScores != null && m.LastGroupScores.TryGetValue("tts", out var ttsScore) && ttsScore.HasValue ? ttsScore.Value.ToString() : "-")</td>
                     <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</td>
                     <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</td>
                     <td class="text-end">
@@ -132,11 +135,29 @@
                 info: true,
                 searching: true,
                 ordering: true,
-                order: [[5, 'desc']], // Score column (now index 5 because of chevron column)
+                stateSave: true,
+                order: [[6, 'desc']], // Score column (now index 6 because of chevron column + MaxContext)
                 columnDefs: [ 
                     { targets: 0, orderable: false, className: 'dt-control' },
                     { targets: 'no-sort', orderable: false }
-                ]
+                ],
+                stateSaveCallback: function(settings, data) {
+                    // Save column visibility state
+                    localStorage.setItem('DataTables_models_columns', JSON.stringify(data.columns));
+                },
+                stateLoadCallback: function(settings) {
+                    // Load column visibility state
+                    var saved = localStorage.getItem('DataTables_models_columns');
+                    if (saved) {
+                        try {
+                            var columns = JSON.parse(saved);
+                            return { columns: columns };
+                        } catch(e) {
+                            console.error('Error loading column state:', e);
+                        }
+                    }
+                    return null;
+                }
             });
 
             // Populate column visibility toggle menu
@@ -153,9 +174,16 @@
                 
                 var li = $('<li>');
                 var label = $('<label class="dropdown-item">');
-                var checkbox = $('<input type="checkbox" class="form-check-input me-2" checked>')
+                var checkbox = $('<input type="checkbox" class="form-check-input me-2">')
+                    .prop('checked', column.visible()) // Sincronizza con stato salvato
                     .on('change', function() {
                         column.visible(this.checked);
+                        // Save state after column visibility change
+                        var state = { columns: [] };
+                        table.columns().every(function() {
+                            state.columns.push({ visible: this.visible() });
+                        });
+                        localStorage.setItem('DataTables_models_columns', JSON.stringify(state.columns));
                     });
                 
                 label.append(checkbox).append(title);
@@ -239,6 +267,13 @@
                     .then(r => { if(r.redirected) window.location = r.url; else return r.json(); })
                     .then(j => { if(j) alert('Discover result: ' + JSON.stringify(j)); else window.location.reload(); })
                     .catch(e => { alert('Error discovering: ' + e); });
+            });
+
+            $('#recalculateScoresBtn').on('click', function(){
+                if(!confirm('Ricalcolare i punteggi writer per tutti i modelli?')) return;
+                postHandler('RecalculateScores', new FormData())
+                    .then(r => { if(r.redirected) window.location = r.url; else window.location.reload(); })
+                    .catch(e => { alert('Error recalculating: ' + e); });
             });
 
             // ShowDisabled checkbox: update querystring and reload while preserving other params

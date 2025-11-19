@@ -20,6 +20,8 @@
     @await RenderSectionAsync("Styles", required: false)
 </head>
 <body>
+    <canvas id="matrix-canvas"></canvas>
+    <script src="matrix-effect.js"></script>
     <!-- Main content area with header (title + home icon) rendered by layout -->
     @{
         var path = Context.Request.Path.HasValue ? Context.Request.Path.Value.ToLowerInvariant() : "/";

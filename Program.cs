@@ -57,10 +57,6 @@ builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_bas
 // === Semantic Kernel + memoria SQLite ===
 // RIMOSSA la registrazione di IKernel: ora si usa solo Kernel reale tramite KernelFactory
 
-// === Servizio di generazione storie ===
-// Stories persistence service (requires DatabaseService)
-builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(sp.GetRequiredService<DatabaseService>(), sp.GetService<ILogger<StoriesService>>()));
-
 // Persistent memory service (sqlite) using consolidated storage DB
 builder.Services.AddSingleton<PersistentMemoryService>(sp => new PersistentMemoryService("data/storage.db"));
 // Progress tracking for live UI updates (will broadcast over SignalR)
@@ -72,6 +68,18 @@ builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<IKernelFactory, KernelFactory>();
 // Also register concrete KernelFactory so services can depend on implementation-specific features
 builder.Services.AddSingleton<KernelFactory>(sp => (KernelFactory)sp.GetRequiredService<IKernelFactory>());
+// Agent configuration service
+builder.Services.AddSingleton<AgentService>();
+
+// === Servizio di generazione storie ===
+// Stories persistence service (requires DatabaseService, IKernelFactory, TtsService, AgentService)
+builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
+    sp.GetRequiredService<DatabaseService>(), 
+    sp.GetRequiredService<IKernelFactory>(), 
+    sp.GetRequiredService<TtsService>(), 
+    sp.GetRequiredService<AgentService>(),
+    sp.GetService<ILogger<StoriesService>>()));
+
 builder.Services.AddTransient<StoryGeneratorService>();
 builder.Services.AddTransient<PlannerExecutor>();
 // Test execution service (per-step execution encapsulation)
@@ -156,11 +164,15 @@ StartupTasks.SeedTtsVoicesIfNeededAsync(db, tts, builder.Configuration, logger).
 // Normalize legacy test prompts using helper
 StartupTasks.NormalizeTestPromptsIfNeeded(db, logger);
 
+logger?.LogInformation("[Startup] About to get kernelFactory service...");
 // Create a Semantic Kernel instance per active Agent and ensure each has persistent memory
 // Ensure kernels for active agents and their memory collections
 var kernelFactory = app.Services.GetService<TinyGenerator.Services.IKernelFactory>() as TinyGenerator.Services.KernelFactory;
+logger?.LogInformation("[Startup] Got kernelFactory, about to get memoryService...");
 var memoryService = app.Services.GetService<TinyGenerator.Services.PersistentMemoryService>();
+logger?.LogInformation("[Startup] Got memoryService, calling EnsureKernelsForActiveAgents...");
 StartupTasks.EnsureKernelsForActiveAgents(db, kernelFactory, memoryService, logger);
+logger?.LogInformation("[Startup] EnsureKernelsForActiveAgents completed.");
 
 // === Middleware ===
 if (!app.Environment.IsDevelopment())

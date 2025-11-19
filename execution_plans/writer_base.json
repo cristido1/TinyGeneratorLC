@@ -8,8 +8,8 @@
     }
   ],
   "constraints": {
-    "min_words": 1200,
-    "max_words": 1800,
+    "min_words": 12000,
+    "max_words": 18000,
     "avoid_repetition": true
   }
 }

@@ -21,6 +21,7 @@
             <th>Model</th>
             <th>Voice</th>
             <th>Skills</th>
+            <th>JSON Format</th>
             <th></th>
         </tr>
     </thead>
@@ -35,6 +36,7 @@
                 <td>@(string.IsNullOrWhiteSpace(a.ModelName) ? a.ModelId?.ToString() ?? "" : a.ModelName)</td>
                 <td>@(string.IsNullOrWhiteSpace(a.VoiceName) ? (a.VoiceId?.ToString() ?? "") : a.VoiceName)</td>
                 <td>@a.Skills</td>
+                <td>@(string.IsNullOrWhiteSpace(a.JsonResponseFormat) ? "-" : a.JsonResponseFormat)</td>
                 <td>
                     <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@a.Id">Edit</a>
                     <form method="post" asp-page-handler="Delete" asp-route-id="@a.Id" class="d-inline">
@@ -46,7 +48,7 @@
     }
     else
     {
-        <tr><td colspan="5">No agents found.</td></tr>
+        <tr><td colspan="7">No agents found.</td></tr>
     }
     </tbody>
 </table>
@@ -100,7 +102,8 @@
                         ],
                         columnDefs: [ { orderable: false, targets: -1 } ],
                         order: [[0, 'asc']],
-                        pageLength: 25
+                        pageLength: 25,
+                        stateSave: true
                     });
 
                     // If server-side pagination controls exist, hide them when DataTables is active

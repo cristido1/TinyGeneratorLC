@@ -27,4 +27,6 @@ public sealed class TestDefinition
     public bool Active { get; set; } = true;
     // Optional: filename under response_formats/ that defines expected JSON response schema
     public string? JsonResponseFormat { get; set; }
+    // Optional: comma-separated list of files from test_source_files/ to copy to test folder
+    public string? FilesToCopy { get; set; }
 }

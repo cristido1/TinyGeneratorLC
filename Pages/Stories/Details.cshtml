@@ -15,7 +15,8 @@
             </div>
             <div>
                 <a class="btn btn-sm btn-outline-secondary me-1" asp-page="/Stories/Edit" asp-route-id="@Model.Story?.Id">Modifica</a>
-                <a class="btn btn-sm btn-outline-primary" id="ttsPlay">Ascolta</a>
+                <a class="btn btn-sm btn-outline-primary me-1" id="ttsPlay">Ascolta (Browser)</a>
+                <a class="btn btn-sm btn-outline-success" id="macTtsPlay">Ascolta (macOS)</a>
             </div>
         </div>
         <details open>
@@ -55,32 +56,104 @@
     <script>
         document.addEventListener('DOMContentLoaded', function(){
             var btn = document.getElementById('ttsPlay');
-            btn?.addEventListener('click', async function(){
+            var isSpeaking = false;
+            var utterance = null;
+
+            btn?.addEventListener('click', function(){
+                if (!('speechSynthesis' in window)) {
+                    alert('Il tuo browser non supporta la sintesi vocale');
+                    return;
+                }
+
+                if (isSpeaking) {
+                    // Stop speaking
+                    window.speechSynthesis.cancel();
+                    btn.innerText = 'Ascolta';
+                    btn.classList.remove('btn-danger');
+                    btn.classList.add('btn-outline-primary');
+                    isSpeaking = false;
+                    return;
+                }
+
+                // Get story text
+                var storyText = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.StoryText ?? ""));
+                
+                if (!storyText || storyText.trim() === '') {
+                    alert('Nessun testo da leggere');
+                    return;
+                }
+
+                // Create speech utterance
+                utterance = new SpeechSynthesisUtterance(storyText);
+                utterance.lang = 'it-IT';
+                utterance.rate = 1.0;
+                utterance.pitch = 1.0;
+
+                utterance.onstart = function() {
+                    isSpeaking = true;
+                    btn.innerText = 'Stop';
+                    btn.classList.remove('btn-outline-primary');
+                    btn.classList.add('btn-danger');
+                };
+
+                utterance.onend = function() {
+                    isSpeaking = false;
+                    btn.innerText = 'Ascolta';
+                    btn.classList.remove('btn-danger');
+                    btn.classList.add('btn-outline-primary');
+                };
+
+                utterance.onerror = function(e) {
+                    console.error('Speech synthesis error:', e);
+                    isSpeaking = false;
+                    btn.innerText = 'Ascolta';
+                    btn.classList.remove('btn-danger');
+                    btn.classList.add('btn-outline-primary');
+                    alert('Errore durante la lettura');
+                };
+
+                // Start speaking
+                window.speechSynthesis.speak(utterance);
+            });
+
+            // macOS TTS button
+            var macBtn = document.getElementById('macTtsPlay');
+            macBtn?.addEventListener('click', async function(){
                 try {
-                    btn.disabled = true;
-                    btn.innerText = 'Generating...';
+                    macBtn.disabled = true;
+                    macBtn.innerText = 'Generazione...';
                     var id = '@Model.Story?.Id';
                     var token = '@Antiforgery.GetAndStoreTokens(HttpContext).RequestToken';
-                    var res = await fetch(`/Stories/Details/${id}?handler=tts`, {
+                    var res = await fetch(`/Stories/Details/${id}?handler=macTts`, {
                         method: 'POST',
                         headers: {
                             'RequestVerificationToken': token,
                             'Accept': 'application/json'
                         }
                     });
-                    if (!res.ok) { alert('Errore TTS'); return; }
+                    if (!res.ok) { 
+                        var errorText = await res.text();
+                        alert('Errore TTS macOS: ' + errorText); 
+                        return; 
+                    }
                     var j = await res.json();
                     var audio = document.getElementById('ttsAudio');
                     if (j && j.audio_url) {
-                        audio.src = j.audio_url; audio.style.display = ''; audio.play();
-                    } else if (j && j.audio_base64) {
-                        audio.src = 'data:audio/wav;base64,' + j.audio_base64; audio.style.display = ''; audio.play();
+                        audio.src = j.audio_url; 
+                        audio.style.display = ''; 
+                        audio.play();
                     } else {
-                        alert('No audio produced');
+                        alert('Audio non generato');
                     }
-                } catch (e) { console.error(e); alert('Errore TTS'); }
-                finally { btn.disabled = false; btn.innerText = 'Ascolta'; }
-            })
+                } catch (e) { 
+                    console.error(e); 
+                    alert('Errore TTS macOS: ' + e.message); 
+                }
+                finally { 
+                    macBtn.disabled = false; 
+                    macBtn.innerText = 'Ascolta (macOS)'; 
+                }
+            });
         })
     </script>
 }

@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataTables Example</title>
+    
+    <!-- CSS DataTables -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;600;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Font Awesome per le icone -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Roboto Mono', monospace;
+            background: #000000;
+            min-height: 100vh;
+            padding: 40px 20px;
+            position: relative;
+            overflow-x: hidden;
+        }
+        
+        /* Matrix rain effect */
+        #matrix-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: #f5f5f5;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 255, 0, 0.3);
+            padding: 20px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        h1 {
+            color: #16a34a;
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            font-family: 'Rajdhani', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            text-shadow: 0 0 10px rgba(22, 163, 74, 0.5);
+        }
+        
+        .subtitle {
+            color: #22c55e;
+            font-size: 14px;
+            margin-bottom: 20px;
+            font-family: 'Roboto Mono', monospace;
+            letter-spacing: 0.5px;
+        }
+        
+        .btn-nuovo {
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(22, 163, 74, 0.4);
+            font-family: 'Rajdhani', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .btn-nuovo:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(22, 163, 74, 0.6);
+        }
+        
+        .btn-nuovo i {
+            font-size: 14px;
+        }
+        
+        /* Stili DataTables moderni */
+        .dataTables_wrapper {
+            padding: 0;
+        }
+        
+        /* Top bar con pulsante nuovo e ricerca */
+        .dataTables_wrapper .dataTables_filter {
+            float: right;
+            margin-bottom: 15px;
+        }
+        
+        .dataTables_wrapper .top-controls {
+            float: left;
+            margin-bottom: 15px;
+        }
+        
+        /* Bottom bar con length, info e pagination sulla stessa riga */
+        .dataTables_wrapper .dataTables_length {
+            float: left;
+            margin-top: 15px;
+            margin-bottom: 10px;
+            display: inline-block;
+        }
+        
+        .dataTables_wrapper .dataTables_info {
+            color: #718096;
+            font-size: 14px;
+            display: inline-block;
+            margin-top: 15px;
+            margin-bottom: 10px;
+            margin-left: 30px;
+        }
+        
+        .dataTables_wrapper .dataTables_paginate {
+            float: right;
+            margin-top: 15px;
+            margin-bottom: 10px;
+        }
+        
+        .dataTables_wrapper .dataTables_filter input {
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px 15px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            margin-left: 10px;
+        }
+        
+        .dataTables_wrapper .dataTables_filter input:focus {
+            outline: none;
+            border-color: #4ade80;
+            box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.1);
+        }
+        
+        .dataTables_wrapper .dataTables_length select {
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 8px 30px 8px 12px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            margin: 0 10px;
+        }
+        
+        table.dataTable {
+            border-collapse: separate !important;
+            border-spacing: 0;
+            width: 100% !important;
+            background: white;
+        }
+        
+        table.dataTable thead th {
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+            color: white;
+            font-weight: 600;
+            padding: 10px 8px;
+            border: none;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: 'Rajdhani', sans-serif;
+        }
+        
+        table.dataTable thead th:first-child {
+            border-top-left-radius: 10px;
+        }
+        
+        table.dataTable thead th:last-child {
+            border-top-right-radius: 10px;
+        }
+        
+        table.dataTable tbody td {
+            padding: 8px 8px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 14px;
+            color: #4a5568;
+            background: white;
+        }
+        
+        table.dataTable tbody tr {
+            transition: all 0.2s ease;
+            background: white;
+        }
+        
+        table.dataTable tbody tr:hover {
+            background-color: #f7fafc !important;
+            transform: scale(1.01);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+        
+        table.dataTable tbody tr:last-child td:first-child {
+            border-bottom-left-radius: 10px;
+        }
+        
+        table.dataTable tbody tr:last-child td:last-child {
+            border-bottom-right-radius: 10px;
+        }
+        
+        /* Paginazione moderna */
+        .dataTables_wrapper .dataTables_paginate {
+            float: right;
+            margin-top: 15px;
+            margin-bottom: 10px;
+        }
+        
+        .dataTables_wrapper .dataTables_paginate .paginate_button {
+            padding: 8px 14px;
+            margin: 0 3px;
+            border-radius: 8px;
+            border: 2px solid #e2e8f0;
+            background: white;
+            color: #4a5568 !important;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+        
+        .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+            border-color: #16a34a;
+            background: #16a34a !important;
+            color: white !important;
+            box-shadow: 0 4px 12px rgba(22, 163, 74, 0.4);
+        }
+        
+        .dataTables_wrapper .dataTables_paginate .paginate_button.current {
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%) !important;
+            color: white !important;
+            border-color: transparent;
+            box-shadow: 0 4px 12px rgba(22, 163, 74, 0.5);
+        }
+        
+        .dataTables_wrapper .dataTables_paginate .paginate_button.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .clear {
+            clear: both;
+        }
+        
+        .bottom-controls {
+            clear: both;
+            overflow: hidden;
+        }
+        
+        /* Ordinamento colonne */
+        table.dataTable thead .sorting,
+        table.dataTable thead .sorting_asc,
+        table.dataTable thead .sorting_desc {
+            cursor: pointer;
+            position: relative;
+        }
+        
+        table.dataTable thead .sorting:after,
+        table.dataTable thead .sorting_asc:after,
+        table.dataTable thead .sorting_desc:after {
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body>
+    <!-- Matrix rain effect canvas -->
+    <canvas id="matrix-canvas"></canvas>
+    
+    <div class="container">
+        <h1>Gestione Utenti</h1>
+        <p class="subtitle">Sistema di gestione con filtro, ordinamento e paginazione avanzati</p>
+        
+        <table id="myTable" class="display" style="width:100%">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Nome</th>
+                <th>Cognome</th>
+                <th>Email</th>
+                <th>Città</th>
+                <th>Data Registrazione</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>1</td>
+                <td>Mario</td>
+                <td>Rossi</td>
+                <td>mario.rossi@email.it</td>
+                <td>Milano</td>
+                <td>2024-01-15</td>
+            </tr>
+            <tr>
+                <td>2</td>
+                <td>Laura</td>
+                <td>Bianchi</td>
+                <td>laura.bianchi@email.it</td>
+                <td>Roma</td>
+                <td>2024-02-20</td>
+            </tr>
+            <tr>
+                <td>3</td>
+                <td>Giuseppe</td>
+                <td>Verdi</td>
+                <td>giuseppe.verdi@email.it</td>
+                <td>Napoli</td>
+                <td>2024-03-10</td>
+            </tr>
+            <tr>
+                <td>4</td>
+                <td>Anna</td>
+                <td>Neri</td>
+                <td>anna.neri@email.it</td>
+                <td>Torino</td>
+                <td>2024-01-25</td>
+            </tr>
+            <tr>
+                <td>5</td>
+                <td>Paolo</td>
+                <td>Gialli</td>
+                <td>paolo.gialli@email.it</td>
+                <td>Firenze</td>
+                <td>2024-02-05</td>
+            </tr>
+            <tr>
+                <td>6</td>
+                <td>Francesca</td>
+                <td>Blu</td>
+                <td>francesca.blu@email.it</td>
+                <td>Bologna</td>
+                <td>2024-03-15</td>
+            </tr>
+            <tr>
+                <td>7</td>
+                <td>Marco</td>
+                <td>Viola</td>
+                <td>marco.viola@email.it</td>
+                <td>Venezia</td>
+                <td>2024-01-30</td>
+            </tr>
+            <tr>
+                <td>8</td>
+                <td>Giulia</td>
+                <td>Rosa</td>
+                <td>giulia.rosa@email.it</td>
+                <td>Palermo</td>
+                <td>2024-02-12</td>
+            </tr>
+            <tr>
+                <td>9</td>
+                <td>Alessandro</td>
+                <td>Arancio</td>
+                <td>alessandro.arancio@email.it</td>
+                <td>Genova</td>
+                <td>2024-03-20</td>
+            </tr>
+            <tr>
+                <td>10</td>
+                <td>Chiara</td>
+                <td>Marrone</td>
+                <td>chiara.marrone@email.it</td>
+                <td>Bari</td>
+                <td>2024-01-18</td>
+            </tr>
+            <tr>
+                <td>11</td>
+                <td>Luca</td>
+                <td>Grigio</td>
+                <td>luca.grigio@email.it</td>
+                <td>Catania</td>
+                <td>2024-02-28</td>
+            </tr>
+            <tr>
+                <td>12</td>
+                <td>Sara</td>
+                <td>Azzurro</td>
+                <td>sara.azzurro@email.it</td>
+                <td>Verona</td>
+                <td>2024-03-05</td>
+            </tr>
+        </tbody>
+    </table>
+    
+    </div> <!-- Fine container -->
+
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    
+    <!-- DataTables JS -->
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    
+    <script>
+        $(document).ready(function() {
+            // Inizializzazione DataTable
+            var table = $('#myTable').DataTable({
+                // Configurazione layout - dom controlla la posizione degli elementi
+                dom: '<"top-controls"B>fr<"clear">t<"bottom-controls"lip>',
+                
+                // Configurazione paginazione
+                paging: true,
+                pageLength: 10,
+                lengthMenu: [[5, 10, 25, 50, -1], [5, 10, 25, 50, "Tutti"]],
+                
+                // Configurazione ordinamento
+                ordering: true,
+                order: [[0, 'asc']], // Ordina per ID in modo ascendente di default
+                
+                // Configurazione filtro/ricerca
+                searching: true,
+                
+                // Testi in italiano
+                language: {
+                    search: "🔍 Cerca:",
+                    lengthMenu: "Mostra _MENU_ elementi per pagina",
+                    info: "Visualizzati da _START_ a _END_ di _TOTAL_ elementi",
+                    infoEmpty: "Nessun elemento disponibile",
+                    infoFiltered: "(filtrati da _MAX_ elementi totali)",
+                    paginate: {
+                        first: "Primo",
+                        last: "Ultimo",
+                        next: "Successivo",
+                        previous: "Precedente"
+                    },
+                    zeroRecords: "Nessun elemento trovato"
+                },
+                
+                initComplete: function() {
+                    // Aggiungi il pulsante Nuovo nella posizione B (top-controls)
+                    $('.top-controls').html('<button class="btn-nuovo" id="btnNuovo"><i class="fas fa-plus"></i> Nuovo Utente</button>');
+                    
+                    // Gestione click sul pulsante Nuovo
+                    $('#btnNuovo').on('click', function() {
+                        alert('Cliccato pulsante Nuovo! Qui puoi aprire un form o una modale per inserire un nuovo elemento.');
+                    });
+                }
+            });
+        });
+        
+        // Matrix Rain Effect
+        const canvas = document.getElementById('matrix-canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // Characters to display
+        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%^&*()_+-=[]{}|;:,.<>?';
+        const fontSize = 14;
+        const columns = canvas.width / fontSize;
+        
+        // Array to store drop positions
+        const drops = [];
+        for (let i = 0; i < columns; i++) {
+            drops[i] = Math.random() * -100;
+        }
+        
+        // Draw function
+        function drawMatrix() {
+            // Semi-transparent black background for trail effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Green text
+            ctx.fillStyle = '#0F0';
+            ctx.font = fontSize + 'px monospace';
+            
+            // Draw characters
+            for (let i = 0; i < drops.length; i++) {
+                const text = characters[Math.floor(Math.random() * characters.length)];
+                ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+                
+                // Reset drop randomly
+                if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+                    drops[i] = 0;
+                }
+                
+                drops[i]++;
+            }
+        }
+        
+        // Start animation
+        setInterval(drawMatrix, 35);
+        
+        // Resize canvas on window resize
+        window.addEventListener('resize', function() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>

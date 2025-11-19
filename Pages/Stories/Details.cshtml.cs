@@ -6,6 +6,7 @@ using TinyGenerator.Services;
 using TinyGenerator.Models;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 
 namespace TinyGenerator.Pages.Stories
 {
@@ -129,6 +130,138 @@ namespace TinyGenerator.Pages.Stories
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in TTS synthesis for story {Id}", id);
+                return StatusCode(500, ex.Message);
+            }
+        }
+
+        public async Task<IActionResult> OnPostMacTtsAsync(long id)
+        {
+            try
+            {
+                var story = _stories.GetStoryById(id);
+                if (story == null) return NotFound();
+                var text = story.Story;
+                if (string.IsNullOrWhiteSpace(text)) return BadRequest("No story text");
+
+                // Check if we're on macOS
+                if (!OperatingSystem.IsMacOS())
+                {
+                    return BadRequest("macOS TTS is only available on macOS");
+                }
+
+                // Use macOS 'say' command to generate audio file
+                var webRoot = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+                var ttsDir = Path.Combine(webRoot, "tts");
+                if (!Directory.Exists(ttsDir)) Directory.CreateDirectory(ttsDir);
+
+                var mp3FileName = $"story_{id}_mac.mp3";
+                var mp3FilePath = Path.Combine(ttsDir, mp3FileName);
+                var aiffFileName = $"story_{id}_mac.aiff";
+                var aiffFilePath = Path.Combine(ttsDir, aiffFileName);
+
+                // If already generated, return it
+                if (System.IO.File.Exists(mp3FilePath))
+                {
+                    var url = $"/tts/{mp3FileName}";
+                    _logger.LogInformation("Returning cached macOS TTS file for story {Id}: {File}", id, mp3FileName);
+                    return new JsonResult(new { audio_url = url });
+                }
+
+                // Save text to temp file (to handle special characters properly)
+                var tempTextFile = Path.GetTempFileName();
+                await System.IO.File.WriteAllTextAsync(tempTextFile, text);
+
+                try
+                {
+                    // Run 'say' command with Italian voice to generate AIFF
+                    // -v Alice (Italian voice), -f input file, -o output file
+                    var sayProcess = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "say",
+                            Arguments = $"-v Alice -f \"{tempTextFile}\" -o \"{aiffFilePath}\"",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }
+                    };
+
+                    _logger.LogInformation("Running macOS 'say' command for story {Id}", id);
+                    sayProcess.Start();
+                    await sayProcess.WaitForExitAsync();
+
+                    if (sayProcess.ExitCode != 0)
+                    {
+                        var error = await sayProcess.StandardError.ReadToEndAsync();
+                        _logger.LogError("macOS 'say' command failed with exit code {Code}: {Error}", sayProcess.ExitCode, error);
+                        return StatusCode(500, "TTS generation failed");
+                    }
+
+                    if (!System.IO.File.Exists(aiffFilePath))
+                    {
+                        _logger.LogError("macOS 'say' command completed but AIFF file not found: {File}", aiffFilePath);
+                        return StatusCode(500, "TTS AIFF file not generated");
+                    }
+
+                    // Convert AIFF to MP3 using ffmpeg
+                    _logger.LogInformation("Converting AIFF to MP3 for story {Id}", id);
+                    var ffmpegProcess = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "ffmpeg",
+                            Arguments = $"-i \"{aiffFilePath}\" -acodec libmp3lame -ab 128k \"{mp3FilePath}\" -y",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }
+                    };
+
+                    ffmpegProcess.Start();
+                    await ffmpegProcess.WaitForExitAsync();
+
+                    if (ffmpegProcess.ExitCode != 0)
+                    {
+                        var error = await ffmpegProcess.StandardError.ReadToEndAsync();
+                        _logger.LogWarning("ffmpeg conversion failed with exit code {Code}: {Error}", ffmpegProcess.ExitCode, error);
+                        // Fall back to returning AIFF if ffmpeg fails
+                        var aiffUrl = $"/tts/{aiffFileName}";
+                        return new JsonResult(new { audio_url = aiffUrl });
+                    }
+
+                    // Delete AIFF file to save space (keep only MP3)
+                    if (System.IO.File.Exists(aiffFilePath))
+                    {
+                        System.IO.File.Delete(aiffFilePath);
+                    }
+
+                    if (System.IO.File.Exists(mp3FilePath))
+                    {
+                        var url = $"/tts/{mp3FileName}";
+                        _logger.LogInformation("Generated macOS TTS MP3 file for story {Id}: {File}", id, mp3FileName);
+                        return new JsonResult(new { audio_url = url });
+                    }
+                    else
+                    {
+                        _logger.LogError("MP3 conversion completed but file not found: {File}", mp3FilePath);
+                        return StatusCode(500, "TTS MP3 file not generated");
+                    }
+                }
+                finally
+                {
+                    // Clean up temp text file
+                    if (System.IO.File.Exists(tempTextFile))
+                    {
+                        System.IO.File.Delete(tempTextFile);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in macOS TTS synthesis for story {Id}", id);
                 return StatusCode(500, ex.Message);
             }
         }

@@ -19,6 +19,9 @@
             <th>Timestamp</th>
             <th>Prompt</th>
             <th>Modello</th>
+            <th>Cartella</th>
+            <th>Caratteri</th>
+            <th>Test</th>
             <th>Score</th>
             <th>Valutazione</th>
             <th>Approved</th>
@@ -27,150 +30,78 @@
     </thead>
     <tbody>
     @foreach(var s in Model.Stories) {
-        <tr data-story-id="@s.Id">
+        var timestamp = DateTime.TryParse(s.Timestamp, out var dt) ? dt.ToString("dd/MM/yyyy HH:mm") : s.Timestamp;
+        <tr data-story-id="@s.Id" data-evaluations='@System.Text.Json.JsonSerializer.Serialize(s.Evaluations)'>
             <td class="dt-control"></td>
             <td>@s.Id</td>
-            <td>@s.Timestamp</td>
+            <td>@timestamp</td>
             <td style="max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">@s.Prompt</td>
             <td>@s.Model</td>
+            <td>@(s.Folder ?? "-")</td>
+            <td>@s.CharCount.ToString("N0")</td>
+            <td>
+                @if (s.TestRunId.HasValue && s.TestStepId.HasValue)
+                {
+                    <a href="/Models?runId=@s.TestRunId" class="badge bg-success" title="Test Run ID: @s.TestRunId, Step ID: @s.TestStepId">✓ Run @s.TestRunId</a>
+                }
+                else
+                {
+                    <span class="text-muted">-</span>
+                }
+            </td>
             <td>@s.Score</td>
             <td>@(s.Evaluations.Any() ? $"{s.Evaluations.Average(e => e.TotalScore):F1}/100" : "-")</td>
             <td>@(s.Approved ? "✅" : "❌")</td>
             <td>
                 <div class="btn-group" role="group">
-                    <a class="btn btn-sm btn-outline-primary" asp-page="/Stories/Details" asp-route-id="@s.Id">Dettagli</a>
-                    <a class="btn btn-sm btn-outline-secondary" asp-page="/Stories/Edit" asp-route-id="@s.Id">Modifica</a>
-                    <form method="post" asp-page-handler="Delete" asp-route-id="@s.Id" class="delete-story-form" style="display:inline">
-                        <button type="submit" class="btn btn-sm btn-danger">Elimina</button>
-                    </form>
+                    <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                        Azioni
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" asp-page="/Stories/Details" asp-route-id="@s.Id">📄 Dettagli</a></li>
+                        <li><a class="dropdown-item" asp-page="/Stories/Edit" asp-route-id="@s.Id">✏️ Modifica</a></li>
+                        @if (!string.IsNullOrWhiteSpace(s.Folder))
+                        {
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <form method="post" asp-page-handler="GenerateTts" asp-route-id="@s.Id" asp-route-folderName="@s.Folder" style="display:inline">
+                                    <button type="submit" class="dropdown-item">🔊 Genera TTS</button>
+                                </form>
+                            </li>
+                        }
+                        @if (Model.Evaluators.Any())
+                        {
+                            <li><hr class="dropdown-divider"></li>
+                            <li><h6 class="dropdown-header">Valuta con agente</h6></li>
+                            @foreach (var evaluator in Model.Evaluators)
+                            {
+                                <li>
+                                    <form method="post" asp-page-handler="Evaluate" asp-route-id="@s.Id" asp-route-agentId="@evaluator.Id" style="display:inline">
+                                        <button type="submit" class="dropdown-item">🤖 @evaluator.Name</button>
+                                    </form>
+                                </li>
+                            }
+                        }
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <form method="post" asp-page-handler="Delete" asp-route-id="@s.Id" class="delete-story-form" style="display:inline">
+                                <button type="submit" class="dropdown-item text-danger">🗑️ Elimina</button>
+                            </form>
+                        </li>
+                    </ul>
                 </div>
             </td>
         </tr>
-        @if (s.Evaluations.Any())
-        {
-            <tr class="evaluation-details" data-parent-story="@s.Id" style="display:none">
-                <td colspan="9">
-                    <div class="p-3">
-                        <h5>Valutazioni complete</h5>
-                        @foreach (var eval in s.Evaluations)
-                        {
-                            <div class="card mb-3">
-                                <div class="card-header">
-                                    <strong>@eval.Model</strong> - Totale: <span class="badge bg-primary">@eval.TotalScore/100</span>
-                                    <small class="text-muted">(@eval.Ts)</small>
-                                </div>
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col-md-6">
-                                            <ul class="list-group list-group-flush">
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Coerenza narrativa:</span> <span class="badge bg-secondary">@eval.NarrativeCoherenceScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.NarrativeCoherenceDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.NarrativeCoherenceDefects</small></li>
-                                                }
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Struttura:</span> <span class="badge bg-secondary">@eval.StructureScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.StructureDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.StructureDefects</small></li>
-                                                }
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Caratterizzazione:</span> <span class="badge bg-secondary">@eval.CharacterizationScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.CharacterizationDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.CharacterizationDefects</small></li>
-                                                }
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Dialoghi:</span> <span class="badge bg-secondary">@eval.DialoguesScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.DialoguesDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.DialoguesDefects</small></li>
-                                                }
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Ritmo:</span> <span class="badge bg-secondary">@eval.PacingScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.PacingDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.PacingDefects</small></li>
-                                                }
-                                            </ul>
-                                        </div>
-                                        <div class="col-md-6">
-                                            <ul class="list-group list-group-flush">
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Originalità:</span> <span class="badge bg-secondary">@eval.OriginalityScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.OriginalityDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.OriginalityDefects</small></li>
-                                                }
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Stile:</span> <span class="badge bg-secondary">@eval.StyleScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.StyleDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.StyleDefects</small></li>
-                                                }
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Worldbuilding:</span> <span class="badge bg-secondary">@eval.WorldbuildingScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.WorldbuildingDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.WorldbuildingDefects</small></li>
-                                                }
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Coerenza tematica:</span> <span class="badge bg-secondary">@eval.ThematicCoherenceScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.ThematicCoherenceDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.ThematicCoherenceDefects</small></li>
-                                                }
-                                                <li class="list-group-item d-flex justify-content-between">
-                                                    <span>Impatto emotivo:</span> <span class="badge bg-secondary">@eval.EmotionalImpactScore/10</span>
-                                                </li>
-                                                @if (!string.IsNullOrWhiteSpace(eval.EmotionalImpactDefects))
-                                                {
-                                                    <li class="list-group-item"><small class="text-muted">@eval.EmotionalImpactDefects</small></li>
-                                                }
-                                            </ul>
-                                        </div>
-                                    </div>
-                                    @if (!string.IsNullOrWhiteSpace(eval.OverallEvaluation))
-                                    {
-                                        <div class="mt-3">
-                                            <strong>Valutazione complessiva:</strong>
-                                            <p class="mb-0">@eval.OverallEvaluation</p>
-                                        </div>
-                                    }
-                                </div>
-                            </div>
-                        }
-                    </div>
-                </td>
-            </tr>
-        }
     }
     </tbody>
 </table>
 
 @section Scripts {
     <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
     <!-- SweetAlert2 (compact confirmation) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" />
     <style>
-        /* DataTables expand control */
-        td.dt-control {
-            background: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgZmlsbD0iY3VycmVudENvbG9yIiBjbGFzcz0iYmkgYmktcGx1cy1jaXJjbGUiIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHBhdGggZD0iTTggMTVBNyA3IDAgMSAxIDggMWE3IDcgMCAwIDEgMCAxNHptMCAxQTggOCAwIDEgMCA4IDBhOCA4IDAgMCAwIDAgMTZ6Ii8+PHBhdGggZD0iTTggNGEuNS41IDAgMCAxIC41LjV2M2gzYS41LjUgMCAwIDEgMCAxaC0zdjNhLjUuNSAwIDAgMS0xIDB2LTNoLTNhLjUuNSAwIDAgMSAwLTFoM3YtM0EuNS41IDAgMCAxIDggNHoiLz48L3N2Zz4=') no-repeat center center;
-            cursor: pointer;
-        }
-        td.dt-control.open {
-            background: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgZmlsbD0iY3VycmVudENvbG9yIiBjbGFzcz0iYmkgYmktZGFzaC1jaXJjbGUiIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHBhdGggZD0iTTggMTVBNyA3IDAgMSAxIDggMWE3IDcgMCAwIDEgMCAxNHptMCAxQTggOCAwIDEgMCA4IDBhOCA4IDAgMCAwIDAgMTZ6Ii8+PHBhdGggZD0iTTQgOGEuNS41IDAgMCAxIC41LS41aDdhLjUuNSAwIDAgMSAwIDFoLTdhQS41LjUgMCAwIDEgNCA4eiIvPjwvc3ZnPg==') no-repeat center center;
-        }
         /* SweetAlert2 compact popup styled to match Bootstrap */
         .swal2-popup.swal2-small {
             width: 420px !important;
@@ -232,35 +163,120 @@
             min-width: 86px;
             margin: 0 .25rem;
         }
+        /* Custom gold badge color for scores 8-10 */
+        .bg-gold {
+            background-color: #ffd700 !important;
+            color: #000 !important;
+        }
     </style>
 
     <script src="~/lib/jquery/jquery.min.js"></script>
     <script src="~/lib/datatables/js/jquery.dataTables.min.js"></script>
     <script src="~/lib/datatables/js/dataTables.bootstrap5.min.js"></script>
+    <script src="~/lib/datatables/js/dataTables.buttons.min.js"></script>
+    <script src="~/lib/datatables/js/buttons.bootstrap5.min.js"></script>
+    <script src="~/lib/datatables/js/buttons.colVis.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script>
         $(document).ready(function() {
+            // Function to get badge color based on score
+            function getScoreBadgeClass(score) {
+                if (score >= 0 && score <= 1) return 'bg-danger'; // rosso
+                if (score >= 2 && score <= 3) return 'bg-danger'; // arancio
+                if (score >= 4 && score <= 5) return 'bg-warning'; // giallo (usando info come giallo chiaro)
+                if (score >= 6 && score <= 7) return 'bg-success'; // verde
+                if (score >= 8 && score <= 10) return 'bg-success text-warning'; // verde
+                return 'bg-secondary'; // default
+            }
+
+            // Format function for child rows (evaluations)
+            function formatEvaluations(evaluations) {
+                if (!evaluations || evaluations.length === 0) {
+                    return '<div class="p-3"><em>Nessuna valutazione disponibile</em></div>';
+                }
+                
+                var html = '<div class="p-3"><h5>Valutazioni complete</h5>';
+                
+                evaluations.forEach(function(eval) {
+                    html += '<div class="card mb-3">';
+                    html += '<div class="card-header">';
+                    html += '<strong>' + (eval.Model || 'N/A') + '</strong> - Totale: <span class="badge bg-primary">' + eval.TotalScore + '/100</span>';
+                    html += '<small class="text-muted"> (' + (eval.Ts || '') + ')</small>';
+                    html += '</div>';
+                    html += '<div class="card-body"><div class="row">';
+                    
+                    // Left column
+                    html += '<div class="col-md-6"><ul class="list-group list-group-flush">';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Coerenza narrativa:</span> <span class="badge ' + getScoreBadgeClass(eval.NarrativeCoherenceScore) + '">' + eval.NarrativeCoherenceScore + '/10</span></li>';
+                    if (eval.NarrativeCoherenceDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.NarrativeCoherenceDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Struttura:</span> <span class="badge ' + getScoreBadgeClass(eval.StructureScore) + '">' + eval.StructureScore + '/10</span></li>';
+                    if (eval.StructureDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.StructureDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Caratterizzazione:</span> <span class="badge ' + getScoreBadgeClass(eval.CharacterizationScore) + '">' + eval.CharacterizationScore + '/10</span></li>';
+                    if (eval.CharacterizationDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.CharacterizationDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Dialoghi:</span> <span class="badge ' + getScoreBadgeClass(eval.DialoguesScore) + '">' + eval.DialoguesScore + '/10</span></li>';
+                    if (eval.DialoguesDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.DialoguesDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Ritmo:</span> <span class="badge ' + getScoreBadgeClass(eval.PacingScore) + '">' + eval.PacingScore + '/10</span></li>';
+                    if (eval.PacingDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.PacingDefects + '</small></li>';
+                    html += '</ul></div>';
+                    
+                    // Right column
+                    html += '<div class="col-md-6"><ul class="list-group list-group-flush">';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Originalità:</span> <span class="badge ' + getScoreBadgeClass(eval.OriginalityScore) + '">' + eval.OriginalityScore + '/10</span></li>';
+                    if (eval.OriginalityDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.OriginalityDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Stile:</span> <span class="badge ' + getScoreBadgeClass(eval.StyleScore) + '">' + eval.StyleScore + '/10</span></li>';
+                    if (eval.StyleDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.StyleDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Worldbuilding:</span> <span class="badge ' + getScoreBadgeClass(eval.WorldbuildingScore) + '">' + eval.WorldbuildingScore + '/10</span></li>';
+                    if (eval.WorldbuildingDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.WorldbuildingDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Coerenza tematica:</span> <span class="badge ' + getScoreBadgeClass(eval.ThematicCoherenceScore) + '">' + eval.ThematicCoherenceScore + '/10</span></li>';
+                    if (eval.ThematicCoherenceDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.ThematicCoherenceDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Impatto emotivo:</span> <span class="badge ' + getScoreBadgeClass(eval.EmotionalImpactScore) + '">' + eval.EmotionalImpactScore + '/10</span></li>';
+                    if (eval.EmotionalImpactDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.EmotionalImpactDefects + '</small></li>';
+                    html += '</ul></div>';
+                    
+                    html += '</div>'; // close row
+                    
+                    if (eval.OverallEvaluation) {
+                        html += '<div class="mt-3"><strong>Valutazione complessiva:</strong><p class="mb-0">' + eval.OverallEvaluation + '</p></div>';
+                    }
+                    
+                    html += '</div></div>'; // close card-body and card
+                });
+                
+                html += '</div>';
+                return html;
+            }
+
             var table = $('#storiesTable').DataTable({
                 pageLength: 25,
                 lengthChange: true,
                 stateSave: true,
+                responsive: true,
+                dom: 'Bfrtip',
+                buttons: [
+                    'colvis'
+                ],
                 columnDefs: [
                     { orderable: false, targets: 0 },
                     { orderable: false, targets: -1 }
                 ]
             });
 
-            // Handle expand/collapse for evaluation details
+            // Handle expand/collapse for evaluation details using DataTables child rows API
             $('#storiesTable tbody').on('click', 'td.dt-control', function () {
                 var tr = $(this).closest('tr');
-                var storyId = tr.data('story-id');
-                var detailRow = $('tr.evaluation-details[data-parent-story="' + storyId + '"]');
+                var row = table.row(tr);
                 
-                if (detailRow.is(':visible')) {
-                    detailRow.hide();
+                if (row.child.isShown()) {
+                    // This row is already open - close it
+                    row.child.hide();
+                    tr.removeClass('shown');
                     $(this).removeClass('open');
                 } else {
-                    detailRow.show();
+                    // Open this row
+                    var evaluationsJson = tr.attr('data-evaluations');
+                    var evaluations = evaluationsJson ? JSON.parse(evaluationsJson) : [];
+                    row.child(formatEvaluations(evaluations)).show();
+                    tr.addClass('shown');
                     $(this).addClass('open');
                 }
             });

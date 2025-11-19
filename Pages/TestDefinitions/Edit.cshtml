@@ -98,6 +98,25 @@
             <small class="form-text text-muted">Seleziona lo schema JSON (cartella <code>response_formats/</code>) per il formato di risposta atteso.</small>
         </div>
         <div class="col-md-6">
+            <label asp-for="SelectedSourceFiles" class="form-label">Files to Copy</label>
+            <select asp-for="SelectedSourceFiles" multiple class="form-control chosen-select" id="source_files">
+                <option value="">(None)</option>
+                @foreach (var f in Model.AvailableSourceFiles ?? new List<string>())
+                {
+                    if (Model.SelectedSourceFiles?.Contains(f) == true)
+                    {
+                        <option value="@f" selected>@f</option>
+                    }
+                    else
+                    {
+                        <option value="@f">@f</option>
+                    }
+                }
+            </select>
+            <span asp-validation-for="SelectedSourceFiles" class="text-danger"></span>
+            <small class="form-text text-muted">Seleziona i file da copiare dalla cartella <code>test_source_files/</code> nella cartella del test. Usa <code>[test_folder]</code> nel prompt per il path assoluto.</small>
+        </div>
+        <div class="col-md-6">
             <label asp-for="Definition.ValidScoreRange" class="form-label">Valid Score Range</label>
             <input asp-for="Definition.ValidScoreRange" class="form-control" />
             <span asp-validation-for="Definition.ValidScoreRange" class="text-danger"></span>
@@ -136,13 +155,18 @@
                             no_results_text: 'No plugin found',
                             width: '100%'
                         });
+                        $('#source_files').chosen({
+                            placeholder_text_multiple: 'Select files to copy or leave empty',
+                            no_results_text: 'No file found',
+                            width: '100%'
+                        });
                     }
                     else {
-                        console.warn('chosen plugin not available: skipping chosen initialization for #allowed_plugins');
+                        console.warn('chosen plugin not available: skipping chosen initialization');
                     }
                 }
                 catch (e) {
-                    console.error('Error while initializing chosen for #allowed_plugins', e);
+                    console.error('Error while initializing chosen', e);
                 }
             });
         })();

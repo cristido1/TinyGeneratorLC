@@ -1,6 +1,6 @@
 {
   "name": "writer_extended",
-  "description": "Writer con pipeline completa a più fasi.",
+  "description": "Writer con pipeline completa a più fasi. Usa la memoria per salvare i progressi.",
   "execution_plan": [
     {
       "step": "outline",
@@ -17,11 +17,15 @@
     {
       "step": "refine",
       "instructions": "Raffina la versione estesa migliorando coerenza e fluidità senza cambiare i contenuti."
+    },
+    {
+      "step": "finalize",
+      "instructions": "Produci la versione finale, correggendo errori grammaticali e stilistici. E ritorna solo la versione finale."
     }
   ],
   "constraints": {
-    "target_words": 1500,
-    "max_steps": 4,
+    "target_words": 15000,
+    "max_steps": 5,
     "avoid_repetition": true,
     "tone_consistency": true
   }

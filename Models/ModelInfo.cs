@@ -11,6 +11,7 @@ public class ModelInfo
     public int MaxContext { get; set; }
     public int ContextToUse { get; set; }
     public int FunctionCallingScore { get; set; }
+    public double WriterScore { get; set; }
     public double CostInPerToken { get; set; }
     public double CostOutPerToken { get; set; }
     public long LimitTokensDay { get; set; }

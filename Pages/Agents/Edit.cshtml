@@ -84,6 +84,11 @@
         <textarea asp-for="Agent.Instructions" class="form-control" rows="3"></textarea>
     </div>
     <div class="mb-3">
+        <label class="form-label">JSON Response Format</label>
+        <input asp-for="Agent.JsonResponseFormat" class="form-control" placeholder="es. full_evaluation.json" />
+        <small class="form-text text-muted">Nome del file schema JSON in response_formats/ per structured output (opzionale)</small>
+    </div>
+    <div class="mb-3">
         <label class="form-label">Execution Plan (JSON or text)</label>
         <textarea asp-for="Agent.ExecutionPlan" class="form-control" rows="4"></textarea>
     </div>

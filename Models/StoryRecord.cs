@@ -11,12 +11,18 @@ namespace TinyGenerator.Models
         public string Timestamp { get; set; } = string.Empty;
         public string Prompt { get; set; } = string.Empty;
         public string Story { get; set; } = string.Empty;
+        public int CharCount { get; set; }
         public string Model { get; set; } = string.Empty;
         public string Agent { get; set; } = string.Empty;
         public string Eval { get; set; } = string.Empty;
         public double Score { get; set; }
         public bool Approved { get; set; }
         public string Status { get; set; } = string.Empty;
+        public string? Folder { get; set; }
+
+        // Test information (if story was generated from a test)
+        public int? TestRunId { get; set; }
+        public int? TestStepId { get; set; }
 
         // Evaluations attached to the story (one for each saved evaluation)
         public List<StoryEvaluation> Evaluations { get; set; } = new List<StoryEvaluation>();

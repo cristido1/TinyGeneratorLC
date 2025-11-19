@@ -28,9 +28,10 @@ namespace TinyGenerator.Services
         private readonly ILoggerFactory? _loggerFactory;
         private readonly TinyGenerator.Services.PersistentMemoryService _memoryService;
         private readonly DatabaseService _database;
-        private readonly StoriesService _storiesService;
+        private readonly System.IServiceProvider _serviceProvider;
         private readonly System.Net.Http.HttpClient _httpClient;
         private readonly System.Net.Http.HttpClient _ttsHttpClient;
+        private readonly System.Net.Http.HttpClient _skHttpClient; // HttpClient for Semantic Kernel with longer timeout
     private readonly bool _forceAudioCpu;
 
         // Proprietà pubbliche per i plugin
@@ -50,15 +51,17 @@ namespace TinyGenerator.Services
             IConfiguration config,
             TinyGenerator.Services.PersistentMemoryService memoryService,
             DatabaseService database,
-            StoriesService storiesService,
+            System.IServiceProvider serviceProvider,
             ILoggerFactory? loggerFactory = null,
             ILogger<KernelFactory>? logger = null)
         {
             _config = config;
             _logger = logger;
             _memoryService = memoryService;
-            _httpClient = new System.Net.Http.HttpClient();
-            _ttsHttpClient = new System.Net.Http.HttpClient();
+            _serviceProvider = serviceProvider;
+            _httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+            _ttsHttpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            _skHttpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) }; // SK HttpClient with 10 min timeout for long-running generations
             _forceAudioCpu = false;
             try
             {
@@ -69,7 +72,6 @@ namespace TinyGenerator.Services
             catch { }
             _loggerFactory = loggerFactory;
             _database = database;
-            _storiesService = storiesService;
 
             // Inizializzazione plugin (factory-level defaults when not using per-kernel instances)
             TextPlugin = new TinyGenerator.Skills.TextPlugin();
@@ -82,7 +84,8 @@ namespace TinyGenerator.Services
             AudioEvaluatorSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient);
             TtsApiSkill = new TinyGenerator.Skills.TtsApiSkill(_ttsHttpClient);
             StoryEvaluatorSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database);
-            StoryWriterSkill = new TinyGenerator.Skills.StoryWriterSkill(storiesService);
+            // StoryWriterSkill will be created lazily when needed to avoid circular dependency
+            StoryWriterSkill = null!;
         }
 
         // Ensure a kernel is created and cached for a given agent id. Allowed plugin aliases control which plugins are registered.
@@ -169,11 +172,11 @@ namespace TinyGenerator.Services
 
                 if (!string.IsNullOrWhiteSpace(openAiEndpoint))
                 {
-                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey, endpoint: new Uri(openAiEndpoint));
+                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey, endpoint: new Uri(openAiEndpoint), httpClient: _skHttpClient);
                 }
                 else
                 {
-                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey);
+                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey, httpClient: _skHttpClient);
                 }
             }
             else if (string.Equals(providerLower, "azure", StringComparison.OrdinalIgnoreCase)
@@ -192,7 +195,7 @@ namespace TinyGenerator.Services
                 }
 
                 _logger?.LogInformation("Creazione kernel Azure OpenAI con deployment {deployment} su {endpoint}", deployment, endpoint);
-                builder.AddAzureOpenAIChatCompletion(deploymentName: deployment, endpoint: endpoint!, apiKey: apiKey!);
+                builder.AddAzureOpenAIChatCompletion(deploymentName: deployment, endpoint: endpoint!, apiKey: apiKey!, httpClient: _skHttpClient);
             }
             else
             {
@@ -235,11 +238,11 @@ namespace TinyGenerator.Services
 
                 if (!string.IsNullOrWhiteSpace(openAiEndpoint))
                 {
-                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey, endpoint: new Uri(openAiEndpoint));
+                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey, endpoint: new Uri(openAiEndpoint), httpClient: _skHttpClient);
                 }
                 else
                 {
-                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey);
+                    builder.AddOpenAIChatCompletion(modelId: model, apiKey: apiKey, httpClient: _skHttpClient);
                 }
             }
             // Istanze plugin registrate nel kernel. If allowedPlugins is provided, only register
@@ -267,7 +270,14 @@ namespace TinyGenerator.Services
             if (allowed("tts")) { builder.Plugins.AddFromObject(TtsApiSkill, "tts"); _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName); registeredAliases.Add("tts"); }
             // Register the StoryEvaluatorSkill which exposes evaluation functions used by texteval tests
             if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database!, numericModelId, agentId); builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
-            if (allowed("story")) { writerSkill = new TinyGenerator.Skills.StoryWriterSkill(_storiesService, _database, numericModelId, agentId, model); builder.Plugins.AddFromObject(writerSkill, "story"); _logger?.LogDebug("Registered plugin: {plugin}", writerSkill?.GetType().FullName); registeredAliases.Add("story"); }
+            if (allowed("story")) { 
+                // Lazy resolve StoriesService to avoid circular dependency
+                var storiesService = _serviceProvider.GetService<StoriesService>();
+                writerSkill = new TinyGenerator.Skills.StoryWriterSkill(storiesService, _database, numericModelId, agentId, model); 
+                builder.Plugins.AddFromObject(writerSkill, "story"); 
+                _logger?.LogDebug("Registered plugin: {plugin}", writerSkill?.GetType().FullName); 
+                registeredAliases.Add("story"); 
+            }
 
             var kernel = builder.Build();
             // Best-effort verification: log that kernel was created and which plugin instances we attached.

@@ -10,8 +10,9 @@ namespace TinyGenerator.Pages.TestDefinitions
         private readonly DatabaseService _db;
         public List<string> PlanFiles { get; set; } = new List<string>();
         public List<string> ResponseFormatFiles { get; set; } = new List<string>();
+        public List<string> AvailableSourceFiles { get; set; } = new List<string>();
         public string[] AvailablePlugins { get; set; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "evaluator", "story" };
-        public string[] TestTypes { get; set; } = new string[] { "functioncall", "writer", "question" };
+        public string[] TestTypes { get; set; } = new string[] { "functioncall", "writer", "question", "tts" };
         public EditModel(DatabaseService db)
         {
             _db = db;
@@ -22,6 +23,9 @@ namespace TinyGenerator.Pages.TestDefinitions
 
         [BindProperty]
         public string[] SelectedAllowedPlugins { get; set; } = new string[] { };
+
+        [BindProperty]
+        public string[] SelectedSourceFiles { get; set; } = new string[] { };
 
         public void OnGet(int? id)
         {
@@ -47,6 +51,16 @@ namespace TinyGenerator.Pages.TestDefinitions
                         .ToList();
                     ResponseFormatFiles = rfiles;
                 }
+                var sourceFilesDir = Path.Combine(Directory.GetCurrentDirectory(), "test_source_files");
+                if (Directory.Exists(sourceFilesDir))
+                {
+                    var sourceFiles = Directory.GetFiles(sourceFilesDir, "*.*")
+                        .Select(Path.GetFileName)
+                        .Where(f => !string.IsNullOrEmpty(f) && !f!.StartsWith("."))
+                        .Select(f => f!)
+                        .ToList();
+                    AvailableSourceFiles = sourceFiles;
+                }
             }
             catch { }
             if (id.HasValue && id.Value > 0)
@@ -55,6 +69,8 @@ namespace TinyGenerator.Pages.TestDefinitions
                 if (td != null) Definition = td;
                 // populate selected allowed plugins array for the multi-select
                 if (!string.IsNullOrWhiteSpace(Definition.AllowedPlugins)) SelectedAllowedPlugins = Definition.AllowedPlugins.Split(',').Select(p => p.Trim()).ToArray();
+                // populate selected source files array for the multi-select
+                if (!string.IsNullOrWhiteSpace(Definition.FilesToCopy)) SelectedSourceFiles = Definition.FilesToCopy.Split(',').Select(f => f.Trim()).ToArray();
             }
             else
             {
@@ -75,6 +91,16 @@ namespace TinyGenerator.Pages.TestDefinitions
             else
             {
                 Definition.AllowedPlugins = null;
+            }
+
+            // Convert SelectedSourceFiles into comma-separated string (or null if none selected)
+            if (SelectedSourceFiles != null && SelectedSourceFiles.Any())
+            {
+                Definition.FilesToCopy = string.Join(",", SelectedSourceFiles.Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => f.Trim()));
+            }
+            else
+            {
+                Definition.FilesToCopy = null;
             }
 
             if (Definition.Id > 0)

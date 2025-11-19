@@ -1,0 +1,140 @@
+{
+  "track_type": "dialogue",
+  "characters": [
+    { "name": "Narratore", "gender": "neutral", "default_emotion": "narrative" },
+    { "name": "Rinaldi",   "gender": "male",   "default_emotion": "calm" },
+    { "name": "Serra",     "gender": "female", "default_emotion": "worried" },
+    { "name": "Ortega",    "gender": "male",   "default_emotion": "calm" }
+  ],
+  "entries": [
+    {
+      "type": "narration",
+      "character": "Narratore",
+      "emotion": "narrative",
+      "text": "Il ponte di comando dell’IDS Folgore era immerso in una luce blu soffusa."
+    },
+    {
+      "type": "narration",
+      "character": "Narratore",
+      "emotion": "narrative",
+      "text": "Il turno notturno venne interrotto da un brusco tremolio della struttura."
+    },
+    {
+      "type": "narration",
+      "character": "Narratore",
+      "emotion": "narrative",
+      "text": "I pannelli sul lato destro emisero una serie di bip d’allarme, e il Comandante Rinaldi alzò lo sguardo dallo schermo tattico."
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Rinaldi",
+      "emotion": "surprised",
+      "text": "Che cosa diavolo è stato?"
+    },
+    { "type": "pause" },
+
+    {
+      "type": "narration",
+      "character": "Narratore",
+      "emotion": "narrative",
+      "text": "La Tenente Serra scorse rapidamente una serie di grafici."
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Serra",
+      "emotion": "worried",
+      "text": "Un impulso gravitazionale, signore. Proveniente dal Settore 14. Non è naturale… e non è nei nostri registri."
+    },
+    { "type": "pause" },
+
+    {
+      "type": "dialogue",
+      "character": "Rinaldi",
+      "emotion": "tense",
+      "text": "Ortega!"
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Ortega",
+      "emotion": "calm",
+      "text": "Sto controllando, Comandante. Ci sono fluttuazioni di campo che non riesco a identificare. Non sembrano emissioni note."
+    },
+    { "type": "pause" },
+
+    {
+      "type": "narration",
+      "character": "Narratore",
+      "emotion": "narrative",
+      "text": "Una breve pausa si abbatté sul ponte."
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Rinaldi",
+      "emotion": "tense",
+      "text": "Serra, voglio una scansione approfondita. Gamma completa, e incrocia i dati con i registri dell’ultimo mese."
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Serra",
+      "emotion": "worried",
+      "text": "Sì, signore. Avvio la procedura."
+    },
+    { "type": "pause" },
+
+    {
+      "type": "dialogue",
+      "character": "Ortega",
+      "emotion": "worried",
+      "text": "Comandante, ricevo un eco attivo. Non siamo soli."
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Rinaldi",
+      "emotion": "tense",
+      "text": "Origine?"
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Ortega",
+      "emotion": "worried",
+      "text": "Settore 14. E si avvicina."
+    },
+    { "type": "pause" },
+
+    {
+      "type": "dialogue",
+      "character": "Serra",
+      "emotion": "tense",
+      "text": "Signore, l’eco cambia frequenza. È come se ci stesse… scandagliando."
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Rinaldi",
+      "emotion": "tense",
+      "text": "Portate gli scudi al quaranta per cento. E mantenete la distanza. Non reagite finché non capiamo cosa abbiamo davanti."
+    },
+
+    {
+      "type": "dialogue",
+      "character": "Ortega",
+      "emotion": "worried",
+      "text": "Comandante… sta per inviare un segnale."
+    },
+    { "type": "pause" },
+
+    {
+      "type": "dialogue",
+      "character": "Rinaldi",
+      "emotion": "calm",
+      "text": "Allora ascoltiamo."
+    }
+  ]
+}

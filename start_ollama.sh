@@ -1,0 +1,1 @@
+OLLAMA_CONTEXT_LENGTH=32000 ollama serve

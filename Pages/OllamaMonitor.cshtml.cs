@@ -13,6 +13,7 @@ namespace TinyGenerator.Pages
 
         public void OnGet()
         {
+            OnGetRefreshAsync().GetAwaiter().GetResult();
         }
 
         public async Task OnGetRefreshAsync()

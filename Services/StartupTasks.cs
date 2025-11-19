@@ -138,18 +138,21 @@ namespace TinyGenerator
             if (db == null || kernelFactory == null || memoryService == null) return;
             try
             {
+                logger?.LogInformation("[Startup] EnsureKernelsForActiveAgents: Starting...");
                 var agents = db.ListAgents().Where(a => a.IsActive).ToList();
                 logger?.LogInformation("[Startup] Found {count} active agents. Initializing kernels and persistent memory.", agents.Count);
                 foreach (var a in agents)
                 {
                     try
                     {
+                        logger?.LogInformation("[Startup] Processing agent {agentId} ({name})...", a.Id, a.Name);
                         string? modelName = null;
                         if (a.ModelId.HasValue) modelName = db.GetModelNameById(a.ModelId.Value);
                         var modelInfo = !string.IsNullOrWhiteSpace(modelName) ? db.GetModelInfo(modelName!) : null;
                         var provider = modelInfo?.Provider ?? "(unknown)";
                         var endpoint = modelInfo?.Endpoint ?? "(default)";
 
+                        logger?.LogInformation("[Startup] Agent {agentId} ({name}) model={model} provider={provider}", a.Id, a.Name, modelName ?? "(none)", provider);
                         var aliases = new System.Collections.Generic.List<string>();
                         try
                         {

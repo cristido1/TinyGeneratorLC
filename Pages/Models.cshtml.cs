@@ -74,14 +74,6 @@ namespace TinyGenerator.Pages
                 {
                     model.TestDurationSeconds = baseGroupDuration.Value / 1000.0; // Convert ms to seconds
                 }
-                
-                // Recalculate total score if different from sum of group scores
-                var calculatedTotal = model.LastGroupScores.Values.Where(v => v.HasValue).Sum(v => v!.Value);
-                if (model.FunctionCallingScore != calculatedTotal)
-                {
-                    model.FunctionCallingScore = calculatedTotal;
-                    _database.RecalculateModelScore(model.Name);
-                }
             }
         }
 
@@ -180,6 +172,20 @@ namespace TinyGenerator.Pages
             try
             {
                 _database.UpdateModelCosts(Model, CostInPer1k, CostOutPer1k);
+                return RedirectToPage();
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+        }
+
+        public IActionResult OnPostRecalculateScores()
+        {
+            try
+            {
+                _database.RecalculateAllWriterScores();
+                TempData["TestResultMessage"] = "Punteggi writer ricalcolati per tutti i modelli.";
                 return RedirectToPage();
             }
             catch (Exception ex)

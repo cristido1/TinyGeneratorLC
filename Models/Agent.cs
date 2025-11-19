@@ -14,6 +14,7 @@ namespace TinyGenerator.Models
         public string? ModelName { get; set; }
         public string? Skills { get; set; } // JSON array
         public string? Config { get; set; } // JSON object
+        public string? JsonResponseFormat { get; set; } // Nome file schema JSON (es. "full_evaluation.json")
         public string? Prompt { get; set; }
         public string? Instructions { get; set; }
         public string? ExecutionPlan { get; set; }

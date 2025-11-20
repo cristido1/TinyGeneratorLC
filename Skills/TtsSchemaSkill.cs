@@ -8,11 +8,19 @@ using Microsoft.AspNetCore.Routing.Constraints;
 
 namespace TinyGenerator.Skills
 {
-    public class TtsSchemaSkill
+    public class TtsSchemaSkill : ITinySkill
     {
-        private readonly string _storyText;                           // Immutable story text
+        private string _storyText;                                    // Story text (can be set initially or updated later)
         private readonly string _workingFolder;                       // File path for schema saving
         private TtsSchema _schema;                                    // Working schema structure for the agent
+
+        // ITinySkill implementation
+        public int? ModelId { get; set; }
+        public string? ModelName { get; set; }
+        public int? AgentId { get; set; }
+        public string? AgentName { get; set; }
+        public DateTime? LastCalled { get; set; }
+        public string? LastFunction { get; set; }
 
         // Supported emotions for TTS phrases
         private static readonly HashSet<string> SupportedEmotions = new(StringComparer.OrdinalIgnoreCase)
@@ -29,11 +37,16 @@ namespace TinyGenerator.Skills
         // ================================================================
         // CONSTRUCTOR
         // ================================================================
-        public TtsSchemaSkill(string storyText, string workingFolder)
+        /// <summary>
+        /// Creates a TtsSchemaSkill instance.
+        /// </summary>
+        /// <param name="workingFolder">Directory where tts_schema.json will be saved</param>
+        /// <param name="storyText">Optional story text. Can be provided now or set later via the story.</param>
+        public TtsSchemaSkill(string workingFolder, string? storyText = null)
         {
-            _storyText = storyText;
-            _schema = new TtsSchema();
             _workingFolder = workingFolder;
+            _storyText = storyText ?? string.Empty;
+            _schema = new TtsSchema();
         }
 
         // ================================================================
@@ -145,8 +158,17 @@ namespace TinyGenerator.Skills
         {
             try
             {
+                // Validate schema before saving
+                var validationResult = CheckSchema();
+                if (validationResult != "OK")
+                {
+                    return validationResult; // Return validation error instead of saving
+                }
+
                 string filePath = Path.Combine(_workingFolder, "tts_schema.json");
                 File.WriteAllText(filePath, JsonSerializer.Serialize(_schema, JsonOptions));
+                LastCalled = DateTime.UtcNow;
+                LastFunction = "ConfirmSchema";
                 return "OK";
             }
             catch (Exception ex)

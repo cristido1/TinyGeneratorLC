@@ -1409,94 +1409,32 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
         openSw.Stop();
         Console.WriteLine($"[DB] Connection opened in {openSw.ElapsedMilliseconds}ms");
 
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = $@"CREATE TABLE IF NOT EXISTS usage_state (
-    month TEXT PRIMARY KEY,
-    tokens_this_run INTEGER DEFAULT 0,
-    tokens_this_month INTEGER DEFAULT 0,
-    cost_this_month REAL DEFAULT 0
-);
+        // Seed some commonly used, lower-cost OpenAI chat models so they appear in the models table
+        try
+        {
+            Console.WriteLine("[DB] Seeding default OpenAI models (if missing)...");
+            var seedSw = Stopwatch.StartNew();
+            SeedDefaultOpenAiModels();
+            seedSw.Stop();
+            Console.WriteLine($"[DB] SeedDefaultOpenAiModels completed in {seedSw.ElapsedMilliseconds}ms");
+        }
+        catch
+        {
+            // best-effort seeding, ignore failures
+        }
 
-CREATE TABLE IF NOT EXISTS calls (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT,
-    model TEXT,
-    provider TEXT,
-    input_tokens INTEGER DEFAULT 0,
-    output_tokens INTEGER DEFAULT 0,
-    tokens INTEGER,
-    cost REAL,
-    request TEXT,
-    response TEXT
-);
+        // Run migrations to handle schema updates
+        RunMigrations(conn);
 
-CREATE TABLE IF NOT EXISTS models (
-    Name TEXT PRIMARY KEY,
-    Provider TEXT,
-    Endpoint TEXT,
-    IsLocal INTEGER DEFAULT 1,
-    MaxContext INTEGER DEFAULT 4096,
-    ContextToUse INTEGER DEFAULT 4096,
-    FunctionCallingScore INTEGER DEFAULT 0,
-    WriterScore REAL DEFAULT 0,
-    CostInPerToken REAL DEFAULT 0,
-    CostOutPerToken REAL DEFAULT 0,
-    LimitTokensDay INTEGER DEFAULT 0,
-    LimitTokensWeek INTEGER DEFAULT 0,
-    LimitTokensMonth INTEGER DEFAULT 0,
-    Metadata TEXT,
-    Enabled INTEGER DEFAULT 1,
-    CreatedAt TEXT,
-    UpdatedAt TEXT,
-    TestDurationSeconds REAL
-);";
-        cmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Created usage_state/calls/models tables");
+        Console.WriteLine($"[DB] InitializeSchema completed in {sw.ElapsedMilliseconds}ms");
+    }
 
-        // TTS Voices table (before agents, as agents has FK to tts_voices)
-        using var voicesCmd = conn.CreateCommand();
-        voicesCmd.CommandText = @"CREATE TABLE IF NOT EXISTS tts_voices (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    voice_id TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    model TEXT,
-    language TEXT,
-    gender TEXT,
-    age TEXT,
-    confidence REAL DEFAULT 0,
-    tags TEXT,
-    sample_path TEXT,
-    template_wav TEXT,
-    metadata TEXT,
-    created_at TEXT,
-    updated_at TEXT
-);";
-        voicesCmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Created tts_voices table (if not exists)");
-
-        // Test definitions table (independent, no FK dependencies)
-        using var testDefsCmd = conn.CreateCommand();
-        testDefsCmd.CommandText = @"CREATE TABLE IF NOT EXISTS test_definitions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    test_group TEXT NOT NULL,
-    test_type TEXT NOT NULL,
-    function_name TEXT,
-    prompt TEXT NOT NULL,
-    expected_prompt_value TEXT,
-    valid_score_range TEXT,
-    expected_behavior TEXT,
-    json_response_format TEXT,
-    allowed_plugins TEXT,
-    execution_plan TEXT,
-    timeout_ms INTEGER DEFAULT 30000,
-    enabled INTEGER DEFAULT 1,
-    files_to_copy TEXT,
-    created_at TEXT,
-    updated_at TEXT
-);";
-        testDefsCmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Created test_definitions table (if not exists)");
-
+    /// <summary>
+    /// Run schema migrations. These are applied to handle schema updates when database
+    /// is recreated from db_schema.sql but needs subsequent modifications.
+    /// </summary>
+    private void RunMigrations(IDbConnection conn)
+    {
         // Migration: Add files_to_copy column if not exists
         var hasFilesToCopy = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('test_definitions') WHERE name='files_to_copy'");
         if (hasFilesToCopy == 0)
@@ -1514,143 +1452,6 @@ CREATE TABLE IF NOT EXISTS models (
             Console.WriteLine("[DB] Migrating test_definitions: renaming group_name to test_group");
             conn.Execute("ALTER TABLE test_definitions RENAME COLUMN group_name TO test_group");
         }
-
-        // Stories table (after models, before stories_evaluations)
-        using var storiesCmd = conn.CreateCommand();
-        storiesCmd.CommandText = @"CREATE TABLE IF NOT EXISTS stories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    generation_id TEXT,
-    memory_key TEXT,
-    ts TEXT,
-    prompt TEXT,
-    story TEXT,
-    char_count INTEGER DEFAULT 0,
-    eval TEXT,
-    score REAL DEFAULT 0,
-    approved INTEGER DEFAULT 0,
-    status TEXT,
-    folder TEXT NULL,
-    model_id INTEGER NULL,
-    agent_id INTEGER NULL,
-    FOREIGN KEY (model_id) REFERENCES models(Id),
-    FOREIGN KEY (agent_id) REFERENCES agents(id)
-);";
-        storiesCmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Created stories table (if not exists)");
-
-        // Agents table for reusable agent configurations
-        using var agentsCmd = conn.CreateCommand();
-        agentsCmd.CommandText = @"CREATE TABLE IF NOT EXISTS agents (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    voice_rowid INTEGER NULL,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL,
-    model_id INTEGER NULL,
-    skills TEXT NULL,
-    config TEXT NULL,
-    json_response_format TEXT NULL,
-    prompt TEXT NULL,
-    instructions TEXT NULL,
-    execution_plan TEXT NULL,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NULL,
-    notes TEXT NULL,
-    FOREIGN KEY (voice_rowid) REFERENCES tts_voices(id)
-);
-";
-        agentsCmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Created agents table (if not exists)");
-
-        // Seed some commonly used, lower-cost OpenAI chat models so they appear in the models table
-        try
-        {
-            Console.WriteLine("[DB] Seeding default OpenAI models (if missing)...");
-            var seedSw = Stopwatch.StartNew();
-            SeedDefaultOpenAiModels();
-            seedSw.Stop();
-            Console.WriteLine($"[DB] SeedDefaultOpenAiModels completed in {seedSw.ElapsedMilliseconds}ms");
-        }
-        catch
-        {
-            // best-effort seeding, ignore failures
-        }
-
-        // Ensure Log table exists
-        using var logCmd = conn.CreateCommand();
-        logCmd.CommandText = @"CREATE TABLE IF NOT EXISTS Log (
-    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    Ts TEXT,
-    Level TEXT,
-    Category TEXT,
-    Message TEXT,
-    Exception TEXT,
-    State TEXT,
-    ThreadId INTEGER DEFAULT 0,
-    AgentName TEXT,
-    Context TEXT
-);
-";
-        logCmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Created Log table");
-
-        // Ensure stories_evaluations table exists (newly added feature to persist story evaluations)
-        using var storiesEvalCmd = conn.CreateCommand();
-        storiesEvalCmd.CommandText = @"
-    CREATE TABLE IF NOT EXISTS stories_evaluations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        story_id INTEGER NOT NULL,
-        narrative_coherence_score INTEGER DEFAULT 0,
-        narrative_coherence_defects TEXT,
-        structure_score INTEGER DEFAULT 0,
-        structure_defects TEXT,
-        characterization_score INTEGER DEFAULT 0,
-        characterization_defects TEXT,
-        dialogues_score INTEGER DEFAULT 0,
-        dialogues_defects TEXT,
-        pacing_score INTEGER DEFAULT 0,
-        pacing_defects TEXT,
-        originality_score INTEGER DEFAULT 0,
-        originality_defects TEXT,
-        style_score INTEGER DEFAULT 0,
-        style_defects TEXT,
-        worldbuilding_score INTEGER DEFAULT 0,
-        worldbuilding_defects TEXT,
-        thematic_coherence_score INTEGER DEFAULT 0,
-        thematic_coherence_defects TEXT,
-        emotional_impact_score INTEGER DEFAULT 0,
-        emotional_impact_defects TEXT,
-        total_score REAL DEFAULT 0,
-        overall_evaluation TEXT,
-        raw_json TEXT,
-        model_id INTEGER NULL,
-        agent_id INTEGER NULL,
-        ts TEXT,
-        FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE,
-        FOREIGN KEY (model_id) REFERENCES models(Id) ON DELETE SET NULL,
-        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL
-    );";
-        storiesEvalCmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Created stories_evaluations table (if not exists)");
-
-        // Ensure model_test_* tables exist (basic schema). These are used by the test runner.
-        using var runsCmd = conn.CreateCommand();
-        runsCmd.CommandText = @"
-    CREATE TABLE IF NOT EXISTS model_test_runs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        model_id INTEGER NULL,
-        test_group TEXT,
-        description TEXT,
-        passed INTEGER DEFAULT 0,
-        duration_ms INTEGER NULL,
-        notes TEXT,
-        run_date TEXT,
-        test_folder TEXT,
-        FOREIGN KEY (model_id) REFERENCES models(Id)
-    );
-    ";
-        runsCmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Ensured model_test_runs table exists");
 
         // Migration: Add Id column to models if not exists
         var hasIdColumn = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='Id'");
@@ -1685,45 +1486,6 @@ CREATE TABLE IF NOT EXISTS models (
             Console.WriteLine("[DB] Migrating model_test_runs: renaming test_code to test_group");
             conn.Execute("ALTER TABLE model_test_runs RENAME COLUMN test_code TO test_group");
         }
-
-        using var stepsCmd = conn.CreateCommand();
-        stepsCmd.CommandText = @"
-    CREATE TABLE IF NOT EXISTS model_test_steps (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id INTEGER,
-        step_number INTEGER,
-        step_name TEXT,
-        input_json TEXT,
-        output_json TEXT,
-        passed INTEGER DEFAULT 0,
-        error TEXT,
-        duration_ms INTEGER NULL,
-        FOREIGN KEY (run_id) REFERENCES model_test_runs(id)
-    );
-    ";
-        stepsCmd.ExecuteNonQuery();
-        Console.WriteLine("[DB] Ensured model_test_steps table exists");
-
-        using var assetsCmd2 = conn.CreateCommand();
-        assetsCmd2.CommandText = @"
-    CREATE TABLE IF NOT EXISTS model_test_assets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        step_id INTEGER,
-        file_type TEXT,
-        file_path TEXT,
-        description TEXT,
-        duration_sec REAL,
-        size_bytes INTEGER,
-        story_id INTEGER NULL,
-        FOREIGN KEY (step_id) REFERENCES model_test_steps(id),
-        FOREIGN KEY (story_id) REFERENCES stories(id)
-    );
-    ";
-        assetsCmd2.ExecuteNonQuery();
-        Console.WriteLine("[DB] Ensured model_test_assets table exists");
-
-        // NOTE: The `tts_voices` table is expected to exist in this installation
-        Console.WriteLine($"[DB] InitializeSchema completed in {sw.ElapsedMilliseconds}ms");
     }
 
     // Async batch insert for log entries. Will insert all provided entries in a single INSERT statement when possible.

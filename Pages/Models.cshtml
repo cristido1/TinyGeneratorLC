@@ -2,6 +2,7 @@
 @model TinyGenerator.Pages.ModelsModel
 @{
     ViewData["Title"] = "Models";
+    ViewData["PageDescription"] = "Gestisci i modelli e i test delle funzioni";
     var groupsHeader = Model.TestGroups ?? new System.Collections.Generic.List<string>();
     var visibleGroups = groupsHeader.Take(4).ToList();
 }

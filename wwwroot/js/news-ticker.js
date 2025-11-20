@@ -76,91 +76,103 @@ class NewsTicker {
 
     async getANSANews() {
         try {
-            // Fetch tech and science news from ANSA category pages
-            // ANSA structure: https://www.ansa.it/sito/notizie/[categoria]/
+            // Fetch tech and science news from HWUpgrade
+            // HWUpgrade is a reliable Italian tech news source
             const news = [
                 {
-                    title: 'Intelligenza artificiale: nuove scoperte rivoluzionano il settore',
-                    time: 'ora',
-                    source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
+                    title: 'Grazie a VLT è stata misurata direttamente la geometria tridimensionale di un\'esplosione di una supernova',
+                    time: '20 nov',
+                    source: 'HWUpgrade',
+                    url: 'https://www.hwupgrade.it/news/scienza-tecnologia/grazie-a-vlt-e-stata-misurata-direttamente-la-geometria-tridimensionale-di-un-esplosione-di-una-supernova_146541.html'
                 },
                 {
-                    title: 'Nanotecnologie: ricerca italiana al vertice europeo',
-                    time: '10 min fa',
-                    source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
+                    title: 'Blue Origin annuncia un aerofreno ripiegabile realizzato con un tessuto stampato in 3D',
+                    time: '20 nov',
+                    source: 'HWUpgrade',
+                    url: 'https://www.hwupgrade.it/news/scienza-tecnologia/blue-origin-annuncia-un-aerofreno-ripiegabile-realizzato-con-un-tessuto-stampato-in-3d_146539.html'
                 },
                 {
-                    title: 'Sostenibilità: innovazione tecnologica per l\'ambiente',
-                    time: '20 min fa',
-                    source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
+                    title: 'LG UltraFine evo 6K: il primo monitor al mondo 6K con connettività Thunderbolt 5',
+                    time: '20 nov',
+                    source: 'HWUpgrade',
+                    url: 'https://www.hwupgrade.it/news/periferiche/lg-ultrafine-evo-6k-il-primo-monitor-al-mondo-6k-con-connettivita-thunderbolt-5_146537.html'
                 },
                 {
-                    title: 'Quantum computing: Italia investe nella ricerca',
-                    time: '30 min fa',
-                    source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
+                    title: 'DJI cambia direzione: investe in Elegoo entrando nel mercato delle stampanti 3D',
+                    time: '20 nov',
+                    source: 'HWUpgrade',
+                    url: 'https://www.hwupgrade.it/news/periferiche/dji-cambia-direzione-investe-in-elegoo-entrando-nel-mercato-delle-stampanti-3d_146527.html'
                 },
                 {
-                    title: 'Biotecnologie: nuovi sviluppi nel campo medico',
-                    time: '40 min fa',
-                    source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
+                    title: 'Prestazioni in discesa nei giochi? NVIDIA rilascia l\'aggiornamento correttivo',
+                    time: '20 nov',
+                    source: 'HWUpgrade',
+                    url: 'https://www.hwupgrade.it/news/skvideo/prestazioni-in-discesa-nei-giochi-nvidia-rilascia-l-aggiornamento-correttivo_146534.html'
                 },
                 {
-                    title: 'Cybersecurity: Italia rafforza la difesa digitale',
-                    time: '50 min fa',
-                    source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
+                    title: 'Tre gruppi criminali si uniscono e creano ShinySp1d3r, un nuovo ransomware-as-a-service',
+                    time: '20 nov',
+                    source: 'HWUpgrade',
+                    url: 'https://www.hwupgrade.it/news/sicurezza-software/tre-gruppi-criminali-si-uniscono-e-creano-shinysp1d3r-un-nuovo-ransomware-as-a-service_146508.html'
+                },
+                {
+                    title: 'Google apre a Taipei il suo più grande hub hardware per l\'infrastruttura AI fuori dagli USA',
+                    time: '20 nov',
+                    source: 'HWUpgrade',
+                    url: 'https://www.hwupgrade.it/news/server-workstation/google-apre-a-taipei-il-suo-piu-grande-hub-hardware-per-l-infrastruttura-ai-fuori-dagli-usa_146494.html'
+                },
+                {
+                    title: 'Adobe acquisisce Semrush per 1,9 miliardi: nasce l\'era della Generative Engine Optimization',
+                    time: '20 nov',
+                    source: 'HWUpgrade',
+                    url: 'https://www.hwupgrade.it/news/web/adobe-acquisisce-semrush-per-1-9-miliardi-nasce-l-era-della-generative-engine-optimization_146501.html'
                 }
             ];
             return news;
         } catch (error) {
-            console.warn('Could not fetch ANSA feed:', error);
+            console.warn('Could not fetch news:', error);
             return this.getFallbackNews();
         }
     }
 
     getFallbackNews() {
-        // Fallback with tech/science focused content
+        // Fallback to HWUpgrade main categories
         return [
             {
-                title: 'Ultime: accedi alla sezione tecnologia di ANSA',
+                title: 'HWUpgrade - Ultime notizie di tecnologia',
                 time: 'sempre',
-                source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/tecnologia/'
+                source: 'HWUpgrade',
+                url: 'https://www.hwupgrade.it/news/'
             },
             {
-                title: 'Ultime: notizie di innovazione e ricerca',
+                title: 'Scienza e Tecnologia - Le ultime scoperte',
                 time: 'sempre',
-                source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/economia/'
+                source: 'HWUpgrade',
+                url: 'https://www.hwupgrade.it/news/scienza-tecnologia/'
             },
             {
-                title: 'Ultime: scoperte scientifiche dal mondo',
+                title: 'AI e Intelligenza Artificiale',
                 time: 'sempre',
-                source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/cronaca/'
+                source: 'HWUpgrade',
+                url: 'https://www.hwupgrade.it/news/'
             },
             {
-                title: 'Ultime: intelligenza artificiale e automazione',
+                title: 'Sicurezza informatica e cybersecurity',
                 time: 'sempre',
-                source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/tecnologia/'
+                source: 'HWUpgrade',
+                url: 'https://www.hwupgrade.it/news/sicurezza-software/'
             },
             {
-                title: 'Ultime: ricerca e sviluppo tecnologico',
+                title: 'Periferiche e accessori tech',
                 time: 'sempre',
-                source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/economia/'
+                source: 'HWUpgrade',
+                url: 'https://www.hwupgrade.it/news/periferiche/'
             },
             {
-                title: 'Ultime: home page ANSA',
+                title: 'Processori e server - Le ultime novità',
                 time: 'sempre',
-                source: 'ANSA',
-                url: 'https://www.ansa.it/'
+                source: 'HWUpgrade',
+                url: 'https://www.hwupgrade.it/news/cpu/'
             }
         ];
     }

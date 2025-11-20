@@ -135,7 +135,7 @@ namespace TinyGenerator.Services
                             $"warmup_{model}",
                             model,
                             "Warmup",
-                            30,
+                            90,
                             "warmup");
                         
                         _progress?.Append(runId.ToString(), $"[{model}] Warmup completed");

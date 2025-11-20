@@ -139,9 +139,27 @@ StartupTasks.InitializeDatabaseIfNeeded(dbInit, logger);
 // context, metadata). This is only for discovery and does NOT exercise model
 // functions or plugins. Capability tests are run manually via the Models admin UI
 // (the "Test function-calling" button) or by calling the Models test API endpoint.
-// Populate local Ollama models (best-effort)
+// Populate local Ollama models (best-effort) ONLY if the models table is empty to avoid
+// overwriting or duplicating an already-populated models table on fresh startup.
 var cost = app.Services.GetService<TinyGenerator.Services.CostController>();
-StartupTasks.PopulateLocalOllamaModelsIfNeededAsync(cost, logger).GetAwaiter().GetResult();
+var dbForModels = app.Services.GetService<TinyGenerator.Services.DatabaseService>();
+try
+{
+    var modelCount = dbForModels?.ListModels().Count ?? 0;
+    if (modelCount == 0)
+    {
+        logger?.LogInformation("[Startup] Models table empty — attempting to populate local Ollama models...");
+        StartupTasks.PopulateLocalOllamaModelsIfNeededAsync(cost, builder.Configuration, logger).GetAwaiter().GetResult();
+    }
+    else
+    {
+        logger?.LogInformation("[Startup] Models table already contains {count} entries — skipping local model discovery.", modelCount);
+    }
+}
+catch (Exception ex)
+{
+    logger?.LogWarning(ex, "[Startup] PopulateLocalOllamaModelsAsync failed: {msg}", ex.Message);
+}
 
 // Notify clients that the app is ready (best-effort: clients might not yet be connected)
 try

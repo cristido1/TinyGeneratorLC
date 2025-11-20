@@ -67,6 +67,10 @@
                     }
                 }
             ]
+                // Enable native state saving with a unique key and persistent duration
+                stateSave: true,
+                stateSaveName: 'DataTables_agents_external',
+                stateDuration: -1
         });
         table.buttons().container().addClass('mb-2');
 

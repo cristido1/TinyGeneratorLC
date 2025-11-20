@@ -103,7 +103,9 @@
                         columnDefs: [ { orderable: false, targets: -1 } ],
                         order: [[0, 'asc']],
                         pageLength: 25,
-                        stateSave: true
+                        stateSave: true,
+                        stateSaveName: 'DataTables_agents',
+                        stateDuration: -1
                     });
 
                     // If server-side pagination controls exist, hide them when DataTables is active

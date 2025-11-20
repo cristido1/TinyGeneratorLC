@@ -96,5 +96,43 @@ namespace TinyGenerator.Services
             _completed.TryRemove(id, out _);
             _result.TryRemove(id, out _);
         }
+
+        // Agent activity tracking
+        public async Task ShowAgentActivityAsync(string agentName, string status, string? agentId = null, string testType = "question")
+        {
+            try
+            {
+                if (_hubContext != null)
+                {
+                    var id = agentId ?? $"agent_{agentName}_{DateTime.UtcNow.Ticks}";
+                    await _hubContext.Clients.All.SendAsync("AgentActivityStarted", id, agentName, status, testType);
+                }
+            }
+            catch (Exception ex)
+            {
+                try { _logger?.LogWarning(ex, "Failed broadcasting AgentActivityStarted for {AgentName}", agentName); } catch { }
+            }
+        }
+
+        public void ShowAgentActivity(string agentName, string status, string? agentId = null, string testType = "question") 
+            => ShowAgentActivityAsync(agentName, status, agentId, testType).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public async Task HideAgentActivityAsync(string agentId)
+        {
+            try
+            {
+                if (_hubContext != null)
+                {
+                    await _hubContext.Clients.All.SendAsync("AgentActivityEnded", agentId);
+                }
+            }
+            catch (Exception ex)
+            {
+                try { _logger?.LogWarning(ex, "Failed broadcasting AgentActivityEnded for {AgentId}", agentId); } catch { }
+            }
+        }
+
+        public void HideAgentActivity(string agentId) 
+            => HideAgentActivityAsync(agentId).ConfigureAwait(false).GetAwaiter().GetResult();
     }
 }

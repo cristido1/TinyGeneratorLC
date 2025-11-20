@@ -27,6 +27,30 @@ namespace TinyGenerator.Services
     public static class OllamaMonitorService
     {
         private static readonly ConcurrentDictionary<string, (string Prompt, DateTime Ts)> _lastPrompt = new();
+        private static string? _ollamaEndpoint = null;
+
+        public static void SetOllamaEndpoint(string? endpoint)
+        {
+            _ollamaEndpoint = endpoint;
+        }
+
+        private static ProcessStartInfo CreateOllamaProcessStartInfo(string arguments)
+        {
+            var psi = new ProcessStartInfo("ollama", arguments)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            };
+            
+            // Imposta OLLAMA_HOST se configurato
+            if (!string.IsNullOrWhiteSpace(_ollamaEndpoint))
+            {
+                psi.EnvironmentVariables["OLLAMA_HOST"] = _ollamaEndpoint;
+            }
+            
+            return psi;
+        }
 
         public static void RecordPrompt(string model, string prompt)
         {
@@ -77,7 +101,7 @@ namespace TinyGenerator.Services
                 var list = new List<OllamaModelInfo>();
                 try
                 {
-                    var psi = new ProcessStartInfo("ollama", "ps") { RedirectStandardOutput = true, UseShellExecute = false };
+                    var psi = CreateOllamaProcessStartInfo("ps");
                     using var p = Process.Start(psi);
                     if (p == null) return list;
                     p.WaitForExit(3000);
@@ -132,7 +156,7 @@ namespace TinyGenerator.Services
                 var list = new List<OllamaModelInfo>();
                 try
                 {
-                    var psi = new ProcessStartInfo("ollama", "list") { RedirectStandardOutput = true, UseShellExecute = false };
+                    var psi = CreateOllamaProcessStartInfo("list");
                     using var p = Process.Start(psi);
                     if (p == null) return list;
                     p.WaitForExit(3000);

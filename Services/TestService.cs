@@ -30,17 +30,20 @@ namespace TinyGenerator.Services
         private readonly ProgressService _progress;
         private readonly StoriesService _stories;
         private readonly IKernelFactory _factory;
+        private readonly AgentService _agentService;
 
         public TestService(
             DatabaseService database,
             ProgressService progress,
             StoriesService stories,
-            IKernelFactory factory)
+            IKernelFactory factory,
+            AgentService agentService)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _progress = progress ?? throw new ArgumentNullException(nameof(progress));
             _stories = stories ?? throw new ArgumentNullException(nameof(stories));
             _factory = factory ?? throw new ArgumentNullException(nameof(factory));
+            _agentService = agentService ?? throw new ArgumentNullException(nameof(agentService));
         }
 
         public async Task<object?> RunGroupAsync(string model, string group)
@@ -125,9 +128,15 @@ namespace TinyGenerator.Services
                         var warmupHistory = new ChatHistory();
                         warmupHistory.AddUserMessage("Hello");
                         
-                        await InvokeWithTimeoutAsync(
-                            warmupService.GetChatMessageContentAsync(warmupHistory, warmupSettings, warmupKernel),
-                            10000);
+                        await _agentService.InvokeModelAsync(
+                            warmupKernel,
+                            warmupHistory,
+                            warmupSettings,
+                            $"warmup_{model}",
+                            model,
+                            "Warmup",
+                            10,
+                            "warmup");
                         
                         _progress?.Append(runId.ToString(), $"[{model}] Warmup completed");
                     }
@@ -284,20 +293,27 @@ namespace TinyGenerator.Services
             var chatService = kernel.GetRequiredService<IChatCompletionService>();
 
             var settings = CreateExecutionSettings(test, model);
-            var timeout = test.TimeoutMs > 0 ? test.TimeoutMs : 30000;
+            var timeout = test.TimeoutMs > 0 ? (test.TimeoutMs / 1000) : 30;
 
             var history = new ChatHistory();
             history.AddUserMessage(prompt);
 
             try
             {
-                var response = await InvokeWithTimeoutAsync(
-                    chatService.GetChatMessageContentAsync(history, settings, kernel),
-                    timeout);
-
+                var agentId = $"question_{model}_{runId}_{idx}";
+                var response = await _agentService.InvokeModelAsync(
+                    kernel,
+                    history,
+                    settings,
+                    agentId,
+                    model,
+                    $"Question {idx}",
+                    timeout,
+                    "question");
+                
                 sw.Stop();
 
-                var responseText = response?.Content ?? string.Empty;
+                var responseText = response?.ToString() ?? string.Empty;
                 bool passed = ValidateResponse(responseText, test, out var failReason);
 
                 var resultJson = JsonSerializer.Serialize(new
@@ -346,19 +362,26 @@ namespace TinyGenerator.Services
             var settings = CreateExecutionSettings(test, model);
             settings.ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions;
 
-            var timeout = test.TimeoutMs > 0 ? test.TimeoutMs : 30000;
+            var timeout = test.TimeoutMs > 0 ? (test.TimeoutMs / 1000) : 30;
             var history = new ChatHistory();
             history.AddUserMessage(prompt);
 
             try
             {
-                var response = await InvokeWithTimeoutAsync(
-                    chatService.GetChatMessageContentAsync(history, settings, kernel),
-                    timeout);
-
+                var agentId = $"function_{model}_{runId}_{idx}";
+                var response = await _agentService.InvokeModelAsync(
+                    kernel,
+                    history,
+                    settings,
+                    agentId,
+                    model,
+                    $"Function {idx}",
+                    timeout,
+                    "functioncall");
+                
                 sw.Stop();
 
-                var responseText = response?.Content ?? string.Empty;
+                var responseText = response?.ToString() ?? string.Empty;
                 bool passed = ValidateFunctionCallResponse(responseText, test, out var failReason);
 
                 var resultJson = JsonSerializer.Serialize(new
@@ -459,7 +482,7 @@ DO NOT rush or summarize. Take your time to develop the story fully.
 IMPORTANT: Write the story in Italian language.";
             }
 
-            var timeout = test.TimeoutMs > 0 ? test.TimeoutMs : 120000; // Usa timeout dal test o default 2 minuti
+            var timeout = test.TimeoutMs > 0 ? (test.TimeoutMs / 1000) : 120; // Usa timeout dal test o default 2 minuti
             var history = new ChatHistory();
 
             if (!string.IsNullOrWhiteSpace(instructions))
@@ -469,13 +492,20 @@ IMPORTANT: Write the story in Italian language.";
 
             try
             {
-                var response = await InvokeWithTimeoutAsync(
-                    chatService.GetChatMessageContentAsync(history, settings, kernel),
-                    timeout);
+                var agentId = $"writer_{model}_{runId}_{idx}";
+                var response = await _agentService.InvokeModelAsync(
+                    kernel,
+                    history,
+                    settings,
+                    agentId,
+                    model,
+                    $"Writer {idx}",
+                    timeout,
+                    "writer");
 
                 sw.Stop();
 
-                var storyText = response?.Content ?? string.Empty;
+                var storyText = response?.ToString() ?? string.Empty;
 
                 if (string.IsNullOrWhiteSpace(storyText))
                 {
@@ -640,16 +670,6 @@ IMPORTANT: Write the story in Italian language.";
             }
 
             return settings;
-        }
-
-        private async Task<T> InvokeWithTimeoutAsync<T>(Task<T> task, int timeoutMs)
-        {
-            var completedTask = await Task.WhenAny(task, Task.Delay(timeoutMs));
-
-            if (completedTask != task)
-                throw new TimeoutException($"Operation timed out after {timeoutMs}ms");
-
-            return await task;
         }
 
         private bool ValidateResponse(string? responseText, TestDefinition test, out string? failReason)
@@ -901,20 +921,27 @@ IMPORTANT: Write the story in Italian language.";
                 ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions
             };
             
-            var timeout = test.TimeoutMs > 0 ? test.TimeoutMs : 60000;
+            var timeout = test.TimeoutMs > 0 ? (test.TimeoutMs / 1000) : 60;
 
             var history = new ChatHistory();
             history.AddUserMessage(prompt);
 
             try
             {
-                var response = await InvokeWithTimeoutAsync(
-                    chatService.GetChatMessageContentAsync(history, settings, kernel),
-                    timeout);
-
+                var agentId = $"tts_{model}_{runId}_{idx}";
+                var response = await _agentService.InvokeModelAsync(
+                    kernel,
+                    history,
+                    settings,
+                    agentId,
+                    model,
+                    $"TTS {idx}",
+                    timeout,
+                    "tts");
+                
                 sw.Stop();
 
-                var responseText = response?.Content ?? string.Empty;
+                var responseText = response?.ToString() ?? string.Empty;
                 
                 // Log raw response for debugging
                 _progress?.Append(runId.ToString(), $"[{model}] Response: {responseText}");
@@ -922,12 +949,14 @@ IMPORTANT: Write the story in Italian language.";
                 // Extract file path from function call metadata
                 string? generatedFilePath = null;
                 
-                // Check if filesystem plugin was called by inspecting chat history or response metadata
-                if (response?.Metadata != null && response.Metadata.ContainsKey("FunctionCalls"))
+                // Check if filesystem plugin was called by inspecting response metadata
+                if (response?.Metadata != null)
                 {
-                    // Extract from metadata if available
-                    var functionCalls = response.Metadata["FunctionCalls"];
-                    _progress?.Append(runId.ToString(), $"[{model}] Function calls metadata: {JsonSerializer.Serialize(functionCalls)}");
+                    try
+                    {
+                        _progress?.Append(runId.ToString(), $"[{model}] Function calls metadata: {JsonSerializer.Serialize(response.Metadata)}");
+                    }
+                    catch { }
                 }
                 
                 // Alternative: scan test folder for newly created JSON files

@@ -57,6 +57,29 @@ namespace TinyGenerator
                 logger?.LogInformation("[Startup] Initializing database schema...");
                 db.Initialize();
                 logger?.LogInformation("[Startup] Database schema initialization completed.");
+
+                // If models table is empty, check for a seed SQL file and apply it automatically.
+                try
+                {
+                    var modelCount = db.ListModels().Count;
+                    if (modelCount == 0)
+                    {
+                        var seedPath = Path.Combine(Directory.GetCurrentDirectory(), "data", "models_seed.sql");
+                        if (File.Exists(seedPath))
+                        {
+                            logger?.LogInformation("[Startup] Models table empty — applying seed file {path}", seedPath);
+                            db.ExecuteSqlScript(seedPath);
+                        }
+                        else
+                        {
+                            logger?.LogInformation("[Startup] Models table empty and no seed file found at {path}", seedPath);
+                        }
+                    }
+                }
+                catch (Exception exSeed)
+                {
+                    logger?.LogWarning(exSeed, "[Startup] Failed applying models seed: {msg}", exSeed.Message);
+                }
             }
             catch (Exception ex)
             {
@@ -64,11 +87,22 @@ namespace TinyGenerator
             }
         }
 
-        public static async Task PopulateLocalOllamaModelsIfNeededAsync(CostController? cost, ILogger? logger = null)
+        public static async Task PopulateLocalOllamaModelsIfNeededAsync(CostController? cost, IConfiguration? config = null, ILogger? logger = null)
         {
             if (cost == null) return;
             try
             {
+                // Imposta l'endpoint Ollama da configurazione se disponibile
+                if (config != null)
+                {
+                    var ollamaEndpoint = config["Ollama:endpoint"];
+                    if (!string.IsNullOrWhiteSpace(ollamaEndpoint))
+                    {
+                        logger?.LogInformation("[Startup] Setting Ollama endpoint to: {endpoint}", ollamaEndpoint);
+                        OllamaMonitorService.SetOllamaEndpoint(ollamaEndpoint);
+                    }
+                }
+                
                 logger?.LogInformation("[Startup] Populating local Ollama models...");
                 var added = await cost.PopulateLocalOllamaModelsAsync();
                 logger?.LogInformation("[Startup] Populated {count} local ollama models into models", added);

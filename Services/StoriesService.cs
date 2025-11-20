@@ -162,8 +162,17 @@ Story:
 
             history.AddUserMessage(evaluationPrompt);
 
-            var response = await chatService.GetChatMessageContentAsync(history, settings, evaluatorKernel);
-            var responseText = response?.Content ?? string.Empty;
+            var evalAgentId = $"evaluator_{agentId}_{storyId}";
+            var response = await _agentService.InvokeModelAsync(
+                evaluatorKernel,
+                history,
+                settings,
+                evalAgentId,
+                agent.Name ?? $"Agent{agentId}",
+                "Evaluating",
+                60,
+                "evaluator");
+            var responseText = response?.ToString() ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(responseText))
                 return (false, 0, "Empty response from evaluator");

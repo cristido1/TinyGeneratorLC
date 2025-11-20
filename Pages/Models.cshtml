@@ -136,29 +136,35 @@
                 searching: true,
                 ordering: true,
                 stateSave: true,
+                stateSaveName: 'DataTables_models',
+                stateDuration: -1,
                 order: [[6, 'desc']], // Score column (now index 6 because of chevron column + MaxContext)
                 columnDefs: [ 
                     { targets: 0, orderable: false, className: 'dt-control' },
                     { targets: 'no-sort', orderable: false }
-                ],
-                stateSaveCallback: function(settings, data) {
-                    // Save column visibility state
-                    localStorage.setItem('DataTables_models_columns', JSON.stringify(data.columns));
-                },
-                stateLoadCallback: function(settings) {
-                    // Load column visibility state
-                    var saved = localStorage.getItem('DataTables_models_columns');
-                    if (saved) {
-                        try {
-                            var columns = JSON.parse(saved);
-                            return { columns: columns };
-                        } catch(e) {
-                            console.error('Error loading column state:', e);
-                        }
-                    }
-                    return null;
-                }
+                ]
             });
+
+                // Ripristina esplicitamente la visibilità delle colonne salvata in localStorage
+                (function() {
+                    try {
+                        var savedCols = localStorage.getItem('DataTables_models_columns');
+                        if (savedCols) {
+                            var cols = JSON.parse(savedCols);
+                            if (Array.isArray(cols)) {
+                                table.columns().every(function(idx) {
+                                    var colState = cols[idx];
+                                    if (colState && typeof colState.visible !== 'undefined') {
+                                        // Forza lo stato di visibilità (coerente sia con saved object completo che con array di {visible:bool})
+                                        this.visible(!!colState.visible);
+                                    }
+                                });
+                            }
+                        }
+                    } catch(e) {
+                        console.error('Error restoring column visibility:', e);
+                    }
+                })();
 
             // Populate column visibility toggle menu
             var columnToggleMenu = $('#columnToggleMenu');

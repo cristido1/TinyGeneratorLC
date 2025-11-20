@@ -39,6 +39,16 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        // Allow manual evaluation input (for stories created without an associated model/agent)
+        public IActionResult OnPostManualEvaluate(long id, double score, string overall)
+        {
+            // Build minimal raw JSON representation
+            var raw = System.Text.Json.JsonSerializer.Serialize(new { overall_evaluation = overall });
+            // Persist evaluation without model/agent association
+            _database.AddStoryEvaluation(id, raw, score, null, null);
+            return RedirectToPage();
+        }
+
         public async Task<IActionResult> OnPostGenerateTtsAsync(long id, string folderName)
         {
             await _stories.GenerateTtsForStoryAsync(id, folderName);

@@ -88,6 +88,9 @@
                                 <button type="submit" class="dropdown-item text-danger">🗑️ Elimina</button>
                             </form>
                         </li>
+                        <li>
+                            <a href="#" class="dropdown-item manual-eval-btn" data-story-id="@s.Id">✍️ Valutazione manuale</a>
+                        </li>
                     </ul>
                 </div>
             </td>
@@ -250,6 +253,8 @@
                 pageLength: 25,
                 lengthChange: true,
                 stateSave: true,
+                stateSaveName: 'DataTables_stories',
+                stateDuration: -1,
                 responsive: true,
                 dom: 'Bfrtip',
                 buttons: [
@@ -301,6 +306,46 @@
                     }
                 });
             });
+
+                // Manual evaluation flow: open SweetAlert2 modal to collect score + overall text
+                $(document).on('click', '.manual-eval-btn', function(e){
+                    e.preventDefault();
+                    var storyId = $(this).data('story-id');
+                    Swal.fire({
+                        title: 'Valutazione manuale',
+                        html: '<div class="mb-2">Punteggio totale (0-100):</div><input id="swal-score" type="number" min="0" max="100" class="swal2-input" placeholder="Es. 85">' +
+                              '<div class="mt-2">Valutazione complessiva (opzionale):</div><textarea id="swal-overall" class="swal2-textarea" placeholder="Breve commento"></textarea>',
+                        focusConfirm: false,
+                        showCancelButton: true,
+                        confirmButtonText: 'Salva valutazione',
+                        cancelButtonText: 'Annulla',
+                        customClass: { popup: 'swal2-small', confirmButton: 'btn btn-primary', cancelButton: 'btn btn-secondary' },
+                        preConfirm: () => {
+                            const scoreVal = document.getElementById('swal-score').value;
+                            const overallVal = document.getElementById('swal-overall').value || '';
+                            if (scoreVal === '' || isNaN(scoreVal)) {
+                                Swal.showValidationMessage('Inserisci un punteggio numerico (0-100)');
+                                return false;
+                            }
+                            const score = parseFloat(scoreVal);
+                            if (score < 0 || score > 100) {
+                                Swal.showValidationMessage('Il punteggio deve essere compreso tra 0 e 100');
+                                return false;
+                            }
+                            return { score: score, overall: overallVal };
+                        }
+                    }).then((result) => {
+                        if (result.isConfirmed && result.value) {
+                            const data = new FormData();
+                            data.append('id', storyId);
+                            data.append('score', result.value.score);
+                            data.append('overall', result.value.overall);
+                            fetch('?handler=ManualEvaluate', { method: 'POST', body: data })
+                                .then(r => { if (r.redirected) window.location = r.url; else window.location.reload(); })
+                                .catch(e => { Swal.fire('Errore', 'Impossibile salvare la valutazione: ' + e, 'error'); });
+                        }
+                    });
+                });
         });
     </script>
 }

@@ -438,6 +438,13 @@
                     },
                     zeroRecords: "Nessun elemento trovato"
                 },
+                // Add Buttons so user can toggle visible columns
+                dom: '<"top-controls"B>fr<"clear">t<"bottom-controls"lip>',
+                buttons: [ 'colvis' ],
+                // Salvataggio nativo dello stato
+                stateSave: true,
+                stateSaveName: 'DataTables_example_users',
+                stateDuration: -1,
                 
                 initComplete: function() {
                     // Aggiungi il pulsante Nuovo nella posizione B (top-controls)

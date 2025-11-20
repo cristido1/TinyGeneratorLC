@@ -17,7 +17,7 @@
             <th>Library</th>
             <th>Function</th>
             <th>Priority</th>
-            <th>Timeout (ms)</th>
+            <th>Timeout (s)</th>
             <th>Test Type</th>
             <th>Allowed Plugins</th>
             <th>Response Format</th>
@@ -36,7 +36,7 @@
                 <td class="library">@d.Library</td>
                 <td class="function">@d.FunctionName</td>
                 <td class="priority" data-priority="@d.Priority">@d.Priority</td>
-                <td class="timeout">@d.TimeoutMs</td>
+                <td class="timeout" data-timeout-ms="@d.TimeoutMs">@(d.TimeoutMs > 0 ? (d.TimeoutMs / 1000).ToString() : "")</td>
                 <td class="testtype">@(string.IsNullOrWhiteSpace(d.TestType) ? "" : d.TestType)</td>
                 <td class="allowedplugins">@(string.IsNullOrWhiteSpace(d.AllowedPlugins) ? "" : d.AllowedPlugins)</td>
                 <td class="responseformat">@(string.IsNullOrWhiteSpace(d.JsonResponseFormat) ? "" : d.JsonResponseFormat)</td>
@@ -77,7 +77,14 @@
                 pageLength: 25,
                 responsive: true,
                 columnDefs: [{ orderable: false, targets: -1 }], // actions column not sortable
-                stateSave: true
+                // Add Buttons colvis so user can toggle visible columns
+                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
+                     "rt" +
+                     "<'row'<'col-sm-6'i><'col-sm-6'p>>",
+                buttons: [ 'colvis' ],
+                stateSave: true,
+                stateSaveName: 'DataTables_testdefinitions',
+                stateDuration: -1
             });
 
             // Format detail content showing the prompt

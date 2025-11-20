@@ -65,6 +65,26 @@ public sealed class DatabaseService
         }
     }
 
+    /// <summary>
+    /// Execute a SQL script file against the configured database. Best-effort execution.
+    /// </summary>
+    public void ExecuteSqlScript(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return;
+        try
+        {
+            var sql = File.ReadAllText(filePath);
+            using var conn = CreateConnection();
+            conn.Open();
+            conn.Execute(sql);
+            Console.WriteLine($"[DB] Executed SQL script: {filePath}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Failed to execute SQL script {filePath}: {ex.Message}");
+        }
+    }
+
     private IDbConnection CreateConnection() => new SqliteConnection(_connectionString);
 
     public List<ModelInfo> ListModels()
@@ -335,8 +355,21 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, ts AS Timestamp, model AS Model, provider AS Provider, input_tokens AS InputTokens, output_tokens AS OutputTokens, tokens AS Tokens, cost AS Cost, request AS Request, response AS Response FROM calls ORDER BY id DESC LIMIT @Limit";
-        return conn.Query<CallRecord>(sql, new { Limit = limit }).ToList();
+        var sql = @"SELECT id, ts, model, provider, input_tokens, output_tokens, tokens, cost, request, response FROM calls ORDER BY id DESC LIMIT @Limit";
+        var results = conn.Query<dynamic>(sql, new { Limit = limit });
+        return results.Select(r => new CallRecord
+        {
+            Id = (long)r.id,
+            Timestamp = r.ts ?? string.Empty,
+            Model = r.model ?? string.Empty,
+            Provider = r.provider ?? string.Empty,
+            InputTokens = (int)(r.input_tokens ?? 0),
+            OutputTokens = (int)(r.output_tokens ?? 0),
+            Tokens = (int)(r.tokens ?? 0),
+            Cost = (double)(r.cost ?? 0.0),
+            Request = r.request ?? string.Empty,
+            Response = r.response ?? string.Empty
+        }).ToList();
     }
 
     // Agents CRUD

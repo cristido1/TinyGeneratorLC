@@ -36,6 +36,10 @@ data/*.db-journal
 # Backups created by the tool
 backups/
 
+# Ignore test run output folders (shouldn't be tracked)
+test_run_folders/
+wwwroot/tts_test/
+
 # Static web assets build outputs
 wwwroot/lib/**/LICENSE*
 

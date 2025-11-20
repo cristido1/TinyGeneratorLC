@@ -38,8 +38,8 @@ class MatrixRain {
         // Gestisce il ridimensionamento della finestra
         window.addEventListener('resize', () => this.handleResize());
         
-        // Avvia il testo scorrevole ogni 10 secondi
-        setInterval(() => this.startScrollingText(), 10000);
+        // Avvia il testo scorrevole ogni minuto (60 secondi)
+        setInterval(() => this.startScrollingText(), 60000);
     }
     
     resizeCanvas() {

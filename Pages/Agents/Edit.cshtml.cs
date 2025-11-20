@@ -34,7 +34,7 @@ namespace TinyGenerator.Pages.Agents
                 Voices = _database.ListTtsVoices();
                 Models = _database.ListModels();
                 // Resolve selected model name from numeric ModelId
-                try { SelectedModelName = Agent.ModelId.HasValue ? _database.GetModelNameById(Agent.ModelId.Value) : null; } catch { SelectedModelName = null; }
+                try { SelectedModelName = Agent.ModelId.HasValue ? _database.GetModelInfoById(Agent.ModelId.Value)?.Name : null; } catch { SelectedModelName = null; }
                 // Load selected skills from JSON array stored in Agent.Skills
                 try {
                     if (!string.IsNullOrWhiteSpace(Agent.Skills)) {

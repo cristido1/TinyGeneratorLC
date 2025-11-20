@@ -55,8 +55,8 @@ namespace TinyGenerator.Pages.Agents
                     {
                         if (a.ModelId.HasValue)
                         {
-                            var name = _database.GetModelNameById(a.ModelId.Value);
-                            a.ModelName = name;
+                            var modelInfo = _database.GetModelInfoById(a.ModelId.Value);
+                            a.ModelName = modelInfo?.Name;
                         }
                     }
                     catch { }

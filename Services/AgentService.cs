@@ -55,10 +55,11 @@ namespace TinyGenerator.Services
                     return null;
                 }
 
-                // Get model name for this agent
-                var modelName = agent.ModelId.HasValue 
-                    ? _database.GetModelNameById(agent.ModelId.Value) 
+                // Get model info for this agent
+                var modelInfo = agent.ModelId.HasValue 
+                    ? _database.GetModelInfoById(agent.ModelId.Value) 
                     : null;
+                var modelName = modelInfo?.Name;
 
                 if (string.IsNullOrWhiteSpace(modelName))
                 {

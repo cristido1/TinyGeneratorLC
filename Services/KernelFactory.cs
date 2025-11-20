@@ -102,7 +102,8 @@ namespace TinyGenerator.Services
                         var agent = _database?.GetAgentById(agentId);
                         if (agent?.ModelId != null)
                         {
-                            resolvedModel = _database?.GetModelNameById(agent.ModelId.Value);
+                            var modelInfo = _database?.GetModelInfoById(agent.ModelId.Value);
+                            resolvedModel = modelInfo?.Name;
                         }
                     }
                 }

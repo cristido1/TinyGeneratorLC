@@ -28,9 +28,9 @@ namespace TinyGenerator.Skills
         public string CreateStory(string story)
         {
             // For writer-only skill, the program provides model/agent info via properties; set minimal defaults
-            var modelName = _modelName ?? (_database != null && _modelId.HasValue ? _database.GetModelNameById(_modelId.Value) : string.Empty) ?? string.Empty;
+            var modelInfo = _modelName != null ? _modelName : (_database != null && _modelId.HasValue ? _database.GetModelInfoById(_modelId.Value)?.Name : string.Empty) ?? string.Empty;
             var id = _stories.InsertSingleStory(string.Empty, story, _modelId, _agentId, 0.0, null, 0, null, memoryKey: null);
-            var obj = new { id = id, story = story, model = modelName, model_id = _modelId, agent_id = _agentId };
+            var obj = new { id = id, story = story, model = modelInfo, model_id = _modelId, agent_id = _agentId };
             LastResult = JsonSerializer.Serialize(obj);
             return id.ToString();;
         }

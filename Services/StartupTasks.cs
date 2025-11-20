@@ -180,13 +180,12 @@ namespace TinyGenerator
                     try
                     {
                         logger?.LogInformation("[Startup] Processing agent {agentId} ({name})...", a.Id, a.Name);
-                        string? modelName = null;
-                        if (a.ModelId.HasValue) modelName = db.GetModelNameById(a.ModelId.Value);
-                        var modelInfo = !string.IsNullOrWhiteSpace(modelName) ? db.GetModelInfo(modelName!) : null;
+                        var modelInfo = a.ModelId.HasValue ? db.GetModelInfoById(a.ModelId.Value) : null;
                         var provider = modelInfo?.Provider ?? "(unknown)";
                         var endpoint = modelInfo?.Endpoint ?? "(default)";
+                        var modelName = modelInfo?.Name ?? "(none)";
 
-                        logger?.LogInformation("[Startup] Agent {agentId} ({name}) model={model} provider={provider}", a.Id, a.Name, modelName ?? "(none)", provider);
+                        logger?.LogInformation("[Startup] Agent {agentId} ({name}) model={model} provider={provider}", a.Id, a.Name, modelName, provider);
                         var aliases = new System.Collections.Generic.List<string>();
                         try
                         {

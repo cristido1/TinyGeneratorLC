@@ -97,6 +97,31 @@ public sealed class DatabaseService
     }
 
     /// <summary>
+    /// Return a lightweight summary of the latest test run for the given model id, or null if none.
+    /// </summary>
+    public (int runId, string testCode, bool passed, long? durationMs, string? runDate)? GetLatestTestRunSummaryById(long modelId)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        try
+        {
+            var sql = @"SELECT id AS RunId, test_group AS TestCode, passed AS Passed, duration_ms AS DurationMs, run_date AS RunDate FROM model_test_runs WHERE model_id = @mid ORDER BY id DESC LIMIT 1";
+            var row = conn.QueryFirstOrDefault(sql, new { mid = modelId });
+            if (row == null) return null;
+            int runId = (int)row.RunId;
+            string testCode = row.TestCode ?? string.Empty;
+            bool passed = Convert.ToInt32(row.Passed) != 0;
+            long? duration = row.DurationMs == null ? (long?)null : Convert.ToInt64(row.DurationMs);
+            string? runDate = row.RunDate;
+            return (runId, testCode, passed, duration, runDate);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Return a lightweight summary of the latest test run for the given model name, or null if none.
     /// </summary>
     public (int runId, string testCode, bool passed, long? durationMs, string? runDate)? GetLatestTestRunSummary(string modelName)
@@ -117,6 +142,27 @@ public sealed class DatabaseService
             long? duration = row.DurationMs == null ? (long?)null : Convert.ToInt64(row.DurationMs);
             string? runDate = row.RunDate;
             return (runId, testCode, passed, duration, runDate);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Get the duration in milliseconds of the latest test run for a specific group by model id.
+    /// </summary>
+    public long? GetGroupTestDurationById(long modelId, string groupName)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        try
+        {
+            var sql = @"SELECT duration_ms FROM model_test_runs 
+                        WHERE model_id = @mid AND test_group = @group 
+                        ORDER BY id DESC LIMIT 1";
+            var duration = conn.ExecuteScalar<long?>(sql, new { mid = modelId, group = groupName });
+            return duration;
         }
         catch
         {
@@ -162,16 +208,16 @@ public sealed class DatabaseService
     }
 
     /// <summary>
-    /// Return the model Name for a given Id in the models table (best-effort).
+    /// Get model info by explicit ID (preferred over name-based lookup).
     /// </summary>
-    public string? GetModelNameById(long rowId)
+    public ModelInfo? GetModelInfoById(long modelId)
     {
         using var conn = CreateConnection();
         conn.Open();
         try
         {
-            var name = conn.ExecuteScalar<string?>("SELECT Name FROM models WHERE Id = @id LIMIT 1", new { id = rowId });
-            return name;
+            var sql = $"SELECT {SelectModelColumns()} FROM models WHERE Id = @Id LIMIT 1";
+            return conn.QueryFirstOrDefault<ModelInfo>(sql, new { Id = modelId });
         }
         catch
         {

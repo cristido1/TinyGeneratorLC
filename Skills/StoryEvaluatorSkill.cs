@@ -48,7 +48,6 @@ namespace TinyGenerator.Skills
                     // store as a quick evaluation row — wrap a minimal evaluator object
                     var json = LastResult!;
                     var total = finalScore; // single feature total is the value
-                    var evaluatorModelName = _modelId.HasValue ? _db.GetModelNameById(_modelId.Value) : null;
                     // Store evaluation using model_id / agent_id for scoping; embed any feature info inside raw JSON.
                     _db.AddStoryEvaluation(story_id, json, total, _modelId, _agentId);
                 }
@@ -99,7 +98,6 @@ namespace TinyGenerator.Skills
                     // store parsed details in DB as story evaluation
                     var json = LastResult!;
                     var total = obj.total;
-                    var evaluatorModelName = _modelId.HasValue ? _db.GetModelNameById(_modelId.Value) : null;
                     _db.AddStoryEvaluation(story_id, json, total, _modelId, _agentId);
                 }
                 catch { }

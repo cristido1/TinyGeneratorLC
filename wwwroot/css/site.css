@@ -16,7 +16,8 @@ html, body { font-size: 14px; }
 /* Card / grid: use neutral backgrounds and subtle borders */
 .keep-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; align-items: start; padding: 14px 6px; }
 .note-card { background: var(--bs-white); border-radius: 8px; padding: 12px 14px; box-shadow: 0 1px 2px rgba(20,24,32,0.04); min-height: 110px; border: 1px solid var(--bs-border-color); display:block; text-decoration:none; color:inherit; position:relative; overflow:visible; transition: all 0.3s ease; }
-.note-card::before { content: ''; position: absolute; top: -2px; left: -2px; right: -2px; bottom: -2px; border-radius: 10px; background: linear-gradient(90deg, #00cc99 0%, transparent 50%, #00cc99 100%); opacity: 0; pointer-events: none; animation: none; z-index: -1; }
+.note-card::before { content: ''; position: absolute; top: -3px; left: -3px; right: -3px; bottom: -3px; border-radius: 10px; background: linear-gradient(90deg, #00cc99 0%, transparent 50%, #00cc99 100%); opacity: 0; pointer-events: none; animation: none; z-index: -1; }
+.note-card:hover { transform: scale(1.03); }
 .note-card:hover::before { animation: borderOrbit 2s linear infinite; }
 .note-card:focus { outline: none; box-shadow: 0 0 0 0.06rem rgba(var(--bs-primary-rgb),0.08); }
 .note-card .note-card-icon { position: absolute; right: 12px; bottom: 8px; font-size: 84px; line-height: 1; color: #00cc99; opacity: 0.12; pointer-events: none; transform: translateZ(0); }
@@ -24,11 +25,11 @@ html, body { font-size: 14px; }
 .note-body { color: #333; white-space:pre-wrap; }
 
 @keyframes borderOrbit {
-  0% { background-position: 0% 0%; opacity: 1; clip-path: polygon(0% 0%, 100% 0%, 100% 2px, 0% 2px); }
-  25% { opacity: 1; clip-path: polygon(98% 0%, 100% 0%, 100% 100%, 98% 100%); }
-  50% { opacity: 1; clip-path: polygon(0% 98%, 100% 98%, 100% 100%, 0% 100%); }
-  75% { opacity: 1; clip-path: polygon(0% 0%, 2px 0%, 2px 100%, 0% 100%); }
-  100% { opacity: 1; clip-path: polygon(0% 0%, 100% 0%, 100% 2px, 0% 2px); }
+  0% { background-position: 0% 0%; opacity: 1; clip-path: polygon(0% 0%, 100% 0%, 100% 3px, 0% 3px); }
+  25% { opacity: 1; clip-path: polygon(97% 0%, 100% 0%, 100% 100%, 97% 100%); }
+  50% { opacity: 1; clip-path: polygon(0% 97%, 100% 97%, 100% 100%, 0% 100%); }
+  75% { opacity: 1; clip-path: polygon(0% 0%, 3px 0%, 3px 100%, 0% 100%); }
+  100% { opacity: 1; clip-path: polygon(0% 0%, 100% 0%, 100% 3px, 0% 3px); }
 }
 
 /* Layout: softer header and sidebar colors but keep structure */

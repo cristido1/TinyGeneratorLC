@@ -140,15 +140,20 @@ namespace TinyGenerator.Skills
             if (_schema.Characters.Count == 0)
                 return "ERROR: No characters defined. Add at least one character with AddCharacter.";
 
-            // Check 2: Timeline has entries (phrases or pauses)
+            // Check 2: Narrator character must be present
+            bool hasNarrator = _schema.Characters.Any(c => c.Name.Equals("Narratore", StringComparison.OrdinalIgnoreCase));
+            if (!hasNarrator)
+                return "ERROR: Narratore character is required. Add a Narratore character with AddCharacter.";
+
+            // Check 3: Timeline has entries (phrases or pauses)
             if (_schema.Timeline.Count == 0)
                 return "ERROR: No timeline entries. Add phrases or pauses with AddPhrase or AddPause.";
 
-            // Check 3: Story is not empty
+            // Check 4: Story is not empty
             if (string.IsNullOrWhiteSpace(_storyText))
                 return "ERROR: Story text is empty.";
 
-            // Check 4: Story coverage - verify all story text has been included in the schema
+            // Check 5: Story coverage - verify all story text has been included in the schema
             var coverageError = CheckStoryCoverage();
             if (coverageError != null)
                 return coverageError;

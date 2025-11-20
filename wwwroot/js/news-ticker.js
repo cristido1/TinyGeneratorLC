@@ -1,6 +1,7 @@
 /**
  * News Ticker - Displays Italian news headlines
  * Uses ANSA RSS feed for real, up-to-date news
+ * Verifies link validity before displaying
  */
 
 class NewsTicker {
@@ -8,11 +9,7 @@ class NewsTicker {
         this.newsItems = [];
         this.tickerContent = document.querySelector('.news-ticker-scroll');
         this.refreshInterval = 300000; // 5 minutes
-        this.ansaCategoryUrls = [
-            'https://www.ansa.it/sito/notizie/cronaca/cronaca.shtml',
-            'https://www.ansa.it/sito/notizie/politica/politica.shtml',
-            'https://www.ansa.it/sito/notizie/economia/economia.shtml'
-        ];
+        this.verifiedUrls = new Map(); // Cache for verified URLs
         this.init();
     }
 
@@ -25,13 +22,55 @@ class NewsTicker {
 
     async loadNews() {
         try {
-            this.newsItems = await this.getANSANews();
+            let newsItems = await this.getANSANews();
+            // Filter out items with invalid URLs
+            this.newsItems = await this.filterValidNews(newsItems);
+            if (this.newsItems.length === 0) {
+                this.newsItems = this.getFallbackNews();
+            }
             this.renderNews();
         } catch (error) {
             console.warn('News ticker error:', error);
             // Fallback to local news
             this.newsItems = this.getFallbackNews();
             this.renderNews();
+        }
+    }
+
+    async filterValidNews(newsItems) {
+        const validNews = [];
+        for (const item of newsItems) {
+            if (await this.isUrlValid(item.url)) {
+                validNews.push(item);
+            }
+        }
+        return validNews.length > 0 ? validNews : newsItems; // Return originals if all fail
+    }
+
+    async isUrlValid(url) {
+        // Check cache first
+        if (this.verifiedUrls.has(url)) {
+            return this.verifiedUrls.get(url);
+        }
+
+        try {
+            const response = await fetch('/api/utils/check-url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url })
+            });
+
+            const data = await response.json();
+            const isValid = data.exists === true;
+            
+            // Cache the result
+            this.verifiedUrls.set(url, isValid);
+            return isValid;
+        } catch (error) {
+            console.warn('Error checking URL validity:', url, error);
+            // If check fails, assume valid (better UX than hiding news)
+            this.verifiedUrls.set(url, true);
+            return true;
         }
     }
 

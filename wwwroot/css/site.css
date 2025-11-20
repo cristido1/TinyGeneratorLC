@@ -367,7 +367,7 @@ body {
     background: linear-gradient(90deg, #001a00, #003300, #001a00);
     border-top: 2px solid #00ff7f;
     border-bottom: 2px solid #00cc99;
-    z-index: 999;
+    z-index: 10000;
     display: flex;
     align-items: center;
     gap: 20px;
@@ -449,6 +449,12 @@ body {
 /* Ensure body has padding-bottom for news ticker */
 body {
     padding-bottom: 70px !important;
+}
+
+/* Prevent LiveMonitor from covering news ticker */
+.log-entry {
+    max-height: calc(100vh - 150px);
+    overflow-y: auto;
 }
 
 

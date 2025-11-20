@@ -293,7 +293,7 @@ namespace TinyGenerator.Services
             var chatService = kernel.GetRequiredService<IChatCompletionService>();
 
             var settings = CreateExecutionSettings(test, model);
-            var timeout = test.TimeoutMs > 0 ? (test.TimeoutMs / 1000) : 30;
+            var timeout = test.TimeoutMs > 0 ? Math.Max(1, (int)(test.TimeoutMs / 1000.0)) : 30;
 
             var history = new ChatHistory();
             history.AddUserMessage(prompt);
@@ -362,7 +362,7 @@ namespace TinyGenerator.Services
             var settings = CreateExecutionSettings(test, model);
             settings.ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions;
 
-            var timeout = test.TimeoutMs > 0 ? (test.TimeoutMs / 1000) : 30;
+            var timeout = test.TimeoutMs > 0 ? Math.Max(1, (int)(test.TimeoutMs / 1000.0)) : 30;
             var history = new ChatHistory();
             history.AddUserMessage(prompt);
 
@@ -482,7 +482,7 @@ DO NOT rush or summarize. Take your time to develop the story fully.
 IMPORTANT: Write the story in Italian language.";
             }
 
-            var timeout = test.TimeoutMs > 0 ? (test.TimeoutMs / 1000) : 120; // Usa timeout dal test o default 2 minuti
+            var timeout = test.TimeoutMs > 0 ? Math.Max(1, (int)(test.TimeoutMs / 1000.0)) : 120; // Usa timeout dal test o default 2 minuti
             var history = new ChatHistory();
 
             if (!string.IsNullOrWhiteSpace(instructions))
@@ -921,7 +921,7 @@ IMPORTANT: Write the story in Italian language.";
                 ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions
             };
             
-            var timeout = test.TimeoutMs > 0 ? (test.TimeoutMs / 1000) : 60;
+            var timeout = test.TimeoutMs > 0 ? Math.Max(1, (int)(test.TimeoutMs / 1000.0)) : 60;
 
             var history = new ChatHistory();
             history.AddUserMessage(prompt);

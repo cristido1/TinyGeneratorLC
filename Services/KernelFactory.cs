@@ -270,14 +270,14 @@ namespace TinyGenerator.Services
             if (allowed("audiocraft")) { builder.Plugins.AddFromObject(AudioCraftSkill, "audiocraft"); _logger?.LogDebug("Registered plugin: {plugin}", AudioCraftSkill?.GetType().FullName); registeredAliases.Add("audiocraft"); }
             if (allowed("audioevaluator")) { audioEvalSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient); builder.Plugins.AddFromObject(audioEvalSkill, "audioevaluator"); _logger?.LogDebug("Registered plugin: {plugin}", audioEvalSkill?.GetType().FullName); registeredAliases.Add("audioevaluator"); }
             if (allowed("tts")) { builder.Plugins.AddFromObject(TtsApiSkill, "tts"); _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName); registeredAliases.Add("tts"); }
-            if (allowed("schema")) { 
+            if (allowed("ttsschema")) { 
                 // TtsSchemaSkill uses test_run_folders as working directory for TTS tests
                 var workingFolder = Path.Combine(Directory.GetCurrentDirectory(), "test_run_folders");
                 Directory.CreateDirectory(workingFolder);
                 ttsSchemaSkill = new TinyGenerator.Skills.TtsSchemaSkill(workingFolder);
-                builder.Plugins.AddFromObject(ttsSchemaSkill, "schema");
+                builder.Plugins.AddFromObject(ttsSchemaSkill, "ttsschema");
                 _logger?.LogDebug("Registered plugin: {plugin}", ttsSchemaSkill?.GetType().FullName);
-                registeredAliases.Add("schema");
+                registeredAliases.Add("ttsschema");
             }
             // Register the StoryEvaluatorSkill which exposes evaluation functions used by texteval tests
             if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database!, null, agentId); builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }

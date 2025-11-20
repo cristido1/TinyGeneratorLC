@@ -11,7 +11,7 @@ namespace TinyGenerator.Pages.TestDefinitions
         public List<string> PlanFiles { get; set; } = new List<string>();
         public List<string> ResponseFormatFiles { get; set; } = new List<string>();
         public List<string> AvailableSourceFiles { get; set; } = new List<string>();
-        public string[] AvailablePlugins { get; set; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "evaluator", "story" };
+        public string[] AvailablePlugins { get; set; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "ttsschema", "evaluator", "story" };
         public string[] TestTypes { get; set; } = new string[] { "functioncall", "writer", "question", "tts" };
         public EditModel(DatabaseService db)
         {

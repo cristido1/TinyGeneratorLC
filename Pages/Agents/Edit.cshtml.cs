@@ -17,7 +17,7 @@ namespace TinyGenerator.Pages.Agents
         public string? SelectedModelName { get; set; }
         [BindProperty]
         public string[] SelectedSkills { get; set; } = new string[] { };
-        public string[] AvailableSkills { get; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "evaluator", "story" };
+        public string[] AvailableSkills { get; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "ttsschema", "evaluator", "story" };
 
         public EditModel(DatabaseService database)
         {

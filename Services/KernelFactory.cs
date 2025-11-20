@@ -19,6 +19,7 @@ namespace TinyGenerator.Services
         public TinyGenerator.Skills.StoryWriterSkill? StoryWriterSkill { get; set; }
         public TinyGenerator.Skills.AudioEvaluatorSkill? AudioEvaluatorSkill { get; set; }
         public TinyGenerator.Skills.StoryEvaluatorSkill? StoryEvaluatorSkill { get; set; }
+        public TinyGenerator.Skills.TtsSchemaSkill? TtsSchemaSkill { get; set; }
     }
     public class KernelFactory : IKernelFactory
     {
@@ -259,6 +260,7 @@ namespace TinyGenerator.Services
             TinyGenerator.Skills.StoryEvaluatorSkill? evSkill = null;
             TinyGenerator.Skills.StoryWriterSkill? writerSkill = null;
             TinyGenerator.Skills.AudioEvaluatorSkill? audioEvalSkill = null;
+            TinyGenerator.Skills.TtsSchemaSkill? ttsSchemaSkill = null;
             if (allowed("text")) { builder.Plugins.AddFromObject(TextPlugin, "text"); _logger?.LogDebug("Registered plugin: {plugin}", TextPlugin?.GetType().FullName); registeredAliases.Add("text"); }
             if (allowed("math")) { builder.Plugins.AddFromObject(MathPlugin, "math"); _logger?.LogDebug("Registered plugin: {plugin}", MathPlugin?.GetType().FullName); registeredAliases.Add("math"); }
             if (allowed("time")) { builder.Plugins.AddFromObject(TimePlugin, "time"); _logger?.LogDebug("Registered plugin: {plugin}", TimePlugin?.GetType().FullName); registeredAliases.Add("time"); }
@@ -268,6 +270,15 @@ namespace TinyGenerator.Services
             if (allowed("audiocraft")) { builder.Plugins.AddFromObject(AudioCraftSkill, "audiocraft"); _logger?.LogDebug("Registered plugin: {plugin}", AudioCraftSkill?.GetType().FullName); registeredAliases.Add("audiocraft"); }
             if (allowed("audioevaluator")) { audioEvalSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient); builder.Plugins.AddFromObject(audioEvalSkill, "audioevaluator"); _logger?.LogDebug("Registered plugin: {plugin}", audioEvalSkill?.GetType().FullName); registeredAliases.Add("audioevaluator"); }
             if (allowed("tts")) { builder.Plugins.AddFromObject(TtsApiSkill, "tts"); _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName); registeredAliases.Add("tts"); }
+            if (allowed("schema")) { 
+                // TtsSchemaSkill uses test_run_folders as working directory for TTS tests
+                var workingFolder = Path.Combine(Directory.GetCurrentDirectory(), "test_run_folders");
+                Directory.CreateDirectory(workingFolder);
+                ttsSchemaSkill = new TinyGenerator.Skills.TtsSchemaSkill(workingFolder);
+                builder.Plugins.AddFromObject(ttsSchemaSkill, "schema");
+                _logger?.LogDebug("Registered plugin: {plugin}", ttsSchemaSkill?.GetType().FullName);
+                registeredAliases.Add("schema");
+            }
             // Register the StoryEvaluatorSkill which exposes evaluation functions used by texteval tests
             if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database!, null, agentId); builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
             if (allowed("story")) { 
@@ -329,7 +340,8 @@ namespace TinyGenerator.Services
                 MemorySkill = memSkill,
                 StoryWriterSkill = writerSkill,
                 StoryEvaluatorSkill = evSkill,
-                AudioEvaluatorSkill = audioEvalSkill
+                AudioEvaluatorSkill = audioEvalSkill,
+                TtsSchemaSkill = ttsSchemaSkill
             };
             return kw;
         }

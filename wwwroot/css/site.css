@@ -17,7 +17,7 @@ html, body { font-size: 14px; }
 .keep-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; align-items: start; padding: 14px 6px; }
 .note-card { background: var(--bs-white); border-radius: 8px; padding: 12px 14px; box-shadow: 0 1px 2px rgba(20,24,32,0.04); min-height: 110px; border: 1px solid var(--bs-border-color); display:block; text-decoration:none; color:inherit; position:relative; overflow:hidden; }
 .note-card:focus { outline: none; box-shadow: 0 0 0 0.06rem rgba(var(--bs-primary-rgb),0.08); }
-.note-card .note-card-icon { position: absolute; right: 12px; bottom: 8px; font-size: 84px; line-height: 1; color: #00cc99; opacity: 0.25; pointer-events: none; transform: translateZ(0); }
+.note-card .note-card-icon { position: absolute; right: 12px; bottom: 8px; font-size: 84px; line-height: 1; color: #00cc99; opacity: 0.12; pointer-events: none; transform: translateZ(0); }
 .note-title { font-weight:600; margin-bottom:6px; }
 .note-body { color: #333; white-space:pre-wrap; }
 
@@ -47,7 +47,7 @@ html, body { font-size: 14px; }
 .models-table th, .models-table td { vertical-align: middle; padding: .4rem .5rem }
 .keep-container { gap: 10px; padding: 8px 6px; }
 .note-card { padding: 8px 10px; border-radius:6px; min-height:100px }
-.note-card .note-card-icon { font-size:64px; right:10px; bottom:6px; color: #00cc99; opacity: 0.25 }
+.note-card .note-card-icon { font-size:64px; right:10px; bottom:6px; color: #00cc99; opacity: 0.12 }
 .note-title { font-size:.95rem; margin-bottom:4px }
 .note-body { font-size:.9rem }
 .sidebar { padding:8px 6px }

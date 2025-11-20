@@ -179,20 +179,6 @@ public sealed class DatabaseService
         }
     }
 
-    public long? GetModelIdByName(string? modelName)
-    {
-        if (string.IsNullOrWhiteSpace(modelName)) return null;
-        using var conn = CreateConnection();
-        conn.Open();
-        try
-        {
-            // Use Id as the numeric identifier for models (table uses Name as primary key)
-            var id = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
-            return id;
-        }
-        catch { return null; }
-    }
-
     public void UpsertModel(ModelInfo model)
     {
         if (model == null || string.IsNullOrWhiteSpace(model.Name)) return;
@@ -1031,7 +1017,6 @@ SET WriterScore = (
 
         var midA = (long?)null;
         var aidA = (int?)null;
-        try { if (!string.IsNullOrWhiteSpace(r.ModelA)) midA = GetModelIdByName(r.ModelA); } catch { }
         try { aidA = GetAgentIdByName("WriterA"); } catch { }
         var charCountA = (r.StoryA ?? string.Empty).Length;
         var sqlA = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@st,@mid,@aid);";
@@ -1039,7 +1024,6 @@ SET WriterScore = (
 
         var midB = (long?)null;
         var aidB = (int?)null;
-        try { if (!string.IsNullOrWhiteSpace(r.ModelB)) midB = GetModelIdByName(r.ModelB); } catch { }
         try { aidB = GetAgentIdByName("WriterB"); } catch { }
         var charCountB = (r.StoryB ?? string.Empty).Length;
         var sqlB = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@st,@mid,@aid); SELECT last_insert_rowid();";
@@ -1047,7 +1031,6 @@ SET WriterScore = (
 
         var midC = (long?)null;
         var aidC = (int?)null;
-        try { if (!string.IsNullOrWhiteSpace(r.ModelC)) midC = GetModelIdByName(r.ModelC); } catch { }
         try { aidC = GetAgentIdByName("WriterC"); } catch { }
         var charCountC = (r.StoryC ?? string.Empty).Length;
         var sqlC = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@st,@mid,@aid); SELECT last_insert_rowid();";

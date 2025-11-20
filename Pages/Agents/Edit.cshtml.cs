@@ -66,8 +66,8 @@ namespace TinyGenerator.Pages.Agents
                 // Ensure Agent.Skills is serialised from SelectedSkills
                 try { Agent.Skills = System.Text.Json.JsonSerializer.Serialize(SelectedSkills ?? new string[] {}); } catch { Agent.Skills = "[]"; }
 
-                // If a model name was selected, resolve it to numeric id
-                try { if (!string.IsNullOrWhiteSpace(SelectedModelName)) { var mid = _database.GetModelIdByName(SelectedModelName); Agent.ModelId = mid.HasValue ? (int?)mid.Value : null; } else { Agent.ModelId = null; } } catch { }
+                // Model ID should be set directly via UI input
+                try { Agent.ModelId = string.IsNullOrWhiteSpace(SelectedModelName) ? null : null; } catch { }
                 if (!string.IsNullOrWhiteSpace(Agent.Skills))
                 {
                     var doc = System.Text.Json.JsonDocument.Parse(Agent.Skills);

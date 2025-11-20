@@ -150,7 +150,6 @@ namespace TinyGenerator.Services
             }
 
             var model = modelId ?? _config["AI:Model"] ?? "phi3:mini-128k";
-            var numericModelId = _database?.GetModelIdByName(model);
             var modelInfo = _database?.GetModelInfo(model);
             var provider = modelInfo?.Provider?.Trim();
             var providerLower = provider?.ToLowerInvariant();
@@ -264,16 +263,16 @@ namespace TinyGenerator.Services
             if (allowed("time")) { builder.Plugins.AddFromObject(TimePlugin, "time"); _logger?.LogDebug("Registered plugin: {plugin}", TimePlugin?.GetType().FullName); registeredAliases.Add("time"); }
             if (allowed("filesystem")) { builder.Plugins.AddFromObject(FileSystemPlugin, "filesystem"); _logger?.LogDebug("Registered plugin: {plugin}", FileSystemPlugin?.GetType().FullName); registeredAliases.Add("filesystem"); }
             if (allowed("http")) { builder.Plugins.AddFromObject(HttpPlugin, "http"); _logger?.LogDebug("Registered plugin: {plugin}", HttpPlugin?.GetType().FullName); registeredAliases.Add("http"); }
-            if (allowed("memory")) { memSkill = new TinyGenerator.Skills.MemorySkill(_memoryService, numericModelId, agentId); builder.Plugins.AddFromObject(memSkill, "memory"); _logger?.LogDebug("Registered plugin: {plugin}", memSkill?.GetType().FullName); registeredAliases.Add("memory"); }
+            if (allowed("memory")) { memSkill = new TinyGenerator.Skills.MemorySkill(_memoryService, null, agentId); builder.Plugins.AddFromObject(memSkill, "memory"); _logger?.LogDebug("Registered plugin: {plugin}", memSkill?.GetType().FullName); registeredAliases.Add("memory"); }
             if (allowed("audiocraft")) { builder.Plugins.AddFromObject(AudioCraftSkill, "audiocraft"); _logger?.LogDebug("Registered plugin: {plugin}", AudioCraftSkill?.GetType().FullName); registeredAliases.Add("audiocraft"); }
             if (allowed("audioevaluator")) { audioEvalSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient); builder.Plugins.AddFromObject(audioEvalSkill, "audioevaluator"); _logger?.LogDebug("Registered plugin: {plugin}", audioEvalSkill?.GetType().FullName); registeredAliases.Add("audioevaluator"); }
             if (allowed("tts")) { builder.Plugins.AddFromObject(TtsApiSkill, "tts"); _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName); registeredAliases.Add("tts"); }
             // Register the StoryEvaluatorSkill which exposes evaluation functions used by texteval tests
-            if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database!, numericModelId, agentId); builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
+            if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database!, null, agentId); builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
             if (allowed("story")) { 
                 // Lazy resolve StoriesService to avoid circular dependency
                 var storiesService = _serviceProvider.GetService<StoriesService>();
-                writerSkill = new TinyGenerator.Skills.StoryWriterSkill(storiesService, _database, numericModelId, agentId, model); 
+                writerSkill = new TinyGenerator.Skills.StoryWriterSkill(storiesService, _database, null, agentId, model); 
                 builder.Plugins.AddFromObject(writerSkill, "story"); 
                 _logger?.LogDebug("Registered plugin: {plugin}", writerSkill?.GetType().FullName); 
                 registeredAliases.Add("story"); 

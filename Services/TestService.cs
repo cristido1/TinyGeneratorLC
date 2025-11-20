@@ -544,7 +544,7 @@ IMPORTANT: Write the story in Italian language.";
                 var storyId = _stories.InsertSingleStory(
                     test.Prompt ?? string.Empty,
                     cleanStoryText,
-                    _database.GetModelIdByName(model),
+                    null, // modelId - now using explicit IDs only
                     null, // agentId
                     0.0, // score - will be set by evaluation
                     null, // eval

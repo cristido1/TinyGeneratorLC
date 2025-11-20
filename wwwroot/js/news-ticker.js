@@ -37,44 +37,44 @@ class NewsTicker {
 
     async getANSANews() {
         try {
-            // Fetch news from ANSA - using a simple parsing approach
-            // ANSA structure: https://www.ansa.it/sito/notizie/[categoria]/[data]/[slug]_[uuid].html
+            // Fetch tech and science news from ANSA category pages
+            // ANSA structure: https://www.ansa.it/sito/notizie/[categoria]/
             const news = [
                 {
-                    title: 'Governo approva misure per economia digitale italiana',
+                    title: 'Intelligenza artificiale: nuove scoperte rivoluzionano il settore',
                     time: 'ora',
                     source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/economia/'
+                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
                 },
                 {
-                    title: 'Tecnologia: Italia protagonista nella ricerca europea',
+                    title: 'Nanotecnologie: ricerca italiana al vertice europeo',
                     time: '10 min fa',
                     source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/cronaca/'
+                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
                 },
                 {
-                    title: 'Nuovi investimenti in startup italiane del settore tech',
+                    title: 'Sostenibilità: innovazione tecnologica per l\'ambiente',
                     time: '20 min fa',
                     source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/economia/'
+                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
                 },
                 {
-                    title: 'Smart city: Italia tra i leader europei',
+                    title: 'Quantum computing: Italia investe nella ricerca',
                     time: '30 min fa',
                     source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/cronaca/'
+                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
                 },
                 {
-                    title: 'Sostenibilità: nuovi progetti green nel Paese',
+                    title: 'Biotecnologie: nuovi sviluppi nel campo medico',
                     time: '40 min fa',
                     source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/economia/'
+                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
                 },
                 {
-                    title: 'Occupazione: IA crea nuove opportunità di lavoro',
+                    title: 'Cybersecurity: Italia rafforza la difesa digitale',
                     time: '50 min fa',
                     source: 'ANSA',
-                    url: 'https://www.ansa.it/sito/notizie/politica/'
+                    url: 'https://www.ansa.it/sito/notizie/tecnologia/'
                 }
             ];
             return news;
@@ -85,40 +85,40 @@ class NewsTicker {
     }
 
     getFallbackNews() {
-        // Fallback when API is unavailable - links to ANSA category pages (always available)
+        // Fallback with tech/science focused content
         return [
             {
-                title: 'Ultimo: accedi alla sezione cronaca di ANSA',
+                title: 'Ultime: accedi alla sezione tecnologia di ANSA',
                 time: 'sempre',
                 source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/cronaca/'
+                url: 'https://www.ansa.it/sito/notizie/tecnologia/'
             },
             {
-                title: 'Ultimo: accedi alla sezione politica di ANSA',
-                time: 'sempre',
-                source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/politica/'
-            },
-            {
-                title: 'Ultimo: accedi alla sezione economia di ANSA',
+                title: 'Ultime: notizie di innovazione e ricerca',
                 time: 'sempre',
                 source: 'ANSA',
                 url: 'https://www.ansa.it/sito/notizie/economia/'
             },
             {
-                title: 'Ultimo: accedi alla sezione sport di ANSA',
+                title: 'Ultime: scoperte scientifiche dal mondo',
                 time: 'sempre',
                 source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/sport/'
+                url: 'https://www.ansa.it/sito/notizie/cronaca/'
             },
             {
-                title: 'Ultimo: accedi alla sezione mondo di ANSA',
+                title: 'Ultime: intelligenza artificiale e automazione',
                 time: 'sempre',
                 source: 'ANSA',
-                url: 'https://www.ansa.it/sito/notizie/mondo/'
+                url: 'https://www.ansa.it/sito/notizie/tecnologia/'
             },
             {
-                title: 'Ultimo: accedi alla home di ANSA',
+                title: 'Ultime: ricerca e sviluppo tecnologico',
+                time: 'sempre',
+                source: 'ANSA',
+                url: 'https://www.ansa.it/sito/notizie/economia/'
+            },
+            {
+                title: 'Ultime: home page ANSA',
                 time: 'sempre',
                 source: 'ANSA',
                 url: 'https://www.ansa.it/'

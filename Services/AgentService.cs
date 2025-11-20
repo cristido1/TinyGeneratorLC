@@ -186,12 +186,10 @@ namespace TinyGenerator.Services
 
                 if (completedTask is Task<ChatMessageContent> resultTask)
                 {
-                     _progress?.HideAgentActivity(agentId);
                     return await resultTask;
                 }
                 else
                 {
-                     _progress?.HideAgentActivity(agentId);
                     throw new TimeoutException($"Operation timed out after {timeoutSeconds}s");
                 }
             }

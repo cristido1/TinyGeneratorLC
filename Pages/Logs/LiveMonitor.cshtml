@@ -37,9 +37,11 @@
         justify-content: space-between;
         align-items: center;
         margin-bottom: 32px;
-        padding-bottom: 16px;
-        border-bottom: 2px solid #00cc99;
-        box-shadow: 0 4px 16px rgba(0, 255, 191, 0.1);
+        padding: 20px 24px;
+        background: rgba(76, 175, 130, 0.08);
+        border: 1px solid #00cc99;
+        border-radius: 4px;
+        box-shadow: 0 0 16px rgba(0, 204, 153, 0.1);
     }
     
     .title {
@@ -114,9 +116,9 @@
     }
     
     .logs-header span { flex-shrink: 0; }
-    .logs-header .timestamp { width: 140px; }
-    .logs-header .level { width: 100px; }
-    .logs-header .category { width: 120px; }
+    .logs-header .timestamp { width: 160px; }
+    .logs-header .level { width: 110px; }
+    .logs-header .category { width: 140px; }
     .logs-header .message { flex: 1; }
     
     .logs-content {
@@ -150,9 +152,9 @@
     }
     
     .log-icon { width: 20px; height: 20px; flex-shrink: 0; font-size: 12px; }
-    .log-timestamp { width: 140px; flex-shrink: 0; font-size: 11px; color: #00ffbf; opacity: 0.8; }
-    .log-level { width: 100px; flex-shrink: 0; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; padding: 4px 8px; border-radius: 2px; text-align: center; }
-    .log-category { width: 120px; flex-shrink: 0; font-size: 10px; color: #00ffbf; text-transform: uppercase; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .log-timestamp { width: 160px; flex-shrink: 0; font-size: 11px; color: #00ffbf; opacity: 0.8; }
+    .log-level { width: 110px; flex-shrink: 0; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; padding: 4px 8px; border-radius: 2px; text-align: center; }
+    .log-category { width: 140px; flex-shrink: 0; font-size: 10px; color: #00ffbf; text-transform: uppercase; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .log-message { flex: 1; font-size: 12px; color: #00ffbf; word-break: break-word; white-space: pre-wrap; }
     
     .log-level.info { background: rgba(0, 255, 191, 0.2); border: 1px solid #00cc99; color: #00ffbf; box-shadow: 0 0 6px rgba(0, 255, 191, 0.3); }
@@ -200,7 +202,6 @@
 
 <div class="container">
     <div class="header">
-        <div class="title">► LIVE MONITOR</div>
         <div class="controls">
             <button class="btn" id="btn-pause">⏸ Pause</button>
             <button class="btn btn-clear" id="btn-clear">✕ Clear</button>

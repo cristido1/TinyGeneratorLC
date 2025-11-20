@@ -31,19 +31,22 @@ namespace TinyGenerator.Services
         private readonly StoriesService _stories;
         private readonly IKernelFactory _factory;
         private readonly AgentService _agentService;
+        private readonly ICustomLogger _customLogger;
 
         public TestService(
             DatabaseService database,
             ProgressService progress,
             StoriesService stories,
             IKernelFactory factory,
-            AgentService agentService)
+            AgentService agentService,
+            ICustomLogger customLogger)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _progress = progress ?? throw new ArgumentNullException(nameof(progress));
             _stories = stories ?? throw new ArgumentNullException(nameof(stories));
             _factory = factory ?? throw new ArgumentNullException(nameof(factory));
             _agentService = agentService ?? throw new ArgumentNullException(nameof(agentService));
+            _customLogger = customLogger ?? throw new ArgumentNullException(nameof(customLogger));
         }
 
         public async Task<object?> RunGroupAsync(string model, string group)
@@ -66,7 +69,7 @@ namespace TinyGenerator.Services
                 try
                 {
                     Directory.CreateDirectory(testFolder);
-                    _progress?.Append("setup", $"[{model}] Created test folder: {testFolder}");
+                    LogTestMessage("setup", $"[{model}] Created test folder: {testFolder}");
                     
                     // Copy files from test_source_files for each test that needs them
                     foreach (var test in testsWithFiles)
@@ -83,18 +86,18 @@ namespace TinyGenerator.Services
                             if (File.Exists(sourceFile))
                             {
                                 File.Copy(sourceFile, destFile, overwrite: true);
-                                _progress?.Append("setup", $"[{model}] Copied file: {fileName}");
+                                LogTestMessage("setup", $"[{model}] Copied file: {fileName}");
                             }
                             else
                             {
-                                _progress?.Append("setup", $"[{model}] WARNING: Source file not found: {fileName}");
+                                LogTestMessage("setup", $"[{model}] WARNING: Source file not found: {fileName}", "Warning");
                             }
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _progress?.Append("setup", $"[{model}] ERROR creating test folder: {ex.Message}");
+                    LogTestMessage("setup", $"[{model}] ERROR creating test folder: {ex.Message}", "Error");
                     testFolder = null;
                 }
             }
@@ -109,13 +112,14 @@ namespace TinyGenerator.Services
                 testFolder);
 
             _progress?.Start(runId.ToString());
+            LogTestMessage(runId.ToString(), $"[{model}] Starting test group: {group}");
 
             // Warmup call only for Ollama models to exclude cold start from measurements
             if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
             {
                 try
                 {
-                    _progress?.Append(runId.ToString(), $"[{model}] Performing warmup call for Ollama model...");
+                    LogTestMessage(runId.ToString(), $"[{model}] Performing warmup call for Ollama model...");
                     var warmupKernel = _factory.CreateKernel(model, Array.Empty<string>());
                     if (warmupKernel != null)
                     {
@@ -138,12 +142,12 @@ namespace TinyGenerator.Services
                             90,
                             "warmup");
                         
-                        _progress?.Append(runId.ToString(), $"[{model}] Warmup completed");
+                        LogTestMessage(runId.ToString(), $"[{model}] Warmup completed");
                     }
                 }
                 catch (Exception ex)
                 {
-                    _progress?.Append(runId.ToString(), $"[{model}] Warmup failed (continuing anyway): {ex.Message}");
+                    LogTestMessage(runId.ToString(), $"[{model}] Warmup failed (continuing anyway): {ex.Message}", "Warning");
                 }
             }
 
@@ -178,11 +182,11 @@ namespace TinyGenerator.Services
             // Send completion notification with success/error status
             if (passedFlag)
             {
-                _progress?.Append(runId.ToString(), $"✅ [{model}] Test completato con successo: {passedCount}/{steps} test passati, score {score}/10, durata {durationMs/1000.0:0.##}s", "success");
+                LogTestMessage(runId.ToString(), $"✅ [{model}] Test completato con successo: {passedCount}/{steps} test passati, score {score}/10, durata {durationMs/1000.0:0.##}s");
             }
             else
             {
-                _progress?.Append(runId.ToString(), $"❌ [{model}] Test fallito: {passedCount}/{steps} test passati, score {score}/10", "error");
+                LogTestMessage(runId.ToString(), $"❌ [{model}] Test fallito: {passedCount}/{steps} test passati, score {score}/10", "Error");
             }
 
             return new { runId, score, steps, passed = passedCount, duration = durationMs };
@@ -276,7 +280,7 @@ namespace TinyGenerator.Services
             catch (Exception ex)
             {
                 _database.UpdateTestStepResult(stepId, false, null, ex.Message, null);
-                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}");
+                LogTestMessage(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}", "Error");
             }
         }
 
@@ -1147,6 +1151,25 @@ IMPORTANT: Write the story in Italian language.";
                        .Select(w => w.Trim().ToLowerInvariant())
                        .Where(w => !string.IsNullOrEmpty(w))
                        .ToList();
+        }
+
+        /// <summary>
+        /// Log a test message both to ProgressService (for real-time UI) and to database (for persistence)
+        /// </summary>
+        private void LogTestMessage(string runId, string message, string level = "Information")
+        {
+            // Log to ProgressService for real-time updates
+            _progress?.Append(runId, message);
+            
+            // Log to database for persistence and Live Monitor display
+            try
+            {
+                _customLogger?.Log(level, "TestService", message);
+            }
+            catch
+            {
+                // Ignore logging failures
+            }
         }
     }
 

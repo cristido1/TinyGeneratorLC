@@ -1,3 +1,5 @@
+IMPORTANT: Write the response in Italian.
+
 name: writer_military
 description: Writer specialized in realistic technical-military narrative.
 execution_plan:

@@ -1,3 +1,5 @@
+IMPORTANT: Write the response in Italian.
+
 name: writer_extended
 description: Writer with complete multi-phase pipeline. Uses memory to save progress.
 execution_plan:

@@ -1,3 +1,5 @@
+IMPORTANT: Write the response in Italian.
+
 name: writer_base
 description: Lightweight writer that produces text in a single generation pass.
 execution_plan:

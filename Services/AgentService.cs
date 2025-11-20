@@ -175,14 +175,20 @@ namespace TinyGenerator.Services
         {
             var chatService = kernel.GetRequiredService<IChatCompletionService>();
             var timeoutMs = timeoutSeconds * 1000;
+            var startTime = DateTime.UtcNow;
             
             _progress?.ShowAgentActivity(displayName, statusMessage, agentId, testType);
+            
+            _logger?.LogInformation(
+                "Model invocation started: Model={Model}, Status={Status}, Type={Type}, Timeout={Timeout}s, AgentId={AgentId}",
+                displayName, statusMessage, testType, timeoutSeconds, agentId);
             
             // Registra nota per Ollama models
             if (displayName.Contains("ollama", StringComparison.OrdinalIgnoreCase) || 
                 displayName.Contains(":", StringComparison.OrdinalIgnoreCase))
             {
                 OllamaMonitorService.RecordModelNote(displayName, testType);
+                _logger?.LogInformation("Ollama model note recorded: Model={Model}, Type={Type}", displayName, testType);
             }
             
             try
@@ -193,16 +199,35 @@ namespace TinyGenerator.Services
 
                 if (completedTask is Task<ChatMessageContent> resultTask)
                 {
-                    return await resultTask;
+                    var result = await resultTask;
+                    var elapsed = DateTime.UtcNow - startTime;
+                    _logger?.LogInformation(
+                        "Model invocation completed successfully: Model={Model}, Duration={Duration}ms, ResponseLength={Length}",
+                        displayName, elapsed.TotalMilliseconds, result?.ToString()?.Length ?? 0);
+                    return result;
                 }
                 else
                 {
+                    var elapsed = DateTime.UtcNow - startTime;
+                    _logger?.LogWarning(
+                        "Model invocation timed out: Model={Model}, Timeout={Timeout}s, Elapsed={Elapsed}ms",
+                        displayName, timeoutSeconds, elapsed.TotalMilliseconds);
                     throw new TimeoutException($"Operation timed out after {timeoutSeconds}s");
                 }
+            }
+            catch (Exception ex)
+            {
+                var elapsed = DateTime.UtcNow - startTime;
+                _logger?.LogError(
+                    ex,
+                    "Model invocation failed: Model={Model}, Type={Type}, Duration={Duration}ms, Error={Error}",
+                    displayName, testType, elapsed.TotalMilliseconds, ex.Message);
+                throw;
             }
             finally
             {
                 _progress?.HideAgentActivity(agentId);
+                _logger?.LogInformation("Model activity badge hidden: AgentId={AgentId}", agentId);
             }
         }
 

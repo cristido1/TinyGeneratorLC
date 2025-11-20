@@ -1,0 +1,394 @@
+@page
+@model TinyGenerator.Pages.Logs.LiveMonitorModel
+@{
+    ViewData["Title"] = "Live Monitor";
+}
+
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-gradient d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="bi bi-activity"></i> Live Activity Monitor
+                    </h5>
+                    <div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-pause">
+                            <i class="bi bi-pause"></i> Pause
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" id="btn-clear">
+                            <i class="bi bi-trash"></i> Clear
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div id="logs-container" style="height: 600px; overflow-y: auto; background: #f8f9fa; font-family: 'Roboto Mono', monospace; font-size: 12px;">
+                        <div class="p-3 text-muted text-center">
+                            <i class="bi bi-hourglass-split"></i> Waiting for activity...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-gradient">
+                    <h5 class="mb-0"><i class="bi bi-gear"></i> Active Models</h5>
+                </div>
+                <div class="card-body">
+                    <div id="models-status" class="list-group">
+                        <div class="list-group-item text-muted">
+                            <i class="bi bi-info-circle"></i> No models running
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-gradient">
+                    <h5 class="mb-0"><i class="bi bi-graph-up"></i> Statistics</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="stat-box">
+                                <div class="stat-label">Total Events</div>
+                                <div class="stat-value" id="stat-total">0</div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="stat-box">
+                                <div class="stat-label">Errors</div>
+                                <div class="stat-value text-danger" id="stat-errors">0</div>
+                            </div>
+                        </div>
+                        <div class="col-6 mt-3">
+                            <div class="stat-box">
+                                <div class="stat-label">Warnings</div>
+                                <div class="stat-value text-warning" id="stat-warnings">0</div>
+                            </div>
+                        </div>
+                        <div class="col-6 mt-3">
+                            <div class="stat-box">
+                                <div class="stat-label">Info</div>
+                                <div class="stat-value text-info" id="stat-info">0</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .bg-gradient {
+        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+        color: white;
+    }
+
+    .card {
+        border-radius: 12px;
+        transition: all 0.3s ease;
+    }
+
+    .card:hover {
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
+    }
+
+    #logs-container {
+        border-radius: 0 0 12px 12px;
+    }
+
+    .log-entry {
+        padding: 8px 12px;
+        border-bottom: 1px solid #e0e0e0;
+        display: flex;
+        gap: 12px;
+        animation: slideIn 0.3s ease-out;
+    }
+
+    .log-entry:hover {
+        background: #fff;
+        transition: background 0.2s ease;
+    }
+
+    .log-timestamp {
+        color: #666;
+        min-width: 180px;
+        flex-shrink: 0;
+        font-weight: 500;
+    }
+
+    .log-level {
+        min-width: 80px;
+        flex-shrink: 0;
+        font-weight: 600;
+        padding: 2px 6px;
+        border-radius: 4px;
+        text-align: center;
+    }
+
+    .log-level.info {
+        background: #d1ecf1;
+        color: #0c5460;
+    }
+
+    .log-level.warning {
+        background: #fff3cd;
+        color: #856404;
+    }
+
+    .log-level.error {
+        background: #f8d7da;
+        color: #721c24;
+    }
+
+    .log-level.success {
+        background: #d4edda;
+        color: #155724;
+    }
+
+    .log-category {
+        color: #0066cc;
+        font-weight: 600;
+        min-width: 120px;
+        flex-shrink: 0;
+    }
+
+    .log-message {
+        flex: 1;
+        word-break: break-word;
+        color: #333;
+    }
+
+    .log-exception {
+        color: #d32f2f;
+        font-weight: 500;
+    }
+
+    @@keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .stat-box {
+        text-align: center;
+        padding: 12px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        border: 1px solid #e0e0e0;
+    }
+
+    .stat-label {
+        font-size: 12px;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .stat-value {
+        font-size: 24px;
+        font-weight: 700;
+        color: #16a34a;
+        margin-top: 8px;
+    }
+
+    .model-status {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        margin-bottom: 8px;
+    }
+
+    .model-status.running {
+        background: #f0f8ff;
+        border-color: #16a34a;
+    }
+
+    .status-indicator {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+    }
+
+    .status-indicator.running {
+        background: #16a34a;
+    }
+
+    @@keyframes pulse {
+        0%, 100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.5;
+        }
+    }
+
+    .btn-outline-secondary:hover {
+        background: #6c757d;
+        color: white;
+    }
+
+    .btn-outline-danger:hover {
+        background: #dc3545;
+        color: white;
+    }
+</style>
+
+<script src="~/lib/signalr/signalr.min.js"></script>
+<script>
+    (() => {
+        let isPaused = false;
+        let logCount = { total: 0, info: 0, warning: 0, error: 0 };
+        let activeModels = new Map();
+
+        const container = document.getElementById('logs-container');
+        const pauseBtn = document.getElementById('btn-pause');
+        const clearBtn = document.getElementById('btn-clear');
+
+        function clearContainer() {
+            container.innerHTML = '<div class="p-3 text-muted text-center"><i class="bi bi-hourglass-split"></i> Waiting for activity...</div>';
+            logCount = { total: 0, info: 0, warning: 0, error: 0 };
+            updateStats();
+        }
+
+        pauseBtn.addEventListener('click', () => {
+            isPaused = !isPaused;
+            pauseBtn.textContent = isPaused ? '▶ Resume' : '⏸ Pause';
+            pauseBtn.classList.toggle('btn-warning', isPaused);
+        });
+
+        clearBtn.addEventListener('click', () => {
+            fetch('/api/logs/clear', { method: 'POST' }).then(() => clearContainer());
+        });
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function addLogEntry(timestamp, level, category, message, exception) {
+            if (isPaused) return;
+
+            // Remove placeholder
+            const placeholder = container.querySelector('.text-muted');
+            if (placeholder) placeholder.remove();
+
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+
+            const levelClass = level.toLowerCase();
+            const levelColor = {
+                'information': 'info',
+                'warning': 'warning',
+                'error': 'error'
+            }[levelClass] || 'info';
+
+            logCount.total++;
+            logCount[levelColor === 'info' ? 'info' : levelColor === 'warning' ? 'warning' : 'error']++;
+
+            entry.innerHTML = `
+                <div class="log-timestamp">${escapeHtml(timestamp.substring(11, 19))}</div>
+                <div class="log-level ${levelColor}">${level}</div>
+                <div class="log-category">${escapeHtml(category)}</div>
+                <div class="log-message">${escapeHtml(message)}</div>
+                ${exception ? `<div class="log-exception">⚠ ${escapeHtml(exception.substring(0, 100))}</div>` : ''}
+            `;
+
+            container.insertBefore(entry, container.firstChild);
+
+            // Limit entries to 1000
+            while (container.children.length > 1000) {
+                container.removeChild(container.lastChild);
+            }
+
+            updateStats();
+        }
+
+        function updateStats() {
+            document.getElementById('stat-total').textContent = logCount.total;
+            document.getElementById('stat-info').textContent = logCount.info;
+            document.getElementById('stat-warnings').textContent = logCount.warning;
+            document.getElementById('stat-errors').textContent = logCount.error;
+        }
+
+        function updateModelStatus(modelName, status, taskType) {
+            const modelsDiv = document.getElementById('models-status');
+            let modelItem = modelsDiv.querySelector(`[data-model="${modelName}"]`);
+
+            if (!modelItem) {
+                if (modelsDiv.querySelector('.text-muted')) {
+                    modelsDiv.innerHTML = '';
+                }
+                modelItem = document.createElement('div');
+                modelItem.className = 'model-status running';
+                modelItem.setAttribute('data-model', modelName);
+                modelsDiv.appendChild(modelItem);
+            }
+
+            modelItem.innerHTML = `
+                <div>
+                    <span class="status-indicator running"></span>
+                    <strong>${escapeHtml(modelName)}</strong> - ${escapeHtml(status)} (${escapeHtml(taskType)})
+                </div>
+                <small class="text-muted">now</small>
+            `;
+        }
+
+        // Connect to SignalR
+        const connection = new signalR.HubConnectionBuilder()
+            .withUrl('/progressHub')
+            .withAutomaticReconnect()
+            .build();
+
+        connection.on('ProgressAppended', (id, message, extraClass) => {
+            const ts = new Date().toISOString();
+            addLogEntry(ts, 'Information', 'Progress', message, null);
+        });
+
+        connection.on('AgentActivityStarted', (agentId, agentName, status, testType) => {
+            updateModelStatus(agentName, status, testType);
+            const ts = new Date().toISOString();
+            addLogEntry(ts, 'Information', 'Agent', `Model started: ${agentName}`, null);
+        });
+
+        connection.on('AgentActivityEnded', (agentId) => {
+            const modelDiv = document.getElementById('models-status').querySelector(`[data-model]`);
+            if (modelDiv) modelDiv.remove();
+
+            const ts = new Date().toISOString();
+            addLogEntry(ts, 'Success', 'Agent', `Model completed: ${agentId}`, null);
+        });
+
+        // Load initial logs
+        fetch('/api/logs/recent?limit=50')
+            .then(r => r.json())
+            .then(logs => {
+                logs.reverse().forEach(log => {
+                    addLogEntry(log.ts, log.level, log.category, log.message, log.exception);
+                });
+            })
+            .catch(e => console.warn('Failed to load initial logs', e));
+
+        connection.start()
+            .then(() => console.log('Live monitor connected'))
+            .catch(e => console.error('SignalR error', e));
+    })();
+</script>

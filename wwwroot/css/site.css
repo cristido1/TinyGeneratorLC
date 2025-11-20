@@ -26,7 +26,7 @@ html, body { font-size: 14px; }
 .note-card:hover { transform: scale(1.03); }
 .note-card:hover::before { animation: borderOrbit 2s linear infinite; }
 .note-card:focus { outline: none; box-shadow: 0 0 0 0.06rem rgba(var(--bs-primary-rgb),0.08); }
-.note-card .note-card-icon { position: absolute; right: 12px; bottom: 8px; font-size: 84px; line-height: 1; color: #00cc99; opacity: 0.12; pointer-events: none; transform: translateZ(0); }
+.note-card .note-card-icon { position: absolute; right: 12px; bottom: 8px; font-size: 84px; line-height: 1; color: #00cc99; opacity: 0.3; pointer-events: none; transform: translateZ(0); }
 .note-title { font-weight:600; margin-bottom:6px; }
 .note-body { color: #333; white-space:pre-wrap; }
 
@@ -64,7 +64,7 @@ html, body { font-size: 14px; }
 .models-table th, .models-table td { vertical-align: middle; padding: .4rem .5rem }
 .keep-container { gap: 10px; padding: 8px 6px; }
 .note-card { padding: 8px 10px; border-radius:6px; min-height:100px }
-.note-card .note-card-icon { font-size:64px; right:10px; bottom:6px; color: #00cc99; opacity: 0.12 }
+.note-card .note-card-icon { font-size:64px; right:10px; bottom:6px; color: #00cc99; opacity: 0.3 }
 .note-title { font-size:.95rem; margin-bottom:4px }
 .note-body { font-size:.9rem }
 .sidebar { padding:8px 6px }

@@ -42,42 +42,6 @@
         text-shadow: 0 0 10px #00ffbf, 0 0 20px #00cc99;
     }
     
-    .controls { display: flex; gap: 12px; margin-bottom: 16px; }
-    
-    .btn {
-        font-family: 'Share Tech Mono', monospace;
-        font-size: 12px;
-        font-weight: bold;
-        padding: 8px 16px;
-        background: transparent;
-        border: 2px solid #00ffbf;
-        color: #00ffbf;
-        cursor: pointer;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
-        box-shadow: inset 0 0 8px rgba(0, 255, 191, 0.1);
-    }
-    
-    .btn:hover {
-        background: rgba(0, 255, 191, 0.1);
-        box-shadow: 0 0 12px #00ffbf, inset 0 0 12px rgba(0, 255, 191, 0.2);
-        text-shadow: 0 0 8px #00ffbf;
-    }
-    
-    .btn-clear {
-        border-color: #ff4444;
-        color: #ff4444;
-        box-shadow: inset 0 0 8px rgba(255, 68, 68, 0.1);
-    }
-    
-    .btn-clear:hover {
-        background: rgba(255, 68, 68, 0.1);
-        box-shadow: 0 0 12px #ff4444, inset 0 0 12px rgba(255, 68, 68, 0.2);
-    }
-    
     .logs-container {
         background: rgba(10, 14, 10, 0.8);
         border: 2px solid #00cc99;
@@ -189,11 +153,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 
 <div class="container">
-    <div class="controls">
-        <button class="btn" id="btn-pause">⏸ Pause</button>
-        <button class="btn btn-clear" id="btn-clear">✕ Clear</button>
-    </div>
-
     <div class="logs-container">
         <div class="logs-header">
             <span class="timestamp">TIME</span>
@@ -233,18 +192,13 @@
 <script src="~/lib/signalr/signalr.min.js"></script>
 <script>
     // State management
-    let isPaused = false;
     let stats = { total: 0, info: 0, success: 0, warning: 0, error: 0 };
     
     const logsContent = document.getElementById('logs-content');
-    const btnPause = document.getElementById('btn-pause');
-    const btnClear = document.getElementById('btn-clear');
     
     const iconSVG = { info: '⊙', success: '✓', warning: '⚠', error: '✕' };
     
     function addLogEntry(level = 'info', message = '', category = 'System') {
-        if (isPaused) return;
-        
         const placeholder = logsContent.querySelector('.logs-placeholder');
         if (placeholder) placeholder.remove();
         
@@ -291,16 +245,6 @@
         const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
         return text.replace(/[&<>"']/g, m => map[m]);
     }
-    
-    btnPause.addEventListener('click', () => {
-        isPaused = !isPaused;
-        btnPause.textContent = isPaused ? '▶ Resume' : '⏸ Pause';
-        btnPause.style.borderColor = isPaused ? '#ffd700' : '#00ffbf';
-        btnPause.style.color = isPaused ? '#ffd700' : '#00ffbf';
-        btnPause.style.boxShadow = isPaused ? '0 0 12px #ffd700, inset 0 0 12px rgba(255, 215, 0, 0.2)' : '0 0 12px #00ffbf, inset 0 0 12px rgba(0, 255, 191, 0.2)';
-    });
-    
-    btnClear.addEventListener('click', clearLogs);
     
     // SignalR connection
     const connection = new signalR.HubConnectionBuilder()

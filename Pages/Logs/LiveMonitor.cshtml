@@ -32,18 +32,6 @@
     
     .container { max-width: 1400px; margin: 0 auto; padding: 24px; position: relative; z-index: 1; }
     
-    .header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 32px;
-        padding: 20px 24px;
-        background: rgba(76, 175, 130, 0.08);
-        border: 1px solid #00cc99;
-        border-radius: 4px;
-        box-shadow: 0 0 16px rgba(0, 204, 153, 0.1);
-    }
-    
     .title {
         font-family: 'Orbitron', monospace;
         font-size: 28px;
@@ -54,7 +42,7 @@
         text-shadow: 0 0 10px #00ffbf, 0 0 20px #00cc99;
     }
     
-    .controls { display: flex; gap: 12px; }
+    .controls { display: flex; gap: 12px; margin-bottom: 16px; }
     
     .btn {
         font-family: 'Share Tech Mono', monospace;
@@ -201,11 +189,9 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 
 <div class="container">
-    <div class="header">
-        <div class="controls">
-            <button class="btn" id="btn-pause">⏸ Pause</button>
-            <button class="btn btn-clear" id="btn-clear">✕ Clear</button>
-        </div>
+    <div class="controls">
+        <button class="btn" id="btn-pause">⏸ Pause</button>
+        <button class="btn btn-clear" id="btn-clear">✕ Clear</button>
     </div>
 
     <div class="logs-container">

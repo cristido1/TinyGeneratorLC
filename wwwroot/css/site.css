@@ -417,6 +417,7 @@ body {
     text-shadow: 0 0 5px rgba(0, 204, 153, 0.5);
     cursor: pointer;
     transition: all 0.3s ease;
+    text-decoration: none;
 }
 
 .news-item:hover {

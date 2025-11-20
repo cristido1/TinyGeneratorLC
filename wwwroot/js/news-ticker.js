@@ -38,38 +38,44 @@ class NewsTicker {
     }
 
     async getLocalNews() {
-        // Return example Italian news headlines
+        // Return example Italian news headlines with URLs
         // In production, these could come from an API endpoint
         return [
             {
                 title: 'Nuove iniziative digitali nel settore pubblico italiano',
                 time: '5 min fa',
-                source: 'ANSA'
+                source: 'ANSA',
+                url: 'https://www.ansa.it/'
             },
             {
                 title: 'Tecnologie IA trasformano il mercato del lavoro',
                 time: '15 min fa',
-                source: 'Corriere'
+                source: 'Corriere',
+                url: 'https://www.corriere.it/'
             },
             {
                 title: 'Startup italiane crescono nel panorama europeo',
                 time: '25 min fa',
-                source: 'Repubblica'
+                source: 'Repubblica',
+                url: 'https://www.repubblica.it/'
             },
             {
                 title: 'Innovazione nelle smart cities italiane',
                 time: '35 min fa',
-                source: 'ANSA'
+                source: 'ANSA',
+                url: 'https://www.ansa.it/'
             },
             {
                 title: 'Sviluppo sostenibile: nuovi progetti green',
                 time: '45 min fa',
-                source: 'Corriere'
+                source: 'Corriere',
+                url: 'https://www.corriere.it/'
             },
             {
                 title: 'Italia leader in sviluppo tecnologico europeo',
                 time: '55 min fa',
-                source: 'Repubblica'
+                source: 'Repubblica',
+                url: 'https://www.repubblica.it/'
             }
         ];
     }
@@ -80,11 +86,11 @@ class NewsTicker {
             
             // Create news items and duplicate them for continuous scroll
             const newsHTML = this.newsItems
-                .map(item => `
-                    <div class="news-item" title="${item.title}">
+                .map((item, index) => `
+                    <a href="${item.url}" target="_blank" rel="noopener noreferrer" class="news-item" title="${item.title}" data-index="${index}">
                         <span class="news-item-time">${item.time}</span>
                         <span>${item.title}</span>
-                    </div>
+                    </a>
                 `)
                 .join('');
             
@@ -96,7 +102,33 @@ class NewsTicker {
             const duration = scrollWidth / 50; // pixels per second
             
             this.tickerContent.style.animation = `scrollNews ${duration}s linear infinite`;
+            
+            // Add click handlers
+            this.addClickHandlers();
         }
+    }
+
+    addClickHandlers() {
+        const newsItems = document.querySelectorAll('.news-item');
+        newsItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                const url = item.getAttribute('href');
+                // Browser will handle the link opening in new tab naturally
+                // We just add visual feedback
+                item.style.opacity = '0.7';
+                setTimeout(() => {
+                    item.style.opacity = '1';
+                }, 200);
+            });
+            
+            item.addEventListener('mouseenter', () => {
+                item.style.opacity = '0.8';
+            });
+            
+            item.addEventListener('mouseleave', () => {
+                item.style.opacity = '1';
+            });
+        });
     }
 }
 

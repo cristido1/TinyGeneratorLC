@@ -99,7 +99,7 @@ public sealed class DatabaseService
     /// <summary>
     /// Return a lightweight summary of the latest test run for the given model id, or null if none.
     /// </summary>
-    public (int runId, string testCode, bool passed, long? durationMs, string? runDate)? GetLatestTestRunSummaryById(long modelId)
+    public (int runId, string testCode, bool passed, long? durationMs, string? runDate)? GetLatestTestRunSummaryById(int modelId)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -152,7 +152,7 @@ public sealed class DatabaseService
     /// <summary>
     /// Get the duration in milliseconds of the latest test run for a specific group by model id.
     /// </summary>
-    public long? GetGroupTestDurationById(long modelId, string groupName)
+    public long? GetGroupTestDurationById(int modelId, string groupName)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -179,7 +179,7 @@ public sealed class DatabaseService
         conn.Open();
         try
         {
-            var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
             if (!modelId.HasValue) return null;
             
             var sql = @"SELECT duration_ms FROM model_test_runs 
@@ -210,7 +210,7 @@ public sealed class DatabaseService
     /// <summary>
     /// Get model info by explicit ID (preferred over name-based lookup).
     /// </summary>
-    public ModelInfo? GetModelInfoById(long modelId)
+    public ModelInfo? GetModelInfoById(int modelId)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -260,7 +260,7 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
         try
         {
             // Resolve model id first
-            var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = name });
+            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = name });
             if (modelId.HasValue)
             {
                 conn.Execute("DELETE FROM model_test_runs WHERE model_id = @id", new { id = modelId.Value });
@@ -907,7 +907,7 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         return id;
     }
 
-    public long AddStoryEvaluation(long storyId, string rawJson, double totalScore, long? modelId = null, int? agentId = null)
+    public long AddStoryEvaluation(long storyId, string rawJson, double totalScore, int? modelId = null, int? agentId = null)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -1131,7 +1131,7 @@ SET WriterScore = (
         return (null, null);
     }
 
-    public long InsertSingleStory(string prompt, string story, long? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, string? status = null, string? memoryKey = null)
+    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, string? status = null, string? memoryKey = null)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -1165,7 +1165,7 @@ SET WriterScore = (
         return name.Trim().Replace(" ", "_").ToLowerInvariant();
     }
 
-    public bool UpdateStoryById(long id, string? story = null, long? modelId = null, int? agentId = null, string? status = null)
+    public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, string? status = null)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -1592,6 +1592,14 @@ CREATE TABLE IF NOT EXISTS models (
     ";
         runsCmd.ExecuteNonQuery();
         Console.WriteLine("[DB] Ensured model_test_runs table exists");
+
+        // Migration: Add Id column to models if not exists
+        var hasIdColumn = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='Id'");
+        if (hasIdColumn == 0)
+        {
+            Console.WriteLine("[DB] Adding Id column to models table");
+            conn.Execute("ALTER TABLE models ADD COLUMN Id INTEGER PRIMARY KEY AUTOINCREMENT");
+        }
 
         // Migration: Add writer_score column to models if not exists
         var hasWriterScore = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='WriterScore'");

@@ -9,13 +9,13 @@ namespace TinyGenerator.Skills
     public class MemorySkill
     {
         private readonly PersistentMemoryService _memory;
-        private readonly long? _modelId;
+        private readonly int? _modelId;
         private readonly int? _agentId;
         public string? LastCalled { get; set; }
         public string? LastCollection { get; set; }
         public string? LastText { get; set; }
 
-        public MemorySkill(PersistentMemoryService memory, long? modelId = null, int? agentId = null)
+        public MemorySkill(PersistentMemoryService memory, int? modelId = null, int? agentId = null)
         {
             _memory = memory;
             _modelId = modelId;

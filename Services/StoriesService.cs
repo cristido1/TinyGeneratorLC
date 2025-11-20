@@ -56,12 +56,12 @@ public sealed class StoriesService
         _database.DeleteStoryById(id);
     }
 
-    public long InsertSingleStory(string prompt, string story, long? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, string? status = null, string? memoryKey = null)
+    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, string? status = null, string? memoryKey = null)
     {
         return _database.InsertSingleStory(prompt, story, modelId, agentId, score, eval, approved, status, memoryKey);
     }
 
-    public bool UpdateStoryById(long id, string? story = null, long? modelId = null, int? agentId = null, string? status = null)
+    public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, string? status = null)
     {
         return _database.UpdateStoryById(id, story, modelId, agentId, status);
     }

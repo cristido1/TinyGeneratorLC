@@ -11,13 +11,13 @@ namespace TinyGenerator.Skills
         public string? LastCalled { get; set; }
         public string? LastResult { get; set; }
         private readonly DatabaseService? _db;
-        private readonly long? _modelId;
+        private readonly int? _modelId;
         private readonly int? _agentId;
 
         public StoryEvaluatorSkill()
         {
         }
-        public StoryEvaluatorSkill(DatabaseService db, long? modelId = null, int? agentId = null)
+        public StoryEvaluatorSkill(DatabaseService db, int? modelId = null, int? agentId = null)
         {
             _db = db;
             _modelId = modelId;

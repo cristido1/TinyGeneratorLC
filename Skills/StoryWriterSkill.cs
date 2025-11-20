@@ -10,12 +10,12 @@ namespace TinyGenerator.Skills
     {
         private readonly StoriesService _stories;
         private readonly DatabaseService? _database;
-        private readonly long? _modelId;
+        private readonly int? _modelId;
         private readonly int? _agentId;
         private readonly string? _modelName;
         public string? LastResult { get; set; }
 
-        public StoryWriterSkill(StoriesService stories, DatabaseService? database = null, long? modelId = null, int? agentId = null, string? modelName = null)
+        public StoryWriterSkill(StoriesService stories, DatabaseService? database = null, int? modelId = null, int? agentId = null, string? modelName = null)
         {
             _stories = stories;
             _database = database;

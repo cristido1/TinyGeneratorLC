@@ -131,7 +131,7 @@ public sealed class DatabaseService
         try
         {
             // Resolve model id from name and query by model_id (model_name column was removed)
-            var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
             if (!modelId.HasValue) return null;
             var sql = @"SELECT id AS RunId, test_group AS TestCode, passed AS Passed, duration_ms AS DurationMs, run_date AS RunDate FROM model_test_runs WHERE model_id = @mid ORDER BY id DESC LIMIT 1";
             var row = conn.QueryFirstOrDefault(sql, new { mid = modelId.Value });
@@ -655,7 +655,7 @@ VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Promp
         conn.Open();
         try
         {
-            var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
             if (!modelId.HasValue) return null;
             var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = groupName });
             if (!runId.HasValue) return null;
@@ -681,7 +681,7 @@ VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Promp
         conn.Open();
         try
         {
-            var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
             if (!modelId.HasValue) return null;
             var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = groupName });
             if (!runId.HasValue) return null;
@@ -857,7 +857,7 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         double totalScore,
         string overallEvaluation,
         string rawJson,
-        long? modelId = null,
+        int? modelId = null,
         int? agentId = null)
     {
         using var conn = CreateConnection();
@@ -966,7 +966,7 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
             try { if (root.TryGetProperty("overall_evaluation", out var ov) && ov.ValueKind == System.Text.Json.JsonValueKind.String) overall = ov.GetString() ?? string.Empty; } catch { }
 
             var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, structure_score, structure_defects, characterization_score, characterization_defects, dialogues_score, dialogues_defects, pacing_score, pacing_defects, originality_score, originality_defects, style_score, style_defects, worldbuilding_score, worldbuilding_defects, thematic_coherence_score, thematic_coherence_defects, emotional_impact_score, emotional_impact_defects, total_score, overall_evaluation, raw_json, model_id, agent_id, ts) VALUES(@story_id, @ncs, @ncd, @ss, @sd, @chs, @chd, @dlg, @dlgdef, @pc, @pcdef, @org, @orgdef, @stl, @stldef, @wb, @wbdef, @th, @thdef, @em, @emdef, @total, @overall, @raw, @model_id, @agent_id, @ts); SELECT last_insert_rowid();";
-            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, ncs = nc, ncd = ncdef, ss = st, sd = stdef, chs = ch, chd = chdef, dlg = dlg, dlgdef = dlgdef, pc = pc, pcdef = pcdef, org = org, orgdef = orgdef, stl = stl, stldef = stldef, wb = wb, wbdef = wbdef, th = th, thdef = thdef, em = em, emdef = emdef, total = totalScore, overall = overall, raw = rawJson, model_id = modelId ?? (long?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
+            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, ncs = nc, ncd = ncdef, ss = st, sd = stdef, chs = ch, chd = chdef, dlg = dlg, dlgdef = dlgdef, pc = pc, pcdef = pcdef, org = org, orgdef = orgdef, stl = stl, stldef = stldef, wb = wb, wbdef = wbdef, th = th, thdef = thdef, em = em, emdef = emdef, total = totalScore, overall = overall, raw = rawJson, model_id = modelId ?? (int?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
             
             // Recalculate writer score for the model
             if (modelId.HasValue)
@@ -979,7 +979,7 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         catch (Exception)
         {
             var sql = @"INSERT INTO stories_evaluations(story_id, total_score, raw_json, model_id, agent_id, ts) VALUES(@story_id, @total, @raw, @model_id, @agent_id, @ts); SELECT last_insert_rowid();";
-            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, total = totalScore, raw = rawJson, model_id = modelId ?? (long?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
+            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, total = totalScore, raw = rawJson, model_id = modelId ?? (int?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
             
             // Recalculate writer score for the model
             if (modelId.HasValue)
@@ -991,7 +991,7 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         }
     }
 
-    public void RecalculateWriterScore(long modelId)
+    public void RecalculateWriterScore(int modelId)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -1753,7 +1753,7 @@ CREATE TABLE IF NOT EXISTS models (
     private static string SelectModelColumns()
     {
         // Return only core model columns (Skill* and Last* columns removed)
-        return string.Join(", ", new[] { "Name", "Provider", "Endpoint", "IsLocal", "MaxContext", "ContextToUse", "FunctionCallingScore", "WriterScore", "CostInPerToken", "CostOutPerToken", "LimitTokensDay", "LimitTokensWeek", "LimitTokensMonth", "Metadata", "Enabled", "CreatedAt", "UpdatedAt", "TestDurationSeconds", "NoTools" });
+        return string.Join(", ", new[] { "Id", "Name", "Provider", "Endpoint", "IsLocal", "MaxContext", "ContextToUse", "FunctionCallingScore", "WriterScore", "CostInPerToken", "CostOutPerToken", "LimitTokensDay", "LimitTokensWeek", "LimitTokensMonth", "Metadata", "Enabled", "CreatedAt", "UpdatedAt", "TestDurationSeconds", "NoTools" });
     }
 
     // Retrieve recent log entries with optional filtering by level or category and support offset for pagination.
@@ -1841,7 +1841,7 @@ CREATE TABLE IF NOT EXISTS models (
         using var conn = CreateConnection();
         conn.Open();
 
-        var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
         if (!modelId.HasValue) return new List<TestGroupSummary>();
 
         var groups = conn.Query<string>("SELECT DISTINCT test_group FROM model_test_runs WHERE model_id = @mid ORDER BY test_group", new { mid = modelId.Value }).ToList();
@@ -1880,7 +1880,7 @@ CREATE TABLE IF NOT EXISTS models (
         using var conn = CreateConnection();
         conn.Open();
 
-        var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
         if (!modelId.HasValue) return new List<object>();
 
         var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = groupName });
@@ -1958,7 +1958,7 @@ CREATE TABLE IF NOT EXISTS models (
         using var conn = CreateConnection();
         conn.Open();
 
-        var modelId = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
         if (!modelId.HasValue) return;
 
         // Get all unique test groups for this model

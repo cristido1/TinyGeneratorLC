@@ -14,6 +14,12 @@ namespace TinyGenerator.Skills
         private readonly string _workingFolder;                       // File path for schema saving
         private TtsSchema _schema;                                    // Working schema structure for the agent
 
+        // Supported emotions for TTS phrases
+        private static readonly HashSet<string> SupportedEmotions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "neutral", "happy", "sad", "angry", "fearful", "disgusted", "surprised"
+        };
+
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
             WriteIndented = true,
@@ -83,6 +89,12 @@ namespace TinyGenerator.Skills
                 return "ERROR: Phrase text is required.";
             if (string.IsNullOrWhiteSpace(emotion))
                 return "ERROR: Emotion is mandatory for each phrase.";
+
+            // Validate emotion value
+            if (!SupportedEmotions.Contains(emotion))
+            {
+                return $"ERROR: Emotion '{emotion}' is not supported. Supported emotions are: {string.Join(", ", SupportedEmotions)}.";
+            }
 
             // Check if character is defined
             bool characterExists = _schema.Characters.Any(c => c.Name.Equals(character, StringComparison.OrdinalIgnoreCase));

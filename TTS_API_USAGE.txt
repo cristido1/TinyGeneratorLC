@@ -32,6 +32,15 @@ Endpoint principali
     - speed (float, optional): fattore di velocità (es. 0.8 = più lento, 1.2 = più veloce).
     - format (string, optional): "wav" (default) o "base64" per ricevere l'audio inline.
 
+emozioni ammesse:
+- neutral (neutrale)
+- happy (felice)
+- sad (triste)
+- angry (arrabbiato)
+- fearful (spaventato)
+- disgusted (disgustato)
+- surprised (sorpreso)
+
   - Esempio JSON body:
     {
       "text": "Questa è una prova.",

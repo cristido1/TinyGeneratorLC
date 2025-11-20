@@ -116,7 +116,7 @@ CREATE TABLE test_definitions (
   min_score INTEGER DEFAULT 0,
   priority INTEGER DEFAULT 1,
   active INTEGER DEFAULT 1,
-  timeout_ms INTEGER DEFAULT 30000,
+  timeout_secs INTEGER DEFAULT 30,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT
 , allowed_plugins TEXT, valid_score_range TEXT, test_type text default 'functioncall', expected_prompt_value text, execution_plan text, json_response_format text, files_to_copy TEXT);

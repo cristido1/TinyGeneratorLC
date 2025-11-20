@@ -127,7 +127,7 @@
         <div class="col-md-6">
             <label for="timeout_seconds" class="form-label">Timeout (seconds)</label>
             <input id="timeout_seconds" class="form-control" type="number" min="0" step="1" />
-            <input asp-for="Definition.TimeoutMs" type="hidden" id="timeout_ms_hidden" />
+            <input asp-for="Definition.TimeoutMs" type="hidden" id="timeout_secs_hidden" />
             <span asp-validation-for="Definition.TimeoutMs" class="text-danger"></span>
             <small class="form-text text-muted">Default: 30s for questions, 60s for TTS, 120s for writers</small>
         </div>
@@ -171,20 +171,20 @@
                     console.error('Error while initializing chosen', e);
                 }
                 
-                // Convert ms to seconds on page load
-                var timeoutMs = parseInt($('#timeout_ms_hidden').val()) || 0;
-                $('#timeout_seconds').val(timeoutMs > 0 ? Math.round(timeoutMs / 1000) : '');
+                // Load timeout value on page load
+                var timeoutSecs = parseInt($('#timeout_secs_hidden').val()) || 0;
+                $('#timeout_seconds').val(timeoutSecs > 0 ? timeoutSecs : '');
                 
-                // Convert seconds to ms on input change
+                // Update hidden field on input change
                 $('#timeout_seconds').on('input change', function() {
                     var seconds = parseInt($(this).val()) || 0;
-                    $('#timeout_ms_hidden').val(seconds * 1000);
+                    $('#timeout_secs_hidden').val(seconds);
                 });
                 
                 // Ensure conversion happens before form submit
                 $('form').on('submit', function() {
                     var seconds = parseInt($('#timeout_seconds').val()) || 0;
-                    $('#timeout_ms_hidden').val(seconds * 1000);
+                    $('#timeout_secs_hidden').val(seconds);
                 });
             });
         })();

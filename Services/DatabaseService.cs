@@ -591,7 +591,7 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
         using var conn = CreateConnection();
         conn.Open();
 
-        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy
+        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy
                 FROM test_definitions WHERE test_group = @g AND active = 1 ORDER BY priority, id";
         return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
     }
@@ -611,7 +611,7 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
             using var rdr = check.ExecuteReader();
             if (rdr.Read())
             {
-                var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, active AS Active
+                var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, active AS Active
 FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
                 return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
             }
@@ -651,7 +651,7 @@ FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
             order = col + (ascending ? " ASC" : " DESC");
         }
 
-        var sql = $@"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, active AS Active
+        var sql = $@"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, active AS Active
 FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
 
         return conn.Query<TestDefinition>(sql, parameters).ToList();
@@ -661,7 +661,7 @@ FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_ms AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, active AS Active
+        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutMs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, active AS Active
 FROM test_definitions WHERE id = @id LIMIT 1";
         return conn.QueryFirstOrDefault<TestDefinition>(sql, new { id });
     }
@@ -670,7 +670,7 @@ FROM test_definitions WHERE id = @id LIMIT 1";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"INSERT INTO test_definitions(test_group, library, function_name, expected_behavior, expected_asset, prompt, timeout_ms, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, execution_plan, json_response_format, files_to_copy, active)
+        var sql = @"INSERT INTO test_definitions(test_group, library, function_name, expected_behavior, expected_asset, prompt, timeout_secs, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, execution_plan, json_response_format, files_to_copy, active)
 VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Prompt,@TimeoutMs,@Priority,@ValidScoreRange,@TestType,@ExpectedPromptValue,@AllowedPlugins,@ExecutionPlan,@JsonResponseFormat,@FilesToCopy,@Active); SELECT last_insert_rowid();";
         var id = conn.ExecuteScalar<long>(sql, td);
         return (int)id;
@@ -680,7 +680,7 @@ VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Promp
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"UPDATE test_definitions SET test_group=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_ms=@TimeoutMs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins, execution_plan=@ExecutionPlan, json_response_format=@JsonResponseFormat, files_to_copy=@FilesToCopy, active=@Active WHERE id = @Id";
+        var sql = @"UPDATE test_definitions SET test_group=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_secs=@TimeoutMs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins, execution_plan=@ExecutionPlan, json_response_format=@JsonResponseFormat, files_to_copy=@FilesToCopy, active=@Active WHERE id = @Id";
         conn.Execute(sql, td);
     }
 

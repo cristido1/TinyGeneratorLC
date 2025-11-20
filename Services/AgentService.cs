@@ -178,6 +178,13 @@ namespace TinyGenerator.Services
             
             _progress?.ShowAgentActivity(displayName, statusMessage, agentId, testType);
             
+            // Registra nota per Ollama models
+            if (displayName.Contains("ollama", StringComparison.OrdinalIgnoreCase) || 
+                displayName.Contains(":", StringComparison.OrdinalIgnoreCase))
+            {
+                OllamaMonitorService.RecordModelNote(displayName, testType);
+            }
+            
             try
             {
                 var completedTask = await Task.WhenAny(

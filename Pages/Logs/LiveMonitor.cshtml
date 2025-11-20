@@ -4,391 +4,354 @@
     ViewData["Title"] = "Live Monitor";
 }
 
-<div class="container-fluid mt-4">
-    <div class="row">
-        <div class="col-12">
-            <div class="card shadow-sm border-0">
-                <div class="card-header bg-gradient d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">
-                        <i class="bi bi-activity"></i> Live Activity Monitor
-                    </h5>
-                    <div>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-pause">
-                            <i class="bi bi-pause"></i> Pause
-                        </button>
-                        <button type="button" class="btn btn-sm btn-outline-danger" id="btn-clear">
-                            <i class="bi bi-trash"></i> Clear
-                        </button>
-                    </div>
-                </div>
-                <div class="card-body p-0">
-                    <div id="logs-container" style="height: 600px; overflow-y: auto; background: #f8f9fa; font-family: 'Roboto Mono', monospace; font-size: 12px;">
-                        <div class="p-3 text-muted text-center">
-                            <i class="bi bi-hourglass-split"></i> Waiting for activity...
-                        </div>
-                    </div>
-                </div>
-            </div>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    html, body { width: 100%; height: 100%; }
+    
+    body {
+        font-family: 'Share Tech Mono', monospace;
+        background: #0a0e0a url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 L 0 0 0 20" fill="none" stroke="%23003d2e" stroke-width="0.5" opacity="0.3"/></pattern></defs><rect width="100" height="100" fill="%230a0e0a"/><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+        background-attachment: fixed;
+        color: #00ffbf;
+        overflow-x: hidden;
+        position: relative;
+    }
+    
+    body::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: repeating-linear-gradient(0deg, rgba(0, 255, 191, 0.03), rgba(0, 255, 191, 0.03) 2px, transparent 2px, transparent 4px);
+        pointer-events: none;
+        z-index: 9999;
+    }
+    
+    .container { max-width: 1400px; margin: 0 auto; padding: 24px; position: relative; z-index: 1; }
+    
+    .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 32px;
+        padding-bottom: 16px;
+        border-bottom: 2px solid #00cc99;
+        box-shadow: 0 4px 16px rgba(0, 255, 191, 0.1);
+    }
+    
+    .title {
+        font-family: 'Orbitron', monospace;
+        font-size: 28px;
+        font-weight: 900;
+        color: #00ffbf;
+        text-transform: uppercase;
+        letter-spacing: 4px;
+        text-shadow: 0 0 10px #00ffbf, 0 0 20px #00cc99;
+    }
+    
+    .controls { display: flex; gap: 12px; }
+    
+    .btn {
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 12px;
+        font-weight: bold;
+        padding: 8px 16px;
+        background: transparent;
+        border: 2px solid #00ffbf;
+        color: #00ffbf;
+        cursor: pointer;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+        box-shadow: inset 0 0 8px rgba(0, 255, 191, 0.1);
+    }
+    
+    .btn:hover {
+        background: rgba(0, 255, 191, 0.1);
+        box-shadow: 0 0 12px #00ffbf, inset 0 0 12px rgba(0, 255, 191, 0.2);
+        text-shadow: 0 0 8px #00ffbf;
+    }
+    
+    .btn-clear {
+        border-color: #ff4444;
+        color: #ff4444;
+        box-shadow: inset 0 0 8px rgba(255, 68, 68, 0.1);
+    }
+    
+    .btn-clear:hover {
+        background: rgba(255, 68, 68, 0.1);
+        box-shadow: 0 0 12px #ff4444, inset 0 0 12px rgba(255, 68, 68, 0.2);
+    }
+    
+    .logs-container {
+        background: rgba(10, 14, 10, 0.8);
+        border: 2px solid #00cc99;
+        border-radius: 4px;
+        overflow: hidden;
+        box-shadow: 0 0 20px rgba(0, 255, 191, 0.2), inset 0 0 20px rgba(0, 255, 191, 0.05);
+        height: 600px;
+        display: flex;
+        flex-direction: column;
+    }
+    
+    .logs-header {
+        display: flex;
+        padding: 12px 16px;
+        background: rgba(0, 204, 153, 0.1);
+        border-bottom: 1px solid #00cc99;
+        font-size: 11px;
+        color: #00ffbf;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        gap: 16px;
+        align-items: center;
+    }
+    
+    .logs-header span { flex-shrink: 0; }
+    .logs-header .timestamp { width: 140px; }
+    .logs-header .level { width: 100px; }
+    .logs-header .category { width: 120px; }
+    .logs-header .message { flex: 1; }
+    
+    .logs-content {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 0;
+    }
+    
+    .logs-content::-webkit-scrollbar { width: 8px; }
+    .logs-content::-webkit-scrollbar-track { background: rgba(0, 255, 191, 0.05); }
+    .logs-content::-webkit-scrollbar-thumb { background: #00cc99; border-radius: 4px; }
+    .logs-content::-webkit-scrollbar-thumb:hover { background: #00ffbf; box-shadow: 0 0 8px #00ffbf; }
+    
+    .log-entry {
+        display: flex;
+        align-items: center;
+        padding: 10px 16px;
+        border-bottom: 1px solid rgba(0, 204, 153, 0.2);
+        transition: all 0.2s ease;
+        gap: 12px;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .log-entry:hover {
+        background: rgba(0, 255, 191, 0.08);
+        transform: translateY(-2px);
+        box-shadow: inset 0 0 12px rgba(0, 255, 191, 0.1), 0 4px 12px rgba(0, 255, 191, 0.15);
+        border-bottom-color: rgba(0, 255, 191, 0.4);
+    }
+    
+    .log-icon { width: 20px; height: 20px; flex-shrink: 0; font-size: 12px; }
+    .log-timestamp { width: 140px; flex-shrink: 0; font-size: 11px; color: #00ffbf; opacity: 0.8; }
+    .log-level { width: 100px; flex-shrink: 0; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; padding: 4px 8px; border-radius: 2px; text-align: center; }
+    .log-category { width: 120px; flex-shrink: 0; font-size: 10px; color: #00ffbf; text-transform: uppercase; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .log-message { flex: 1; font-size: 12px; color: #00ffbf; word-break: break-word; white-space: pre-wrap; }
+    
+    .log-level.info { background: rgba(0, 255, 191, 0.2); border: 1px solid #00cc99; color: #00ffbf; box-shadow: 0 0 6px rgba(0, 255, 191, 0.3); }
+    .log-level.success { background: rgba(0, 255, 100, 0.2); border: 1px solid #00ff66; color: #00ff99; box-shadow: 0 0 6px rgba(0, 255, 100, 0.3); }
+    .log-level.warning { background: rgba(255, 200, 0, 0.2); border: 1px solid #ffd700; color: #ffed4e; box-shadow: 0 0 6px rgba(255, 200, 0, 0.3); }
+    .log-level.error { background: rgba(255, 50, 50, 0.2); border: 1px solid #ff4444; color: #ff6666; box-shadow: 0 0 6px rgba(255, 50, 50, 0.3); }
+    
+    .log-entry.entry-info { border-left: 3px solid #00cc99; }
+    .log-entry.entry-success { border-left: 3px solid #00ff66; }
+    .log-entry.entry-warning { border-left: 3px solid #ffd700; }
+    .log-entry.entry-error { border-left: 3px solid #ff4444; }
+    
+    .logs-placeholder { display: flex; align-items: center; justify-content: center; height: 100%; color: #00cc99; font-size: 14px; text-transform: uppercase; letter-spacing: 2px; opacity: 0.6; }
+    
+    .stats-panel {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+        margin-top: 24px;
+    }
+    
+    .stat-box {
+        background: rgba(0, 204, 153, 0.05);
+        border: 1px solid #00cc99;
+        border-radius: 4px;
+        padding: 16px;
+        box-shadow: inset 0 0 12px rgba(0, 255, 191, 0.05);
+        transition: all 0.3s ease;
+    }
+    
+    .stat-box:hover {
+        background: rgba(0, 204, 153, 0.1);
+        box-shadow: 0 0 12px rgba(0, 255, 191, 0.2), inset 0 0 12px rgba(0, 255, 191, 0.1);
+    }
+    
+    .stat-label { font-size: 10px; color: #00cc99; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; font-weight: bold; }
+    .stat-value { font-size: 24px; font-weight: bold; color: #00ffbf; text-shadow: 0 0 8px #00ffbf; font-family: 'Orbitron', monospace; }
+    .stat-value.info { color: #00ffbf; }
+    .stat-value.success { color: #00ff99; }
+    .stat-value.warning { color: #ffed4e; }
+    .stat-value.error { color: #ff6666; }
+</style>
+
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+<div class="container">
+    <div class="header">
+        <div class="title">► LIVE MONITOR</div>
+        <div class="controls">
+            <button class="btn" id="btn-pause">⏸ Pause</button>
+            <button class="btn btn-clear" id="btn-clear">✕ Clear</button>
         </div>
     </div>
 
-    <div class="row mt-4">
-        <div class="col-md-6">
-            <div class="card shadow-sm border-0">
-                <div class="card-header bg-gradient">
-                    <h5 class="mb-0"><i class="bi bi-gear"></i> Active Models</h5>
-                </div>
-                <div class="card-body">
-                    <div id="models-status" class="list-group">
-                        <div class="list-group-item text-muted">
-                            <i class="bi bi-info-circle"></i> No models running
-                        </div>
-                    </div>
-                </div>
-            </div>
+    <div class="logs-container">
+        <div class="logs-header">
+            <span class="timestamp">TIME</span>
+            <span class="level">LEVEL</span>
+            <span class="category">CATEGORY</span>
+            <span class="message">MESSAGE</span>
         </div>
+        <div class="logs-content" id="logs-content">
+            <div class="logs-placeholder">▬ AWAITING DATA ▬</div>
+        </div>
+    </div>
 
-        <div class="col-md-6">
-            <div class="card shadow-sm border-0">
-                <div class="card-header bg-gradient">
-                    <h5 class="mb-0"><i class="bi bi-graph-up"></i> Statistics</h5>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="stat-box">
-                                <div class="stat-label">Total Events</div>
-                                <div class="stat-value" id="stat-total">0</div>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="stat-box">
-                                <div class="stat-label">Errors</div>
-                                <div class="stat-value text-danger" id="stat-errors">0</div>
-                            </div>
-                        </div>
-                        <div class="col-6 mt-3">
-                            <div class="stat-box">
-                                <div class="stat-label">Warnings</div>
-                                <div class="stat-value text-warning" id="stat-warnings">0</div>
-                            </div>
-                        </div>
-                        <div class="col-6 mt-3">
-                            <div class="stat-box">
-                                <div class="stat-label">Info</div>
-                                <div class="stat-value text-info" id="stat-info">0</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+    <div class="stats-panel">
+        <div class="stat-box">
+            <div class="stat-label">Total Events</div>
+            <div class="stat-value info" id="stat-total">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">Info Messages</div>
+            <div class="stat-value info" id="stat-info">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">Success</div>
+            <div class="stat-value success" id="stat-success">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">Warnings</div>
+            <div class="stat-value warning" id="stat-warning">0</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">Errors</div>
+            <div class="stat-value error" id="stat-error">0</div>
         </div>
     </div>
 </div>
 
-<style>
-    .bg-gradient {
-        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
-        color: white;
-    }
-
-    .card {
-        border-radius: 12px;
-        transition: all 0.3s ease;
-    }
-
-    .card:hover {
-        box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
-    }
-
-    #logs-container {
-        border-radius: 0 0 12px 12px;
-    }
-
-    .log-entry {
-        padding: 8px 12px;
-        border-bottom: 1px solid #e0e0e0;
-        display: flex;
-        gap: 12px;
-        animation: slideIn 0.3s ease-out;
-    }
-
-    .log-entry:hover {
-        background: #fff;
-        transition: background 0.2s ease;
-    }
-
-    .log-timestamp {
-        color: #666;
-        min-width: 180px;
-        flex-shrink: 0;
-        font-weight: 500;
-    }
-
-    .log-level {
-        min-width: 80px;
-        flex-shrink: 0;
-        font-weight: 600;
-        padding: 2px 6px;
-        border-radius: 4px;
-        text-align: center;
-    }
-
-    .log-level.info {
-        background: #d1ecf1;
-        color: #0c5460;
-    }
-
-    .log-level.warning {
-        background: #fff3cd;
-        color: #856404;
-    }
-
-    .log-level.error {
-        background: #f8d7da;
-        color: #721c24;
-    }
-
-    .log-level.success {
-        background: #d4edda;
-        color: #155724;
-    }
-
-    .log-category {
-        color: #0066cc;
-        font-weight: 600;
-        min-width: 120px;
-        flex-shrink: 0;
-    }
-
-    .log-message {
-        flex: 1;
-        word-break: break-word;
-        color: #333;
-    }
-
-    .log-exception {
-        color: #d32f2f;
-        font-weight: 500;
-    }
-
-    @@keyframes slideIn {
-        from {
-            opacity: 0;
-            transform: translateY(-10px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    .stat-box {
-        text-align: center;
-        padding: 12px;
-        background: #f8f9fa;
-        border-radius: 8px;
-        border: 1px solid #e0e0e0;
-    }
-
-    .stat-label {
-        font-size: 12px;
-        color: #666;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-
-    .stat-value {
-        font-size: 24px;
-        font-weight: 700;
-        color: #16a34a;
-        margin-top: 8px;
-    }
-
-    .model-status {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 10px;
-        border: 1px solid #e0e0e0;
-        border-radius: 6px;
-        margin-bottom: 8px;
-    }
-
-    .model-status.running {
-        background: #f0f8ff;
-        border-color: #16a34a;
-    }
-
-    .status-indicator {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        animation: pulse 2s infinite;
-    }
-
-    .status-indicator.running {
-        background: #16a34a;
-    }
-
-    @@keyframes pulse {
-        0%, 100% {
-            opacity: 1;
-        }
-        50% {
-            opacity: 0.5;
-        }
-    }
-
-    .btn-outline-secondary:hover {
-        background: #6c757d;
-        color: white;
-    }
-
-    .btn-outline-danger:hover {
-        background: #dc3545;
-        color: white;
-    }
-</style>
-
 <script src="~/lib/signalr/signalr.min.js"></script>
 <script>
-    (() => {
-        let isPaused = false;
-        let logCount = { total: 0, info: 0, warning: 0, error: 0 };
-        let activeModels = new Map();
-
-        const container = document.getElementById('logs-container');
-        const pauseBtn = document.getElementById('btn-pause');
-        const clearBtn = document.getElementById('btn-clear');
-
-        function clearContainer() {
-            container.innerHTML = '<div class="p-3 text-muted text-center"><i class="bi bi-hourglass-split"></i> Waiting for activity...</div>';
-            logCount = { total: 0, info: 0, warning: 0, error: 0 };
-            updateStats();
+    // State management
+    let isPaused = false;
+    let stats = { total: 0, info: 0, success: 0, warning: 0, error: 0 };
+    
+    const logsContent = document.getElementById('logs-content');
+    const btnPause = document.getElementById('btn-pause');
+    const btnClear = document.getElementById('btn-clear');
+    
+    const iconSVG = { info: '⊙', success: '✓', warning: '⚠', error: '✕' };
+    
+    function addLogEntry(level = 'info', message = '', category = 'System') {
+        if (isPaused) return;
+        
+        const placeholder = logsContent.querySelector('.logs-placeholder');
+        if (placeholder) placeholder.remove();
+        
+        const entry = document.createElement('div');
+        entry.className = `log-entry entry-${level}`;
+        
+        const now = new Date();
+        const timestamp = now.toLocaleTimeString('it-IT', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+        
+        entry.innerHTML = `
+            <div class="log-icon">${iconSVG[level] || '·'}</div>
+            <div class="log-timestamp">${timestamp}</div>
+            <div class="log-level ${level}">${level.toUpperCase()}</div>
+            <div class="log-category">[${category}]</div>
+            <div class="log-message">${escapeHtml(message)}</div>
+        `;
+        
+        logsContent.insertBefore(entry, logsContent.firstChild);
+        
+        stats.total++;
+        stats[level]++;
+        updateStats();
+        
+        while (logsContent.children.length > 500) {
+            logsContent.removeChild(logsContent.lastChild);
         }
-
-        pauseBtn.addEventListener('click', () => {
-            isPaused = !isPaused;
-            pauseBtn.textContent = isPaused ? '▶ Resume' : '⏸ Pause';
-            pauseBtn.classList.toggle('btn-warning', isPaused);
-        });
-
-        clearBtn.addEventListener('click', () => {
-            fetch('/api/logs/clear', { method: 'POST' }).then(() => clearContainer());
-        });
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function addLogEntry(timestamp, level, category, message, exception) {
-            if (isPaused) return;
-
-            // Remove placeholder
-            const placeholder = container.querySelector('.text-muted');
-            if (placeholder) placeholder.remove();
-
-            const entry = document.createElement('div');
-            entry.className = 'log-entry';
-
-            const levelClass = level.toLowerCase();
-            const levelColor = {
-                'information': 'info',
-                'warning': 'warning',
-                'error': 'error'
-            }[levelClass] || 'info';
-
-            logCount.total++;
-            logCount[levelColor === 'info' ? 'info' : levelColor === 'warning' ? 'warning' : 'error']++;
-
-            entry.innerHTML = `
-                <div class="log-timestamp">${escapeHtml(timestamp.substring(11, 19))}</div>
-                <div class="log-level ${levelColor}">${level}</div>
-                <div class="log-category">${escapeHtml(category)}</div>
-                <div class="log-message">${escapeHtml(message)}</div>
-                ${exception ? `<div class="log-exception">⚠ ${escapeHtml(exception.substring(0, 100))}</div>` : ''}
-            `;
-
-            container.insertBefore(entry, container.firstChild);
-
-            // Limit entries to 1000
-            while (container.children.length > 1000) {
-                container.removeChild(container.lastChild);
-            }
-
-            updateStats();
-        }
-
-        function updateStats() {
-            document.getElementById('stat-total').textContent = logCount.total;
-            document.getElementById('stat-info').textContent = logCount.info;
-            document.getElementById('stat-warnings').textContent = logCount.warning;
-            document.getElementById('stat-errors').textContent = logCount.error;
-        }
-
-        function updateModelStatus(modelName, status, taskType) {
-            const modelsDiv = document.getElementById('models-status');
-            let modelItem = modelsDiv.querySelector(`[data-model="${modelName}"]`);
-
-            if (!modelItem) {
-                if (modelsDiv.querySelector('.text-muted')) {
-                    modelsDiv.innerHTML = '';
-                }
-                modelItem = document.createElement('div');
-                modelItem.className = 'model-status running';
-                modelItem.setAttribute('data-model', modelName);
-                modelsDiv.appendChild(modelItem);
-            }
-
-            modelItem.innerHTML = `
-                <div>
-                    <span class="status-indicator running"></span>
-                    <strong>${escapeHtml(modelName)}</strong> - ${escapeHtml(status)} (${escapeHtml(taskType)})
-                </div>
-                <small class="text-muted">now</small>
-            `;
-        }
-
-        // Connect to SignalR
-        const connection = new signalR.HubConnectionBuilder()
-            .withUrl('/progressHub')
-            .withAutomaticReconnect()
-            .build();
-
-        connection.on('ProgressAppended', (id, message, extraClass) => {
-            const ts = new Date().toISOString();
-            addLogEntry(ts, 'Information', 'Progress', message, null);
-        });
-
-        connection.on('AgentActivityStarted', (agentId, agentName, status, testType) => {
-            updateModelStatus(agentName, status, testType);
-            const ts = new Date().toISOString();
-            addLogEntry(ts, 'Information', 'Agent', `Model started: ${agentName}`, null);
-        });
-
-        connection.on('AgentActivityEnded', (agentId) => {
-            const modelDiv = document.getElementById('models-status').querySelector(`[data-model]`);
-            if (modelDiv) modelDiv.remove();
-
-            const ts = new Date().toISOString();
-            addLogEntry(ts, 'Success', 'Agent', `Model completed: ${agentId}`, null);
-        });
-
-        // Load initial logs
-        fetch('/api/logs/recent?limit=50')
-            .then(r => r.json())
-            .then(logs => {
-                logs.reverse().forEach(log => {
-                    addLogEntry(log.ts, log.level, log.category, log.message, log.exception);
-                });
-            })
-            .catch(e => console.warn('Failed to load initial logs', e));
-
-        connection.start()
-            .then(() => console.log('Live monitor connected'))
-            .catch(e => console.error('SignalR error', e));
-    })();
+    }
+    
+    function clearLogs() {
+        logsContent.innerHTML = '<div class="logs-placeholder">▬ AWAITING DATA ▬</div>';
+        stats = { total: 0, info: 0, success: 0, warning: 0, error: 0 };
+        updateStats();
+    }
+    
+    function updateStats() {
+        document.getElementById('stat-total').textContent = stats.total;
+        document.getElementById('stat-info').textContent = stats.info;
+        document.getElementById('stat-success').textContent = stats.success;
+        document.getElementById('stat-warning').textContent = stats.warning;
+        document.getElementById('stat-error').textContent = stats.error;
+    }
+    
+    function escapeHtml(text) {
+        const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+        return text.replace(/[&<>"']/g, m => map[m]);
+    }
+    
+    btnPause.addEventListener('click', () => {
+        isPaused = !isPaused;
+        btnPause.textContent = isPaused ? '▶ Resume' : '⏸ Pause';
+        btnPause.style.borderColor = isPaused ? '#ffd700' : '#00ffbf';
+        btnPause.style.color = isPaused ? '#ffd700' : '#00ffbf';
+        btnPause.style.boxShadow = isPaused ? '0 0 12px #ffd700, inset 0 0 12px rgba(255, 215, 0, 0.2)' : '0 0 12px #00ffbf, inset 0 0 12px rgba(0, 255, 191, 0.2)';
+    });
+    
+    btnClear.addEventListener('click', clearLogs);
+    
+    // SignalR connection
+    const connection = new signalR.HubConnectionBuilder()
+        .withUrl('/progressHub')
+        .withAutomaticReconnect()
+        .build();
+    
+    connection.on('ProgressAppended', (id, message, extraClass) => {
+        addLogEntry('info', message, 'Progress');
+    });
+    
+    connection.on('ProgressCompleted', (id, result) => {
+        addLogEntry('success', result || 'Completed', 'Progress');
+    });
+    
+    connection.on('AgentActivityStarted', (agentId, agentName, status, testType) => {
+        addLogEntry('info', `${agentName}: ${status}`, 'Agent');
+    });
+    
+    connection.on('AgentActivityEnded', (agentId) => {
+        addLogEntry('success', `Agent completed: ${agentId}`, 'Agent');
+    });
+    
+    // Load initial logs
+    fetch('/api/logs/recent?limit=50')
+        .then(r => r.json())
+        .then(logs => {
+            logs.reverse().forEach(log => {
+                addLogEntry(log.level.toLowerCase(), log.message, log.category);
+            });
+        })
+        .catch(e => console.warn('Failed to load initial logs', e));
+    
+    connection.start()
+        .then(() => console.log('Live monitor connected'))
+        .catch(e => console.error('SignalR error', e));
+    
+    window.addLog = addLogEntry;
+    window.clearAllLogs = clearLogs;
+    window.getStats = () => stats;
 </script>

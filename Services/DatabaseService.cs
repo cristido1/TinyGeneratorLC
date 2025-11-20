@@ -162,7 +162,7 @@ public sealed class DatabaseService
     }
 
     /// <summary>
-    /// Return the model Name for a given rowid in the models table (best-effort).
+    /// Return the model Name for a given Id in the models table (best-effort).
     /// </summary>
     public string? GetModelNameById(long rowId)
     {
@@ -170,7 +170,7 @@ public sealed class DatabaseService
         conn.Open();
         try
         {
-            var name = conn.ExecuteScalar<string?>("SELECT Name FROM models WHERE rowid = @id LIMIT 1", new { id = rowId });
+            var name = conn.ExecuteScalar<string?>("SELECT Name FROM models WHERE Id = @id LIMIT 1", new { id = rowId });
             return name;
         }
         catch
@@ -186,8 +186,8 @@ public sealed class DatabaseService
         conn.Open();
         try
         {
-            // Use rowid as the numeric identifier for models (table uses Name as primary key)
-            var id = conn.ExecuteScalar<long?>("SELECT rowid FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+            // Use Id as the numeric identifier for models (table uses Name as primary key)
+            var id = conn.ExecuteScalar<long?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
             return id;
         }
         catch { return null; }
@@ -1008,7 +1008,7 @@ SET WriterScore = (
         // For now return as a LogEntry-like structure or a dedicated DTO. Simpler approach: return raw rows with JSON in raw_json.
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT se.id AS Id, se.ts AS Ts, COALESCE(m.Name,'') AS Model, COALESCE(a.name,'') AS Category, se.total_score AS Score, se.raw_json AS Message FROM stories_evaluations se LEFT JOIN models m ON se.model_id = m.rowid LEFT JOIN agents a ON se.agent_id = a.id WHERE se.story_id = @sid ORDER BY se.id";
+        var sql = @"SELECT se.id AS Id, se.ts AS Ts, COALESCE(m.Name,'') AS Model, COALESCE(a.name,'') AS Category, se.total_score AS Score, se.raw_json AS Message FROM stories_evaluations se LEFT JOIN models m ON se.model_id = m.Id LEFT JOIN agents a ON se.agent_id = a.id WHERE se.story_id = @sid ORDER BY se.id";
         return conn.Query<TinyGenerator.Models.LogEntry>(sql, new { sid = storyId }).ToList();
     }
 
@@ -1018,7 +1018,7 @@ SET WriterScore = (
         conn.Open();
         var sql = @"SELECT id AS Id, story_id AS StoryId, narrative_coherence_score AS NarrativeCoherenceScore, narrative_coherence_defects AS NarrativeCoherenceDefects, structure_score AS StructureScore, structure_defects AS StructureDefects, characterization_score AS CharacterizationScore, characterization_defects AS CharacterizationDefects, dialogues_score AS DialoguesScore, dialogues_defects AS DialoguesDefects, pacing_score AS PacingScore, pacing_defects AS PacingDefects, originality_score AS OriginalityScore, originality_defects AS OriginalityDefects, style_score AS StyleScore, style_defects AS StyleDefects, worldbuilding_score AS WorldbuildingScore, worldbuilding_defects AS WorldbuildingDefects, thematic_coherence_score AS ThematicCoherenceScore, thematic_coherence_defects AS ThematicCoherenceDefects, emotional_impact_score AS EmotionalImpactScore, emotional_impact_defects AS EmotionalImpactDefects, total_score AS TotalScore, overall_evaluation AS OverallEvaluation, raw_json AS RawJson, model_id AS ModelId, agent_id AS AgentId, ts AS Ts FROM stories_evaluations WHERE story_id = @sid ORDER BY id";
         // Also join models and agents for human-friendly names and a 'Score' alias used by UI
-        sql = @"SELECT se.id AS Id, se.story_id AS StoryId, se.narrative_coherence_score AS NarrativeCoherenceScore, se.narrative_coherence_defects AS NarrativeCoherenceDefects, se.structure_score AS StructureScore, se.structure_defects AS StructureDefects, se.characterization_score AS CharacterizationScore, se.characterization_defects AS CharacterizationDefects, se.dialogues_score AS DialoguesScore, se.dialogues_defects AS DialoguesDefects, se.pacing_score AS PacingScore, se.pacing_defects AS PacingDefects, se.originality_score AS OriginalityScore, se.originality_defects AS OriginalityDefects, se.style_score AS StyleScore, se.style_defects AS StyleDefects, se.worldbuilding_score AS WorldbuildingScore, se.worldbuilding_defects AS WorldbuildingDefects, se.thematic_coherence_score AS ThematicCoherenceScore, se.thematic_coherence_defects AS ThematicCoherenceDefects, se.emotional_impact_score AS EmotionalImpactScore, se.emotional_impact_defects AS EmotionalImpactDefects, se.total_score AS TotalScore, se.overall_evaluation AS OverallEvaluation, se.raw_json AS RawJson, se.model_id AS ModelId, se.agent_id AS AgentId, se.ts AS Ts, COALESCE(m.Name, '') AS Model, se.total_score AS Score FROM stories_evaluations se LEFT JOIN models m ON se.model_id = m.rowid WHERE se.story_id = @sid ORDER BY se.id";
+        sql = @"SELECT se.id AS Id, se.story_id AS StoryId, se.narrative_coherence_score AS NarrativeCoherenceScore, se.narrative_coherence_defects AS NarrativeCoherenceDefects, se.structure_score AS StructureScore, se.structure_defects AS StructureDefects, se.characterization_score AS CharacterizationScore, se.characterization_defects AS CharacterizationDefects, se.dialogues_score AS DialoguesScore, se.dialogues_defects AS DialoguesDefects, se.pacing_score AS PacingScore, se.pacing_defects AS PacingDefects, se.originality_score AS OriginalityScore, se.originality_defects AS OriginalityDefects, se.style_score AS StyleScore, se.style_defects AS StyleDefects, se.worldbuilding_score AS WorldbuildingScore, se.worldbuilding_defects AS WorldbuildingDefects, se.thematic_coherence_score AS ThematicCoherenceScore, se.thematic_coherence_defects AS ThematicCoherenceDefects, se.emotional_impact_score AS EmotionalImpactScore, se.emotional_impact_defects AS EmotionalImpactDefects, se.total_score AS TotalScore, se.overall_evaluation AS OverallEvaluation, se.raw_json AS RawJson, se.model_id AS ModelId, se.agent_id AS AgentId, se.ts AS Ts, COALESCE(m.Name, '') AS Model, se.total_score AS Score FROM stories_evaluations se LEFT JOIN models m ON se.model_id = m.Id WHERE se.story_id = @sid ORDER BY se.id";
         return conn.Query<TinyGenerator.Models.StoryEvaluation>(sql, new { sid = storyId }).ToList();
     }
 
@@ -1444,7 +1444,7 @@ CREATE TABLE IF NOT EXISTS models (
     folder TEXT NULL,
     model_id INTEGER NULL,
     agent_id INTEGER NULL,
-    FOREIGN KEY (model_id) REFERENCES models(rowid),
+    FOREIGN KEY (model_id) REFERENCES models(Id),
     FOREIGN KEY (agent_id) REFERENCES agents(id)
 );";
         storiesCmd.ExecuteNonQuery();
@@ -1558,7 +1558,7 @@ CREATE TABLE IF NOT EXISTS models (
         notes TEXT,
         run_date TEXT,
         test_folder TEXT,
-        FOREIGN KEY (model_id) REFERENCES models(rowid)
+        FOREIGN KEY (model_id) REFERENCES models(Id)
     );
     ";
         runsCmd.ExecuteNonQuery();

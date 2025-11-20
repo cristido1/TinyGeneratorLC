@@ -76,6 +76,19 @@ namespace TinyGenerator.Skills
         [KernelFunction, Description("Adds a phrase spoken by a character.")]
         public string AddPhrase(string character, string text, string emotion)
         {
+            // Validate required parameters
+            if (string.IsNullOrWhiteSpace(character))
+                return "ERROR: Character name is required.";
+            if (string.IsNullOrWhiteSpace(text))
+                return "ERROR: Phrase text is required.";
+            if (string.IsNullOrWhiteSpace(emotion))
+                return "ERROR: Emotion is mandatory for each phrase.";
+
+            // Check if character is defined
+            bool characterExists = _schema.Characters.Any(c => c.Name.Equals(character, StringComparison.OrdinalIgnoreCase));
+            if (!characterExists)
+                return $"ERROR: Character '{character}' is not defined. Define the character with AddCharacter before adding phrases. Phrase not added.";
+
             _schema.Timeline.Add(new TtsPhrase
             {
                 Character = character,
@@ -153,7 +166,17 @@ namespace TinyGenerator.Skills
             if (string.IsNullOrWhiteSpace(_storyText))
                 return "ERROR: Story text is empty.";
 
-            // Check 5: Story coverage - verify all story text has been included in the schema
+            // Check 5: All characters are used in the timeline
+            var unusedError = CheckUnusedCharacters();
+            if (unusedError != null)
+                return unusedError;
+
+            // Check 6: All character names in phrases match defined characters
+            var characterError = CheckCharacterConsistency();
+            if (characterError != null)
+                return characterError;
+
+            // Check 7: Story coverage - verify all story text has been included in the schema
             var coverageError = CheckStoryCoverage();
             if (coverageError != null)
                 return coverageError;
@@ -218,6 +241,59 @@ namespace TinyGenerator.Skills
             }
 
             return null; // Coverage is acceptable
+        }
+
+        /// <summary>
+        /// Checks that all defined characters are used at least once in the timeline.
+        /// Returns an error message if unused characters are found, otherwise returns null.
+        /// </summary>
+        private string? CheckUnusedCharacters()
+        {
+            var phraseCharacters = _schema.Timeline
+                .OfType<TtsPhrase>()
+                .Select(p => p.Character)
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var unusedCharacters = _schema.Characters
+                .Where(c => !phraseCharacters.Contains(c.Name))
+                .Select(c => c.Name)
+                .ToList();
+
+            if (unusedCharacters.Count > 0)
+            {
+                return $"ERROR: Unused characters: {string.Join(", ", unusedCharacters)}. " +
+                       $"All characters must be used in at least one phrase.";
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Checks that all character names used in phrases are defined in the characters list.
+        /// Returns an error message if undefined character names are found, otherwise returns null.
+        /// </summary>
+        private string? CheckCharacterConsistency()
+        {
+            var definedCharacters = _schema.Characters
+                .Select(c => c.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var undefinedCharacters = _schema.Timeline
+                .OfType<TtsPhrase>()
+                .Select(p => p.Character)
+                .Where(c => !string.IsNullOrWhiteSpace(c) && !definedCharacters.Contains(c))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (undefinedCharacters.Count > 0)
+            {
+                return $"ERROR: Undefined characters in phrases: {string.Join(", ", undefinedCharacters)}. " +
+                       $"All character names in phrases must match defined characters.";
+            }
+
+            return null;
         }
     }
 }

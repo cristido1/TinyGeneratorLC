@@ -56,6 +56,15 @@ public sealed class DatabaseService
         try
         {
             Console.WriteLine("[DB] Initialize() called");
+            
+            // Check if database file exists; if not, recreate from schema file
+            var dbPath = _connectionString.Replace("Data Source=", "").Replace(";", "").Trim();
+            if (!File.Exists(dbPath))
+            {
+                Console.WriteLine($"[DB] Database file not found at {dbPath}, recreating from schema...");
+                RecreateFromSchema(dbPath);
+            }
+            
             InitializeSchema();
         }
         catch (Exception ex)
@@ -63,6 +72,56 @@ public sealed class DatabaseService
             Console.WriteLine($"[DB] Initialize() error: {ex.Message}\n{ex.StackTrace}");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Recreate database from saved schema file (db_schema.sql).
+    /// </summary>
+    private void RecreateFromSchema(string dbPath)
+    {
+        // Schema file path - relative to application working directory
+        var schemaPath = Path.Combine(Directory.GetCurrentDirectory(), "data", "db_schema.sql");
+        
+        if (!File.Exists(schemaPath))
+        {
+            Console.WriteLine($"[DB] Warning: Schema file not found at {schemaPath}. Creating empty database with InitializeSchema().");
+            // Create connection to empty database
+            using var connEmpty = CreateConnection();
+            connEmpty.Open();
+            connEmpty.Close();
+            return;
+        }
+        
+        Console.WriteLine($"[DB] Loading schema from {schemaPath}");
+        var schema = File.ReadAllText(schemaPath);
+        
+        // Create connection and apply schema
+        using var connSchema = CreateConnection();
+        connSchema.Open();
+        
+        // Split by semicolon and execute each statement
+        var statements = schema.Split(new[] { ";" }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var statement in statements)
+        {
+            var trimmed = statement.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed))
+            {
+                try
+                {
+                    using var cmd = ((SqliteConnection)connSchema).CreateCommand();
+                    cmd.CommandText = trimmed + ";";
+                    cmd.ExecuteNonQuery();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[DB] Warning: Failed to execute schema statement: {ex.Message}");
+                    // Continue with next statement
+                }
+            }
+        }
+        
+        connSchema.Close();
+        Console.WriteLine($"[DB] Database recreated from schema successfully");
     }
 
     /// <summary>

@@ -8,11 +8,19 @@ using System.IO;
 namespace TinyGenerator.Skills
 {
     [Description("Provides functions to call the PAM Audio Evaluator service (analyze and verify audio files).")]
-    public class AudioEvaluatorSkill
+    public class AudioEvaluatorSkill : ITinySkill
     {
         private readonly HttpClient _http;
+        private DateTime? _lastCalled;
+        private string? _lastFunction;
 
-        public string? LastCalled { get; set; }
+        // ITinySkill implementation
+        int? ITinySkill.ModelId => null;
+        string? ITinySkill.ModelName => null;
+        int? ITinySkill.AgentId => null;
+        string? ITinySkill.AgentName => null;
+        DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
+        string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
 
         public AudioEvaluatorSkill(HttpClient httpClient)
         {
@@ -24,7 +32,8 @@ namespace TinyGenerator.Skills
         [KernelFunction("check_health"), Description("Checks PAM service health.")]
         public async Task<string> CheckHealthAsync()
         {
-            LastCalled = nameof(CheckHealthAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(CheckHealthAsync);
             var resp = await _http.GetAsync("/health");
             if (resp.IsSuccessStatusCode)
             {
@@ -37,7 +46,8 @@ namespace TinyGenerator.Skills
         [KernelFunction("list_models"), Description("Lists available PAM models.")]
         public async Task<string> ListModelsAsync()
         {
-            LastCalled = nameof(ListModelsAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(ListModelsAsync);
             var resp = await _http.GetAsync("/models");
             if (resp.IsSuccessStatusCode)
             {
@@ -52,7 +62,8 @@ namespace TinyGenerator.Skills
             [Description("Path to the local audio file to analyze.")] string filePath,
             [Description("Optional PAM model name to use.")] string? modelName = null)
         {
-            LastCalled = nameof(AnalyzeAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(AnalyzeAsync);
 
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
                 throw new FileNotFoundException($"Audio file not found: {filePath}");
@@ -81,7 +92,8 @@ namespace TinyGenerator.Skills
             [Description("Optional path to a reference audio file for comparison.")] string? referenceFile = null,
             [Description("Verification type, e.g. 'speaker_verification' or 'audio_authenticity'.")] string verificationType = "speaker_verification")
         {
-            LastCalled = nameof(VerifyAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(VerifyAsync);
 
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
                 throw new FileNotFoundException($"Audio file not found: {filePath}");

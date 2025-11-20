@@ -9,12 +9,21 @@ using System.Text;
 namespace TinyGenerator.Skills
 {
     [Description("Client for localTTS (local FastAPI TTS service)")]
-    public class TtsApiSkill
+    public class TtsApiSkill : ITinySkill
     {
         private readonly HttpClient _http;
+        private DateTime? _lastCalled;
+        private string? _lastFunction;
 
-        public string? LastCalled { get; set; }
         public string? LastSynthFormat { get; set; }
+
+        // ITinySkill implementation
+        int? ITinySkill.ModelId => null;
+        string? ITinySkill.ModelName => null;
+        int? ITinySkill.AgentId => null;
+        string? ITinySkill.AgentName => null;
+        DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
+        string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
 
         public TtsApiSkill(HttpClient httpClient)
         {
@@ -25,7 +34,8 @@ namespace TinyGenerator.Skills
         [KernelFunction("check_health"), Description("Checks the health of the TTS service.")]
         public async Task<string> CheckHealthAsync()
         {
-            LastCalled = nameof(CheckHealthAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(CheckHealthAsync);
             var r = await _http.GetAsync("/health");
             if (r.IsSuccessStatusCode)
             {
@@ -37,14 +47,16 @@ namespace TinyGenerator.Skills
         [KernelFunction("list_voices"), Description("Lists available TTS voices and templates.")]
         public async Task<string> ListVoicesAsync()
         {
-            LastCalled = nameof(ListVoicesAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(ListVoicesAsync);
             return await _http.GetStringAsync("/voices");
         }
 
         [KernelFunction("patch_transformers"), Description("Attempt to apply runtime patch to transformers on the server.")]
         public async Task<string> PatchTransformersAsync()
         {
-            LastCalled = nameof(PatchTransformersAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(PatchTransformersAsync);
             var r = await _http.PostAsync("/patch_transformers", null);
             return await SafeReadContentAsync(r) ?? string.Empty;
         }
@@ -67,7 +79,8 @@ namespace TinyGenerator.Skills
             [Description("Speed factor, e.g. 0.8 or 1.2")] double speed = 1.0,
             [Description("format: 'wav' (default) or 'base64'")] string format = "wav")
         {
-            LastCalled = nameof(SynthesizeAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(SynthesizeAsync);
             LastSynthFormat = format;
 
             var payload = new System.Collections.Generic.Dictionary<string, object>

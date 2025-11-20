@@ -6,13 +6,22 @@ using TinyGenerator.Services;
 namespace TinyGenerator.Skills
 {
     [Description("Provides story evaluation functions intended for models using function-calling. The model should call these functions with the evaluation parameters; the functions return the provided parameters as JSON.")]
-    public class StoryEvaluatorSkill
+    public class StoryEvaluatorSkill : ITinySkill
     {
-        public string? LastCalled { get; set; }
         public string? LastResult { get; set; }
         private readonly DatabaseService? _db;
         private readonly int? _modelId;
         private readonly int? _agentId;
+        private DateTime? _lastCalled;
+        private string? _lastFunction;
+
+        // ITinySkill implementation
+        int? ITinySkill.ModelId => _modelId;
+        string? ITinySkill.ModelName => null;
+        int? ITinySkill.AgentId => _agentId;
+        string? ITinySkill.AgentName => null;
+        DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
+        string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
 
         public StoryEvaluatorSkill()
         {
@@ -29,7 +38,8 @@ namespace TinyGenerator.Skills
         [KernelFunction("evaluate_single_feature"), Description("Records a single feature evaluation. Parameters: score (int), defects (string), feature (optional string). Accepts alternate score fields (e.g., 'structure_score').")]
         public string EvaluateSingleFeature(int? score = null, int? structure_score = null, string defects = "", string? feature = null, long story_id = 0)
         {
-            LastCalled = nameof(EvaluateSingleFeature);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(EvaluateSingleFeature);
             var finalScore = score ?? structure_score ?? 0;
             var obj = new
             {
@@ -72,7 +82,8 @@ namespace TinyGenerator.Skills
             int emotional_impact_score = 0, string emotional_impact_defects = "",
             string overall_evaluation = "", long story_id = 0)
         {
-            LastCalled = nameof(EvaluateFullStory);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(EvaluateFullStory);
 
             var obj = new
             {

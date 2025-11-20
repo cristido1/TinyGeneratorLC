@@ -31,11 +31,11 @@ namespace TinyGenerator.Skills
         /// <summary>
         /// Timestamp of the last time this skill was called.
         /// </summary>
-        DateTime? LastCalled { get; }
+        DateTime? LastCalled { get; set; }
 
         /// <summary>
         /// Name of the last function/kernel function that was called on this skill.
         /// </summary>
-        string? LastFunction { get; }
+        string? LastFunction { get; set; }
     }
 }

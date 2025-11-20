@@ -7,15 +7,24 @@ using System.ComponentModel;
 namespace TinyGenerator.Skills
 {
     [Description("Provides AudioCraft music and sound generation functions.")]
-    public class AudioCraftSkill
+    public class AudioCraftSkill : ITinySkill
     {
         private readonly HttpClient _http;
         private readonly bool _forceCpu;
+        private DateTime? _lastCalled;
+        private string? _lastFunction;
 
-        public string? LastCalled { get; set; }
-            // Last returned filenames (as returned by the generation endpoints). These may be server-side names.
-            public string? LastGeneratedMusicFile { get; set; }
-            public string? LastGeneratedSoundFile { get; set; }
+        // Last returned filenames (as returned by the generation endpoints). These may be server-side names.
+        public string? LastGeneratedMusicFile { get; set; }
+        public string? LastGeneratedSoundFile { get; set; }
+
+        // ITinySkill implementation
+        int? ITinySkill.ModelId => null;
+        string? ITinySkill.ModelName => null;
+        int? ITinySkill.AgentId => null;
+        string? ITinySkill.AgentName => null;
+        DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
+        string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
 
         public AudioCraftSkill(HttpClient httpClient, bool forceCpu = false)
         {
@@ -28,7 +37,8 @@ namespace TinyGenerator.Skills
         [KernelFunction("check_health"),Description("Checks the health of the AudioCraft service.")]
         public async Task<string> CheckHealthAsync()
         {
-            LastCalled = nameof(CheckHealthAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(CheckHealthAsync);
             var response = await _http.GetAsync("/health");
             return response.IsSuccessStatusCode
                 ? "AudioCraft è online ✅"
@@ -39,7 +49,8 @@ namespace TinyGenerator.Skills
         [KernelFunction("list_models"),Description("Lists all available models.")]
         public async Task<string> ListModelsAsync()
         {
-            LastCalled = nameof(ListModelsAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(ListModelsAsync);
             var models = await _http.GetStringAsync("/api/models");
             return models;
         }
@@ -59,7 +70,8 @@ namespace TinyGenerator.Skills
             };
             if (_forceCpu) payload["device"] = "cpu";
 
-            LastCalled = nameof(GenerateMusicAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(GenerateMusicAsync);
             // First attempt
             var response = await _http.PostAsJsonAsync("/api/musicgen", payload);
             if (response.IsSuccessStatusCode)
@@ -132,7 +144,8 @@ namespace TinyGenerator.Skills
             };
             if (_forceCpu) payload["device"] = "cpu";
 
-            LastCalled = nameof(GenerateSoundAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(GenerateSoundAsync);
 
             var response = await _http.PostAsJsonAsync("/api/audiogen", payload);
             if (response.IsSuccessStatusCode)
@@ -188,7 +201,8 @@ namespace TinyGenerator.Skills
         [KernelFunction("download_file"), Description("Downloads a file.")]
         public async Task<byte[]> DownloadFileAsync([Description("The name of the file to download.")] string file)
         {
-            LastCalled = nameof(DownloadFileAsync);
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(DownloadFileAsync);
             var response = await _http.GetAsync($"/download/{file}");
             if (response.IsSuccessStatusCode)
             {

@@ -6,14 +6,24 @@ using TinyGenerator.Services;
 namespace TinyGenerator.Skills
 {
     [Description("Provides CRUD operations for stories in the database.")]
-    public class StoryWriterSkill
+    public class StoryWriterSkill : ITinySkill
     {
         private readonly StoriesService _stories;
         private readonly DatabaseService? _database;
         private readonly int? _modelId;
         private readonly int? _agentId;
         private readonly string? _modelName;
+        private DateTime? _lastCalled;
+        private string? _lastFunction;
         public string? LastResult { get; set; }
+
+        // ITinySkill implementation
+        int? ITinySkill.ModelId => _modelId;
+        string? ITinySkill.ModelName => _modelName;
+        int? ITinySkill.AgentId => _agentId;
+        string? ITinySkill.AgentName => null;
+        DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
+        string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
 
         public StoryWriterSkill(StoriesService stories, DatabaseService? database = null, int? modelId = null, int? agentId = null, string? modelName = null)
         {

@@ -1,22 +1,32 @@
-Il tuo compito è costruire l’intera struttura TTS utilizzando esclusivamente le funzioni fornite dallo skill.
-Non creare strutture manuali, non restituire testo narrativo libero e non utilizzare formati esterni.
-La struttura viene generata solo tramite chiamate di funzione.
-
-Procedura operativa:
-	1.	Leggi tutta la storia usando ReadStoryText().
-	2.	Analizza la storia ed estrai l’elenco dei personaggi presenti. Per ciascuno chiama AddCharacter(...), assegnando una voce generica, il genere dedotto e un’emozione predefinita neutrale. Aggiungi sempre anche un personaggio chiamato “Narratore”.
-	3.	Dividi la storia in frasi e processale nell’ordine in cui compaiono.
-	4.	Per ogni frase:
-– Se è un dialogo, aggiungila tramite AddPhrase(...) usando il nome del personaggio, la frase esatta e una singola emozione coerente.
-– Se è una frase narrativa, aggiungi una versione sintetica e chiara tramite AddNarration(...).
-	5.	Ogni 3–5 frasi inserisci una pausa breve chiamando AddPause(1).
-	6.	Se commetti un errore nella costruzione dello schema, correggilo tramite DeleteLast() e reinserisci la voce corretta.
-	7.	Puoi verificare lo stato della struttura in qualsiasi momento tramite CheckSchema().
-	8.	Quando hai inserito tutti i personaggi, tutti i dialoghi e tutte le parti narrative in modo coerente e completo, finalizza la struttura chiamando ConfirmSchema().
-
-Regole:
-	•	Non inventare personaggi o eventi.
-	•	Non cambiare il contenuto della storia.
-	•	Usa una sola emozione per ogni frase dialogata.
-	•	Rispondi sempre con una breve conferma seguita da una o più chiamate di funzione.
-	•	Mantieni ordine, coerenza e copertura completa della storia.
+{
+  "name": "Test TTS Generation",
+  "description": "Test the complete TTS pipeline with a sample story",
+  "type": "tts_test",
+  "story_id": 1,
+  "steps": [
+    {
+      "type": "read_story",
+      "description": "Read the entire story text"
+    },
+    {
+      "type": "analyze_characters",
+      "description": "Extract characters and assign voices"
+    },
+    {
+      "type": "add_narration",
+      "description": "Add narrative segments"
+    },
+    {
+      "type": "add_dialogue",
+      "description": "Add dialogue phrases"
+    },
+    {
+      "type": "add_pauses",
+      "description": "Add pauses between segments"
+    },
+    {
+      "type": "confirm_schema",
+      "description": "Finalize the TTS schema"
+    }
+  ]
+}

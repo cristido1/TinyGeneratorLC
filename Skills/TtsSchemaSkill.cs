@@ -10,9 +10,9 @@ namespace TinyGenerator.Skills
 {
     public class TtsSchemaSkill
     {
-        private readonly string _storyText;          // Immutabile
-        private readonly string _workingFolder;            // Percorso file per salvataggio schema
-        private TtsSchema _schema;                   // Struttura di lavoro dell'agente
+        private readonly string _storyText;                           // Immutable story text
+        private readonly string _workingFolder;                       // File path for schema saving
+        private TtsSchema _schema;                                    // Working schema structure for the agent
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -20,9 +20,9 @@ namespace TinyGenerator.Skills
             Converters = { new JsonStringEnumConverter() }
         };
 
-        // ------------------------------------------------------------
-        // COSTRUTTORE
-        // ------------------------------------------------------------
+        // ================================================================
+        // CONSTRUCTOR
+        // ================================================================
         public TtsSchemaSkill(string storyText, string workingFolder)
         {
             _storyText = storyText;
@@ -30,26 +30,26 @@ namespace TinyGenerator.Skills
             _workingFolder = workingFolder;
         }
 
-        // ------------------------------------------------------------
-        // LETTURA STORIA
-        // ------------------------------------------------------------
-        [KernelFunction, Description("Restituisce la storia completa in testo semplice.")]
+        // ================================================================
+        // STORY READING
+        // ================================================================
+        [KernelFunction, Description("Returns the complete story as plain text.")]
         public string ReadStoryText() => _storyText;
 
-        // ------------------------------------------------------------
-        // RESET SCHEMA
-        // ------------------------------------------------------------
-        [KernelFunction, Description("Azzera completamente lo schema TTS.")]
+        // ================================================================
+        // SCHEMA RESET
+        // ================================================================
+        [KernelFunction, Description("Completely resets the TTS schema.")]
         public string ResetSchema()
         {
             _schema = new TtsSchema();
             return "OK";
         }
 
-        // ------------------------------------------------------------
-        // PERSONAGGI
-        // ------------------------------------------------------------
-        [KernelFunction, Description("Aggiunge un personaggio allo schema.")]
+        // ================================================================
+        // CHARACTERS
+        // ================================================================
+        [KernelFunction, Description("Adds a character to the schema.")]
         public string AddCharacter(string name, string voice, string gender, string emotionDefault)
         {
             _schema.Characters.Add(new TtsCharacter
@@ -63,17 +63,17 @@ namespace TinyGenerator.Skills
             return "OK";
         }
 
-        [KernelFunction, Description("Rimuove un personaggio dallo schema.")]
+        [KernelFunction, Description("Removes a character from the schema.")]
         public string DeleteCharacter(string name)
         {
             _schema.Characters.RemoveAll(c => c.Name == name);
             return "OK";
         }
 
-        // ------------------------------------------------------------
-        // FRASI
-        // ------------------------------------------------------------
-        [KernelFunction, Description("Aggiunge una frase pronunciata da un personaggio.")]
+        // ================================================================
+        // PHRASES
+        // ================================================================
+        [KernelFunction, Description("Adds a phrase spoken by a character.")]
         public string AddPhrase(string character, string text, string emotion)
         {
             _schema.Timeline.Add(new TtsPhrase
@@ -86,10 +86,10 @@ namespace TinyGenerator.Skills
             return "OK";
         }
 
-        // ------------------------------------------------------------
-        // PAUSE
-        // ------------------------------------------------------------
-        [KernelFunction, Description("Aggiunge una pausa di un certo numero di secondi.")]
+        // ================================================================
+        // PAUSES
+        // ================================================================
+        [KernelFunction, Description("Adds a pause lasting a given number of seconds.")]
         public string AddPause(int seconds)
         {
             if (seconds < 1) seconds = 1;
@@ -99,10 +99,10 @@ namespace TinyGenerator.Skills
             return "OK";
         }
 
-        // ------------------------------------------------------------
-        // DELETE LAST ENTRY (frase o pausa)
-        // ------------------------------------------------------------
-        [KernelFunction, Description("Cancella l'ultima frase o pausa aggiunta.")]
+        // ================================================================
+        // DELETE LAST ENTRY (phrase or pause)
+        // ================================================================
+        [KernelFunction, Description("Deletes the last phrase or pause added.")]
         public string DeleteLast()
         {
             if (_schema.Timeline.Count == 0) 
@@ -112,10 +112,10 @@ namespace TinyGenerator.Skills
             return "OK";
         }
 
-        // ------------------------------------------------------------
-        // SERIALIZZAZIONE
-        // ------------------------------------------------------------
-        [KernelFunction, Description("Salva lo schema TTS su un file JSON.")]
+        // ================================================================
+        // SERIALIZATION
+        // ================================================================
+        [KernelFunction, Description("Saves the TTS schema to a JSON file.")]
         public string ConfirmSchema()
         {
             try
@@ -130,22 +130,89 @@ namespace TinyGenerator.Skills
             }
         }
 
-        // ------------------------------------------------------------
-        // CHECK SCHEMA
-        // ------------------------------------------------------------
-        [KernelFunction, Description("Verifica che lo schema TTS sia valido.")]
+        // ================================================================
+        // SCHEMA VALIDATION
+        // ================================================================
+        [KernelFunction, Description("Verifies that the TTS schema is valid and complete.")]
         public string CheckSchema()
         {
+            // Check 1: Characters list is not empty
             if (_schema.Characters.Count == 0)
-                return "ERROR: No characters";
+                return "ERROR: No characters defined. Add at least one character with AddCharacter.";
 
+            // Check 2: Timeline has entries (phrases or pauses)
             if (_schema.Timeline.Count == 0)
-                return "ERROR: No timeline entries";
+                return "ERROR: No timeline entries. Add phrases or pauses with AddPhrase or AddPause.";
 
+            // Check 3: Story is not empty
             if (string.IsNullOrWhiteSpace(_storyText))
-                return "ERROR: Story empty";
+                return "ERROR: Story text is empty.";
+
+            // Check 4: Story coverage - verify all story text has been included in the schema
+            var coverageError = CheckStoryCoverage();
+            if (coverageError != null)
+                return coverageError;
 
             return "OK";
+        }
+
+        /// <summary>
+        /// Validates that all significant content from the story has been included in the schema.
+        /// Removes all phrases from the timeline, character names from the residual text,
+        /// and checks if less than 5% of the original story remains (mostly punctuation and connectors).
+        /// Returns an error message if coverage is insufficient, otherwise returns null.
+        /// </summary>
+        private string? CheckStoryCoverage()
+        {
+            // Start with a copy of the original story
+            string remainingText = _storyText;
+
+            // Remove all phrases that are in the schema timeline
+            foreach (var entry in _schema.Timeline)
+            {
+                if (entry is TtsPhrase phrase && !string.IsNullOrWhiteSpace(phrase.Text))
+                {
+                    // Remove the phrase text from the story (case-insensitive, normalize whitespace)
+                    string normalizedPhrase = System.Text.RegularExpressions.Regex.Replace(phrase.Text, @"\s+", " ").Trim();
+                    remainingText = System.Text.RegularExpressions.Regex.Replace(
+                        remainingText,
+                        System.Text.RegularExpressions.Regex.Escape(normalizedPhrase),
+                        "",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                    );
+                }
+            }
+
+            // Remove all character names from the residual text
+            foreach (var character in _schema.Characters)
+            {
+                if (!string.IsNullOrWhiteSpace(character.Name))
+                {
+                    remainingText = System.Text.RegularExpressions.Regex.Replace(
+                        remainingText,
+                        System.Text.RegularExpressions.Regex.Escape(character.Name),
+                        "",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                    );
+                }
+            }
+
+            // Clean up: remove extra whitespace and common punctuation/connectors
+            remainingText = System.Text.RegularExpressions.Regex.Replace(remainingText, @"[""':,;!?\-—–\[\]\(\)]+", "");
+            remainingText = System.Text.RegularExpressions.Regex.Replace(remainingText, @"\s+", " ").Trim();
+
+            // Calculate coverage: check if less than 5% of original content remains
+            double originalLength = _storyText.Length;
+            double remainingLength = remainingText.Length;
+            double coveragePercentage = (remainingLength / originalLength) * 100.0;
+
+            if (coveragePercentage > 5.0)
+            {
+                return $"ERROR: Insufficient story coverage. {coveragePercentage:F1}% of the story content was not included in the schema. " +
+                       $"Please ensure all significant dialogue and narrative elements are captured as phrases or pauses.";
+            }
+
+            return null; // Coverage is acceptable
         }
     }
 }

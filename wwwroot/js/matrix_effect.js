@@ -16,6 +16,12 @@ class MatrixRain {
         this.fontSize = 14;
         this.drops = [];
         
+        // Effetto testo "cristiano donaggio"
+        this.scrollingTextActive = false;
+        this.scrollingTextY = 0;
+        this.scrollingTextX = 0;
+        this.scrollingTextSpeed = 2;
+        
         this.init();
     }
     
@@ -31,6 +37,9 @@ class MatrixRain {
         
         // Gestisce il ridimensionamento della finestra
         window.addEventListener('resize', () => this.handleResize());
+        
+        // Avvia il testo scorrevole ogni 10 secondi
+        setInterval(() => this.startScrollingText(), 10000);
     }
     
     resizeCanvas() {
@@ -67,6 +76,44 @@ class MatrixRain {
             
             this.drops[i]++;
         }
+        
+        // Disegna il testo scorrevole se attivo
+        if (this.scrollingTextActive) {
+            this.drawScrollingText();
+        }
+    }
+    
+    drawScrollingText() {
+        const text = 'cristiano donaggio';
+        const fontSize = 32;
+        this.ctx.font = `bold ${fontSize}px monospace`;
+        this.ctx.fillStyle = 'rgba(255, 128, 0, 0.8)'; // Arancione acceso
+        this.ctx.shadowColor = 'rgba(255, 128, 0, 0.6)';
+        this.ctx.shadowBlur = 10;
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 0;
+        
+        // Calcola la posizione del testo al centro orizzontale
+        const textWidth = this.ctx.measureText(text).width;
+        const x = (this.canvas.width - textWidth) / 2;
+        
+        // Disegna il testo
+        this.ctx.fillText(text, x, this.scrollingTextY);
+        
+        // Incrementa la posizione verticale
+        this.scrollingTextY += this.scrollingTextSpeed;
+        
+        // Ferma l'animazione quando il testo esce dallo schermo
+        if (this.scrollingTextY > this.canvas.height) {
+            this.scrollingTextActive = false;
+            this.ctx.shadowColor = 'rgba(0, 0, 0, 0)';
+            this.ctx.shadowBlur = 0;
+        }
+    }
+    
+    startScrollingText() {
+        this.scrollingTextActive = true;
+        this.scrollingTextY = -50; // Inizia sopra lo schermo
     }
     
     animate() {

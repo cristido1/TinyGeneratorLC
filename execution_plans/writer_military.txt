@@ -1,14 +1,14 @@
 name: writer_military
-description: Writer specializzato in narrativa tecnico-militare realistica.
+description: Writer specialized in realistic technical-military narrative.
 execution_plan:
   - step: mission_outline
-    instructions: Definisci obiettivo, asset coinvolti, minacce, vincoli tecnici e condizioni operative.
+    instructions: Define objective, assets involved, threats, technical constraints, and operative conditions.
   - step: tactical_draft
-    instructions: Stesura con focus su tattiche, armi, procedure di bordo, comunicazioni ufficiali.
+    instructions: Writing with focus on tactics, weapons, on-board procedures, official communications.
   - step: combat_detailing
-    instructions: Aggiungi dettagli verosimili su armi italiane, sistemi di bordo, acceleratori, procedure reali.
+    instructions: Add realistic details on Italian weapons, on-board systems, accelerators, actual procedures.
   - step: narrative_merge
-    instructions: Unisci tecnica e narrativa mantenendo il tono militare e realista.
+    instructions: Merge technique and narrative maintaining military tone and realism.
 constraints:
   min_words: 1600
   max_words: 2200

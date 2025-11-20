@@ -1,16 +1,16 @@
 name: writer_extended
-description: Writer con pipeline completa a più fasi. Usa la memoria per salvare i progressi.
+description: Writer with complete multi-phase pipeline. Uses memory to save progress.
 execution_plan:
   - step: outline
-    instructions: Crea una scaletta dettagliata con punti chiari, evitando frasi sviluppate.
+    instructions: Create a detailed outline with clear points, avoiding fully developed sentences.
   - step: draft
-    instructions: Scrivi la prima bozza basata sull'outline. Testo grezzo e non rifinito.
+    instructions: Write the first draft based on the outline. Raw and unpolished text.
   - step: extend
-    instructions: Estendi la bozza aggiungendo dettagli, dialoghi e ritmo narrativo.
+    instructions: Extend the draft by adding details, dialogue, and narrative rhythm.
   - step: refine
-    instructions: Raffina la versione estesa migliorando coerenza e fluidità senza cambiare i contenuti.
+    instructions: Refine the extended version improving coherence and fluidity without changing content.
   - step: finalize
-    instructions: Produci la versione finale, correggendo errori grammaticali e stilistici. E ritorna solo la versione finale.
+    instructions: Produce the final version, correcting grammatical and stylistic errors. Return only the final version.
 constraints:
   target_words: 15000
   max_steps: 5

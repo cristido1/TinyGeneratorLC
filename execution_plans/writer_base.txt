@@ -1,8 +1,8 @@
 name: writer_base
-description: Writer leggero che produce testo in un'unica generazione.
+description: Lightweight writer that produces text in a single generation pass.
 execution_plan:
   - step: generate
-    instructions: Genera il testo seguendo il prompt e rispettando solo lunghezza e coerenza.
+    instructions: Generate text following the prompt while respecting only length and coherence.
 constraints:
   min_words: 12000
   max_words: 18000

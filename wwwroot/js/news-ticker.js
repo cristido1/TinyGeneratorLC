@@ -87,10 +87,10 @@ class NewsTicker {
             // Create news items and duplicate them for continuous scroll
             const newsHTML = this.newsItems
                 .map((item, index) => `
-                    <a href="${item.url}" target="_blank" rel="noopener noreferrer" class="news-item" title="${item.title}" data-index="${index}">
+                    <div class="news-item" data-url="${item.url}" data-index="${index}" role="button" tabindex="0" title="${item.title}">
                         <span class="news-item-time">${item.time}</span>
                         <span>${item.title}</span>
-                    </a>
+                    </div>
                 `)
                 .join('');
             
@@ -112,21 +112,39 @@ class NewsTicker {
         const newsItems = document.querySelectorAll('.news-item');
         newsItems.forEach(item => {
             item.addEventListener('click', (e) => {
-                const url = item.getAttribute('href');
-                // Browser will handle the link opening in new tab naturally
-                // We just add visual feedback
-                item.style.opacity = '0.7';
-                setTimeout(() => {
-                    item.style.opacity = '1';
-                }, 200);
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const url = item.getAttribute('data-url');
+                if (url) {
+                    // Pause animation
+                    this.tickerContent.style.animationPlayState = 'paused';
+                    
+                    // Open URL in new tab
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                    
+                    // Resume animation after a brief delay
+                    setTimeout(() => {
+                        this.tickerContent.style.animationPlayState = 'running';
+                    }, 500);
+                }
+            });
+            
+            item.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    item.click();
+                }
             });
             
             item.addEventListener('mouseenter', () => {
-                item.style.opacity = '0.8';
+                this.tickerContent.style.animationPlayState = 'paused';
+                item.style.color = '#00ff7f';
             });
             
             item.addEventListener('mouseleave', () => {
-                item.style.opacity = '1';
+                this.tickerContent.style.animationPlayState = 'running';
+                item.style.color = '#00cc99';
             });
         });
     }

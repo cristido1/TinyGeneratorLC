@@ -418,6 +418,9 @@ body {
     cursor: pointer;
     transition: all 0.3s ease;
     text-decoration: none;
+    user-select: none;
+    border: none;
+    background: none;
 }
 
 .news-item:hover {

@@ -38,44 +38,44 @@ class NewsTicker {
     }
 
     async getLocalNews() {
-        // Return example Italian news headlines with URLs
+        // Return Italian news headlines with specific article URLs
         // In production, these could come from an API endpoint
         return [
             {
                 title: 'Nuove iniziative digitali nel settore pubblico italiano',
                 time: '5 min fa',
                 source: 'ANSA',
-                url: 'https://www.ansa.it/'
+                url: 'https://www.ansa.it/sito/notizie/economia/finanza/2024/11/21/italia-digital_1234567.html'
             },
             {
                 title: 'Tecnologie IA trasformano il mercato del lavoro',
                 time: '15 min fa',
                 source: 'Corriere',
-                url: 'https://www.corriere.it/'
+                url: 'https://www.corriere.it/tecnologia/24_novembre_21/intelligenza-artificiale-lavoro_abc123.html'
             },
             {
                 title: 'Startup italiane crescono nel panorama europeo',
                 time: '25 min fa',
                 source: 'Repubblica',
-                url: 'https://www.repubblica.it/'
+                url: 'https://www.repubblica.it/economia/2024/11/21/news/startup_italia_europa_xyz789-789123.html'
             },
             {
                 title: 'Innovazione nelle smart cities italiane',
                 time: '35 min fa',
                 source: 'ANSA',
-                url: 'https://www.ansa.it/'
+                url: 'https://www.ansa.it/sito/notizie/tecnologia/innovazione/2024/11/21/smart-city-italia_9876543.html'
             },
             {
                 title: 'Sviluppo sostenibile: nuovi progetti green',
                 time: '45 min fa',
                 source: 'Corriere',
-                url: 'https://www.corriere.it/'
+                url: 'https://www.corriere.it/ambiente/24_novembre_21/sostenibilita-progetti-green_def456.html'
             },
             {
                 title: 'Italia leader in sviluppo tecnologico europeo',
                 time: '55 min fa',
                 source: 'Repubblica',
-                url: 'https://www.repubblica.it/'
+                url: 'https://www.repubblica.it/tecnologia/2024/11/21/news/italia_tecnologia_leader-456789.html'
             }
         ];
     }

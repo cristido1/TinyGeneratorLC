@@ -20,17 +20,20 @@ namespace TinyGenerator.Services
         private readonly IKernelFactory _kernelFactory;
         private readonly ProgressService? _progress;
         private readonly ILogger<AgentService>? _logger;
+        private readonly ICustomLogger? _customLogger;
 
         public AgentService(
             DatabaseService database, 
             IKernelFactory kernelFactory, 
             ProgressService? progress = null,
-            ILogger<AgentService>? logger = null)
+            ILogger<AgentService>? logger = null,
+            ICustomLogger? customLogger = null)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
             _progress = progress;
             _logger = logger;
+            _customLogger = customLogger;
         }
 
         /// <summary>
@@ -163,7 +166,7 @@ namespace TinyGenerator.Services
         /// <param name="timeoutSeconds">Timeout in secondi</param>
         /// <param name="testType">Tipo di test per icona appropriata: question, writer, tts, evaluator, music</param>
         /// <returns>La risposta del modello</returns>
-        public async Task<ChatMessageContent?> InvokeModelAsync(
+        public async Task<Microsoft.SemanticKernel.ChatMessageContent?> InvokeModelAsync(
             Kernel kernel,
             ChatHistory history,
             OpenAIPromptExecutionSettings settings,
@@ -174,7 +177,7 @@ namespace TinyGenerator.Services
             string testType = "question")
         {
             var chatService = kernel.GetRequiredService<IChatCompletionService>();
-            var timeoutMs = timeoutSeconds * 1000;
+            var timeoutSecs = timeoutSeconds;
             var startTime = DateTime.UtcNow;
             
             _progress?.ShowAgentActivity(displayName, statusMessage, agentId, testType);
@@ -193,27 +196,82 @@ namespace TinyGenerator.Services
             
             try
             {
-                var completedTask = await Task.WhenAny(
-                    chatService.GetChatMessageContentAsync(history, settings, kernel),
-                    Task.Delay(timeoutMs));
-
-                if (completedTask is Task<ChatMessageContent> resultTask)
+                using (var cts = new System.Threading.CancellationTokenSource(timeoutSecs * 1000))
                 {
-                    var result = await resultTask;
+                    // Log complete request (chat history) as JSON
+                    try
+                    {
+                        await (_progress?.AppendAsync(agentId, $"=== RAW REQUEST (JSON) ===", "raw-json-header") ?? Task.CompletedTask);
+                        
+                        // Convert ChatHistory to JSON-serializable format
+                        var historyJson = new List<Dictionary<string, object?>>();
+                        foreach (var msg in history)
+                        {
+                            historyJson.Add(new Dictionary<string, object?>
+                            {
+                                { "role", msg.Role.ToString() },
+                                { "content", msg.Content ?? "(empty)" }
+                            });
+                        }
+                        
+                        // Serialize as compact JSON (no indentation) for single-line display
+                        var jsonString = System.Text.Json.JsonSerializer.Serialize(historyJson, new System.Text.Json.JsonSerializerOptions { WriteIndented = false });
+                        
+                        // Log complete request to database via CustomLogger (no truncation)
+                        _customLogger?.Log("Information", "RawRequest", $"[{displayName}] RAW REQUEST: {jsonString}");
+                        
+                        // Show entire JSON on ONE line with horizontal scroll (for Live Monitor)
+                        await (_progress?.AppendAsync(agentId, jsonString, "raw-json-content") ?? Task.CompletedTask);
+                        
+                        await (_progress?.AppendAsync(agentId, $"=== END REQUEST ({jsonString.Length} chars) ===", "raw-json-header") ?? Task.CompletedTask);
+                    }
+                    catch (Exception ex) 
+                    { 
+                        await (_progress?.AppendAsync(agentId, $"Error serializing request: {ex.Message}") ?? Task.CompletedTask);
+                    }
+                    
+                    // WORKAROUND for SK 1.67.1 bug: Add available kernel functions as tools in system message
+                    // since ToolCallBehavior.AutoInvokeKernelFunctions doesn't send tools to the API
+                    var toolsMessage = BuildToolsSystemMessage(kernel);
+                    if (!string.IsNullOrWhiteSpace(toolsMessage))
+                    {
+                        history.AddSystemMessage(toolsMessage);
+                        await (_progress?.AppendAsync(agentId, "=== TOOLS INJECTED ===", "tools-header") ?? Task.CompletedTask);
+                        await (_progress?.AppendAsync(agentId, toolsMessage, "tools-content") ?? Task.CompletedTask);
+                    }
+                    
+                    var result = await chatService.GetChatMessageContentAsync(history, settings, kernel, cts.Token);
                     var elapsed = DateTime.UtcNow - startTime;
+                    
+                    // Log complete response
+                    try
+                    {
+                        var responseText = result?.ToString() ?? "(empty)";
+                        await (_progress?.AppendAsync(agentId, $"=== RAW RESPONSE ===", "raw-json-header") ?? Task.CompletedTask);
+                        
+                        // Log complete response to database via CustomLogger (no truncation)
+                        _customLogger?.Log("Information", "RawResponse", $"[{displayName}] RAW RESPONSE: {responseText}");
+                        
+                        // Show entire response on ONE line with horizontal scroll (for Live Monitor)
+                        await (_progress?.AppendAsync(agentId, responseText, "raw-json-content") ?? Task.CompletedTask);
+                        
+                        await (_progress?.AppendAsync(agentId, $"=== END RESPONSE ({responseText.Length} chars, {elapsed.TotalMilliseconds}ms) ===", "raw-json-header") ?? Task.CompletedTask);
+                    }
+                    catch { }
+                    
                     _logger?.LogInformation(
                         "Model invocation completed successfully: Model={Model}, Duration={Duration}ms, ResponseLength={Length}",
                         displayName, elapsed.TotalMilliseconds, result?.ToString()?.Length ?? 0);
                     return result;
                 }
-                else
-                {
-                    var elapsed = DateTime.UtcNow - startTime;
-                    _logger?.LogWarning(
-                        "Model invocation timed out: Model={Model}, Timeout={Timeout}s, Elapsed={Elapsed}ms",
-                        displayName, timeoutSeconds, elapsed.TotalMilliseconds);
-                    throw new TimeoutException($"Operation timed out after {timeoutSeconds}s");
-                }
+            }
+            catch (System.OperationCanceledException)
+            {
+                var elapsed = DateTime.UtcNow - startTime;
+                _logger?.LogWarning(
+                    "Model invocation timed out: Model={Model}, Timeout={Timeout}s, Elapsed={Elapsed}ms",
+                    displayName, timeoutSeconds, elapsed.TotalMilliseconds);
+                throw new TimeoutException($"Operation timed out after {timeoutSeconds}s");
             }
             catch (Exception ex)
             {
@@ -234,7 +292,7 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Overload semplificato senza settings personalizzati (usa defaults)
         /// </summary>
-        public async Task<ChatMessageContent?> InvokeModelAsync(
+        public async Task<Microsoft.SemanticKernel.ChatMessageContent?> InvokeModelAsync(
             Kernel kernel,
             ChatHistory history,
             string agentId,
@@ -252,6 +310,55 @@ namespace TinyGenerator.Services
             };
 
             return await InvokeModelAsync(kernel, history, settings, agentId, displayName, statusMessage, timeoutSeconds, testType);
+        }
+
+        /// <summary>
+        /// Build a system message containing all available kernel functions as tools.
+        /// This is a workaround for SK 1.67.1 bug where tools aren't sent to the API.
+        /// The model needs to know what functions it can call, so we include them in the system message.
+        /// </summary>
+        private string BuildToolsSystemMessage(Kernel kernel)
+        {
+            try
+            {
+                var functionsMetadata = kernel.Plugins.GetFunctionsMetadata().ToList();
+                if (functionsMetadata.Count == 0)
+                    return string.Empty;
+
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("# Available Tools/Functions");
+                sb.AppendLine();
+                sb.AppendLine("You have access to the following functions. Call them by using their names with appropriate parameters.");
+                sb.AppendLine();
+
+                foreach (var func in functionsMetadata)
+                {
+                    sb.AppendLine($"## {func.PluginName}/{func.Name}");
+                    sb.AppendLine($"**Description:** {func.Description ?? "No description"}");
+                    
+                    if (func.Parameters != null && func.Parameters.Count > 0)
+                    {
+                        sb.AppendLine("**Parameters:**");
+                        foreach (var param in func.Parameters)
+                        {
+                            var required = param.IsRequired ? "(required)" : "(optional)";
+                            sb.AppendLine($"  - `{param.Name}` {required}: {param.Description ?? "No description"}");
+                        }
+                    }
+                    else
+                    {
+                        sb.AppendLine("**Parameters:** None");
+                    }
+                    sb.AppendLine();
+                }
+
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning($"Failed to build tools system message: {ex.Message}");
+                return string.Empty;
+            }
         }
     }
 }

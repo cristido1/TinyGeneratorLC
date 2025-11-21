@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.SemanticKernel;
@@ -61,9 +62,10 @@ namespace TinyGenerator.Services
             var testsWithFiles = tests.Where(t => !string.IsNullOrWhiteSpace(t.FilesToCopy)).ToList();
             if (testsWithFiles.Any())
             {
-                // Create test folder: test_run_folders/{model}_{group}_{yyyyMMdd_HHmmss}/
-                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                var folderName = $"{model}_{group}_{timestamp}";
+                // Create test folder: test_run_folders/yyyyMMdd_HHmmssffff_{model}_{group}/
+                var now = DateTime.Now;
+                var timestamp = now.ToString("yyyyMMdd_HHmmssfff");
+                var folderName = $"{timestamp}_{model}_{group}";
                 testFolder = Path.Combine(Directory.GetCurrentDirectory(), "test_run_folders", folderName);
                 
                 try
@@ -237,11 +239,23 @@ namespace TinyGenerator.Services
                 prompt = prompt.Replace("[test_folder]", testFolder);
             }
             
+            // Log prompt and execution plan for debugging
+            var planInfo = string.IsNullOrWhiteSpace(test.ExecutionPlan) 
+                ? "(no plan)" 
+                : $"plan={Path.GetFileName(test.ExecutionPlan)}";
+            
             var stepId = _database.AddTestStep(
                 runId,
                 idx,
                 test.FunctionName ?? $"test_{test.Id}",
-                JsonSerializer.Serialize(new { prompt }));
+                JsonSerializer.Serialize(new { prompt, plan = planInfo }));
+            
+            // Log to console for visibility
+            LogTestMessage(runId.ToString(), $"[{model}] Step {idx}: {planInfo}", "Information");
+            if (!string.IsNullOrWhiteSpace(test.ExecutionPlan))
+            {
+                LogTestMessage(runId.ToString(), $"[{model}] Execution Plan: {test.ExecutionPlan}", "Information");
+            }
 
             try
             {
@@ -297,7 +311,7 @@ namespace TinyGenerator.Services
             var chatService = kernel.GetRequiredService<IChatCompletionService>();
 
             var settings = CreateExecutionSettings(test, model);
-            var timeout = test.TimeoutMs > 0 ? Math.Max(1, test.TimeoutMs) : 30;
+            var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 30;
 
             var history = new ChatHistory();
             history.AddUserMessage(prompt);
@@ -344,9 +358,20 @@ namespace TinyGenerator.Services
                     stepId,
                     false,
                     null,
-                    $"Timeout after {timeout / 1000}s",
+                    $"Timeout after {timeout}s",
                     (long?)sw.ElapsedMilliseconds);
                 _progress?.Append(runId.ToString(), $"[{model}] Step {idx} TIMEOUT");
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                _database.UpdateTestStepResult(
+                    stepId,
+                    false,
+                    null,
+                    $"Error: {ex.Message}",
+                    (long?)sw.ElapsedMilliseconds);
+                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}");
             }
         }
 
@@ -366,7 +391,7 @@ namespace TinyGenerator.Services
             var settings = CreateExecutionSettings(test, model);
             settings.ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions;
 
-            var timeout = test.TimeoutMs > 0 ? Math.Max(1, test.TimeoutMs) : 30;
+            var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 30;
             var history = new ChatHistory();
             history.AddUserMessage(prompt);
 
@@ -411,7 +436,7 @@ namespace TinyGenerator.Services
                     stepId,
                     false,
                     null,
-                    $"Timeout after {timeout / 1000}s",
+                    $"Timeout after {timeout}s",
                     (long?)sw.ElapsedMilliseconds);
             }
             catch (Exception ex)
@@ -486,7 +511,7 @@ DO NOT rush or summarize. Take your time to develop the story fully.
 IMPORTANT: Write the story in Italian language.";
             }
 
-            var timeout = test.TimeoutMs > 0 ? Math.Max(1, test.TimeoutMs) : 120; // Usa timeout dal test o default 2 minuti
+            var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 120; // Usa timeout dal test o default 2 minuti
             var history = new ChatHistory();
 
             if (!string.IsNullOrWhiteSpace(instructions))
@@ -588,12 +613,12 @@ IMPORTANT: Write the story in Italian language.";
                     stepId,
                     false,
                     null,
-                    $"Timeout after {timeout / 1000}s",
+                    $"Timeout after {timeout}s",
                     (long?)sw.ElapsedMilliseconds);
             }
         }
 
-        private Kernel CreateKernelForTest(string model, TestDefinition test)
+        private Kernel CreateKernelForTest(string model, TestDefinition test, string? ttsStoryText = null, string? workingFolder = null)
         {
             // Parse allowed plugins from test definition
             var allowedPlugins = string.IsNullOrWhiteSpace(test.AllowedPlugins)
@@ -604,8 +629,23 @@ IMPORTANT: Write the story in Italian language.";
                     .Where(s => !string.IsNullOrWhiteSpace(s))
                     .ToArray();
 
-            // Create kernel with specified plugins (no special handling for writer tests)
-            var kernel = _factory.CreateKernel(model, allowedPlugins);
+            _progress?.Append(test.Id.ToString(), $"[{model}] CreateKernelForTest: test.AllowedPlugins='{test.AllowedPlugins}', parsed as: {string.Join(", ", allowedPlugins)}");
+
+            // Create kernel with specified plugins
+            var kernel = _factory.CreateKernel(model, allowedPlugins, null, ttsStoryText, workingFolder);
+            
+            // Verify that kernel has the expected plugins
+            if (kernel != null)
+            {
+                var pluginsCount = kernel.Plugins.Count;
+                var functionsMetadata = kernel.Plugins.GetFunctionsMetadata().ToList();
+                _progress?.Append(test.Id.ToString(), $"[{model}] Created kernel with {pluginsCount} plugins, {functionsMetadata.Count} functions total");
+                foreach (var func in functionsMetadata)
+                {
+                    _progress?.Append(test.Id.ToString(), $"[{model}]   - {func.PluginName}/{func.Name}");
+                }
+            }
+            
             return kernel ?? throw new InvalidOperationException("Failed to create kernel");
         }
 
@@ -914,137 +954,301 @@ IMPORTANT: Write the story in Italian language.";
             string prompt,
             string? testFolder)
         {
-            var kernel = CreateKernelForTest(model, test);
-            var chatService = kernel.GetRequiredService<IChatCompletionService>();
-
-            // For TTS tests, use function calling instead of JSON response format
-            var settings = new OpenAIPromptExecutionSettings
-            {
-                Temperature = model.Contains("gpt-5-nano", StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0,
-                MaxTokens = 8000,
-                ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions
-            };
+            // Log the prompt being used
+            _progress?.Append(runId.ToString(), $"[{model}] === TEST CONFIGURATION ===");
+            _progress?.Append(runId.ToString(), $"[{model}] Prompt: {(prompt.Length > 200 ? prompt.Substring(0, 200) + "..." : prompt)}");
             
-            var timeout = test.TimeoutMs > 0 ? Math.Max(1, test.TimeoutMs) : 60;
-
-            var history = new ChatHistory();
-            history.AddUserMessage(prompt);
-
-            try
+            // Read TTS story from file
+            string? ttsStoryText = null;
+            if (!string.IsNullOrWhiteSpace(testFolder))
             {
-                var agentId = $"tts_{model}_{runId}_{idx}";
-                var response = await _agentService.InvokeModelAsync(
-                    kernel,
-                    history,
-                    settings,
-                    agentId,
-                    model,
-                    $"TTS {idx}",
-                    timeout,
-                    "tts");
-                
-                sw.Stop();
-
-                var responseText = response?.ToString() ?? string.Empty;
-                
-                // Log raw response for debugging
-                _progress?.Append(runId.ToString(), $"[{model}] Response: {responseText}");
-                
-                // Extract file path from function call metadata
-                string? generatedFilePath = null;
-                
-                // Check if filesystem plugin was called by inspecting response metadata
-                if (response?.Metadata != null)
+                var storyFilePath = Path.Combine(testFolder, "tts_storia");
+                if (File.Exists(storyFilePath))
                 {
                     try
                     {
-                        _progress?.Append(runId.ToString(), $"[{model}] Function calls metadata: {JsonSerializer.Serialize(response.Metadata)}");
+                        ttsStoryText = await File.ReadAllTextAsync(storyFilePath);
+                        _progress?.Append(runId.ToString(), $"[{model}] Loaded TTS story from file ({ttsStoryText?.Length ?? 0} chars)");
+                    }
+                    catch (Exception ex)
+                    {
+                        _progress?.Append(runId.ToString(), $"[{model}] Failed to load TTS story: {ex.Message}");
+                    }
+                }
+            }
+            
+            _progress?.Append(runId.ToString(), $"[{model}] === END CONFIGURATION ===");
+
+            // Retry loop: attempt up to 3 times
+            const int maxRetries = 3;
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                var kernel = CreateKernelForTest(model, test, ttsStoryText, testFolder);
+                var chatService = kernel.GetRequiredService<IChatCompletionService>();
+
+                // For TTS tests, use function calling instead of JSON response format
+                var settings = new OpenAIPromptExecutionSettings
+                {
+                    Temperature = model.Contains("gpt-5-nano", StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0,
+                    MaxTokens = 8000,
+                    ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions
+                };
+                
+                var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 60;
+
+                var history = new ChatHistory();
+                
+                // Load execution plan from file if specified
+                string executionPlan = string.Empty;
+                if (!string.IsNullOrWhiteSpace(test.ExecutionPlan))
+                {
+                    var planPath = Path.Combine(Directory.GetCurrentDirectory(), "execution_plans", test.ExecutionPlan);
+                    if (File.Exists(planPath))
+                    {
+                        try
+                        {
+                            executionPlan = await File.ReadAllTextAsync(planPath);
+                            var planPreview = executionPlan.Length > 200 
+                                ? executionPlan.Substring(0, 200) + "..." 
+                                : executionPlan;
+                            _progress?.Append(runId.ToString(), $"[{model}] === EXECUTION PLAN ===");
+                            _progress?.Append(runId.ToString(), $"[{model}] {planPreview}");
+                            _progress?.Append(runId.ToString(), $"[{model}] === END EXECUTION PLAN ({executionPlan.Length} chars) ===");
+                        }
+                        catch (Exception ex)
+                        {
+                            _progress?.Append(runId.ToString(), $"[{model}] Failed to load execution plan: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        _progress?.Append(runId.ToString(), $"[{model}] Execution plan file not found: {planPath}");
+                    }
+                }
+                
+                // Add execution plan as SYSTEM message if available (BEFORE user prompt)
+                if (!string.IsNullOrWhiteSpace(executionPlan))
+                {
+                    history.AddSystemMessage(executionPlan);
+                    _progress?.Append(runId.ToString(), $"[{model}] Added execution plan as SYSTEM message");
+                }
+                
+                // Add user prompt (without concatenating execution plan)
+                if (attempt == 1)
+                {
+                    history.AddUserMessage(prompt);
+                    _progress?.Append(runId.ToString(), $"[{model}] Added prompt as USER message");
+                }
+                else
+                {
+                    var retryPrompt = $"{prompt}\n\n[RETRY {attempt}/{maxRetries}] The schema file was not generated. " +
+                        $"You MUST call ConfirmSchema() to save the schema to a JSON file before completing the task.";
+                    history.AddUserMessage(retryPrompt);
+                    _progress?.Append(runId.ToString(), $"[{model}] Attempt {attempt}/{maxRetries}: Retrying with ConfirmSchema instruction");
+                }
+
+                try
+                {
+                    var agentId = $"tts_{model}_{runId}_{idx}_attempt{attempt}";
+                    
+                    // Log history size BEFORE invocation
+                    var historyCountBefore = history.Count;
+                    _progress?.Append(runId.ToString(), $"[{model}] History BEFORE invocation: {historyCountBefore} messages");
+                    
+                    var response = await _agentService.InvokeModelAsync(
+                        kernel,
+                        history,
+                        settings,
+                        agentId,
+                        model,
+                        $"TTS {idx}",
+                        timeout,
+                        "tts");
+                    
+                    sw.Stop();
+
+                    // Log history size AFTER invocation
+                    var historyCountAfter = history.Count;
+                    _progress?.Append(runId.ToString(), $"[{model}] History AFTER invocation: {historyCountAfter} messages (added {historyCountAfter - historyCountBefore})");
+
+                    var responseText = response?.ToString() ?? string.Empty;
+                    
+                    // Log raw response for debugging - both to progress and database
+                    _progress?.Append(runId.ToString(), $"[{model}] Model Response: {responseText}");
+                    
+                    // Also log to database via CustomLogger
+                    try
+                    {
+                        var truncatedResponse = responseText.Length > 500 
+                            ? responseText.Substring(0, 500) + "... (truncated in log)" 
+                            : responseText;
+                        _customLogger?.Log("Information", "ModelCompletion", $"[{model}] Final response: {truncatedResponse}");
                     }
                     catch { }
-                }
-                
-                // Alternative: scan test folder for newly created JSON files
-                if (!string.IsNullOrWhiteSpace(testFolder))
-                {
-                    var jsonFiles = Directory.GetFiles(testFolder, "*.json")
-                        .Where(f => !f.EndsWith("_expected_result.json"))
-                        .OrderByDescending(f => File.GetCreationTimeUtc(f))
-                        .ToList();
                     
-                    if (jsonFiles.Any())
+                    // IMPORTANT: Add the assistant response to history so next retry can see it
+                    if (response != null && !string.IsNullOrWhiteSpace(responseText))
                     {
-                        generatedFilePath = jsonFiles.First();
-                        _progress?.Append(runId.ToString(), $"[{model}] Found generated file: {Path.GetFileName(generatedFilePath)}");
+                        history.AddAssistantMessage(responseText);
+                        _progress?.Append(runId.ToString(), $"[{model}] Manually added Assistant response to history");
+                    }
+                    
+                    // Log complete chat history to show all function calls and responses
+                    try
+                    {
+                        _progress?.Append(runId.ToString(), $"[{model}] === CHAT HISTORY ({history.Count} messages) ===");
+                        for (int i = 0; i < history.Count; i++)
+                        {
+                            var msg = history[i];
+                            var content = msg.Content?.Length > 500 
+                                ? msg.Content.Substring(0, 500) + "... (truncated)" 
+                                : msg.Content ?? "(empty)";
+                            _progress?.Append(runId.ToString(), $"[{model}] [{i}] {msg.Role}: {content}");
+                        }
+                        _progress?.Append(runId.ToString(), $"[{model}] === END CHAT HISTORY ===");
+                    }
+                    catch { }
+                    
+                    // Extract file path from function call metadata
+                    string? generatedFilePath = null;
+                    
+                    // Check if filesystem plugin was called by inspecting response metadata
+                    if (response?.Metadata != null)
+                    {
+                        try
+                        {
+                            _progress?.Append(runId.ToString(), $"[{model}] Function calls metadata: {JsonSerializer.Serialize(response.Metadata)}");
+                        }
+                        catch { }
+                    }
+                    
+                    // Alternative: scan test folder for newly created JSON files
+                    if (!string.IsNullOrWhiteSpace(testFolder))
+                    {
+                        var jsonFiles = Directory.GetFiles(testFolder, "*.json")
+                            .Where(f => !f.EndsWith("_expected_result.json"))
+                            .OrderByDescending(f => File.GetCreationTimeUtc(f))
+                            .ToList();
+                        
+                        if (jsonFiles.Any())
+                        {
+                            generatedFilePath = jsonFiles.First();
+                            _progress?.Append(runId.ToString(), $"[{model}] Found generated file: {Path.GetFileName(generatedFilePath)}");
+                        }
+                    }
+
+                    // If file was generated, process it
+                    if (!string.IsNullOrWhiteSpace(generatedFilePath))
+                    {
+                        // Read generated file
+                        string generatedJson;
+                        try
+                        {
+                            if (!File.Exists(generatedFilePath))
+                            {
+                                _database.UpdateTestStepResult(stepId, false, responseText, $"Generated file not found: {generatedFilePath}", (int)sw.ElapsedMilliseconds);
+                                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: File not found");
+                                return;
+                            }
+                            generatedJson = await File.ReadAllTextAsync(generatedFilePath);
+                        }
+                        catch (Exception ex)
+                        {
+                            _database.UpdateTestStepResult(stepId, false, responseText, $"Failed to read generated file: {ex.Message}", (int)sw.ElapsedMilliseconds);
+                            _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: Cannot read file");
+                            return;
+                        }
+
+                        // Read expected result file
+                        var expectedFilePath = Path.Combine(Directory.GetCurrentDirectory(), "test_source_files", "tts_dialogue_expexted_result.json");
+                        string expectedJson;
+                        try
+                        {
+                            if (!File.Exists(expectedFilePath))
+                            {
+                                _database.UpdateTestStepResult(stepId, false, responseText, $"Expected result file not found: {expectedFilePath}", (int)sw.ElapsedMilliseconds);
+                                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: Expected file missing");
+                                return;
+                            }
+                            expectedJson = await File.ReadAllTextAsync(expectedFilePath);
+                        }
+                        catch (Exception ex)
+                        {
+                            _database.UpdateTestStepResult(stepId, false, responseText, $"Failed to read expected file: {ex.Message}", (int)sw.ElapsedMilliseconds);
+                            _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: Cannot read expected file");
+                            return;
+                        }
+
+                        // Evaluate TTS
+                        int score = ValutaTTS(expectedJson, generatedJson);
+                        bool passed = score >= 2; // Consider >= 7 as passing
+
+                        var resultJson = JsonSerializer.Serialize(new
+                        {
+                            file_path = generatedFilePath,
+                            score = score,
+                            passed = passed,
+                            attempt = attempt
+                        });
+
+                        _database.UpdateTestStepResult(stepId, passed, resultJson, passed ? null : $"Score too low: {score}/10", (int)sw.ElapsedMilliseconds);
+                        
+                        var status = passed ? "PASSED" : "FAILED";
+                        _progress?.Append(runId.ToString(), $"[{model}] Step {idx} {status} - TTS Score: {score}/10 (Attempt {attempt})");
+                        return; // Success - exit retry loop
+                    }
+                    else
+                    {
+                        // No file generated - retry if attempts remaining
+                        if (attempt < maxRetries)
+                        {
+                            _progress?.Append(runId.ToString(), $"[{model}] No file generated. Retrying... ({attempt}/{maxRetries})");
+                            continue; // Try again
+                        }
+                        else
+                        {
+                            // Final attempt failed - record as failed
+                            _database.UpdateTestStepResult(stepId, false, responseText, "No JSON file generated in test folder after 3 attempts", (int)sw.ElapsedMilliseconds);
+                            _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: No file generated after {maxRetries} attempts");
+                            return;
+                        }
                     }
                 }
-
-                if (string.IsNullOrWhiteSpace(generatedFilePath))
+                catch (TimeoutException)
                 {
-                    _database.UpdateTestStepResult(stepId, false, responseText, "No JSON file generated in test folder", (int)sw.ElapsedMilliseconds);
-                    _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: No file generated");
-                    return;
-                }
-
-                // Read generated file
-                string generatedJson;
-                try
-                {
-                    if (!File.Exists(generatedFilePath))
+                    sw.Stop();
+                    if (attempt < maxRetries)
                     {
-                        _database.UpdateTestStepResult(stepId, false, responseText, $"Generated file not found: {generatedFilePath}", (int)sw.ElapsedMilliseconds);
-                        _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: File not found");
+                        _progress?.Append(runId.ToString(), $"[{model}] Timeout on attempt {attempt}/{maxRetries}. Retrying...");
+                        continue;
+                    }
+                    else
+                    {
+                        _database.UpdateTestStepResult(
+                            stepId,
+                            false,
+                            null,
+                            $"Timeout after {timeout}s on all {maxRetries} attempts",
+                            (long?)sw.ElapsedMilliseconds);
+                        _progress?.Append(runId.ToString(), $"[{model}] Step {idx} TIMEOUT after {maxRetries} attempts");
                         return;
                     }
-                    generatedJson = await File.ReadAllTextAsync(generatedFilePath);
                 }
                 catch (Exception ex)
                 {
-                    _database.UpdateTestStepResult(stepId, false, responseText, $"Failed to read generated file: {ex.Message}", (int)sw.ElapsedMilliseconds);
-                    _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: Cannot read file");
-                    return;
-                }
-
-                // Read expected result file
-                var expectedFilePath = Path.Combine(Directory.GetCurrentDirectory(), "test_source_files", "tts_dialogue_expexted_result.json");
-                string expectedJson;
-                try
-                {
-                    if (!File.Exists(expectedFilePath))
+                    sw.Stop();
+                    if (attempt < maxRetries)
                     {
-                        _database.UpdateTestStepResult(stepId, false, responseText, $"Expected result file not found: {expectedFilePath}", (int)sw.ElapsedMilliseconds);
-                        _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: Expected file missing");
+                        _progress?.Append(runId.ToString(), $"[{model}] Error on attempt {attempt}/{maxRetries}: {ex.Message}. Retrying...");
+                        continue;
+                    }
+                    else
+                    {
+                        _database.UpdateTestStepResult(stepId, false, null, $"{ex.Message} (after {maxRetries} attempts)", (int)sw.ElapsedMilliseconds);
+                        _progress?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR after {maxRetries} attempts: {ex.Message}");
                         return;
                     }
-                    expectedJson = await File.ReadAllTextAsync(expectedFilePath);
                 }
-                catch (Exception ex)
-                {
-                    _database.UpdateTestStepResult(stepId, false, responseText, $"Failed to read expected file: {ex.Message}", (int)sw.ElapsedMilliseconds);
-                    _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: Cannot read expected file");
-                    return;
-                }
-
-                // Evaluate TTS
-                int score = ValutaTTS(expectedJson, generatedJson);
-                bool passed = score >= 2; // Consider >= 7 as passing
-
-                var resultJson = JsonSerializer.Serialize(new
-                {
-                    file_path = generatedFilePath,
-                    score = score,
-                    passed = passed
-                });
-
-                _database.UpdateTestStepResult(stepId, passed, resultJson, passed ? null : $"Score too low: {score}/10", (int)sw.ElapsedMilliseconds);
-                
-                var status = passed ? "PASSED" : "FAILED";
-                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} {status} - TTS Score: {score}/10");
-            }
-            catch (Exception ex)
-            {
-                sw.Stop();
-                _database.UpdateTestStepResult(stepId, false, null, ex.Message, (int)sw.ElapsedMilliseconds);
-                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}");
             }
         }
 

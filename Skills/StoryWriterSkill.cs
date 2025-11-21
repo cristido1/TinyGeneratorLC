@@ -10,25 +10,28 @@ namespace TinyGenerator.Skills
     {
         private readonly StoriesService _stories;
         private readonly DatabaseService? _database;
-        private readonly int? _modelId;
+        private readonly ICustomLogger? _logger;
+        private int? _modelId;
         private readonly int? _agentId;
-        private readonly string? _modelName;
+        private string? _modelName;
         private DateTime? _lastCalled;
         private string? _lastFunction;
         public string? LastResult { get; set; }
 
         // ITinySkill implementation
-        int? ITinySkill.ModelId => _modelId;
-        string? ITinySkill.ModelName => _modelName;
+        int? ITinySkill.ModelId { get => _modelId; set => _modelId = value; }
+        string? ITinySkill.ModelName { get => _modelName; set => _modelName = value; }
         int? ITinySkill.AgentId => _agentId;
         string? ITinySkill.AgentName => null;
         DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
         string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
+        ICustomLogger? ITinySkill.Logger { get => _logger; set { } }
 
-        public StoryWriterSkill(StoriesService stories, DatabaseService? database = null, int? modelId = null, int? agentId = null, string? modelName = null)
+        public StoryWriterSkill(StoriesService stories, DatabaseService? database = null, int? modelId = null, int? agentId = null, string? modelName = null, ICustomLogger? logger = null)
         {
             _stories = stories;
             _database = database;
+            _logger = logger;
             _modelId = modelId;
             _agentId = agentId;
             _modelName = modelName;
@@ -37,6 +40,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("create_story"), Description("Create a single story row (writer only). Returns JSON with inserted id.")]
         public string CreateStory(string story)
         {
+            ((ITinySkill)this).LogFunctionCall("create_story");
             // For writer-only skill, the program provides model/agent info via properties; set minimal defaults
             var modelInfo = _modelName != null ? _modelName : (_database != null && _modelId.HasValue ? _database.GetModelInfoById(_modelId.Value)?.Name : string.Empty) ?? string.Empty;
             var id = _stories.InsertSingleStory(string.Empty, story, _modelId, _agentId, 0.0, null, 0, null, memoryKey: null);
@@ -48,6 +52,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("read_story"), Description("Read a single story by id. Returns JSON with story fields.")]
         public string ReadStory(long id)
         {
+            ((ITinySkill)this).LogFunctionCall("read_story");
             var row = _stories.GetStoryById(id);
             if (row == null) return JsonSerializer.Serialize(new { error = "not found", id });
             var obj = new
@@ -72,6 +77,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("update_story"), Description("Update an existing story by id with optional fields (writer-only): story, status. Returns JSON confirmation.")]
         public string UpdateStory(long id, string? story = null, string? status = null)
         {
+            ((ITinySkill)this).LogFunctionCall("update_story");
             var existing = _stories.GetStoryById(id);
             if (existing == null) return JsonSerializer.Serialize(new { error = "not found", id });
             // Build an update via StoriesService.Update flow if available; if not, use direct SQL by exposing method in StoriesService.
@@ -97,6 +103,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("delete_story"), Description("Delete a story and its generation group by id. Returns confirmation JSON.")]
         public string DeleteStory(long id)
         {
+            ((ITinySkill)this).LogFunctionCall("delete_story");
             try
             {
                 _stories.Delete(id);

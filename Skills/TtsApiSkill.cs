@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.ComponentModel;
 using System;
 using System.Text;
+using TinyGenerator.Services;
 
 namespace TinyGenerator.Skills
 {
@@ -12,28 +13,34 @@ namespace TinyGenerator.Skills
     public class TtsApiSkill : ITinySkill
     {
         private readonly HttpClient _http;
+        private readonly ICustomLogger? _logger;
+        private int? _modelId;
+        private string? _modelName;
         private DateTime? _lastCalled;
         private string? _lastFunction;
 
         public string? LastSynthFormat { get; set; }
 
         // ITinySkill implementation
-        int? ITinySkill.ModelId => null;
-        string? ITinySkill.ModelName => null;
+        int? ITinySkill.ModelId { get => _modelId; set => _modelId = value; }
+        string? ITinySkill.ModelName { get => _modelName; set => _modelName = value; }
         int? ITinySkill.AgentId => null;
         string? ITinySkill.AgentName => null;
         DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
         string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
+        ICustomLogger? ITinySkill.Logger { get => _logger; set { } }
 
-        public TtsApiSkill(HttpClient httpClient)
+        public TtsApiSkill(HttpClient httpClient, ICustomLogger? logger = null)
         {
             _http = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            _logger = logger;
             _http.BaseAddress = new Uri("http://localhost:8004/");
         }
 
         [KernelFunction("check_health"), Description("Checks the health of the TTS service.")]
         public async Task<string> CheckHealthAsync()
         {
+            ((ITinySkill)this).LogFunctionCall("check_health");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(CheckHealthAsync);
             var r = await _http.GetAsync("/health");
@@ -47,6 +54,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("list_voices"), Description("Lists available TTS voices and templates.")]
         public async Task<string> ListVoicesAsync()
         {
+            ((ITinySkill)this).LogFunctionCall("list_voices");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(ListVoicesAsync);
             return await _http.GetStringAsync("/voices");
@@ -55,6 +63,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("patch_transformers"), Description("Attempt to apply runtime patch to transformers on the server.")]
         public async Task<string> PatchTransformersAsync()
         {
+            ((ITinySkill)this).LogFunctionCall("patch_transformers");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(PatchTransformersAsync);
             var r = await _http.PostAsync("/patch_transformers", null);
@@ -79,6 +88,7 @@ namespace TinyGenerator.Skills
             [Description("Speed factor, e.g. 0.8 or 1.2")] double speed = 1.0,
             [Description("format: 'wav' (default) or 'base64'")] string format = "wav")
         {
+            ((ITinySkill)this).LogFunctionCall("synthesize");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(SynthesizeAsync);
             LastSynthFormat = format;
@@ -144,7 +154,10 @@ namespace TinyGenerator.Skills
         }
 
         [KernelFunction("describe"), Description("Describes the available TTS functions.")]
-        public string Describe() =>
-            "Available functions: check_health(), list_voices(), patch_transformers(), synthesize(text, model, voice, speaker, speaker_idx, speaker_wav, language, emotion, speed, format). Returns audio bytes (wav) when server returns audio, or JSON bytes when format=base64.";
+        public string Describe()
+        {
+            ((ITinySkill)this).LogFunctionCall("describe");
+            return "Available functions: check_health(), list_voices(), patch_transformers(), synthesize(text, model, voice, speaker, speaker_idx, speaker_wav, language, emotion, speed, format). Returns audio bytes (wav) when server returns audio, or JSON bytes when format=base64.";
+        }
     }
 }

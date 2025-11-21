@@ -28,17 +28,12 @@ namespace TinyGenerator.Services
         {
             // Resolve dependencies lazily to avoid cycles during startup validation
             ICustomLogger? custom = _customLogger;
-            NotificationService? notifications = _notifications; // Do NOT resolve via _serviceProvider here to avoid circular DI calls during logger creation
-            try
-            {
-                if (custom == null && _serviceProvider != null)
-                {
-                    custom = _serviceProvider.GetService<ICustomLogger>();
-                }
-            }
-            catch { }
-            // NOTE: resolving NotificationService here may trigger logger creation again and cause a recursive loop during DI initialization.
-            // We intentionally do not resolve the NotificationService via IServiceProvider to avoid this circular dependency.
+            NotificationService? notifications = _notifications;
+            
+            // DO NOT attempt to resolve ICustomLogger from _serviceProvider here!
+            // This causes infinite loops during DI setup because CustomLogger creation
+            // may trigger logger creation, leading to circular dependencies.
+            // If custom is null, we simply fall back to console logging in AdapterLogger.
 
             try { System.Console.WriteLine($"[Startup] CustomLoggerProvider.CreateLogger(category={categoryName}) customPresent={custom != null} notificationsPresent={notifications != null}"); } catch { }
             return new AdapterLogger(categoryName, custom, notifications);

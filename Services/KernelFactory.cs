@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Connectors.Sqlite;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
+using TinyGenerator.Skills;
 
 namespace TinyGenerator.Services
 {
@@ -11,10 +12,10 @@ namespace TinyGenerator.Services
     {
         public Kernel? Kernel { get; set; }
         public TinyGenerator.Skills.TextPlugin? TextPlugin { get; set; }
-        public TinyGenerator.Skills.MathPlugin? MathPlugin { get; set; }
-        public TinyGenerator.Skills.TimePlugin? TimePlugin { get; set; }
-        public TinyGenerator.Skills.FileSystemPlugin? FileSystemPlugin { get; set; }
-        public TinyGenerator.Skills.HttpPlugin? HttpPlugin { get; set; }
+        public TinyGenerator.Skills.MathSkill? MathSkill { get; set; }
+        public TinyGenerator.Skills.TimeSkill? TimeSkill { get; set; }
+        public TinyGenerator.Skills.FileSystemSkill? FileSystemSkill { get; set; }
+        public TinyGenerator.Skills.HttpSkill? HttpSkill { get; set; }
         public TinyGenerator.Skills.MemorySkill? MemorySkill { get; set; }
         public TinyGenerator.Skills.StoryWriterSkill? StoryWriterSkill { get; set; }
         public TinyGenerator.Skills.AudioEvaluatorSkill? AudioEvaluatorSkill { get; set; }
@@ -37,10 +38,10 @@ namespace TinyGenerator.Services
 
         // Proprietà pubbliche per i plugin
         public TinyGenerator.Skills.TextPlugin TextPlugin { get; }
-        public TinyGenerator.Skills.MathPlugin MathPlugin { get; }
-        public TinyGenerator.Skills.TimePlugin TimePlugin { get; }
-        public TinyGenerator.Skills.FileSystemPlugin FileSystemPlugin { get; }
-        public TinyGenerator.Skills.HttpPlugin HttpPlugin { get; }
+        public TinyGenerator.Skills.MathSkill MathSkill { get; }
+        public TinyGenerator.Skills.TimeSkill TimeSkill { get; }
+        public TinyGenerator.Skills.FileSystemSkill FileSystemSkill { get; }
+        public TinyGenerator.Skills.HttpSkill HttpSkill { get; }
         public TinyGenerator.Skills.MemorySkill MemorySkill { get; }
         public TinyGenerator.Skills.AudioCraftSkill AudioCraftSkill { get; }
         public TinyGenerator.Skills.AudioEvaluatorSkill AudioEvaluatorSkill { get; }
@@ -75,16 +76,17 @@ namespace TinyGenerator.Services
             _database = database;
 
             // Inizializzazione plugin (factory-level defaults when not using per-kernel instances)
-            TextPlugin = new TinyGenerator.Skills.TextPlugin();
-            MathPlugin = new TinyGenerator.Skills.MathPlugin();
-            TimePlugin = new TinyGenerator.Skills.TimePlugin();
-            FileSystemPlugin = new TinyGenerator.Skills.FileSystemPlugin();
-            HttpPlugin = new TinyGenerator.Skills.HttpPlugin();
-            MemorySkill = new TinyGenerator.Skills.MemorySkill(_memoryService);
-            AudioCraftSkill = new TinyGenerator.Skills.AudioCraftSkill(_httpClient, _forceAudioCpu);
-            AudioEvaluatorSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient);
-            TtsApiSkill = new TinyGenerator.Skills.TtsApiSkill(_ttsHttpClient);
-            StoryEvaluatorSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database);
+            var customLogger = _serviceProvider?.GetService<ICustomLogger>();
+            TextPlugin = new TinyGenerator.Skills.TextPlugin(customLogger);
+            MathSkill = new TinyGenerator.Skills.MathSkill(customLogger);
+            TimeSkill = new TinyGenerator.Skills.TimeSkill(customLogger);
+            FileSystemSkill = new TinyGenerator.Skills.FileSystemSkill(customLogger);
+            HttpSkill = new TinyGenerator.Skills.HttpSkill(customLogger);
+            MemorySkill = new TinyGenerator.Skills.MemorySkill(_memoryService, null, null, customLogger);
+            AudioCraftSkill = new TinyGenerator.Skills.AudioCraftSkill(_httpClient, _forceAudioCpu, customLogger);
+            AudioEvaluatorSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient, customLogger);
+            TtsApiSkill = new TinyGenerator.Skills.TtsApiSkill(_ttsHttpClient, customLogger);
+            StoryEvaluatorSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database, null, null, customLogger);
             // StoryWriterSkill will be created lazily when needed to avoid circular dependency
             StoryWriterSkill = null!;
         }
@@ -128,7 +130,7 @@ namespace TinyGenerator.Services
             return null;
         }
 
-        public KernelWithPlugins CreateKernel(string? modelId = null, System.Collections.Generic.IEnumerable<string>? allowedPlugins = null, int? agentId = null)
+        public KernelWithPlugins CreateKernel(string? modelId = null, System.Collections.Generic.IEnumerable<string>? allowedPlugins = null, int? agentId = null, string? ttsStoryText = null, string? workingFolder = null)
         {
             var builder = Kernel.CreateBuilder();
             // Abilita l’auto-invocazione delle funzioni registrate
@@ -256,41 +258,93 @@ namespace TinyGenerator.Services
             };
 
             var registeredAliases = new System.Collections.Generic.List<string>();
+            var customLoggerForKernel = _serviceProvider?.GetService<ICustomLogger>();
             TinyGenerator.Skills.MemorySkill? memSkill = null;
             TinyGenerator.Skills.StoryEvaluatorSkill? evSkill = null;
             TinyGenerator.Skills.StoryWriterSkill? writerSkill = null;
             TinyGenerator.Skills.AudioEvaluatorSkill? audioEvalSkill = null;
             TinyGenerator.Skills.TtsSchemaSkill? ttsSchemaSkill = null;
             if (allowed("text")) { builder.Plugins.AddFromObject(TextPlugin, "text"); _logger?.LogDebug("Registered plugin: {plugin}", TextPlugin?.GetType().FullName); registeredAliases.Add("text"); }
-            if (allowed("math")) { builder.Plugins.AddFromObject(MathPlugin, "math"); _logger?.LogDebug("Registered plugin: {plugin}", MathPlugin?.GetType().FullName); registeredAliases.Add("math"); }
-            if (allowed("time")) { builder.Plugins.AddFromObject(TimePlugin, "time"); _logger?.LogDebug("Registered plugin: {plugin}", TimePlugin?.GetType().FullName); registeredAliases.Add("time"); }
-            if (allowed("filesystem")) { builder.Plugins.AddFromObject(FileSystemPlugin, "filesystem"); _logger?.LogDebug("Registered plugin: {plugin}", FileSystemPlugin?.GetType().FullName); registeredAliases.Add("filesystem"); }
-            if (allowed("http")) { builder.Plugins.AddFromObject(HttpPlugin, "http"); _logger?.LogDebug("Registered plugin: {plugin}", HttpPlugin?.GetType().FullName); registeredAliases.Add("http"); }
-            if (allowed("memory")) { memSkill = new TinyGenerator.Skills.MemorySkill(_memoryService, null, agentId); builder.Plugins.AddFromObject(memSkill, "memory"); _logger?.LogDebug("Registered plugin: {plugin}", memSkill?.GetType().FullName); registeredAliases.Add("memory"); }
-            if (allowed("audiocraft")) { builder.Plugins.AddFromObject(AudioCraftSkill, "audiocraft"); _logger?.LogDebug("Registered plugin: {plugin}", AudioCraftSkill?.GetType().FullName); registeredAliases.Add("audiocraft"); }
-            if (allowed("audioevaluator")) { audioEvalSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient); builder.Plugins.AddFromObject(audioEvalSkill, "audioevaluator"); _logger?.LogDebug("Registered plugin: {plugin}", audioEvalSkill?.GetType().FullName); registeredAliases.Add("audioevaluator"); }
-            if (allowed("tts")) { builder.Plugins.AddFromObject(TtsApiSkill, "tts"); _logger?.LogDebug("Registered plugin: {plugin}", TtsApiSkill?.GetType().FullName); registeredAliases.Add("tts"); }
+            if (allowed("math")) { var mathSkill = new TinyGenerator.Skills.MathSkill(customLoggerForKernel); ((ITinySkill)mathSkill).ModelId = modelInfo?.Id; ((ITinySkill)mathSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(mathSkill, "math"); _logger?.LogDebug("Registered plugin: {plugin}", mathSkill?.GetType().FullName); registeredAliases.Add("math"); }
+            if (allowed("time")) { var timeSkill = new TinyGenerator.Skills.TimeSkill(customLoggerForKernel); ((ITinySkill)timeSkill).ModelId = modelInfo?.Id; ((ITinySkill)timeSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(timeSkill, "time"); _logger?.LogDebug("Registered plugin: {plugin}", timeSkill?.GetType().FullName); registeredAliases.Add("time"); }
+            if (allowed("filesystem")) { var fsSkill = new TinyGenerator.Skills.FileSystemSkill(customLoggerForKernel); ((ITinySkill)fsSkill).ModelId = modelInfo?.Id; ((ITinySkill)fsSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(fsSkill, "filesystem"); _logger?.LogDebug("Registered plugin: {plugin}", fsSkill?.GetType().FullName); registeredAliases.Add("filesystem"); }
+            if (allowed("http")) { var httpSkill = new TinyGenerator.Skills.HttpSkill(customLoggerForKernel); ((ITinySkill)httpSkill).ModelId = modelInfo?.Id; ((ITinySkill)httpSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(httpSkill, "http"); _logger?.LogDebug("Registered plugin: {plugin}", httpSkill?.GetType().FullName); registeredAliases.Add("http"); }
+            if (allowed("memory")) { memSkill = new TinyGenerator.Skills.MemorySkill(_memoryService, modelInfo?.Id, agentId, customLoggerForKernel); ((ITinySkill)memSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(memSkill, "memory"); _logger?.LogDebug("Registered plugin: {plugin}", memSkill?.GetType().FullName); registeredAliases.Add("memory"); }
+            if (allowed("audiocraft")) { var audioSkill = new TinyGenerator.Skills.AudioCraftSkill(_httpClient, _forceAudioCpu, customLoggerForKernel); ((ITinySkill)audioSkill).ModelId = modelInfo?.Id; ((ITinySkill)audioSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(audioSkill, "audiocraft"); _logger?.LogDebug("Registered plugin: {plugin}", audioSkill?.GetType().FullName); registeredAliases.Add("audiocraft"); }
+            if (allowed("audioevaluator")) { audioEvalSkill = new TinyGenerator.Skills.AudioEvaluatorSkill(_httpClient, customLoggerForKernel); ((ITinySkill)audioEvalSkill).ModelId = modelInfo?.Id; ((ITinySkill)audioEvalSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(audioEvalSkill, "audioevaluator"); _logger?.LogDebug("Registered plugin: {plugin}", audioEvalSkill?.GetType().FullName); registeredAliases.Add("audioevaluator"); }
+            if (allowed("tts")) { var ttsSkill = new TinyGenerator.Skills.TtsApiSkill(_ttsHttpClient, customLoggerForKernel); ((ITinySkill)ttsSkill).ModelId = modelInfo?.Id; ((ITinySkill)ttsSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(ttsSkill, "tts"); _logger?.LogDebug("Registered plugin: {plugin}", ttsSkill?.GetType().FullName); registeredAliases.Add("tts"); }
             if (allowed("ttsschema")) { 
-                // TtsSchemaSkill uses test_run_folders as working directory for TTS tests
-                var workingFolder = Path.Combine(Directory.GetCurrentDirectory(), "test_run_folders");
-                Directory.CreateDirectory(workingFolder);
-                ttsSchemaSkill = new TinyGenerator.Skills.TtsSchemaSkill(workingFolder);
-                builder.Plugins.AddFromObject(ttsSchemaSkill, "ttsschema");
-                _logger?.LogDebug("Registered plugin: {plugin}", ttsSchemaSkill?.GetType().FullName);
+                _logger?.LogInformation("TtsSchemaSkill allowed, registering with allowed={AllowedPlugins}", allowedPlugins == null ? "null" : string.Join(",", allowedPlugins));
+                // TtsSchemaSkill uses test_run_folders as working directory for TTS tests, or a specific folder if provided
+                var ttsFolderPath = workingFolder ?? Path.Combine(Directory.GetCurrentDirectory(), "test_run_folders");
+                Directory.CreateDirectory(ttsFolderPath);
+                ttsSchemaSkill = new TinyGenerator.Skills.TtsSchemaSkill(ttsFolderPath, ttsStoryText, customLoggerForKernel);
+                ttsSchemaSkill.ModelId = modelInfo?.Id;
+                ttsSchemaSkill.ModelName = modelInfo?.Name ?? model;
+                
+                try
+                {
+                    builder.Plugins.AddFromObject(ttsSchemaSkill, "ttsschema");
+                    _logger?.LogInformation("TtsSchemaSkill successfully added to plugins");
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Failed to add TtsSchemaSkill: {Error}", ex.Message);
+                }
+                
+                _logger?.LogInformation("Registered plugin: {plugin}", ttsSchemaSkill?.GetType().FullName);
                 registeredAliases.Add("ttsschema");
             }
+            else
+            {
+                _logger?.LogInformation("TtsSchemaSkill NOT allowed, allowedPlugins={AllowedPlugins}", allowedPlugins == null ? "null" : string.Join(",", allowedPlugins));
+            }
             // Register the StoryEvaluatorSkill which exposes evaluation functions used by texteval tests
-            if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database!, null, agentId); builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
+            if (allowed("evaluator")) { evSkill = new TinyGenerator.Skills.StoryEvaluatorSkill(_database!, modelInfo?.Id, agentId, customLoggerForKernel); ((ITinySkill)evSkill).ModelName = modelInfo?.Name ?? model; builder.Plugins.AddFromObject(evSkill, "evaluator"); _logger?.LogDebug("Registered plugin: {plugin}", evSkill?.GetType().FullName); registeredAliases.Add("evaluator"); }
             if (allowed("story")) { 
                 // Lazy resolve StoriesService to avoid circular dependency
                 var storiesService = _serviceProvider.GetService<StoriesService>();
-                writerSkill = new TinyGenerator.Skills.StoryWriterSkill(storiesService, _database, null, agentId, model); 
+                writerSkill = new TinyGenerator.Skills.StoryWriterSkill(storiesService, _database, modelInfo?.Id, agentId, modelInfo?.Name ?? model, customLoggerForKernel); 
                 builder.Plugins.AddFromObject(writerSkill, "story"); 
                 _logger?.LogDebug("Registered plugin: {plugin}", writerSkill?.GetType().FullName); 
                 registeredAliases.Add("story"); 
             }
 
             var kernel = builder.Build();
+            
+            // CRITICAL: Verify that plugins were actually added to the kernel AFTER build
+            try
+            {
+                var pluginsCount = kernel.Plugins.Count;
+                var functionsMetadata = kernel.Plugins.GetFunctionsMetadata().ToList();
+                _logger?.LogInformation("Kernel built for {model}: {pluginCount} plugins, {functionCount} functions total", 
+                    model, pluginsCount, functionsMetadata.Count);
+                
+                foreach (var func in functionsMetadata)
+                {
+                    _logger?.LogInformation("  - Function: {plugin}/{name}", func.PluginName, func.Name);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Failed to inspect kernel plugins: {error}", ex.Message);
+            }
+            
+            // Add filters for tracking prompts and function invocations for live monitoring
+            try
+            {
+                var customLogger = _serviceProvider.GetService<ICustomLogger>();
+                if (customLogger != null)
+                {
+                    kernel.PromptRenderFilters.Add(new PromptRenderFilter(customLogger, model));
+                    kernel.FunctionInvocationFilters.Add(new FunctionInvocationTrackerFilter(customLogger, model));
+                }
+            }
+            catch
+            {
+                // best-effort: if filter registration fails, continue without it
+            }
+            
             // Best-effort verification: log that kernel was created and which plugin instances we attached.
             try
             {
@@ -333,23 +387,24 @@ namespace TinyGenerator.Services
             {
                 Kernel = kernel,
                 TextPlugin = allowed("text") ? this.TextPlugin : null,
-                MathPlugin = allowed("math") ? this.MathPlugin : null,
-                TimePlugin = allowed("time") ? this.TimePlugin : null,
-                FileSystemPlugin = allowed("filesystem") ? this.FileSystemPlugin : null,
-                HttpPlugin = allowed("http") ? this.HttpPlugin : null,
+                MathSkill = allowed("math") ? this.MathSkill : null,
+                TimeSkill = allowed("time") ? this.TimeSkill : null,
+                FileSystemSkill = allowed("filesystem") ? this.FileSystemSkill : null,
+                HttpSkill = allowed("http") ? this.HttpSkill : null,
                 MemorySkill = memSkill,
                 StoryWriterSkill = writerSkill,
                 StoryEvaluatorSkill = evSkill,
                 AudioEvaluatorSkill = audioEvalSkill,
-                TtsSchemaSkill = ttsSchemaSkill
+                TtsSchemaSkill = ttsSchemaSkill,
+                
             };
             return kw;
         }
 
         // Backwards-compatible IKernelFactory implementation that returns the Kernel instance
-        Microsoft.SemanticKernel.Kernel IKernelFactory.CreateKernel(string? model, System.Collections.Generic.IEnumerable<string>? allowedPlugins)
+        Microsoft.SemanticKernel.Kernel IKernelFactory.CreateKernel(string? model, System.Collections.Generic.IEnumerable<string>? allowedPlugins, int? agentId = null, string? ttsStoryText = null, string? workingFolder = null)
         {
-            var kw = CreateKernel(model, allowedPlugins, null);
+            var kw = CreateKernel(model, allowedPlugins, agentId, ttsStoryText, workingFolder);
             return kw?.Kernel!;
         }
     }

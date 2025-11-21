@@ -27,21 +27,8 @@ namespace TinyGenerator.Services
 
         private void EnsureTable()
         {
-            using var conn = new SqliteConnection($"Data Source={_dbPath}");
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT NOT NULL,
-    level TEXT NOT NULL,
-    category TEXT NOT NULL,
-    message TEXT,
-    exception TEXT,
-    state TEXT
-);
-";
-            cmd.ExecuteNonQuery();
+            // Log table should be created by migrations/DatabaseService
+            // This provider doesn't need to ensure the table exists
         }
 
         public ILogger CreateLogger(string categoryName) => new SqliteLogger(_dbPath, categoryName);
@@ -73,13 +60,17 @@ CREATE TABLE IF NOT EXISTS logs (
                     using var conn = new SqliteConnection($"Data Source={_dbPath}");
                     conn.Open();
                     using var cmd = conn.CreateCommand();
-                    cmd.CommandText = "INSERT INTO logs (ts, level, category, message, exception, state) VALUES (@ts, @level, @cat, @msg, @ex, @st)";
+                    // Write to Log table (capital L) with all columns from LogEntry model
+                    cmd.CommandText = "INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context) VALUES (@ts, @level, @cat, @msg, @ex, @st, @tid, @agent, @ctx)";
                     cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow.ToString("o"));
                     cmd.Parameters.AddWithValue("@level", logLevel.ToString());
                     cmd.Parameters.AddWithValue("@cat", _category ?? "");
                     cmd.Parameters.AddWithValue("@msg", message ?? "");
                     cmd.Parameters.AddWithValue("@ex", exText ?? string.Empty);
                     cmd.Parameters.AddWithValue("@st", stateText ?? string.Empty);
+                    cmd.Parameters.AddWithValue("@tid", Environment.CurrentManagedThreadId);
+                    cmd.Parameters.AddWithValue("@agent", DBNull.Value);
+                    cmd.Parameters.AddWithValue("@ctx", DBNull.Value);
                     cmd.ExecuteNonQuery();
                 }
                 catch

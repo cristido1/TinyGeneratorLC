@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Threading.Tasks;
 using System.IO;
+using TinyGenerator.Services;
 
 namespace TinyGenerator.Skills
 {
@@ -11,20 +12,25 @@ namespace TinyGenerator.Skills
     public class AudioEvaluatorSkill : ITinySkill
     {
         private readonly HttpClient _http;
+        private readonly ICustomLogger? _logger;
+        private int? _modelId;
+        private string? _modelName;
         private DateTime? _lastCalled;
         private string? _lastFunction;
 
         // ITinySkill implementation
-        int? ITinySkill.ModelId => null;
-        string? ITinySkill.ModelName => null;
+        int? ITinySkill.ModelId { get => _modelId; set => _modelId = value; }
+        string? ITinySkill.ModelName { get => _modelName; set => _modelName = value; }
         int? ITinySkill.AgentId => null;
         string? ITinySkill.AgentName => null;
         DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
         string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
+        ICustomLogger? ITinySkill.Logger { get => _logger; set { } }
 
-        public AudioEvaluatorSkill(HttpClient httpClient)
+        public AudioEvaluatorSkill(HttpClient httpClient, ICustomLogger? logger = null)
         {
             _http = httpClient;
+            _logger = logger;
             // PAM default base address per PAM.md
             _http.BaseAddress = new System.Uri("http://localhost:8010");
         }
@@ -32,6 +38,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("check_health"), Description("Checks PAM service health.")]
         public async Task<string> CheckHealthAsync()
         {
+            ((ITinySkill)this).LogFunctionCall("check_health");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(CheckHealthAsync);
             var resp = await _http.GetAsync("/health");
@@ -46,6 +53,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("list_models"), Description("Lists available PAM models.")]
         public async Task<string> ListModelsAsync()
         {
+            ((ITinySkill)this).LogFunctionCall("list_models");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(ListModelsAsync);
             var resp = await _http.GetAsync("/models");
@@ -62,6 +70,7 @@ namespace TinyGenerator.Skills
             [Description("Path to the local audio file to analyze.")] string filePath,
             [Description("Optional PAM model name to use.")] string? modelName = null)
         {
+            ((ITinySkill)this).LogFunctionCall("analyze");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(AnalyzeAsync);
 
@@ -92,6 +101,7 @@ namespace TinyGenerator.Skills
             [Description("Optional path to a reference audio file for comparison.")] string? referenceFile = null,
             [Description("Verification type, e.g. 'speaker_verification' or 'audio_authenticity'.")] string verificationType = "speaker_verification")
         {
+            ((ITinySkill)this).LogFunctionCall("verify");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(VerifyAsync);
 
@@ -138,7 +148,10 @@ namespace TinyGenerator.Skills
         }
 
         [KernelFunction("describe"), Description("Describes the PAM audio evaluator functions.")]
-        public string Describe() =>
-            "Available functions: check_health(), list_models(), analyze(filePath, modelName?), verify(filePath, referenceFile?, verificationType?).";
+        public string Describe()
+        {
+            ((ITinySkill)this).LogFunctionCall("describe");
+            return "Available functions: check_health(), list_models(), analyze(filePath, modelName?), verify(filePath, referenceFile?, verificationType?).";
+        }
     }
 }

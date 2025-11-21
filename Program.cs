@@ -68,8 +68,13 @@ builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<IKernelFactory, KernelFactory>();
 // Also register concrete KernelFactory so services can depend on implementation-specific features
 builder.Services.AddSingleton<KernelFactory>(sp => (KernelFactory)sp.GetRequiredService<IKernelFactory>());
-// Agent configuration service
-builder.Services.AddSingleton<AgentService>();
+// Agent configuration service (with ProgressService for real-time logging)
+builder.Services.AddSingleton<AgentService>(sp => new AgentService(
+    sp.GetRequiredService<DatabaseService>(),
+    sp.GetRequiredService<IKernelFactory>(),
+    sp.GetRequiredService<ProgressService>(),
+    sp.GetService<ILogger<AgentService>>(),
+    sp.GetService<ICustomLogger>()));
 
 // === Servizio di generazione storie ===
 // Stories persistence service (requires DatabaseService, IKernelFactory, TtsService, AgentService)
@@ -90,7 +95,7 @@ builder.Services.AddSingleton(sp => new DatabaseService("data/storage.db"));
 // Configure custom logger options from configuration (section: CustomLogger)
 builder.Services.Configure<CustomLoggerOptions>(builder.Configuration.GetSection("CustomLogger"));
 // Register the async database-backed logger (ensure DatabaseService is available)
-builder.Services.AddSingleton<ICustomLogger>(sp => new CustomLogger(sp.GetRequiredService<DatabaseService>(), sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CustomLoggerOptions>>().Value));
+builder.Services.AddSingleton<ICustomLogger>(sp => new CustomLogger(sp.GetRequiredService<DatabaseService>(), sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CustomLoggerOptions>>().Value, sp.GetService<ProgressService>()));
 // Register the CustomLoggerProvider and inject NotificationService so logs can be broadcast as notifications
 // Register logger provider without resolving ICustomLogger immediately to avoid startup cycles.
 builder.Services.AddSingleton<ILoggerProvider>(sp => new CustomLoggerProvider(sp));
@@ -181,6 +186,17 @@ StartupTasks.SeedTtsVoicesIfNeededAsync(db, tts, builder.Configuration, logger).
 // Normalize any legacy test prompts at startup so prompts explicitly mention addin/library.function
 // Normalize legacy test prompts using helper
 StartupTasks.NormalizeTestPromptsIfNeeded(db, logger);
+
+// Clean up old logs if log count exceeds threshold
+// Automatically delete logs older than 7 days if total count > 1000
+try
+{
+    db.CleanupOldLogs(daysOld: 7, countThreshold: 1000);
+}
+catch (Exception ex)
+{
+    logger?.LogWarning(ex, "[Startup] Log cleanup failed: {msg}", ex.Message);
+}
 
 logger?.LogInformation("[Startup] About to get kernelFactory service...");
 // Create a Semantic Kernel instance per active Agent and ensure each has persistent memory

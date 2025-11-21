@@ -32,13 +32,11 @@ namespace TinyGenerator.Services
         public async Task AppendAsync(string id, string message, string? extraClass = null)
         {
             if (!_store.ContainsKey(id)) Start(id);
-            var ts = DateTime.UtcNow.ToString("o");
-            var stamped = $"{ts} - {message}";
-            _store[id].Add(stamped);
+            _store[id].Add(message);
             try
             {
-                if (_logger != null) _logger.LogInformation("ProgressAppend [{RunId}] {Message}", id, stamped);
-                else Console.WriteLine($"[ProgressService] Append {id}: {stamped}");
+                if (_logger != null) _logger.LogInformation("ProgressAppend [{RunId}] {Message}", id, message);
+                else Console.WriteLine($"[ProgressService] Append {id}: {message}");
             }
             catch { }
             // Broadcast to connected clients in the group for this id (best-effort)
@@ -47,7 +45,7 @@ namespace TinyGenerator.Services
                 if (_hubContext != null)
                 {
                     // Broadcast to all clients so progress messages appear on any page
-                    await _hubContext.Clients.All.SendAsync("ProgressAppended", id, stamped, extraClass);
+                    await _hubContext.Clients.All.SendAsync("ProgressAppended", id, message, extraClass);
                 }
             }
             catch { }

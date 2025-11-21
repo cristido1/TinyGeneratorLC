@@ -10,25 +10,29 @@ namespace TinyGenerator.Skills
     {
         public string? LastResult { get; set; }
         private readonly DatabaseService? _db;
-        private readonly int? _modelId;
-        private readonly int? _agentId;
+        private readonly ICustomLogger? _logger;
+        private int? _modelId;
+        private int? _agentId;
+        private string? _modelName;
         private DateTime? _lastCalled;
         private string? _lastFunction;
 
         // ITinySkill implementation
-        int? ITinySkill.ModelId => _modelId;
-        string? ITinySkill.ModelName => null;
+        int? ITinySkill.ModelId { get => _modelId; set => _modelId = value; }
+        string? ITinySkill.ModelName { get => _modelName; set => _modelName = value; }
         int? ITinySkill.AgentId => _agentId;
         string? ITinySkill.AgentName => null;
         DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
         string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
+        ICustomLogger? ITinySkill.Logger { get => _logger; set { } }
 
         public StoryEvaluatorSkill()
         {
         }
-        public StoryEvaluatorSkill(DatabaseService db, int? modelId = null, int? agentId = null)
+        public StoryEvaluatorSkill(DatabaseService db, int? modelId = null, int? agentId = null, ICustomLogger? logger = null)
         {
             _db = db;
+            _logger = logger;
             _modelId = modelId;
             _agentId = agentId;
         }
@@ -38,6 +42,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("evaluate_single_feature"), Description("Records a single feature evaluation. Parameters: score (int), defects (string), feature (optional string). Accepts alternate score fields (e.g., 'structure_score').")]
         public string EvaluateSingleFeature(int? score = null, int? structure_score = null, string defects = "", string? feature = null, long story_id = 0)
         {
+            ((ITinySkill)this).LogFunctionCall("evaluate_single_feature");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(EvaluateSingleFeature);
             var finalScore = score ?? structure_score ?? 0;
@@ -82,6 +87,7 @@ namespace TinyGenerator.Skills
             int emotional_impact_score = 0, string emotional_impact_defects = "",
             string overall_evaluation = "", long story_id = 0)
         {
+            ((ITinySkill)this).LogFunctionCall("evaluate_full_story");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(EvaluateFullStory);
 

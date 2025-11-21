@@ -37,7 +37,7 @@
                 <td class="library">@d.Library</td>
                 <td class="function">@d.FunctionName</td>
                 <td class="priority" data-priority="@d.Priority">@d.Priority</td>
-                <td class="timeout" data-timeout-secs="@d.TimeoutMs">@(d.TimeoutMs > 0 ? d.TimeoutMs.ToString() : "")</td>
+                <td class="timeout" data-timeout-secs="@d.TimeoutSecs">@(d.TimeoutSecs > 0 ? d.TimeoutSecs.ToString() : "")</td>
                 <td class="testtype">@(string.IsNullOrWhiteSpace(d.TestType) ? "" : d.TestType)</td>
                 <td class="allowedplugins">@(string.IsNullOrWhiteSpace(d.AllowedPlugins) ? "" : d.AllowedPlugins)</td>
                 <td class="responseformat">@(string.IsNullOrWhiteSpace(d.JsonResponseFormat) ? "" : d.JsonResponseFormat)</td>

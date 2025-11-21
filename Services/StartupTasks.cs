@@ -205,6 +205,7 @@ namespace TinyGenerator
                                             case "files": aliases.Add("filesystem"); break;
                                             case "audiocraft": aliases.Add("audiocraft"); break;
                                             case "tts": aliases.Add("tts"); break;
+                                            case "ttsschema": aliases.Add("ttsschema"); break;
                                             case "evaluator": aliases.Add("evaluator"); break;
                                             case "memory": aliases.Add("memory"); break;
                                             case "planner": aliases.Add("text"); break;

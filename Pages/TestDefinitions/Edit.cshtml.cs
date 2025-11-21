@@ -34,7 +34,7 @@ namespace TinyGenerator.Pages.TestDefinitions
                 var dir = Path.Combine(Directory.GetCurrentDirectory(), "execution_plans");
                 if (Directory.Exists(dir))
                 {
-                    var files = Directory.GetFiles(dir, "*.json")
+                    var files = Directory.GetFiles(dir, "*.txt")
                         .Select(Path.GetFileName)
                         .Where(f => !string.IsNullOrEmpty(f))
                         .Select(f => f!)

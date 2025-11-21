@@ -19,7 +19,7 @@ public sealed class TestDefinition
     public string? ExpectedPromptValue { get; set; }
     // Valid score range as provided by importer (e.g. "1-3")
     public string? ValidScoreRange { get; set; }
-    public int TimeoutMs { get; set; }
+    public int TimeoutSecs { get; set; }
     public int Priority { get; set; }
     public string? Description { get; set; }
     public string? ExecutionPlan { get; set; }

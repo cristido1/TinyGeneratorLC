@@ -127,8 +127,8 @@
         <div class="col-md-6">
             <label for="timeout_seconds" class="form-label">Timeout (seconds)</label>
             <input id="timeout_seconds" class="form-control" type="number" min="0" step="1" />
-            <input asp-for="Definition.TimeoutMs" type="hidden" id="timeout_secs_hidden" />
-            <span asp-validation-for="Definition.TimeoutMs" class="text-danger"></span>
+            <input asp-for="Definition.TimeoutSecs" type="hidden" id="timeout_secs_hidden" />
+            <span asp-validation-for="Definition.TimeoutSecs" class="text-danger"></span>
             <small class="form-text text-muted">Default: 30s for questions, 60s for TTS, 120s for writers</small>
         </div>
         <div class="col-md-6">

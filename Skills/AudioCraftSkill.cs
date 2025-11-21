@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Threading.Tasks;
 using System.ComponentModel;
+using TinyGenerator.Services;
 
 namespace TinyGenerator.Skills
 {
@@ -10,7 +11,10 @@ namespace TinyGenerator.Skills
     public class AudioCraftSkill : ITinySkill
     {
         private readonly HttpClient _http;
+        private readonly ICustomLogger? _logger;
         private readonly bool _forceCpu;
+        private int? _modelId;
+        private string? _modelName;
         private DateTime? _lastCalled;
         private string? _lastFunction;
 
@@ -19,16 +23,18 @@ namespace TinyGenerator.Skills
         public string? LastGeneratedSoundFile { get; set; }
 
         // ITinySkill implementation
-        int? ITinySkill.ModelId => null;
-        string? ITinySkill.ModelName => null;
+        int? ITinySkill.ModelId { get => _modelId; set => _modelId = value; }
+        string? ITinySkill.ModelName { get => _modelName; set => _modelName = value; }
         int? ITinySkill.AgentId => null;
         string? ITinySkill.AgentName => null;
         DateTime? ITinySkill.LastCalled { get => _lastCalled; set => _lastCalled = value; }
         string? ITinySkill.LastFunction { get => _lastFunction; set => _lastFunction = value; }
+        ICustomLogger? ITinySkill.Logger { get => _logger; set { } }
 
-        public AudioCraftSkill(HttpClient httpClient, bool forceCpu = false)
+        public AudioCraftSkill(HttpClient httpClient, bool forceCpu = false, ICustomLogger? logger = null)
         {
             _http = httpClient;
+            _logger = logger;
             _http.BaseAddress = new System.Uri("http://localhost:8000"); // endpoint del container
             _forceCpu = forceCpu;
         }
@@ -37,6 +43,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("check_health"),Description("Checks the health of the AudioCraft service.")]
         public async Task<string> CheckHealthAsync()
         {
+            ((ITinySkill)this).LogFunctionCall("check_health");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(CheckHealthAsync);
             var response = await _http.GetAsync("/health");
@@ -49,6 +56,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("list_models"),Description("Lists all available models.")]
         public async Task<string> ListModelsAsync()
         {
+            ((ITinySkill)this).LogFunctionCall("list_models");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(ListModelsAsync);
             var models = await _http.GetStringAsync("/api/models");
@@ -62,6 +70,9 @@ namespace TinyGenerator.Skills
             [Description("The model to use for music generation.")] string model = "facebook/musicgen-small",
             [Description("The duration of the generated music in seconds.")] int duration = 30)
         {
+            ((ITinySkill)this).LogFunctionCall("generate_music");
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(GenerateMusicAsync);
             var payload = new System.Collections.Generic.Dictionary<string, object>
             {
                 ["model"] = model,
@@ -136,6 +147,9 @@ namespace TinyGenerator.Skills
             [Description("The model to use for sound generation.")] string model = "facebook/audiogen-medium",
             [Description("The duration of the generated sound effect in seconds.")] int duration = 10)
         {
+            ((ITinySkill)this).LogFunctionCall("generate_sound");
+            ((ITinySkill)this).LastCalled = DateTime.UtcNow;
+            ((ITinySkill)this).LastFunction = nameof(GenerateSoundAsync);
             var payload = new System.Collections.Generic.Dictionary<string, object>
             {
                 ["model"] = model,
@@ -201,6 +215,7 @@ namespace TinyGenerator.Skills
         [KernelFunction("download_file"), Description("Downloads a file.")]
         public async Task<byte[]> DownloadFileAsync([Description("The name of the file to download.")] string file)
         {
+            ((ITinySkill)this).LogFunctionCall("download_file");
             ((ITinySkill)this).LastCalled = DateTime.UtcNow;
             ((ITinySkill)this).LastFunction = nameof(DownloadFileAsync);
             var response = await _http.GetAsync($"/download/{file}");
@@ -232,8 +247,11 @@ namespace TinyGenerator.Skills
         }
 
         [KernelFunction("describe"), Description("Describes the available AudioCraft functions.")]
-        public string Describe() =>
-            "Available functions: check_health(), list_models(), generate_music(prompt, model, duration), generate_sound(prompt, model, duration), download_file(file)." +
-            "Example: audio.generate_music('A calm piano melody', 'facebook/musicgen-small', 30) generates a 30-second music clip.";
+        public string Describe()
+        {
+            ((ITinySkill)this).LogFunctionCall("describe");
+            return "Available functions: check_health(), list_models(), generate_music(prompt, model, duration), generate_sound(prompt, model, duration), download_file(file)." +
+                "Example: audio.generate_music('A calm piano melody', 'facebook/musicgen-small', 30) generates a 30-second music clip.";
+        }
     }
 }

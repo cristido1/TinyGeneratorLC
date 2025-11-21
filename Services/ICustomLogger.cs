@@ -9,5 +9,11 @@ namespace TinyGenerator.Services
 
         // Force flush of any buffered logs to the database.
         Task FlushAsync();
+
+        // Log a model prompt (question to the AI model)
+        void LogPrompt(string modelName, string prompt);
+
+        // Log a model response (answer from the AI model)
+        void LogResponse(string modelName, string response);
     }
 }

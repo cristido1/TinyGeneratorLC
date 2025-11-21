@@ -13,6 +13,7 @@ namespace TinyGenerator.Services
     public class CustomLogger : ICustomLogger, IDisposable
     {
         private readonly DatabaseService _db;
+        private readonly ProgressService? _progress;
         private readonly List<LogEntry> _buffer = new();
         private readonly object _lock = new();
         private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -21,9 +22,10 @@ namespace TinyGenerator.Services
         private readonly TimeSpan _flushInterval;
         private bool _disposed;
 
-        public CustomLogger(DatabaseService databaseService, CustomLoggerOptions options)
+        public CustomLogger(DatabaseService databaseService, CustomLoggerOptions options, ProgressService? progressService = null)
         {
             _db = databaseService ?? throw new ArgumentNullException(nameof(databaseService));
+            _progress = progressService;
             if (options == null) options = new CustomLoggerOptions();
             _batchSize = Math.Max(1, options.BatchSize);
             _flushInterval = TimeSpan.FromMilliseconds(Math.Max(100, options.FlushIntervalMs));
@@ -56,11 +58,54 @@ namespace TinyGenerator.Services
                 if (_buffer.Count >= _batchSize) shouldFlush = true;
             }
 
+            // Broadcast important log categories to Live Monitor via ProgressService
+            // Categories like PromptRendering, FunctionInvocation, ModelCompletion should appear in real-time
+            if (_progress != null && (category == "PromptRendering" || category == "FunctionInvocation" || category == "ModelCompletion"))
+            {
+                try
+                {
+                    _progress.Append("live-logs", $"[{category}] {message}");
+                }
+                catch { /* best-effort */ }
+            }
+
             if (shouldFlush)
             {
                 // fire-and-forget flush; if semaphore is busy, FlushAsync will return quickly and postpone
                 _ = Task.Run(() => FlushAsync());
             }
+        }
+
+        /// <summary>
+        /// Logs a model prompt (question to the AI model)
+        /// </summary>
+        public void LogPrompt(string modelName, string prompt)
+        {
+            // Truncate very long prompts for readability (keep first 1000 chars)
+            var displayPrompt = string.IsNullOrWhiteSpace(prompt) 
+                ? "(empty prompt)" 
+                : prompt.Length > 1000 
+                    ? prompt.Substring(0, 1000) + "..." 
+                    : prompt;
+            
+            var message = $"[{modelName}] PROMPT: {displayPrompt}";
+            Log("Information", "ModelPrompt", message);
+        }
+
+        /// <summary>
+        /// Logs a model response (answer from the AI model)
+        /// </summary>
+        public void LogResponse(string modelName, string response)
+        {
+            // Truncate very long responses for readability (keep first 1000 chars)
+            var displayResponse = string.IsNullOrWhiteSpace(response) 
+                ? "(empty response)" 
+                : response.Length > 1000 
+                    ? response.Substring(0, 1000) + "..." 
+                    : response;
+            
+            var message = $"[{modelName}] RESPONSE: {displayResponse}";
+            Log("Information", "ModelCompletion", message);
         }
 
         private async Task OnTimerAsync()

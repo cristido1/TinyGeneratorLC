@@ -32,6 +32,13 @@ project.lock.json
 # Database files created by the app - keep local DB out of source control
 data/*.db
 data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+data/*.bak
+data/*.backup
+*.db
+*.db-shm
+*.db-wal
 
 # Backups created by the tool
 backups/
@@ -52,7 +59,10 @@ publish/
 # Logs
 *.log
 
-# Secrets
+# Secrets and credentials (any file with "secret" or "secrets" in the name)
+*secret*
+*secrets*
 secrets.json
 appsettings.*.Local.json
 appsettings.secrets.json
+*.secrets.json

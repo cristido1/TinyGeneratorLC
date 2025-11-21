@@ -65,9 +65,41 @@ Console.WriteLine($"Score: {result.ScoreA}");
 - [x] Chat bridge creato
 - [x] Tool factory creato
 - [x] Story generation service creato
+- [x] Unit tests creati e passanti (15/15 ✅)
 - [ ] Integrate nel Genera.cshtml
 - [ ] Test con Ollama locale
 - [ ] Deprecare SK components
+
+## Unit Tests (Status: All 15 Passing ✅)
+
+**Location**: `Tests/LangChainToolsTests.cs`
+
+**Test Coverage**:
+- TextTool schema generation and validation
+- TextTool execution (toupper, tolower, substring operations)
+- MathTool schema generation and validation
+- MathTool operations (add, multiply with error handling)
+- MathTool error handling (division by zero)
+- EvaluatorTool schema generation
+- HybridOrchestrator tool registration
+- HybridOrchestrator tool schema collection
+- HybridOrchestrator tool call parsing from JSON
+- HybridOrchestrator tool execution
+- HybridOrchestrator error handling for unregistered tools
+- LangChainToolFactory essential orchestrator creation
+- ReActLoop execution tracking
+- ConversationMessage serialization
+
+**Running Tests**:
+```bash
+dotnet test --no-build
+# Output: 15 passed in 36ms
+```
+
+**Test Dependencies**:
+- xunit 2.9.3
+- xunit.runner.visualstudio 3.1.5
+- Microsoft.NET.Test.Sdk 17.9.0
 
 ## Architettura: SK vs LangChain
 

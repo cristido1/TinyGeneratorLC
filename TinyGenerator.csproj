@@ -7,11 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- LangChain packages for agent orchestration (NEW) -->
+    <!-- LangChain packages for agent orchestration -->
     <PackageReference Include="LangChain" Version="0.17.1-dev.51" />
     <PackageReference Include="LangChain.Providers.OpenAI" Version="0.17.1-dev.48" />
     
-    <!-- Keep Semantic Kernel for backward compatibility during gradual migration -->
+    <!-- Semantic Kernel (DEPRECATED: gradual migration to LangChain) -->
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.67.1" />
     <PackageReference Include="Microsoft.SemanticKernel.Plugins.Core" Version="1.67.1-preview" />
     <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.67.1" />

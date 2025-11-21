@@ -1,0 +1,170 @@
+@page "/langchain-test"
+@using TinyGenerator.Services
+@model LangChainTestModel
+
+@{
+    ViewData["Title"] = "LangChain Story Generation Test";
+}
+
+<div class="container mt-5">
+    <div class="row">
+        <div class="col-md-12">
+            <h1>LangChain Story Generation Test</h1>
+            <p class="lead">Test the new LangChain-based story generation with explicit ReAct loop.</p>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5>Generation Parameters</h5>
+                </div>
+                <div class="card-body">
+                    <form method="post" id="generationForm">
+                        <div class="mb-3">
+                            <label for="theme" class="form-label">Story Theme</label>
+                            <input type="text" class="form-control" id="theme" name="theme" 
+                                   value="@Model.Theme" placeholder="e.g., A mysterious quest in the enchanted forest">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="modelEndpoint" class="form-label">Model Endpoint</label>
+                            <input type="text" class="form-control" id="modelEndpoint" name="modelEndpoint" 
+                                   value="@Model.ModelEndpoint" placeholder="e.g., http://localhost:11434/v1">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="apiKey" class="form-label">API Key</label>
+                            <input type="text" class="form-control" id="apiKey" name="apiKey" 
+                                   value="@Model.ApiKey" placeholder="e.g., ollama-dummy-key">
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="writerModels" class="form-label">Writer Models (comma-separated)</label>
+                                    <input type="text" class="form-control" id="writerModels" name="writerModels" 
+                                           value="@Model.WriterModels" placeholder="e.g., phi3:mini, mistral:7b">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="evaluatorModel" class="form-label">Evaluator Model</label>
+                                    <input type="text" class="form-control" id="evaluatorModel" name="evaluatorModel" 
+                                           value="@Model.EvaluatorModel" placeholder="e.g., qwen2.5:3b">
+                                </div>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-lg" id="generateBtn">
+                            <i class="fas fa-wand-magic-sparkles"></i> Generate Stories
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card bg-light">
+                <div class="card-header">
+                    <h5>Status</h5>
+                </div>
+                <div class="card-body">
+                    <div id="statusArea" class="alert alert-info">
+                        Ready to generate stories.
+                    </div>
+                    <div id="progressArea"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (Model.Result != null)
+    {
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header bg-success text-white">
+                        <h5>Results</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-@(Model.Result.Success ? "success" : "danger")">
+                            @Model.Result.Message
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="card mb-3">
+                                    <div class="card-header">
+                                        Writer A <span class="badge bg-@(Model.Result.ScoreA >= 7 ? "success" : "warning")">@Model.Result.ScoreA:F1</span>
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="card-text">@(Model.Result.StoryA?.Length > 200 ? Model.Result.StoryA.Substring(0, 200) + "..." : Model.Result.StoryA)</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="col-md-4">
+                                <div class="card mb-3">
+                                    <div class="card-header">
+                                        Writer B <span class="badge bg-@(Model.Result.ScoreB >= 7 ? "success" : "warning")">@Model.Result.ScoreB:F1</span>
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="card-text">@(Model.Result.StoryB?.Length > 200 ? Model.Result.StoryB.Substring(0, 200) + "..." : Model.Result.StoryB)</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="col-md-4">
+                                <div class="card mb-3">
+                                    <div class="card-header">
+                                        Writer C <span class="badge bg-@(Model.Result.ScoreC >= 7 ? "success" : "warning")">@Model.Result.ScoreC:F1</span>
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="card-text">@(Model.Result.StoryC?.Length > 200 ? Model.Result.StoryC.Substring(0, 200) + "..." : Model.Result.StoryC)</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(Model.Result.ApprovedStory))
+                        {
+                            <div class="alert alert-success">
+                                <strong>Best Story:</strong> Writer @Model.Result.ApprovedStory
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@section Scripts {
+    <script>
+        document.getElementById('generationForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            document.getElementById('generateBtn').disabled = true;
+            document.getElementById('statusArea').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+            
+            try {
+                const response = await fetch(this.action, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams(new FormData(this))
+                });
+                
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    document.getElementById('statusArea').innerHTML = '<div class="alert alert-danger">Error: ' + response.statusText + '</div>';
+                }
+            } catch (error) {
+                document.getElementById('statusArea').innerHTML = '<div class="alert alert-danger">Error: ' + error.message + '</div>';
+            } finally {
+                document.getElementById('generateBtn').disabled = false;
+            }
+        });
+    </script>
+}

@@ -90,6 +90,16 @@ builder.Services.AddTransient<PlannerExecutor>();
 // Test execution service (per-step execution encapsulation)
 builder.Services.AddTransient<ITestService, TestService>();
 
+// === LangChain Services (NEW) ===
+// Tool factory for creating LangChain tools and orchestrators
+builder.Services.AddSingleton<LangChainToolFactory>(sp => new LangChainToolFactory(
+    sp.GetRequiredService<PersistentMemoryService>(),
+    sp.GetRequiredService<DatabaseService>(),
+    sp.GetService<ICustomLogger>()));
+
+// LangChain story generation service (alternative to SK-based StoryGeneratorService)
+builder.Services.AddTransient<LangChainStoryGenerationService>();
+
 // Database access service + cost controller (sqlite) - register as factory to avoid heavy constructor work during registration
 builder.Services.AddSingleton(sp => new DatabaseService("data/storage.db"));
 // Configure custom logger options from configuration (section: CustomLogger)

@@ -5,14 +5,35 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+// DEPRECATED: Semantic Kernel references - gradual migration to LangChain in progress
+// These using statements are kept for backward compatibility with legacy TestService code
+// Will be removed once migration to LangChain-based testing is complete
+#pragma warning disable CS0618 // Type or member is obsolete
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
+#pragma warning restore CS0618
 using OpenAI.Chat;
 using TinyGenerator.Models;
 
 namespace TinyGenerator.Services
 {
+    /// <summary>
+    /// DEPRECATED: TestService using Semantic Kernel (legacy implementation)
+    /// 
+    /// This service is maintained for backward compatibility but is no longer the primary testing solution.
+    /// 
+    /// Migration Status:
+    /// - Uses Semantic Kernel (deprecated in favor of LangChain)
+    /// - References to Microsoft.SemanticKernel are wrapped with #pragma warning disable
+    /// - Scheduled for gradual replacement with LangChain-based testing framework
+    /// 
+    /// For new tests, consider using:
+    /// - LangChain-based tools and orchestrators (Skills/TextTool.cs, Services/LangChainToolFactory.cs)
+    /// - Direct HTTP calls to Ollama/OpenAI without SK dependency
+    /// 
+    /// TODO: Migrate to LangChain testing framework
+    /// </summary>
     public interface ITestService
     {
         Task ExecuteTestAsync(int runId, int idx, TestDefinition t, string model, ModelInfo modelInfo, string agentInstructions, object? defaultAgent, string? testFolder = null);
@@ -21,10 +42,14 @@ namespace TinyGenerator.Services
     }
 
     /// <summary>
-    /// Simplified TestService using OpenAI connector for all models (including Ollama).
+    /// DEPRECATED: Simplified TestService using Semantic Kernel (legacy implementation)
     /// Uses ResponseFormat for structured outputs, eliminating manual parsing.
     /// Creates new kernels dynamically when skills change.
+    /// 
+    /// NOTE: This service is maintained for backward compatibility.
+    /// New testing features should use LangChain-based implementations.
     /// </summary>
+    [Obsolete("TestService uses deprecated Semantic Kernel. Use LangChain-based testing framework instead.", false)]
     public class TestService : ITestService
     {
         private readonly DatabaseService _database;

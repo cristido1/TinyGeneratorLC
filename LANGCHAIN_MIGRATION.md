@@ -70,30 +70,43 @@ Console.WriteLine($"Score: {result.ScoreA}");
 - [ ] Test con Ollama locale
 - [ ] Deprecare SK components
 
-## Unit Tests (Status: All 15 Passing ✅)
+## Unit Tests (Status: All 26 Passing ✅)
 
-**Location**: `Tests/LangChainToolsTests.cs`
+**Location**: `Tests/` directory with comprehensive test suite
 
-**Test Coverage**:
-- TextTool schema generation and validation
-- TextTool execution (toupper, tolower, substring operations)
-- MathTool schema generation and validation
-- MathTool operations (add, multiply with error handling)
-- MathTool error handling (division by zero)
-- EvaluatorTool schema generation
-- HybridOrchestrator tool registration
-- HybridOrchestrator tool schema collection
-- HybridOrchestrator tool call parsing from JSON
-- HybridOrchestrator tool execution
-- HybridOrchestrator error handling for unregistered tools
-- LangChainToolFactory essential orchestrator creation
-- ReActLoop execution tracking
-- ConversationMessage serialization
+**Files**:
+- `LangChainToolsTests.cs` - 15 unit tests for individual tools
+- `LangChainIntegrationTests.cs` - 11 integration tests for orchestration
+- `README.md` - Detailed test documentation
+
+**Unit Test Coverage (15 tests)**:
+- TextTool: schema generation, uppercase, substring operations
+- MathTool: schema generation, add, multiply, divide, error handling
+- EvaluatorTool: schema generation
+- HybridOrchestrator: tool registration, tool call parsing (empty/valid), tool execution, error handling for unregistered tools
+- LangChainToolFactory: essential orchestrator creation
+- ReActLoop: execution tracking, message serialization
+
+**Integration Test Coverage (11 tests)**:
+- Orchestrator setup: full tool registry validation
+- Tool call parsing: valid responses, empty responses
+- Tool chaining: multi-tool workflows, error propagation
+- Conversation history: message tracking across iterations
+- Factory pattern: essential vs full orchestrators
+- JSON serialization: preservation of all fields
+- ReAct loop structures: result initialization, execution records
 
 **Running Tests**:
 ```bash
-dotnet test --no-build
-# Output: 15 passed in 36ms
+dotnet test
+# Output: 26 passed in 27ms
+```
+
+**Test Results**:
+```
+Unit Tests (LangChainToolsTests.cs):        15/15 ✅
+Integration Tests (LangChainIntegrationTests.cs): 11/11 ✅
+Total:                                      26/26 ✅
 ```
 
 **Test Dependencies**:

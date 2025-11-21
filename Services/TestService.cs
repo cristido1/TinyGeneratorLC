@@ -50,6 +50,7 @@ namespace TinyGenerator.Services
     /// New testing features should use LangChain-based implementations.
     /// </summary>
     [Obsolete("TestService uses deprecated Semantic Kernel. Use LangChain-based testing framework instead.", false)]
+    #pragma warning disable CS0618 // Type or member is obsolete
     public class TestService : ITestService
     {
         private readonly DatabaseService _database;
@@ -1401,8 +1402,10 @@ IMPORTANT: Write the story in Italian language.";
             }
         }
     }
+    #pragma warning restore CS0618
 
-    // Classi per la valutazione TTS
+    // ==================== TTS EVALUATION HELPER CLASSES ====================
+    // These classes are reused by both SK-based TestService and future LangChain implementation
     public class DialogueTrack
     {
         public List<CharacterInfo> Characters { get; set; } = new List<CharacterInfo>();

@@ -29,6 +29,7 @@ namespace TinyGenerator.Services
     /// Will be removed once all consumers are migrated to LangChain.
     /// </summary>
     [Obsolete("AgentService uses deprecated Semantic Kernel. Use LangChainAgentService instead.", false)]
+    #pragma warning disable CS0618 // Type or member is obsolete
     public sealed class AgentService
     {
         private readonly DatabaseService _database;
@@ -376,4 +377,5 @@ namespace TinyGenerator.Services
             }
         }
     }
+    #pragma warning restore CS0618
 }

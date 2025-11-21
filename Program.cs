@@ -97,6 +97,18 @@ builder.Services.AddSingleton<LangChainToolFactory>(sp => new LangChainToolFacto
     sp.GetRequiredService<DatabaseService>(),
     sp.GetService<ICustomLogger>()));
 
+// LangChain kernel factory (creates and caches orchestrators)
+builder.Services.AddSingleton<ILangChainKernelFactory>(sp => new LangChainKernelFactory(
+    builder.Configuration,
+    sp.GetRequiredService<DatabaseService>(),
+    sp.GetService<ICustomLogger>()));
+
+// LangChain agent service (retrieves agents and provides orchestrators)
+builder.Services.AddSingleton<LangChainAgentService>(sp => new LangChainAgentService(
+    sp.GetRequiredService<DatabaseService>(),
+    sp.GetRequiredService<ILangChainKernelFactory>(),
+    sp.GetService<ICustomLogger>()));
+
 // LangChain story generation service (alternative to SK-based StoryGeneratorService)
 builder.Services.AddTransient<LangChainStoryGenerationService>();
 

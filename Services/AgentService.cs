@@ -4,16 +4,31 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+// DEPRECATED: Semantic Kernel references - gradual migration to LangChain in progress
+// These using statements are kept for backward compatibility with legacy AgentService code
+#pragma warning disable CS0618 // Type or member is obsolete
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
+#pragma warning restore CS0618
 using TinyGenerator.Models;
 
 namespace TinyGenerator.Services
 {
     /// <summary>
-    /// Service for retrieving and configuring agents with their associated kernels and skills
+    /// DEPRECATED: Service for retrieving and configuring agents with their associated kernels and skills
+    /// 
+    /// This service uses Semantic Kernel for agent configuration and kernel creation.
+    /// Maintained for backward compatibility only.
+    /// 
+    /// Migration Path:
+    /// - Migrate to LangChainAgentService for new code
+    /// - Use HybridLangChainOrchestrator instead of Kernel
+    /// - Use agent configuration to populate tool filters
+    /// 
+    /// Will be removed once all consumers are migrated to LangChain.
     /// </summary>
+    [Obsolete("AgentService uses deprecated Semantic Kernel. Use LangChainAgentService instead.", false)]
     public sealed class AgentService
     {
         private readonly DatabaseService _database;

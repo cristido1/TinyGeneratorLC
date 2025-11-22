@@ -7,12 +7,12 @@ namespace TinyGenerator.Pages;
 
 public class GeneraModel : PageModel
 {
-    private readonly StoryGeneratorService _generator;
+    private readonly LangChainStoryGenerationService _generator;
     private readonly ILogger<GeneraModel> _logger;
     private readonly ProgressService _progress;
     private readonly NotificationService _notifications;
 
-    public GeneraModel(StoryGeneratorService generator, ILogger<GeneraModel> logger, ProgressService progress, NotificationService notifications)
+    public GeneraModel(LangChainStoryGenerationService generator, ILogger<GeneraModel> logger, ProgressService progress, NotificationService notifications)
     {
         _generator = generator;
         _logger = logger;
@@ -26,7 +26,7 @@ public class GeneraModel : PageModel
     [BindProperty]
     public string Writer { get; set; } = "All";
 
-    public StoryGeneratorService.GenerationResult? Story { get; set; }
+    public object? Story { get; set; }
     public string Status => _status.ToString();
     public bool IsProcessing { get; set; }
 

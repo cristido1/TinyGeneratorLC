@@ -81,12 +81,10 @@ namespace TinyGenerator.Services
         /// </summary>
         public void LogPrompt(string modelName, string prompt)
         {
-            // Truncate very long prompts for readability (keep first 1000 chars)
+            // Don't truncate - save full prompt to DB for complete audit trail
             var displayPrompt = string.IsNullOrWhiteSpace(prompt) 
                 ? "(empty prompt)" 
-                : prompt.Length > 1000 
-                    ? prompt.Substring(0, 1000) + "..." 
-                    : prompt;
+                : prompt;
             
             var message = $"[{modelName}] PROMPT: {displayPrompt}";
             Log("Information", "ModelPrompt", message);
@@ -97,12 +95,10 @@ namespace TinyGenerator.Services
         /// </summary>
         public void LogResponse(string modelName, string response)
         {
-            // Truncate very long responses for readability (keep first 1000 chars)
+            // Don't truncate - save full response to DB for complete audit trail
             var displayResponse = string.IsNullOrWhiteSpace(response) 
                 ? "(empty response)" 
-                : response.Length > 1000 
-                    ? response.Substring(0, 1000) + "..." 
-                    : response;
+                : response;
             
             var message = $"[{modelName}] RESPONSE: {displayResponse}";
             Log("Information", "ModelCompletion", message);

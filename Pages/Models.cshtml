@@ -237,7 +237,7 @@
                             monitorTestCompletion(j.runIds);
                         }
                     })
-                    .catch(e => { alert('Error starting run: ' + e); });
+                    .catch(e => { showError('Error', 'Error starting run: ' + e); });
             });
 
             $('#runAllBtn').on('click', function(){
@@ -251,36 +251,40 @@
                             monitorTestCompletion(j.runIds);
                         }
                     })
-                    .catch(e => { alert('Error starting run: ' + e); });
+                    .catch(e => { showError('Error', 'Error starting run: ' + e); });
             });
 
             $('#purgeOllamaBtn').on('click', function(){
-                if(!confirm('Permanently purge disabled local Ollama models? This will attempt to delete installed models.')) return;
-                postHandler('PurgeDisabledOllama', new FormData())
-                    .then(r => r.json())
-                    .then(j => { alert('Purge completed. Check logs for details.'); })
-                    .catch(e => { alert('Error purging: ' + e); });
+                showConfirm('Purge Models', 'Permanently purge disabled local Ollama models? This will attempt to delete installed models.').then(confirmed => {
+                    if(!confirmed) return;
+                    postHandler('PurgeDisabledOllama', new FormData())
+                        .then(r => r.json())
+                        .then(j => { showSuccess('Success', 'Purge completed. Check logs for details.'); })
+                        .catch(e => { showError('Error', 'Error purging: ' + e); });
+                });
             });
 
             $('#refreshContextsBtn').on('click', function(){
                 postHandler('RefreshContexts', new FormData())
                     .then(r => { if(r.redirected) window.location = r.url; else return r.json(); })
-                    .then(j => { if(j) alert('Refresh contexts result: ' + JSON.stringify(j)); })
-                    .catch(e => { alert('Error refreshing contexts: ' + e); });
+                    .then(j => { if(j) showInfo('Result', 'Refresh contexts result: ' + JSON.stringify(j)); })
+                    .catch(e => { showError('Error', 'Error refreshing contexts: ' + e); });
             });
 
             $('#discoverOllamaBtn').on('click', function(){
                 postHandler('AddOllamaModels', new FormData())
                     .then(r => { if(r.redirected) window.location = r.url; else return r.json(); })
-                    .then(j => { if(j) alert('Discover result: ' + JSON.stringify(j)); else window.location.reload(); })
-                    .catch(e => { alert('Error discovering: ' + e); });
+                    .then(j => { if(j) showInfo('Result', 'Discover result: ' + JSON.stringify(j)); else window.location.reload(); })
+                    .catch(e => { showError('Error', 'Error discovering: ' + e); });
             });
 
             $('#recalculateScoresBtn').on('click', function(){
-                if(!confirm('Ricalcolare i punteggi writer per tutti i modelli?')) return;
-                postHandler('RecalculateScores', new FormData())
-                    .then(r => { if(r.redirected) window.location = r.url; else window.location.reload(); })
-                    .catch(e => { alert('Error recalculating: ' + e); });
+                showConfirm('Recalculate', 'Ricalcolare i punteggi writer per tutti i modelli?').then(confirmed => {
+                    if(!confirmed) return;
+                    postHandler('RecalculateScores', new FormData())
+                        .then(r => { if(r.redirected) window.location = r.url; else window.location.reload(); })
+                        .catch(e => { showError('Error', 'Error recalculating: ' + e); });
+                });
             });
 
             // ShowDisabled checkbox: update querystring and reload while preserving other params

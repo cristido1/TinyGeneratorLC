@@ -31,18 +31,19 @@ namespace TinyGenerator.Services
         public LangChainKernelFactory(
             IConfiguration config,
             DatabaseService database,
-            ICustomLogger? logger = null)
+            ICustomLogger? logger = null,
+            LangChainToolFactory? toolFactory = null)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _logger = logger;
-            _toolFactory = new LangChainToolFactory(null, database, logger);
+            _toolFactory = toolFactory ?? throw new ArgumentNullException(nameof(toolFactory));
             _agentOrchestrators = new Dictionary<int, HybridLangChainOrchestrator>();
         }
 
         /// <summary>
         /// Create a HybridLangChainOrchestrator with tools for a given model.
-        /// Uses full orchestrator by default.
+        /// Registers only the allowed tools (most efficient approach).
         /// </summary>
         public HybridLangChainOrchestrator CreateOrchestrator(
             string? model = null,
@@ -53,16 +54,25 @@ namespace TinyGenerator.Services
             {
                 _logger?.Log("Info", "LangChainKernelFactory", $"Creating orchestrator for model: {model}, agentId: {agentId}");
 
-                // Use full orchestrator with all tools
-                var orchestrator = _toolFactory.CreateFullOrchestrator(agentId, null);
+                HybridLangChainOrchestrator orchestrator;
 
-                // Filter tools if specified
-                if (allowedPlugins != null)
+                // If specific tools are requested, create orchestrator with ONLY those tools
+                if (allowedPlugins != null && allowedPlugins.Any())
                 {
-                    FilterOrchestratorTools(orchestrator, allowedPlugins);
+                    var pluginsList = allowedPlugins.ToList();
+                    _logger?.Log("Info", "LangChainKernelFactory", 
+                        $"Creating orchestrator with specific tools: {string.Join(", ", pluginsList)}");
+                    orchestrator = _toolFactory.CreateOrchestratorWithTools(pluginsList, agentId, null);
+                }
+                else
+                {
+                    // No tools requested, create empty orchestrator
+                    _logger?.Log("Info", "LangChainKernelFactory", "Creating empty orchestrator (no tools requested)");
+                    orchestrator = new HybridLangChainOrchestrator(_logger);
                 }
 
-                _logger?.Log("Info", "LangChainKernelFactory", "Orchestrator created successfully");
+                _logger?.Log("Info", "LangChainKernelFactory", 
+                    $"Orchestrator created successfully with {orchestrator.GetToolSchemas().Count} tools");
                 return orchestrator;
             }
             catch (Exception ex)
@@ -222,30 +232,52 @@ namespace TinyGenerator.Services
         }
 
         /// <summary>
-        /// Filter orchestrator tools to only allowed plugins.
-        /// Tools are identified by their method names in the schema.
+        /// Create a LangChainChatBridge for direct model communication.
+        /// Resolves model endpoint and API key from configuration.
         /// </summary>
-        private void FilterOrchestratorTools(
-            HybridLangChainOrchestrator orchestrator,
-            IEnumerable<string> allowedPlugins)
+        public LangChainChatBridge CreateChatBridge(string model)
         {
             try
             {
-                var allowedSet = new HashSet<string>(
-                    allowedPlugins.Select(p => p.ToLowerInvariant()),
-                    StringComparer.OrdinalIgnoreCase);
+                var modelInfo = _database.GetModelInfo(model);
+                if (modelInfo == null)
+                {
+                    throw new InvalidOperationException($"Model '{model}' not found in database");
+                }
+
+                // Determine endpoint based on model provider
+                string endpoint;
+                string apiKey = "ollama"; // Default for Ollama (no auth required)
+
+                if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    endpoint = _config.GetSection("Ollama:endpoint").Value ?? "http://localhost:11434";
+                }
+                else if (modelInfo.Provider?.Equals("openai", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    endpoint = _config.GetSection("OpenAI:endpoint").Value ?? "https://api.openai.com/v1";
+                    apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? "sk-";
+                }
+                else if (modelInfo.Provider?.Equals("azure", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    endpoint = modelInfo.Endpoint ?? "https://api.openai.azure.com";
+                    apiKey = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY") ?? "key-";
+                }
+                else
+                {
+                    endpoint = modelInfo.Endpoint ?? _config.GetSection("Ollama:endpoint").Value ?? "http://localhost:11434";
+                }
 
                 _logger?.Log("Info", "LangChainKernelFactory",
-                    $"Filtering tools to allowed plugins: {string.Join(", ", allowedSet)}");
+                    $"Creating ChatBridge for model '{model}' with provider '{modelInfo.Provider}' and endpoint '{endpoint}'");
 
-                // The orchestrator's schema contains all tools
-                // In a real implementation, we would filter here
-                // For now, this is a placeholder for future enhancement
+                return new LangChainChatBridge(endpoint, model, apiKey, null, _logger);
             }
             catch (Exception ex)
             {
-                _logger?.Log("Warning", "LangChainKernelFactory",
-                    $"Failed to filter tools: {ex.Message}");
+                _logger?.Log("Error", "LangChainKernelFactory",
+                    $"Failed to create ChatBridge for model '{model}': {ex.Message}");
+                throw;
             }
         }
     }

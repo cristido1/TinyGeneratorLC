@@ -11,11 +11,13 @@ namespace TinyGenerator.Skills
     /// LangChain version of TextPlugin.
     /// Converts string manipulation functions to LangChain tools with JSON schema.
     /// </summary>
-    public class TextTool : BaseLangChainTool, ILangChainToolWithContext
+    public class TextTool : BaseLangChainTool, ITinyTool
     {
         public int? ModelId { get; set; }
         public string? ModelName { get; set; }
         public int? AgentId { get; set; }
+        public string? LastFunctionCalled { get; set; }
+        public string? LastFunctionResult { get; set; }
         public string? LastCalled { get; set; }
 
         public TextTool(ICustomLogger? logger = null) 
@@ -98,6 +100,8 @@ namespace TinyGenerator.Skills
                     result = new { error = $"Unknown function: {input.Function}" };
 
                 LastCalled = input.Function;
+                LastFunctionCalled = input.Function;
+                LastFunctionResult = JsonSerializer.Serialize(result);
                 CustomLogger?.Log("Info", "TextTool", $"Executed {input.Function}");
                 
                 return await Task.FromResult(JsonSerializer.Serialize(result));

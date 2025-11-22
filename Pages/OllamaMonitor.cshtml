@@ -42,7 +42,7 @@
                       <button class="btn btn-sm btn-outline-primary start-with-context">Start</button>
                     </div>`;
 
-                row.innerHTML = `<td>${m.name}</td><td>${m.id}</td><td>${m.size}</td><td>${m.processor}</td><td>${m.context}</td><td>${m.until}</td><td>${actionsHtml}</td><td><button class='btn btn-sm btn-link' data-prompt='${encodeURIComponent(m.lastPrompt)}'>Preview</button> ${m.lastPrompt ? m.lastPrompt.substring(0,200) : ''}</td>`;
+                row.innerHTML = `<td>${m.name}</td><td>${m.id}</td><td>${m.size}</td><td>${m.processor}</td><td>${m.context}</td><td>${m.until}</td><td>${actionsHtml}</td><td><button class='btn btn-sm btn-link' data-prompt='${encodeURIComponent(m.lastPrompt)}'>Preview</button> ${m.lastPrompt || ''}</td>`;
                 body.appendChild(row);
             }
             // attach click handlers for preview buttons
@@ -50,7 +50,7 @@
                 b.addEventListener('click', e => {
                     const btn = e.currentTarget;
                     const p = decodeURIComponent(btn.getAttribute('data-prompt') || '');
-                    alert(p || 'No prompt recorded');
+                    showInfo('Prompt Preview', p || 'No prompt recorded');
                 });
             });
 
@@ -61,7 +61,11 @@
                     const modelName = tr.children[0].innerText;
                     const input = tr.querySelector('.context-input');
                     const contextVal = parseInt(input.value) || 8192;
-                    if (!confirm(`Start model ${modelName} with context ${contextVal}? This may use significant resources.`)) return;
+                    const confirmed = await showConfirm(
+                        'Start Model',
+                        `Start model ${modelName} with context ${contextVal}? This may use significant resources.`
+                    );
+                    if (!confirmed) return;
                     try {
                         btn.disabled = true;
                         btn.innerText = 'Starting...';
@@ -70,9 +74,9 @@
                             body: JSON.stringify({ model: modelName, context: contextVal })
                         });
                         const j = await res.json();
-                        alert('Start command completed. Output:\n' + (j.runOutput || j.stopOutput || JSON.stringify(j)));
+                        showSuccess('Completed', 'Start command completed. Output:\n' + (j.runOutput || j.stopOutput || JSON.stringify(j)));
                     } catch (err) {
-                        alert('Error starting model: ' + err);
+                        showError('Error', 'Error starting model: ' + err);
                     } finally {
                         btn.disabled = false;
                         btn.innerText = 'Start';

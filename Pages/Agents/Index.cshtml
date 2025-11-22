@@ -40,8 +40,8 @@
                 <td>@(string.IsNullOrWhiteSpace(a.JsonResponseFormat) ? "-" : a.JsonResponseFormat)</td>
                 <td>
                     <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@a.Id">Edit</a>
-                    <form method="post" asp-page-handler="Delete" asp-route-id="@a.Id" class="d-inline">
-                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete agent?');">Delete</button>
+                    <form method="post" asp-page-handler="Delete" asp-route-id="@a.Id" class="d-inline agent-delete-form">
+                        <button type="button" class="btn btn-sm btn-outline-danger agent-delete-btn">Delete</button>
                     </form>
                 </td>
             </tr>
@@ -114,6 +114,18 @@
 
                     // Wire existing search box to DataTables search
                     $('#searchBox').on('input', function(){ table.search(this.value).draw(); });
+                    
+                    // Handle delete buttons with SweetAlert2
+                    document.querySelectorAll('.agent-delete-btn').forEach(btn => {
+                        btn.addEventListener('click', async (e) => {
+                            e.preventDefault();
+                            const form = btn.closest('.agent-delete-form');
+                            const confirmed = await showConfirm('Delete Agent', 'Are you sure you want to delete this agent?', 'Delete', 'Cancel');
+                            if (confirmed) {
+                                form.submit();
+                            }
+                        });
+                    });
                 } catch (e) {
                     console.warn('Failed to initialize Agents DataTable', e);
                 }

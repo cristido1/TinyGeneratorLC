@@ -9,6 +9,12 @@
     <div class="d-flex">
         <a class="btn btn-sm btn-primary" asp-page="./Create">Create Test Definition</a>
     </div>
+    <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="chkShowDisabled" asp-for="ShowDisabled" onchange="window.location.href='?ShowDisabled=' + this.checked;" />
+        <label class="form-check-label" for="chkShowDisabled">
+            Show Disabled Tests
+        </label>
+    </div>
 </div>
 
 <table id="tabTests" class="table table-bordered table-sm table-pastel table-compact">
@@ -22,6 +28,7 @@
             <th>Test Type</th>
             <th>Allowed Plugins</th>
             <th>Response Format</th>
+            <th>Execution Plan</th>
             <th>Active</th>
             <th class="d-none">Prompt</th>
             <th>Actions</th>
@@ -41,6 +48,7 @@
                 <td class="testtype">@(string.IsNullOrWhiteSpace(d.TestType) ? "" : d.TestType)</td>
                 <td class="allowedplugins">@(string.IsNullOrWhiteSpace(d.AllowedPlugins) ? "" : d.AllowedPlugins)</td>
                 <td class="responseformat">@(string.IsNullOrWhiteSpace(d.JsonResponseFormat) ? "" : d.JsonResponseFormat)</td>
+                <td class="executionplan">@(string.IsNullOrWhiteSpace(d.ExecutionPlan) ? "" : d.ExecutionPlan)</td>
                 <td class="active">@(d.Active ? "Yes" : "No")</td>
                 <td class="prompt d-none">@System.Net.WebUtility.HtmlEncode(d.Prompt)</td>
                 <td class="actions">
@@ -54,7 +62,7 @@
     else
     {
         <tr>
-            <td colspan="11">No test definitions found.</td>
+            <td colspan="12">No test definitions found.</td>
         </tr>
     }
     </tbody>

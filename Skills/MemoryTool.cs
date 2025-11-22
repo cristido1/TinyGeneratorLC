@@ -11,12 +11,14 @@ namespace TinyGenerator.Skills
     /// LangChain version of MemorySkill.
     /// Provides persistent memory operations: remember, recall, forget.
     /// </summary>
-    public class MemoryTool : BaseLangChainTool, ILangChainToolWithContext
+    public class MemoryTool : BaseLangChainTool, ITinyTool
     {
         private readonly PersistentMemoryService _memoryService;
         public int? ModelId { get; set; }
         public string? ModelName { get; set; }
         public int? AgentId { get; set; }
+        public string? LastFunctionCalled { get; set; }
+        public string? LastFunctionResult { get; set; }
 
         public MemoryTool(PersistentMemoryService memoryService, ICustomLogger? logger = null) 
             : base("memory", "Persistent memory operations: remember, recall, forget text in collections", logger)
@@ -108,7 +110,10 @@ namespace TinyGenerator.Skills
                 else
                     return JsonSerializer.Serialize(new { error = $"Unknown operation: {operation}" });
 
-                return await Task.FromResult(JsonSerializer.Serialize(new { result = result }));
+                var resultObj = new { result = result };
+                LastFunctionCalled = operation;
+                LastFunctionResult = JsonSerializer.Serialize(resultObj);
+                return await Task.FromResult(JsonSerializer.Serialize(resultObj));
             }
             catch (Exception ex)
             {

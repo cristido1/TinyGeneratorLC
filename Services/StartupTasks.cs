@@ -167,12 +167,16 @@ namespace TinyGenerator
             }
         }
 
-        public static void EnsureKernelsForActiveAgents(DatabaseService? db, KernelFactory? kernelFactory, PersistentMemoryService? memoryService, ILogger? logger = null)
+        // DEPRECATED SK - This method uses old KernelFactory which is deprecated
+        public static void EnsureKernelsForActiveAgents(DatabaseService? db, /* KernelFactory? */ object? kernelFactory, PersistentMemoryService? memoryService, ILogger? logger = null)
         {
             if (db == null || kernelFactory == null || memoryService == null) return;
             try
             {
-                logger?.LogInformation("[Startup] EnsureKernelsForActiveAgents: Starting...");
+                logger?.LogInformation("[Startup] EnsureKernelsForActiveAgents: SKIPPED (deprecated SK KernelFactory)");
+                return;
+                /*
+                DEPRECATED - All SK-based code below has been commented out
                 var agents = db.ListAgents().Where(a => a.IsActive).ToList();
                 logger?.LogInformation("[Startup] Found {count} active agents. Initializing kernels and persistent memory.", agents.Count);
                 foreach (var a in agents)
@@ -244,6 +248,7 @@ namespace TinyGenerator
                         logger?.LogWarning(aex, "[Startup] Failed to initialize agent {name}: {msg}", a.Name, aex.Message);
                     }
                 }
+                */
             }
             catch (Exception ex)
             {
@@ -252,3 +257,4 @@ namespace TinyGenerator
         }
     }
 }
+

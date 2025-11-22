@@ -11,12 +11,14 @@ namespace TinyGenerator.Skills
     /// LangChain version of StoryEvaluatorSkill.
     /// Provides story evaluation functions for models using function-calling.
     /// </summary>
-    public class EvaluatorTool : BaseLangChainTool, ILangChainToolWithContext
+    public class EvaluatorTool : BaseLangChainTool, ITinyTool
     {
         private readonly DatabaseService? _database;
         public int? ModelId { get; set; }
         public string? ModelName { get; set; }
         public int? AgentId { get; set; }
+        public string? LastFunctionCalled { get; set; }
+        public string? LastFunctionResult { get; set; }
         public string? LastResult { get; set; }
 
         public EvaluatorTool(DatabaseService? database = null, ICustomLogger? logger = null) 
@@ -110,6 +112,8 @@ namespace TinyGenerator.Skills
                     };
 
                     LastResult = JsonSerializer.Serialize(obj);
+                    LastFunctionCalled = function;
+                    LastFunctionResult = LastResult;
 
                     // Persist to database if available
                     if (_database != null && input.StoryId > 0)
@@ -141,6 +145,8 @@ namespace TinyGenerator.Skills
                     };
 
                     LastResult = JsonSerializer.Serialize(obj);
+                    LastFunctionCalled = function;
+                    LastFunctionResult = LastResult;
 
                     // Calculate total score
                     var totalScore = (

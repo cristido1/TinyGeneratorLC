@@ -19,12 +19,12 @@ namespace TinyGenerator.Services
     // private readonly HandlebarsPlanner _planner;
         private readonly PersistentMemoryService _persistentMemory;
         private readonly PlannerExecutor _plannerExecutor;
-        private readonly AgentService _agentService;
+        // private readonly AgentService _agentService; // DEPRECATED - Use LangChainAgentService instead
         private readonly string _collection = "storie";
         private readonly string _outputPath = "wwwroot/story_output.txt";
         private readonly Dictionary<string, string> _currentStoryMemory = new Dictionary<string, string>();
 
-    public StoryGeneratorService(IKernelFactory kernelFactory, CostController cost, StoriesService stories, PersistentMemoryService persistentMemory, PlannerExecutor plannerExecutor, AgentService agentService, ProgressService? progress = null)
+    public StoryGeneratorService(IKernelFactory kernelFactory, CostController cost, StoriesService stories, PersistentMemoryService persistentMemory, PlannerExecutor plannerExecutor, /* AgentService agentService */ ProgressService? progress = null)
     {
         _kernelFactory = kernelFactory;
         _cost = cost;
@@ -33,7 +33,7 @@ namespace TinyGenerator.Services
         // _planner = new HandlebarsPlanner(_kernel); // TODO: Planner disabilitato temporaneamente
         _persistentMemory = persistentMemory;
         _plannerExecutor = plannerExecutor;
-        _agentService = agentService ?? throw new ArgumentNullException(nameof(agentService));
+        // _agentService = agentService ?? throw new ArgumentNullException(nameof(agentService));
     }
 
         public class GenerationResult
@@ -237,6 +237,9 @@ namespace TinyGenerator.Services
             };
 
             var agentId = $"story_{modelId}_{Guid.NewGuid():N}";
+            // DEPRECATED SK - await _agentService.InvokeModelAsync(...) 
+            var response = string.Empty; // Stub - use LangChain instead
+            /*
             var response = await _agentService.InvokeModelAsync(
                 kernel,
                 chatHistory,
@@ -246,6 +249,7 @@ namespace TinyGenerator.Services
                 "Story Generation",
                 60,
                 "writer"); // 60 second timeout
+            */
 
             var content = response?.ToString() ?? string.Empty;
 

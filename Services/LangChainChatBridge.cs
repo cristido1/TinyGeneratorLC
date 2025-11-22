@@ -32,7 +32,8 @@ namespace TinyGenerator.Services
             HttpClient? httpClient = null,
             ICustomLogger? logger = null)
         {
-            _modelEndpoint = new Uri(modelEndpoint.EndsWith("/v1") ? modelEndpoint : modelEndpoint.TrimEnd('/') + "/v1");
+            // Normalize endpoint - don't add /v1 suffix, just use endpoint as-is
+            _modelEndpoint = new Uri(modelEndpoint.TrimEnd('/'));
             _modelId = modelId;
             _apiKey = apiKey;
             _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
@@ -40,8 +41,69 @@ namespace TinyGenerator.Services
         }
 
         /// <summary>
+        /// Test connection to the model endpoint.
+        /// For Ollama, checks if model is loaded.
+        /// </summary>
+        public async Task<bool> TestConnectionAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                _logger?.Log("Info", "LangChainBridge", $"Testing connection to {_modelEndpoint} for model {_modelId}");
+
+                // For Ollama, test with /api/tags to see if model is available
+                if (_modelEndpoint.ToString().Contains("11434", StringComparison.OrdinalIgnoreCase))
+                {
+                    var tagsUrl = new Uri(_modelEndpoint, "/api/tags").ToString();
+                    var response = await _httpClient.GetAsync(tagsUrl, ct);
+                    
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var content = await response.Content.ReadAsStringAsync(ct);
+                        _logger?.Log("Info", "LangChainBridge", $"Ollama tags response: {content}");
+                        return true;
+                    }
+                    else
+                    {
+                        _logger?.Log("Error", "LangChainBridge", $"Ollama connection failed: {response.StatusCode}");
+                        return false;
+                    }
+                }
+                
+                // For OpenAI-compatible, test with a simple text request
+                var testRequest = new
+                {
+                    model = _modelId,
+                    messages = new[] { new { role = "user", content = "test" } }
+                };
+
+                var content2 = new StringContent(
+                    JsonSerializer.Serialize(testRequest),
+                    System.Text.Encoding.UTF8,
+                    "application/json");
+
+                var testUrl = new Uri(_modelEndpoint, "/v1/chat/completions").ToString();
+                var httpRequest = new HttpRequestMessage(HttpMethod.Post, testUrl) { Content = content2 };
+
+                if (!_apiKey.Contains("ollama", StringComparison.OrdinalIgnoreCase))
+                {
+                    httpRequest.Headers.Add("Authorization", $"Bearer {_apiKey}");
+                }
+
+                var testResponse = await _httpClient.SendAsync(httpRequest, ct);
+                _logger?.Log("Info", "LangChainBridge", $"Test connection status: {testResponse.StatusCode}");
+                return testResponse.IsSuccessStatusCode;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "LangChainBridge", $"Connection test failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Send chat request to model with tools and get response.
-        /// Compatible with OpenAI and Ollama /v1/chat/completions endpoint.
+        /// For Ollama: sends with format=json when no tools, tools when available
+        /// For OpenAI: sends with tool_choice="auto"
         /// </summary>
         public async Task<string> CallModelWithToolsAsync(
             List<ConversationMessage> messages,
@@ -50,39 +112,91 @@ namespace TinyGenerator.Services
         {
             try
             {
-                var request = new
-                {
-                    model = _modelId,
-                    messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToList(),
-                    tools = tools,
-                    tool_choice = "auto",
-                    temperature = 0.7,
-                    max_tokens = 2000
-                };
+                var isOllama = _modelEndpoint.ToString().Contains("11434", StringComparison.OrdinalIgnoreCase);
+                
+                // For Ollama, create request with format or tools
+                // For OpenAI, include tools with tool_choice="auto"
+                object request;
+                string fullUrl;
 
+                if (isOllama)
+                {
+                    _logger?.Log("Info", "LangChainBridge", $"Using Ollama endpoint for {_modelId} with {tools.Count} tools");
+                    
+                    var requestBody = new Dictionary<string, object>
+                    {
+                        { "model", _modelId },
+                        { "messages", messages.Select(m => new { role = m.Role, content = m.Content }).ToList() },
+                        { "stream", false },
+                        { "temperature", 0.7 }
+                    };
+
+                    // If we have tools, pass them; otherwise request JSON format for structured output
+                    if (tools.Any())
+                    {
+                        requestBody["tools"] = tools;
+                    }
+                    else
+                    {
+                        // No tools - request JSON format for structured output (Ollama feature)
+                        requestBody["format"] = "json";
+                        _logger?.Log("Info", "LangChainBridge", "No tools available, requesting JSON format from model");
+                    }
+
+                    request = requestBody;
+                    fullUrl = new Uri(_modelEndpoint, "/api/chat").ToString();
+                }
+                else
+                {
+                    _logger?.Log("Info", "LangChainBridge", $"Using OpenAI-compatible endpoint for {_modelId}");
+                    
+                    request = new
+                    {
+                        model = _modelId,
+                        messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToList(),
+                        tools = tools,
+                        tool_choice = "auto",
+                        temperature = 0.7,
+                        max_tokens = 2000
+                    };
+                    fullUrl = new Uri(_modelEndpoint, "/v1/chat/completions").ToString();
+                }
+
+                var requestJson = JsonSerializer.Serialize(request, new JsonSerializerOptions { WriteIndented = false });
+                
                 var jsonContent = new StringContent(
-                    JsonSerializer.Serialize(request),
+                    requestJson,
                     System.Text.Encoding.UTF8,
                     "application/json");
 
-                var httpRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(_modelEndpoint, "chat/completions"))
+                _logger?.Log("Info", "LangChainBridge", $"Calling model {_modelId} at {fullUrl}");
+                _logger?.Log("Info", "LangChainBridge", $"Request payload: {requestJson}");
+
+                var httpRequest = new HttpRequestMessage(HttpMethod.Post, fullUrl)
                 {
                     Content = jsonContent
                 };
 
                 // Add auth header if not Ollama (Ollama doesn't require it)
-                if (!_apiKey.Contains("ollama", StringComparison.OrdinalIgnoreCase))
+                if (!isOllama && !_apiKey.Contains("ollama", StringComparison.OrdinalIgnoreCase))
                 {
                     httpRequest.Headers.Add("Authorization", $"Bearer {_apiKey}");
                 }
 
-                _logger?.Log("Info", "LangChainBridge", $"Calling model {_modelId} with {tools.Count} tools");
-
                 var response = await _httpClient.SendAsync(httpRequest, ct);
-                response.EnsureSuccessStatusCode();
-
+                
                 var responseContent = await response.Content.ReadAsStringAsync(ct);
+                
                 _logger?.Log("Info", "LangChainBridge", $"Model responded (status={response.StatusCode})");
+                _logger?.Log("Info", "LangChainBridge", $"Response payload: {responseContent}");
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger?.Log("Error", "LangChainBridge", 
+                        $"Model request failed with status {response.StatusCode}: {responseContent}");
+                    throw new HttpRequestException(
+                        $"Model request failed with status {response.StatusCode}: {responseContent}");
+                }
 
                 return responseContent;
             }
@@ -94,7 +208,8 @@ namespace TinyGenerator.Services
         }
 
         /// <summary>
-        /// Parse OpenAI-format chat completion response to extract tool calls and text.
+        /// Parse chat completion response.
+        /// Handles both OpenAI format (with choices/tool_calls) and Ollama format (with message).
         /// </summary>
         public static (string? textContent, List<ToolCallFromModel> toolCalls) ParseChatResponse(string jsonResponse)
         {
@@ -104,31 +219,48 @@ namespace TinyGenerator.Services
             try
             {
                 var doc = JsonDocument.Parse(jsonResponse);
-                var choices = doc.RootElement.GetProperty("choices").EnumerateArray();
+                var root = doc.RootElement;
 
-                foreach (var choice in choices)
+                // Try OpenAI format first (has "choices" array)
+                if (root.TryGetProperty("choices", out var choicesElement))
                 {
-                    var message = choice.GetProperty("message");
+                    var choices = choicesElement.EnumerateArray();
 
-                    // Extract text content
-                    if (message.TryGetProperty("content", out var content) && content.ValueKind != JsonValueKind.Null)
+                    foreach (var choice in choices)
+                    {
+                        if (choice.TryGetProperty("message", out var message))
+                        {
+                            // Extract text content
+                            if (message.TryGetProperty("content", out var content) && content.ValueKind != JsonValueKind.Null)
+                            {
+                                textContent = content.GetString();
+                            }
+
+                            // Extract tool calls
+                            if (message.TryGetProperty("tool_calls", out var calls))
+                            {
+                                foreach (var call in calls.EnumerateArray())
+                                {
+                                    if (call.TryGetProperty("function", out var func))
+                                    {
+                                        toolCalls.Add(new ToolCallFromModel
+                                        {
+                                            Id = (call.TryGetProperty("id", out var id) ? id.GetString() : null) ?? Guid.NewGuid().ToString(),
+                                            ToolName = (func.TryGetProperty("name", out var name) ? name.GetString() : null) ?? "unknown",
+                                            Arguments = (func.TryGetProperty("arguments", out var args) ? args.GetString() : null) ?? "{}"
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Try Ollama format (has "message" object directly)
+                else if (root.TryGetProperty("message", out var ollamaMessage))
+                {
+                    if (ollamaMessage.TryGetProperty("content", out var content) && content.ValueKind != JsonValueKind.Null)
                     {
                         textContent = content.GetString();
-                    }
-
-                    // Extract tool calls
-                    if (message.TryGetProperty("tool_calls", out var calls))
-                    {
-                        foreach (var call in calls.EnumerateArray())
-                        {
-                            var func = call.GetProperty("function");
-                            toolCalls.Add(new ToolCallFromModel
-                            {
-                                Id = call.GetProperty("id").GetString() ?? Guid.NewGuid().ToString(),
-                                ToolName = func.GetProperty("name").GetString() ?? "unknown",
-                                Arguments = func.GetProperty("arguments").GetString() ?? "{}"
-                            });
-                        }
                     }
                 }
             }

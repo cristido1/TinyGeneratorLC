@@ -37,6 +37,21 @@ namespace TinyGenerator.Services
         }
 
         /// <summary>
+        /// Remove a LangChain tool by name.
+        /// </summary>
+        public void RemoveTool(string toolName)
+        {
+            if (_langChainTools.Remove(toolName))
+            {
+                _logger?.Log("Info", "HybridOrchestrator", $"Removed LangChain tool: {toolName}");
+            }
+            else
+            {
+                _logger?.Log("Warn", "HybridOrchestrator", $"Tool not found for removal: {toolName}");
+            }
+        }
+
+        /// <summary>
         /// Register a fallback SK skill for tools not yet migrated.
         /// </summary>
         public void RegisterFallbackSkill(string name, object skill)
@@ -117,13 +132,28 @@ namespace TinyGenerator.Services
                     foreach (var call in toolCalls.EnumerateArray())
                     {
                         if (call.TryGetProperty("function", out var funcElem) &&
-                            funcElem.TryGetProperty("name", out var nameElem) &&
-                            funcElem.TryGetProperty("arguments", out var argsElem))
+                            funcElem.TryGetProperty("name", out var nameElem))
                         {
+                            // Get arguments - can be either a string or an object
+                            string argumentsJson = "{}";
+                            if (funcElem.TryGetProperty("arguments", out var argsElem))
+                            {
+                                if (argsElem.ValueKind == JsonValueKind.String)
+                                {
+                                    // Arguments is a string, use as-is
+                                    argumentsJson = argsElem.GetString() ?? "{}";
+                                }
+                                else if (argsElem.ValueKind == JsonValueKind.Object)
+                                {
+                                    // Arguments is an object, serialize it to string
+                                    argumentsJson = argsElem.GetRawText();
+                                }
+                            }
+
                             calls.Add(new ToolCall
                             {
                                 ToolName = nameElem.GetString() ?? "unknown",
-                                Arguments = argsElem.GetString() ?? "{}",
+                                Arguments = argumentsJson,
                                 Id = (call.TryGetProperty("id", out var id) ? id.GetString() : null) ?? Guid.NewGuid().ToString()
                             });
                         }

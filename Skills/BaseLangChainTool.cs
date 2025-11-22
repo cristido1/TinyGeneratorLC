@@ -111,4 +111,23 @@ namespace TinyGenerator.Skills
         string? ModelName { get; set; }
         int? AgentId { get; set; }
     }
+
+    /// <summary>
+    /// Enhanced tool interface for tracking function calls.
+    /// Extends ILangChainToolWithContext with call tracking for testing.
+    /// </summary>
+    public interface ITinyTool : ILangChainToolWithContext
+    {
+        /// <summary>
+        /// Name of the last function that was called on this tool.
+        /// Used for testing function call invocation.
+        /// </summary>
+        string? LastFunctionCalled { get; set; }
+
+        /// <summary>
+        /// Result of the last function that was called on this tool.
+        /// Used for testing function call results.
+        /// </summary>
+        string? LastFunctionResult { get; set; }
+    }
 }

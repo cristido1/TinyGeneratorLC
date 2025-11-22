@@ -120,5 +120,41 @@ namespace TinyGenerator.Services
 
             return updated;
         }
+
+        /// <summary>
+        /// Load a model into memory by sending a simple generate request to Ollama.
+        /// This ensures the model is loaded and ready before actual tests run.
+        /// No response text is processed; we just wait for the request to complete.
+        /// </summary>
+        public async Task<bool> WarmupModelAsync(string model, int timeoutSeconds = 60)
+        {
+            try
+            {
+                using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+                
+                var payload = new
+                {
+                    model = model,
+                    prompt = "ok",
+                    stream = false
+                };
+
+                var jsonContent = new System.Net.Http.StringContent(
+                    JsonSerializer.Serialize(payload),
+                    System.Text.Encoding.UTF8,
+                    "application/json");
+
+                var response = await client.PostAsync("http://localhost:11434/api/generate", jsonContent);
+                
+                // Just check if we got a response; don't care about content
+                return response.IsSuccessStatusCode;
+            }
+            catch (Exception ex)
+            {
+                // Warmup is best-effort; log but don't fail
+                System.Console.WriteLine($"[Warmup] Failed to warmup model '{model}': {ex.Message}");
+                return false;
+            }
+        }
     }
 }

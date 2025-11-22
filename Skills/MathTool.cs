@@ -11,11 +11,13 @@ namespace TinyGenerator.Skills
     /// LangChain version of MathSkill.
     /// Provides basic arithmetic operations as a LangChain Tool.
     /// </summary>
-    public class MathTool : BaseLangChainTool, ILangChainToolWithContext
+    public class MathTool : BaseLangChainTool, ITinyTool
     {
         public int? ModelId { get; set; }
         public string? ModelName { get; set; }
         public int? AgentId { get; set; }
+        public string? LastFunctionCalled { get; set; }
+        public string? LastFunctionResult { get; set; }
 
         public MathTool(ICustomLogger? logger = null) 
             : base("math", "Arithmetic operations: add, subtract, multiply, divide", logger)
@@ -80,8 +82,11 @@ namespace TinyGenerator.Skills
                 else
                     return JsonSerializer.Serialize(new { error = $"Unknown operation: {operation}" });
 
+                var resultObj = new { result = result };
+                LastFunctionCalled = operation;
+                LastFunctionResult = JsonSerializer.Serialize(resultObj);
                 CustomLogger?.Log("Info", "MathTool", $"Executed {operation}({input.A}, {input.B}) = {result}");
-                return await Task.FromResult(JsonSerializer.Serialize(new { result = result }));
+                return await Task.FromResult(JsonSerializer.Serialize(resultObj));
             }
             catch (Exception ex)
             {

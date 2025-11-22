@@ -49,5 +49,12 @@ namespace TinyGenerator.Services
         /// Get cached orchestrators count (diagnostic).
         /// </summary>
         int GetCachedCount();
+
+        /// <summary>
+        /// Create a LangChainChatBridge for direct model communication (for ReAct loops, etc)
+        /// </summary>
+        /// <param name="model">Model name (e.g., "phi3:mini", "gpt-3.5-turbo")</param>
+        /// <returns>Configured chat bridge for the model</returns>
+        LangChainChatBridge CreateChatBridge(string model);
     }
 }

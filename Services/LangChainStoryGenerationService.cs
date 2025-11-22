@@ -179,5 +179,72 @@ namespace TinyGenerator.Services
                 return 0;
             }
         }
+
+        /// <summary>
+        /// Wrapper for backward compatibility with StoryGeneratorService.GenerateStoryAsync
+        /// Accepts: prompt (theme), progress callback, writer selection
+        /// </summary>
+        public async Task<dynamic> GenerateStoryAsync(
+            string prompt,
+            Action<string>? progressCallback = null,
+            string writer = "All")
+        {
+            try
+            {
+                progressCallback?.Invoke($"Starting story generation for theme: {prompt}");
+
+                // Get models from database
+                var models = _database.ListModels().Where(m => m.Enabled).ToList();
+                if (models.Count == 0)
+                {
+                    progressCallback?.Invoke("ERROR: No enabled models found in database");
+                    return new { Success = false, Error = "No models available" };
+                }
+
+                // Select writer models based on writer parameter
+                var writerModels = writer switch
+                {
+                    "A" => new[] { models[0].Name },
+                    "B" => new[] { models.Count > 1 ? models[1].Name : models[0].Name },
+                    "C" => new[] { models.Count > 2 ? models[2].Name : models[0].Name },
+                    _ => models.Take(3).Select(m => m.Name).ToArray()
+                };
+
+                // Get first model for endpoint/API config
+                var primaryModel = models[0];
+                var endpoint = primaryModel.Endpoint ?? "http://localhost:11434";
+                var apiKey = ""; // Local models don't need API key
+
+                // Generate stories
+                var result = await GenerateStoriesAsync(
+                    prompt,
+                    writerModels,
+                    primaryModel.Name,
+                    endpoint,
+                    apiKey,
+                    progressCallback,
+                    CancellationToken.None);
+
+                // Convert to object compatible with StoryGeneratorService.GenerationResult
+                return new
+                {
+                    StoryA = result.StoryA,
+                    StoryB = result.StoryB,
+                    StoryC = result.StoryC,
+                    ScoreA = result.ScoreA,
+                    ScoreB = result.ScoreB,
+                    ScoreC = result.ScoreC,
+                    Approved = result.ApprovedStory,
+                    Message = result.Message,
+                    Success = result.Success
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "LangChainStoryGen", $"GenerateStoryAsync failed: {ex.Message}");
+                progressCallback?.Invoke($"ERROR: {ex.Message}");
+                return new { Success = false, Error = ex.Message, StoryA = "", StoryB = "", StoryC = "", Approved = (string?)null };
+            }
+        }
     }
 }

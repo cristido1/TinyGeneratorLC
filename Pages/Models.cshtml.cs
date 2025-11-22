@@ -13,7 +13,7 @@ namespace TinyGenerator.Pages
     public class ModelsModel : PageModel
     {
         private readonly DatabaseService _database;
-        private readonly ITestService _testService;
+        private readonly LangChainTestService _testService;
         private readonly CostController _costController;
         private readonly IOllamaManagementService _ollamaService;
 
@@ -40,7 +40,7 @@ namespace TinyGenerator.Pages
 
         public ModelsModel(
             DatabaseService database,
-            ITestService testService,
+            LangChainTestService testService,
             CostController costController,
             IOllamaManagementService ollamaService)
         {

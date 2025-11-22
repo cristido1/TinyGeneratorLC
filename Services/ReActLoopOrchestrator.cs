@@ -23,14 +23,26 @@ namespace TinyGenerator.Services
     {
         private readonly HybridLangChainOrchestrator _tools;
         private readonly ICustomLogger? _logger;
+        private readonly ProgressService? _progress;
+        private readonly string? _runId;
         private readonly int _maxIterations;
+        private readonly LangChainChatBridge? _modelBridge;
         private List<ConversationMessage> _messageHistory;
 
-        public ReActLoopOrchestrator(HybridLangChainOrchestrator tools, ICustomLogger? logger = null, int maxIterations = 10)
+        public ReActLoopOrchestrator(
+            HybridLangChainOrchestrator tools,
+            ICustomLogger? logger = null,
+            int maxIterations = 10,
+            ProgressService? progress = null,
+            string? runId = null,
+            LangChainChatBridge? modelBridge = null)
         {
             _tools = tools;
             _logger = logger;
+            _progress = progress;
+            _runId = runId;
             _maxIterations = maxIterations;
+            _modelBridge = modelBridge;
             _messageHistory = new List<ConversationMessage>();
         }
 
@@ -108,8 +120,14 @@ namespace TinyGenerator.Services
                         try
                         {
                             _logger?.Log("Info", "ReActLoop", $"  Executing tool: {call.ToolName}");
+                            _progress?.Append(_runId, $"  📞 Tool: {call.ToolName}");
+                            
                             var output = await _tools.ExecuteToolAsync(call.ToolName, call.Arguments);
                             toolResults.Add(output);
+                            
+                            _logger?.Log("Info", "ReActLoop", $"  Tool {call.ToolName} result: {output.Substring(0, Math.Min(100, output.Length))}...");
+                            _progress?.Append(_runId, $"  ✓ {call.ToolName} output: {output.Substring(0, Math.Min(50, output.Length))}...");
+                            
                             result.ExecutedTools.Add(new ToolExecutionRecord
                             {
                                 ToolName = call.ToolName,
@@ -121,6 +139,8 @@ namespace TinyGenerator.Services
                         catch (Exception ex)
                         {
                             _logger?.Log("Error", "ReActLoop", $"  Tool execution failed: {ex.Message}");
+                            _progress?.Append(_runId, $"  ✗ {call.ToolName} error: {ex.Message}");
+                            
                             toolResults.Add(JsonSerializer.Serialize(new { error = ex.Message }));
                         }
                     }
@@ -148,24 +168,92 @@ namespace TinyGenerator.Services
         }
 
         /// <summary>
-        /// Mock: Call model with current conversation and tool schema.
-        /// In production, this would call LangChain ChatOpenAI or similar with:
-        ///   - messages = _messageHistory
-        ///   - tools = _tools.GetToolSchemas()
-        ///   - tool_choice = "auto"
+        /// Call model with current conversation and tool schema.
+        /// If modelBridge is provided, calls actual model. Otherwise, returns mock for testing.
         /// </summary>
         private async Task<string> CallModelAsync(string userPrompt, int iteration)
         {
-            // TODO: Replace with actual LangChain model call
-            // This is a placeholder that simulates a model response for testing
-            
-            return await Task.FromResult(JsonSerializer.Serialize(new
+            // If no model bridge provided, return mock response
+            if (_modelBridge == null)
             {
-                content = "Model would be called here with tool definitions and conversation history",
-                tool_calls = new[] {
-                    new { function = new { name = "text", arguments = "{\"function\": \"toupper\", \"text\": \"hello\"}" } }
+                return await Task.FromResult(JsonSerializer.Serialize(new
+                {
+                    content = "Model would be called here with tool definitions and conversation history",
+                    tool_calls = new[] {
+                        new { function = new { name = "text", arguments = "{\"function\": \"toupper\", \"text\": \"hello\"}" } }
+                    }
+                }));
+            }
+
+            try
+            {
+                // Get tool schemas for the model
+                var toolSchemas = _tools.GetToolSchemas();
+                
+                _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}: Calling model with {toolSchemas.Count} tools available");
+                
+                // Log each tool schema for debugging
+                foreach (var schema in toolSchemas)
+                {
+                    if (schema.TryGetValue("function", out var funcObj) && funcObj is Dictionary<string, object> func)
+                    {
+                        if (func.TryGetValue("name", out var name))
+                        {
+                            _logger?.Log("Info", "ReActLoop", $"  Available tool: {name}");
+                        }
+                    }
                 }
-            }));
+
+                // Log the full request payload for debugging
+                var requestData = new
+                {
+                    iteration = iteration + 1,
+                    toolCount = toolSchemas.Count,
+                    messageCount = _messageHistory.Count,
+                    messages = _messageHistory.Select(m => new { role = m.Role, contentLength = m.Content.Length })
+                };
+                _logger?.Log("Info", "ReActLoop", $"Request data: {JsonSerializer.Serialize(requestData)}");
+
+                // Call actual model via LangChainChatBridge
+                var response = await _modelBridge.CallModelWithToolsAsync(
+                    _messageHistory,
+                    toolSchemas);
+
+                _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}: Model call succeeded");
+
+                // Log full response for debugging
+                _logger?.Log("Info", "ReActLoop", $"Response payload: {response}");
+
+                // Parse the response to extract tool calls
+                var (textContent, toolCalls) = LangChainChatBridge.ParseChatResponse(response);
+
+                _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}: Parsed {toolCalls.Count} tool calls from response");
+
+                // Build response object with tool calls if present
+                var responseObj = new Dictionary<string, object>();
+
+                if (!string.IsNullOrWhiteSpace(textContent))
+                {
+                    responseObj["content"] = textContent;
+                }
+
+                if (toolCalls.Any())
+                {
+                    responseObj["tool_calls"] = toolCalls.Select(tc => new
+                    {
+                        id = tc.Id,
+                        type = "function",
+                        function = new { name = tc.ToolName, arguments = tc.Arguments }
+                    }).ToList();
+                }
+
+                return JsonSerializer.Serialize(responseObj);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "ReActLoop", $"Model call failed: {ex.Message}", ex.ToString());
+                throw;
+            }
         }
 
         /// <summary>

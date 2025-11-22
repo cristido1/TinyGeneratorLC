@@ -19,8 +19,8 @@ namespace TinyGenerator.Pages.Logs
 
         public async Task OnGetAsync()
         {
-            // Load last 50 logs for initial page display
-            RecentLogs = _db.GetRecentLogs(limit: 50);
+            // Load last 250 logs for initial page display
+            RecentLogs = _db.GetRecentLogs(limit: 250);
             RecentLogs.Reverse(); // Show oldest first
             
             await Task.CompletedTask; // Placeholder for async operation

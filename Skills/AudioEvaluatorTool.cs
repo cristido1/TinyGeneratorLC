@@ -15,6 +15,7 @@ namespace TinyGenerator.Skills
     public class AudioEvaluatorTool : BaseLangChainTool, ITinyTool
     {
         private readonly HttpClient _http;
+        private readonly string _baseUrl = "http://localhost:8010";
 
         public int? ModelId { get; set; }
         public string? ModelName { get; set; }
@@ -26,7 +27,7 @@ namespace TinyGenerator.Skills
             : base("audioevaluator", "Provides functions to call the PAM Audio Evaluator service (analyze and verify audio files).", logger)
         {
             _http = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-            _http.BaseAddress = new Uri("http://localhost:8010");
+            // Don't set BaseAddress - HttpClient may already be in use
         }
 
         public override Dictionary<string, object> GetSchema()
@@ -112,7 +113,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var resp = await _http.GetAsync("/health");
+                var resp = await _http.GetAsync($"{_baseUrl}/health");
                 if (resp.IsSuccessStatusCode)
                 {
                     var content = await resp.Content.ReadAsStringAsync();
@@ -131,7 +132,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var resp = await _http.GetAsync("/models");
+                var resp = await _http.GetAsync($"{_baseUrl}/models");
                 if (resp.IsSuccessStatusCode)
                 {
                     var content = await resp.Content.ReadAsStringAsync();
@@ -162,7 +163,7 @@ namespace TinyGenerator.Skills
                 if (!string.IsNullOrWhiteSpace(request.ModelName))
                     content.Add(new StringContent(request.ModelName), "model_name");
 
-                var resp = await _http.PostAsync("/analyze", content);
+                var resp = await _http.PostAsync($"{_baseUrl}/analyze", content);
                 var body = await SafeReadContentAsync(resp);
 
                 if (resp.IsSuccessStatusCode)
@@ -205,7 +206,7 @@ namespace TinyGenerator.Skills
                 if (!string.IsNullOrWhiteSpace(request.VerificationType))
                     content.Add(new StringContent(request.VerificationType), "verification_type");
 
-                var resp = await _http.PostAsync("/verify", content);
+                var resp = await _http.PostAsync($"{_baseUrl}/verify", content);
                 var body = await SafeReadContentAsync(resp);
 
                 if (resp.IsSuccessStatusCode)

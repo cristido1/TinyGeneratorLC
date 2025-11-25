@@ -63,6 +63,7 @@ namespace TinyGenerator.Pages.Models
             // Update only allowed fields
             existing.Name = Model.Name;
             existing.Provider = Model.Provider;
+            existing.Endpoint = Model.Endpoint;
             existing.MaxContext = Model.MaxContext;
             existing.ContextToUse = Model.ContextToUse;
             existing.CostInPerToken = Model.CostInPerToken;
@@ -71,6 +72,8 @@ namespace TinyGenerator.Pages.Models
             existing.LimitTokensWeek = Model.LimitTokensWeek;
             existing.LimitTokensMonth = Model.LimitTokensMonth;
             existing.Enabled = Model.Enabled;
+            existing.NoTools = Model.NoTools;
+            existing.Note = Model.Note;
 
             // Business rule: if provider == "ollama" then IsLocal = true
             if (!string.IsNullOrWhiteSpace(existing.Provider) && existing.Provider.Equals("ollama", System.StringComparison.OrdinalIgnoreCase))

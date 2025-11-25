@@ -30,12 +30,8 @@ packages/
 project.lock.json
 
 # Database files created by the app - keep local DB out of source control
-data/*.db
-data/*.db-journal
-data/*.db-shm
-data/*.db-wal
-data/*.bak
-data/*.backup
+# Exclude entire data folder (databases, backups, local files)
+data/
 *.db
 *.db-shm
 *.db-wal

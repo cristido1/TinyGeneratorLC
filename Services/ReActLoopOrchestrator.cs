@@ -27,6 +27,7 @@ namespace TinyGenerator.Services
         private readonly string? _runId;
         private readonly int _maxIterations;
         private readonly LangChainChatBridge? _modelBridge;
+        private readonly string? _systemMessage;
         private List<ConversationMessage> _messageHistory;
 
         public ReActLoopOrchestrator(
@@ -35,7 +36,8 @@ namespace TinyGenerator.Services
             int maxIterations = 10,
             ProgressService? progress = null,
             string? runId = null,
-            LangChainChatBridge? modelBridge = null)
+            LangChainChatBridge? modelBridge = null,
+            string? systemMessage = null)
         {
             _tools = tools;
             _logger = logger;
@@ -43,6 +45,7 @@ namespace TinyGenerator.Services
             _runId = runId;
             _maxIterations = maxIterations;
             _modelBridge = modelBridge;
+            _systemMessage = systemMessage;
             _messageHistory = new List<ConversationMessage>();
         }
 
@@ -72,6 +75,14 @@ namespace TinyGenerator.Services
         {
             var result = new ReActResult();
             _messageHistory.Clear();
+            
+            // Add system message first if provided
+            if (!string.IsNullOrWhiteSpace(_systemMessage))
+            {
+                _messageHistory.Add(new ConversationMessage { Role = "system", Content = _systemMessage });
+                _logger?.Log("Info", "ReActLoop", $"Added system message (length={_systemMessage.Length})");
+            }
+            
             _messageHistory.Add(new ConversationMessage { Role = "user", Content = userPrompt });
 
             _logger?.Log("Info", "ReActLoop", $"Starting ReAct loop with prompt length={userPrompt.Length}");
@@ -114,7 +125,7 @@ namespace TinyGenerator.Services
                     }
 
                     // Step 3: Execute all tools
-                    var toolResults = new List<string>();
+                    var toolResults = new List<(string callId, string result)>();
                     foreach (var call in toolCalls)
                     {
                         try
@@ -123,10 +134,12 @@ namespace TinyGenerator.Services
                             _progress?.Append(_runId, $"  📞 Tool: {call.ToolName}");
                             
                             var output = await _tools.ExecuteToolAsync(call.ToolName, call.Arguments);
-                            toolResults.Add(output);
+                            toolResults.Add((call.Id, output));
                             
-                            _logger?.Log("Info", "ReActLoop", $"  Tool {call.ToolName} result: {output.Substring(0, Math.Min(100, output.Length))}...");
-                            _progress?.Append(_runId, $"  ✓ {call.ToolName} output: {output.Substring(0, Math.Min(50, output.Length))}...");
+                            // Log full output for better visibility. Be careful: outputs can be large.
+                            // If you prefer truncation, change to substring only for specific tools.
+                            _logger?.Log("Info", "ReActLoop", $"  Tool {call.ToolName} result: {output}");
+                            _progress?.Append(_runId, $"  ✓ {call.ToolName} output: {output}");
                             
                             result.ExecutedTools.Add(new ToolExecutionRecord
                             {
@@ -141,15 +154,31 @@ namespace TinyGenerator.Services
                             _logger?.Log("Error", "ReActLoop", $"  Tool execution failed: {ex.Message}");
                             _progress?.Append(_runId, $"  ✗ {call.ToolName} error: {ex.Message}");
                             
-                            toolResults.Add(JsonSerializer.Serialize(new { error = ex.Message }));
+                            toolResults.Add((call.Id, JsonSerializer.Serialize(new { error = ex.Message })));
                         }
                     }
 
-                    // Step 4: Add assistant and tool results to history for next iteration
-                    _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = modelResponse });
-                    foreach (var toolResult in toolResults)
+                    // Step 4: Add assistant message with tool_calls and tool result messages
+                    _messageHistory.Add(new ConversationMessage 
+                    { 
+                        Role = "assistant", 
+                        Content = modelResponse,
+                        ToolCalls = toolCalls.Select(tc => new ToolCallFromModel
+                        {
+                            Id = tc.Id,
+                            ToolName = tc.ToolName,
+                            Arguments = tc.Arguments
+                        }).ToList() // Store tool_calls for OpenAI format
+                    });
+                    
+                    foreach (var (callId, toolResult) in toolResults)
                     {
-                        _messageHistory.Add(new ConversationMessage { Role = "tool", Content = toolResult });
+                        _messageHistory.Add(new ConversationMessage 
+                        { 
+                            Role = "tool", 
+                            Content = toolResult,
+                            ToolCallId = callId // Associate with the tool_call
+                        });
                     }
                 }
                 catch (Exception ex)
@@ -292,6 +321,8 @@ namespace TinyGenerator.Services
     {
         public string Role { get; set; } = string.Empty; // "user", "assistant", "tool"
         public string Content { get; set; } = string.Empty;
+        public List<ToolCallFromModel>? ToolCalls { get; set; } // For assistant messages with tool_calls
+        public string? ToolCallId { get; set; } // For tool messages, links to the tool_call id
 
         public override string ToString()
         {

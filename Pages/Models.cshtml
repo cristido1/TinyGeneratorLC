@@ -51,15 +51,20 @@
                 <th></th>
                 <th>Name</th>
                 <th>Provider</th>
+                <th>Note</th>
                 <th>Local</th>
                 <th>MaxContext</th>
                 <th>ContextToUse</th>
-                <th class="text-center">Score</th>
-                <th class="text-center">NoTools</th>
-                <th class="text-center">Duration (s)</th>
-                @foreach (var g in visibleGroups) { <th class="text-center">@g</th> }
+                <th class="text-center">Total</th>
+                <th class="text-center">Base</th>
+                <th class="text-center">TextEval</th>
                 <th class="text-center">Writer</th>
                 <th class="text-center">TTS</th>
+                <th class="text-center">Music</th>
+                <th class="text-center">FX</th>
+                <th class="text-center">Ambient</th>
+                <th class="text-center">NoTools</th>
+                <th class="text-center">Duration (s)</th>
                 <th class="text-end">Cost In $/1k</th>
                 <th class="text-end">Cost Out $/1k</th>
                 <th></th>
@@ -71,6 +76,7 @@
                 <tr data-model="@m.Name">
                     <td class="dt-control"></td>
                     <td>@m.Name</td>
+                    <td>@(m.Note ?? "")</td>
                     <td>
                         @if (m.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
                         {
@@ -88,12 +94,16 @@
                     <td>@(m.IsLocal ? "Yes" : "No")</td>
                     <td>@m.MaxContext</td>
                     <td>@m.ContextToUse</td>
-                    <td class="text-center">@m.FunctionCallingScore</td>
+                    <td class="text-center">@(m.TotalScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.TotalScore) : "-")</td>
+                    <td class="text-center">@(m.BaseScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.BaseScore) : "-")</td>
+                    <td class="text-center">@(m.TextEvalScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.TextEvalScore) : "-")</td>
+                    <td class="text-center">@(m.WriterScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.WriterScore) : "-")</td>
+                    <td class="text-center">@(m.TtsScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.TtsScore) : "-")</td>
+                    <td class="text-center">@(m.MusicScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.MusicScore) : "-")</td>
+                    <td class="text-center">@(m.FxScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.FxScore) : "-")</td>
+                    <td class="text-center">@(m.AmbientScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.AmbientScore) : "-")</td>
                     <td class="text-center">@(m.NoTools ? "✓" : "")</td>
                     <td class="text-center">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}", m.TestDurationSeconds.Value) : "-")</td>
-                    @foreach (var g in visibleGroups) { <td class="text-center">@(m.LastGroupScores != null && m.LastGroupScores.TryGetValue(g, out var sc) && sc.HasValue ? sc.Value.ToString() : "-")</td> }
-                    <td class="text-center">@(m.WriterScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.WriterScore) : "-")</td>
-                    <td class="text-center">@(m.LastGroupScores != null && m.LastGroupScores.TryGetValue("tts", out var ttsScore) && ttsScore.HasValue ? ttsScore.Value.ToString() : "-")</td>
                     <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</td>
                     <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</td>
                     <td class="text-end">
@@ -102,6 +112,8 @@
                             <div class="btn-group">
                                 <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">Run</button>
                                 <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="/Chat/@System.Net.WebUtility.UrlEncode(m.Name)">💬 Chat with model</a></li>
+                                    <li><hr class="dropdown-divider"></li>
                                     <li><a class="dropdown-item run-model-all" href="#" data-model="@m.Name">All tests</a></li>
                                     @foreach(var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
                                     {

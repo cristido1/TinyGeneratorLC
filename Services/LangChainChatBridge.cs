@@ -24,6 +24,8 @@ namespace TinyGenerator.Services
         private readonly string _apiKey;
         private readonly HttpClient _httpClient;
         private readonly ICustomLogger? _logger;
+        public double Temperature { get; set; } = 0.7;
+        public double TopP { get; set; } = 1.0;
 
         public LangChainChatBridge(
             string modelEndpoint,
@@ -123,25 +125,23 @@ namespace TinyGenerator.Services
                 {
                     _logger?.Log("Info", "LangChainBridge", $"Using Ollama endpoint for {_modelId} with {tools.Count} tools");
                     
-                    var requestBody = new Dictionary<string, object>
+                        var requestBody = new Dictionary<string, object>
                     {
                         { "model", _modelId },
                         { "messages", messages.Select(m => new { role = m.Role, content = m.Content }).ToList() },
                         { "stream", false },
-                        { "temperature", 0.7 }
+                        { "temperature", Temperature },
+                        { "top_p", TopP },
+                        { "num_predict", 8000 }  // Max tokens for Ollama response
                     };
 
-                    // If we have tools, pass them; otherwise request JSON format for structured output
+                    // If we have tools, pass them
                     if (tools.Any())
                     {
                         requestBody["tools"] = tools;
                     }
-                    else
-                    {
-                        // No tools - request JSON format for structured output (Ollama feature)
-                        requestBody["format"] = "json";
-                        _logger?.Log("Info", "LangChainBridge", "No tools available, requesting JSON format from model");
-                    }
+                    // Note: No longer forcing JSON format when no tools are present
+                    // This allows natural text responses in chat mode
 
                     request = requestBody;
                     fullUrl = new Uri(_modelEndpoint, "/api/chat").ToString();
@@ -150,15 +150,66 @@ namespace TinyGenerator.Services
                 {
                     _logger?.Log("Info", "LangChainBridge", $"Using OpenAI-compatible endpoint for {_modelId}");
                     
-                    request = new
+                    // Determine if model uses new parameter name (o1, gpt-4o series)
+                    bool usesNewTokenParam = _modelId.Contains("o1", StringComparison.OrdinalIgnoreCase) ||
+                                             _modelId.Contains("gpt-4o", StringComparison.OrdinalIgnoreCase) ||
+                                             _modelId.Contains("gpt-5", StringComparison.OrdinalIgnoreCase);
+                    
+                    // Serialize messages properly for OpenAI format
+                    var serializedMessages = messages.Select(m =>
                     {
-                        model = _modelId,
-                        messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToList(),
-                        tools = tools,
-                        tool_choice = "auto",
-                        temperature = 0.7,
-                        max_tokens = 2000
+                        var msgDict = new Dictionary<string, object>
+                        {
+                            { "role", m.Role },
+                            { "content", m.Content ?? string.Empty }
+                        };
+                        
+                        // Add tool_calls for assistant messages that have them
+                        if (m.Role == "assistant" && m.ToolCalls != null && m.ToolCalls.Any())
+                        {
+                            msgDict["tool_calls"] = m.ToolCalls.Select(tc => new Dictionary<string, object>
+                            {
+                                { "id", tc.Id },
+                                { "type", "function" },
+                                { "function", new Dictionary<string, object>
+                                    {
+                                        { "name", tc.ToolName },
+                                        { "arguments", tc.Arguments }
+                                    }
+                                }
+                            }).ToList();
+                        }
+                        
+                        // Add tool_call_id for tool messages
+                        if (m.Role == "tool" && !string.IsNullOrEmpty(m.ToolCallId))
+                        {
+                            msgDict["tool_call_id"] = m.ToolCallId;
+                        }
+                        
+                        return msgDict;
+                    }).ToList();
+                    
+                    var requestDict = new Dictionary<string, object>
+                    {
+                        { "model", _modelId },
+                        { "messages", serializedMessages },
+                        { "tools", tools },
+                        { "tool_choice", "auto" },
+                        { "temperature", Temperature },
+                        { "top_p", TopP }
                     };
+                    
+                    // Add correct token limit parameter based on model
+                    if (usesNewTokenParam)
+                    {
+                        requestDict["max_completion_tokens"] = 8000;
+                    }
+                    else
+                    {
+                        requestDict["max_tokens"] = 8000;
+                    }
+                    
+                    request = requestDict;
                     fullUrl = new Uri(_modelEndpoint, "/v1/chat/completions").ToString();
                 }
 
@@ -170,7 +221,7 @@ namespace TinyGenerator.Services
                     "application/json");
 
                 _logger?.Log("Info", "LangChainBridge", $"Calling model {_modelId} at {fullUrl}");
-                _logger?.Log("Info", "LangChainBridge", $"Request payload: {requestJson}");
+                _logger?.LogRequestJson(_modelId, requestJson);
 
                 var httpRequest = new HttpRequestMessage(HttpMethod.Post, fullUrl)
                 {
@@ -188,12 +239,21 @@ namespace TinyGenerator.Services
                 var responseContent = await response.Content.ReadAsStringAsync(ct);
                 
                 _logger?.Log("Info", "LangChainBridge", $"Model responded (status={response.StatusCode})");
-                _logger?.Log("Info", "LangChainBridge", $"Response payload: {responseContent}");
+                _logger?.LogResponseJson(_modelId, responseContent);
 
                 if (!response.IsSuccessStatusCode)
                 {
                     _logger?.Log("Error", "LangChainBridge", 
                         $"Model request failed with status {response.StatusCode}: {responseContent}");
+                    
+                    // Check if the error indicates the model doesn't support tools
+                    if (responseContent.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new ModelNoToolsSupportException(
+                            _modelId,
+                            $"Model request failed with status {response.StatusCode}: {responseContent}");
+                    }
+                    
                     throw new HttpRequestException(
                         $"Model request failed with status {response.StatusCode}: {responseContent}");
                 }
@@ -262,6 +322,42 @@ namespace TinyGenerator.Services
                     {
                         textContent = content.GetString();
                     }
+
+                    // Extract tool calls from Ollama format
+                    if (ollamaMessage.TryGetProperty("tool_calls", out var ollamaCalls))
+                    {
+                        foreach (var call in ollamaCalls.EnumerateArray())
+                        {
+                            if (call.TryGetProperty("function", out var func))
+                            {
+                                var argsJson = "{}";
+                                if (func.TryGetProperty("arguments", out var argsElement))
+                                {
+                                    // Arguments can be JSON object or string
+                                    if (argsElement.ValueKind == JsonValueKind.Object)
+                                    {
+                                        argsJson = argsElement.GetRawText();
+                                    }
+                                    else if (argsElement.ValueKind == JsonValueKind.String)
+                                    {
+                                        argsJson = argsElement.GetString() ?? "{}";
+                                    }
+                                }
+
+                                toolCalls.Add(new ToolCallFromModel
+                                {
+                                    Id = (call.TryGetProperty("id", out var id) ? id.GetString() : null) ?? Guid.NewGuid().ToString(),
+                                    ToolName = (func.TryGetProperty("name", out var name) ? name.GetString() : null) ?? "unknown",
+                                    Arguments = argsJson
+                                });
+                            }
+                        }
+                    }
+                }
+                // Try simple "response" format (some models return just { "response": "text" })
+                else if (root.TryGetProperty("response", out var responseElement))
+                {
+                    textContent = responseElement.GetString();
                 }
             }
             catch (Exception ex)

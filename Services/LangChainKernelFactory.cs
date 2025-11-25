@@ -48,7 +48,9 @@ namespace TinyGenerator.Services
         public HybridLangChainOrchestrator CreateOrchestrator(
             string? model = null,
             IEnumerable<string>? allowedPlugins = null,
-            int? agentId = null)
+            int? agentId = null,
+            string? ttsWorkingFolder = null,
+            string? ttsStoryText = null)
         {
             try
             {
@@ -62,7 +64,7 @@ namespace TinyGenerator.Services
                     var pluginsList = allowedPlugins.ToList();
                     _logger?.Log("Info", "LangChainKernelFactory", 
                         $"Creating orchestrator with specific tools: {string.Join(", ", pluginsList)}");
-                    orchestrator = _toolFactory.CreateOrchestratorWithTools(pluginsList, agentId, null);
+                    orchestrator = _toolFactory.CreateOrchestratorWithTools(pluginsList, agentId, null, ttsWorkingFolder, ttsStoryText);
                 }
                 else
                 {
@@ -256,12 +258,18 @@ namespace TinyGenerator.Services
                 else if (modelInfo.Provider?.Equals("openai", StringComparison.OrdinalIgnoreCase) == true)
                 {
                     endpoint = _config.GetSection("OpenAI:endpoint").Value ?? "https://api.openai.com/v1";
-                    apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? "sk-";
+                    // Try to get API key from config first, then environment variable
+                    apiKey = _config.GetSection("Secrets:OpenAI:ApiKey").Value 
+                        ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY") 
+                        ?? "sk-";
                 }
                 else if (modelInfo.Provider?.Equals("azure", StringComparison.OrdinalIgnoreCase) == true)
                 {
                     endpoint = modelInfo.Endpoint ?? "https://api.openai.azure.com";
-                    apiKey = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY") ?? "key-";
+                    // Try to get API key from config first, then environment variable
+                    apiKey = _config.GetSection("Secrets:Azure:ApiKey").Value
+                        ?? Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY") 
+                        ?? "key-";
                 }
                 else
                 {

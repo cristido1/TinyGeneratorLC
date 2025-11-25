@@ -15,5 +15,11 @@ namespace TinyGenerator.Services
 
         // Log a model response (answer from the AI model)
         void LogResponse(string modelName, string response);
+
+        // Log raw request JSON
+        void LogRequestJson(string modelName, string requestJson);
+
+        // Log raw response JSON
+        void LogResponseJson(string modelName, string responseJson);
     }
 }

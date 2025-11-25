@@ -21,7 +21,7 @@ namespace TinyGenerator.Skills
         public string? LastFunctionResult { get; set; }
 
         public MemoryTool(PersistentMemoryService memoryService, ICustomLogger? logger = null) 
-            : base("memory", "Persistent memory operations: remember, recall, forget text in collections", logger)
+            : base("memory", "Memory operations", logger)
         {
             _memoryService = memoryService ?? throw new ArgumentNullException(nameof(memoryService));
         }
@@ -34,30 +34,30 @@ namespace TinyGenerator.Skills
                     {
                         { "type", "string" },
                         { "enum", new List<string> { "remember", "recall", "forget" } },
-                        { "description", "The memory operation: remember, recall, or forget" }
+                        { "description", "Operation" }
                     }
                 },
                 { "collection", new Dictionary<string, object>
                     {
                         { "type", "string" },
-                        { "description", "The collection name (namespace) for memory storage" }
+                        { "description", "Collection name" }
                     }
                 },
                 { "text", new Dictionary<string, object>
                     {
                         { "type", "string" },
-                        { "description", "The text to remember or forget" }
+                        { "description", "Text" }
                     }
                 },
                 { "query", new Dictionary<string, object>
                     {
                         { "type", "string" },
-                        { "description", "The search query for recall operations" }
+                        { "description", "Search query" }
                     }
                 }
             };
 
-            return CreateFunctionSchema("memory", "Persistent memory operations", properties, new List<string> { "operation", "collection" });
+            return CreateFunctionSchema("memory", "Memory operations", properties, new List<string> { "operation", "collection" });
         }
 
         public override async Task<string> ExecuteAsync(string jsonInput)

@@ -16,11 +16,15 @@ namespace TinyGenerator.Services
         /// <param name="model">Model name (e.g., "gpt-3.5-turbo", "phi3:mini")</param>
         /// <param name="allowedPlugins">Filter tools by name (optional)</param>
         /// <param name="agentId">Agent ID for caching (optional)</param>
+        /// <param name="ttsWorkingFolder">Working folder for TTS schema tool (optional, TTS tests only)</param>
+        /// <param name="ttsStoryText">Story text for TTS schema tool (optional, TTS tests only)</param>
         /// <returns>Configured orchestrator ready for use</returns>
         HybridLangChainOrchestrator CreateOrchestrator(
             string? model = null,
             System.Collections.Generic.IEnumerable<string>? allowedPlugins = null,
-            int? agentId = null);
+            int? agentId = null,
+            string? ttsWorkingFolder = null,
+            string? ttsStoryText = null);
 
         /// <summary>
         /// Get a cached orchestrator for an agent

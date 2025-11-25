@@ -29,4 +29,7 @@ public sealed class TestDefinition
     public string? JsonResponseFormat { get; set; }
     // Optional: comma-separated list of files from test_source_files/ to copy to test folder
     public string? FilesToCopy { get; set; }
+    // Sampling parameters for model calls
+    public double? Temperature { get; set; }
+    public double? TopP { get; set; }
 }

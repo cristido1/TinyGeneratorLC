@@ -17,6 +17,7 @@ namespace TinyGenerator.Skills
     public class TtsApiTool : BaseLangChainTool, ITinyTool
     {
         private readonly HttpClient _http;
+        private readonly string _baseUrl = "http://localhost:8004";
         public string? LastSynthFormat { get; set; }
 
         public int? ModelId { get; set; }
@@ -29,7 +30,7 @@ namespace TinyGenerator.Skills
             : base("ttsapi", "Client for localTTS (local FastAPI TTS service)", logger)
         {
             _http = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-            _http.BaseAddress = new Uri("http://localhost:8004/");
+            // Don't set BaseAddress here - HttpClient may already be in use
         }
 
         public override Dictionary<string, object> GetSchema()
@@ -131,7 +132,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var response = await _http.GetAsync("/health");
+                var response = await _http.GetAsync($"{_baseUrl}/health");
                 if (response.IsSuccessStatusCode)
                 {
                     try 
@@ -156,7 +157,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var content = await _http.GetStringAsync("/voices");
+                var content = await _http.GetStringAsync($"{_baseUrl}/voices");
                 return SerializeResult(new { result = content });
             }
             catch (Exception ex)
@@ -169,7 +170,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var response = await _http.PostAsync("/patch_transformers", null);
+                var response = await _http.PostAsync($"{_baseUrl}/patch_transformers", null);
                 var content = await SafeReadContentAsync(response) ?? string.Empty;
                 return SerializeResult(new { result = content });
             }
@@ -196,7 +197,7 @@ namespace TinyGenerator.Skills
 
                 LastSynthFormat = request.Format;
 
-                var response = await _http.PostAsJsonAsync("/synthesize", payload);
+                var response = await _http.PostAsJsonAsync($"{_baseUrl}/synthesize", payload);
                 if (!response.IsSuccessStatusCode)
                 {
                     var err = await SafeReadContentAsync(response);

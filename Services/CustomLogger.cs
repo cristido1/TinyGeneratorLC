@@ -20,6 +20,8 @@ namespace TinyGenerator.Services
         private readonly Timer _timer;
         private readonly int _batchSize;
         private readonly TimeSpan _flushInterval;
+        private readonly bool _logRequestResponse;
+        private readonly bool _otherLogs;
         private bool _disposed;
 
         public CustomLogger(DatabaseService databaseService, CustomLoggerOptions options, ProgressService? progressService = null)
@@ -29,6 +31,8 @@ namespace TinyGenerator.Services
             if (options == null) options = new CustomLoggerOptions();
             _batchSize = Math.Max(1, options.BatchSize);
             _flushInterval = TimeSpan.FromMilliseconds(Math.Max(100, options.FlushIntervalMs));
+            _logRequestResponse = options.LogRequestResponse;
+            _otherLogs = options.OtherLogs;
 
             // Timer triggers periodic flush (best-effort)
             _timer = new Timer(async _ => await OnTimerAsync().ConfigureAwait(false), null, _flushInterval, _flushInterval);
@@ -36,7 +40,7 @@ namespace TinyGenerator.Services
 
         public void Log(string level, string category, string message, string? exception = null, string? state = null)
         {
-            if (_disposed) return;
+            if (_disposed || !_otherLogs) return;
 
             var entry = new LogEntry
             {
@@ -81,6 +85,7 @@ namespace TinyGenerator.Services
         /// </summary>
         public void LogPrompt(string modelName, string prompt)
         {
+            if (!_logRequestResponse) return;
             // Don't truncate - save full prompt to DB for complete audit trail
             var displayPrompt = string.IsNullOrWhiteSpace(prompt) 
                 ? "(empty prompt)" 
@@ -95,6 +100,7 @@ namespace TinyGenerator.Services
         /// </summary>
         public void LogResponse(string modelName, string response)
         {
+            if (!_logRequestResponse) return;
             // Don't truncate - save full response to DB for complete audit trail
             var displayResponse = string.IsNullOrWhiteSpace(response) 
                 ? "(empty response)" 
@@ -102,6 +108,26 @@ namespace TinyGenerator.Services
             
             var message = $"[{modelName}] RESPONSE: {displayResponse}";
             Log("Information", "ModelCompletion", message);
+        }
+
+        /// <summary>
+        /// Logs raw request JSON
+        /// </summary>
+        public void LogRequestJson(string modelName, string requestJson)
+        {
+            if (!_logRequestResponse) return;
+            var message = $"[{modelName}] REQUEST_JSON: {requestJson}";
+            Log("Information", "ModelRequest", message);
+        }
+
+        /// <summary>
+        /// Logs raw response JSON
+        /// </summary>
+        public void LogResponseJson(string modelName, string responseJson)
+        {
+            if (!_logRequestResponse) return;
+            var message = $"[{modelName}] RESPONSE_JSON: {responseJson}";
+            Log("Information", "ModelResponse", message);
         }
 
         private async Task OnTimerAsync()

@@ -303,9 +303,9 @@ public sealed class DatabaseService
         model.CreatedAt ??= existing?.CreatedAt ?? now;
         model.UpdatedAt = now;
 
-        var sql = @"INSERT INTO models(Name, Provider, Endpoint, IsLocal, MaxContext, ContextToUse, FunctionCallingScore, CostInPerToken, CostOutPerToken, LimitTokensDay, LimitTokensWeek, LimitTokensMonth, Metadata, Enabled, CreatedAt, UpdatedAt, NoTools)
-VALUES(@Name,@Provider,@Endpoint,@IsLocal,@MaxContext,@ContextToUse,@FunctionCallingScore,@CostInPerToken,@CostOutPerToken,@LimitTokensDay,@LimitTokensWeek,@LimitTokensMonth,@Metadata,@Enabled,@CreatedAt,@UpdatedAt,@NoTools)
-ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=@IsLocal, MaxContext=@MaxContext, ContextToUse=@ContextToUse, FunctionCallingScore=@FunctionCallingScore, CostInPerToken=@CostInPerToken, CostOutPerToken=@CostOutPerToken, LimitTokensDay=@LimitTokensDay, LimitTokensWeek=@LimitTokensWeek, LimitTokensMonth=@LimitTokensMonth, Metadata=@Metadata, Enabled=@Enabled, UpdatedAt=@UpdatedAt, NoTools=@NoTools;";
+        var sql = @"INSERT INTO models(Name, Provider, Endpoint, IsLocal, MaxContext, ContextToUse, FunctionCallingScore, CostInPerToken, CostOutPerToken, LimitTokensDay, LimitTokensWeek, LimitTokensMonth, Metadata, Note, Enabled, CreatedAt, UpdatedAt, NoTools)
+    VALUES(@Name,@Provider,@Endpoint,@IsLocal,@MaxContext,@ContextToUse,@FunctionCallingScore,@CostInPerToken,@CostOutPerToken,@LimitTokensDay,@LimitTokensWeek,@LimitTokensMonth,@Metadata,@Note,@Enabled,@CreatedAt,@UpdatedAt,@NoTools)
+    ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=@IsLocal, MaxContext=@MaxContext, ContextToUse=@ContextToUse, FunctionCallingScore=@FunctionCallingScore, CostInPerToken=@CostInPerToken, CostOutPerToken=@CostOutPerToken, LimitTokensDay=@LimitTokensDay, LimitTokensWeek=@LimitTokensWeek, LimitTokensMonth=@LimitTokensMonth, Metadata=@Metadata, Note=@Note, Enabled=@Enabled, UpdatedAt=@UpdatedAt, NoTools=@NoTools;";
 
         conn.Execute(sql, model);
     }
@@ -591,8 +591,8 @@ ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=
         using var conn = CreateConnection();
         conn.Open();
 
-        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy
-                FROM test_definitions WHERE test_group = @g AND active = 1 ORDER BY priority, id";
+        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, temperature AS Temperature, top_p AS TopP
+            FROM test_definitions WHERE test_group = @g AND active = 1 ORDER BY priority, id";
         return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
     }
 
@@ -651,8 +651,8 @@ FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
             order = col + (ascending ? " ASC" : " DESC");
         }
 
-        var sql = $@"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, active AS Active
-FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
+        var sql = $@"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, temperature AS Temperature, top_p AS TopP, active AS Active
+    FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
 
         return conn.Query<TestDefinition>(sql, parameters).ToList();
     }
@@ -661,8 +661,8 @@ FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, active AS Active
-FROM test_definitions WHERE id = @id LIMIT 1";
+        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, temperature AS Temperature, top_p AS TopP, active AS Active
+    FROM test_definitions WHERE id = @id LIMIT 1";
         return conn.QueryFirstOrDefault<TestDefinition>(sql, new { id });
     }
 
@@ -670,8 +670,8 @@ FROM test_definitions WHERE id = @id LIMIT 1";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"INSERT INTO test_definitions(test_group, library, function_name, expected_behavior, expected_asset, prompt, timeout_secs, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, execution_plan, json_response_format, files_to_copy, active)
-VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Prompt,@TimeoutSecs,@Priority,@ValidScoreRange,@TestType,@ExpectedPromptValue,@AllowedPlugins,@ExecutionPlan,@JsonResponseFormat,@FilesToCopy,@Active); SELECT last_insert_rowid();";
+        var sql = @"INSERT INTO test_definitions(test_group, library, function_name, expected_behavior, expected_asset, prompt, timeout_secs, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, execution_plan, json_response_format, files_to_copy, temperature, top_p, active)
+    VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Prompt,@TimeoutSecs,@Priority,@ValidScoreRange,@TestType,@ExpectedPromptValue,@AllowedPlugins,@ExecutionPlan,@JsonResponseFormat,@FilesToCopy,@Temperature,@TopP,@Active); SELECT last_insert_rowid();";
         var id = conn.ExecuteScalar<long>(sql, td);
         return (int)id;
     }
@@ -680,7 +680,7 @@ VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Promp
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"UPDATE test_definitions SET test_group=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_secs=@TimeoutSecs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins, execution_plan=@ExecutionPlan, json_response_format=@JsonResponseFormat, files_to_copy=@FilesToCopy, active=@Active WHERE id = @Id";
+        var sql = @"UPDATE test_definitions SET test_group=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_secs=@TimeoutSecs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins, execution_plan=@ExecutionPlan, json_response_format=@JsonResponseFormat, files_to_copy=@FilesToCopy, temperature=@Temperature, top_p=@TopP, active=@Active WHERE id = @Id";
         conn.Execute(sql, td);
     }
 
@@ -774,12 +774,31 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
 
     /// <summary>
     /// Create a new test run and return its id.
+    /// Automatically cleans old test runs for the same model+group, keeping only the most recent one.
     /// </summary>
     public int CreateTestRun(string modelName, string testCode, string? description = null, bool passed = false, long? durationMs = null, string? notes = null, string? testFolder = null)
     {
         using var conn = CreateConnection();
         conn.Open();
-        // Insert run: resolve model_id from models.Name and store only model_id (model_name column removed)
+        
+        // Clean old test runs for this model+group BEFORE creating new one
+        // Keep only the most recent run, delete older ones
+        // Note: Stories are preserved via story_id in model_test_assets (not CASCADE deleted)
+        var cleanupSql = @"
+            DELETE FROM model_test_runs 
+            WHERE model_id = (SELECT Id FROM models WHERE Name = @model_name LIMIT 1)
+              AND test_group = @test_group
+              AND id NOT IN (
+                  SELECT id FROM model_test_runs
+                  WHERE model_id = (SELECT Id FROM models WHERE Name = @model_name LIMIT 1)
+                    AND test_group = @test_group
+                  ORDER BY run_date DESC
+                  LIMIT 1
+              )";
+        
+        conn.Execute(cleanupSql, new { model_name = modelName, test_group = testCode });
+        
+        // Insert new run
         var sql = @"INSERT INTO model_test_runs(model_id, test_group, description, passed, duration_ms, notes, test_folder) VALUES((SELECT Id FROM models WHERE Name = @model_name LIMIT 1), @test_group, @description, @passed, @duration_ms, @notes, @test_folder); SELECT last_insert_rowid();";
         var id = conn.ExecuteScalar<long>(sql, new { model_name = modelName, test_group = testCode, description, passed = passed ? 1 : 0, duration_ms = durationMs, notes, test_folder = testFolder });
         return (int)id;
@@ -1071,15 +1090,43 @@ WHERE models.Id = @modelId;";
         conn.Execute(sql, new { modelId });
     }
 
+    /// <summary>
+    /// Calculate score for a test group based on passed tests in the latest run.
+    /// Formula: (passed_count / total_count) * 10, rounded to 1 decimal.
+    /// </summary>
+    private void RecalculateGroupScore(System.Data.IDbConnection conn, string groupName, string scoreColumn)
+    {
+        var sql = $@"
+UPDATE models
+SET {scoreColumn} = (
+    SELECT CASE 
+        WHEN COUNT(s.id) = 0 THEN 0
+        ELSE ROUND((SUM(CASE WHEN s.passed = 1 THEN 1 ELSE 0 END) * 10.0) / COUNT(s.id), 1)
+    END
+    FROM model_test_steps s
+    INNER JOIN model_test_runs r ON s.run_id = r.id
+    WHERE r.model_id = models.Id
+      AND r.test_group = @groupName
+      AND r.id = (
+          SELECT id FROM model_test_runs 
+          WHERE model_id = models.Id AND test_group = @groupName 
+          ORDER BY run_date DESC LIMIT 1
+      )
+);";
+        
+        conn.Execute(sql, new { groupName });
+    }
+
     public void RecalculateAllWriterScores()
     {
         using var conn = CreateConnection();
         conn.Open();
         
-        // First, reset all WriterScore to 0
-        conn.Execute("UPDATE models SET WriterScore = 0;");
+        // Reset all scores to 0
+        conn.Execute("UPDATE models SET WriterScore = 0, BaseScore = 0, TextEvalScore = 0, TtsScore = 0, MusicScore = 0, FxScore = 0, AmbientScore = 0, TotalScore = 0;");
         
-        var sql = @"
+        // Recalculate WriterScore (complex calculation based on story evaluations)
+        var writerSql = @"
 UPDATE models
 SET WriterScore = (
     SELECT CASE 
@@ -1090,8 +1137,29 @@ SET WriterScore = (
     INNER JOIN stories s ON s.id = se.story_id
     WHERE s.model_id = models.Id
 );";
+        conn.Execute(writerSql);
         
-        conn.Execute(sql);
+        // Calculate group-based scores (base, texteval, tts, music, fx, ambient)
+        RecalculateGroupScore(conn, "base", "BaseScore");
+        RecalculateGroupScore(conn, "texteval", "TextEvalScore");
+        RecalculateGroupScore(conn, "tts", "TtsScore");
+        RecalculateGroupScore(conn, "music", "MusicScore");
+        RecalculateGroupScore(conn, "fx", "FxScore");
+        RecalculateGroupScore(conn, "ambient", "AmbientScore");
+        
+        // Calculate TotalScore (sum of all scores)
+        var totalSql = @"
+UPDATE models
+SET TotalScore = (
+    WriterScore +
+    BaseScore +
+    TextEvalScore +
+    TtsScore +
+    MusicScore +
+    FxScore +
+    AmbientScore
+);";
+        conn.Execute(totalSql);
     }
 
     public List<TinyGenerator.Models.LogEntry> GetStoryEvaluationsByStoryId(long storyId)
@@ -1477,6 +1545,36 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
             conn.Execute("ALTER TABLE model_test_runs ADD COLUMN test_folder TEXT");
         }
 
+        // Migration: Add temperature and top_p columns to test_definitions if not exists
+        var hasTemperature = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('test_definitions') WHERE name='temperature'");
+        if (hasTemperature == 0)
+        {
+            Console.WriteLine("[DB] Adding temperature column to test_definitions");
+            conn.Execute("ALTER TABLE test_definitions ADD COLUMN temperature REAL DEFAULT NULL");
+        }
+
+        var hasTopP = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('test_definitions') WHERE name='top_p'");
+        if (hasTopP == 0)
+        {
+            Console.WriteLine("[DB] Adding top_p column to test_definitions");
+            conn.Execute("ALTER TABLE test_definitions ADD COLUMN top_p REAL DEFAULT NULL");
+        }
+
+        // Migration: Add note column to models if not exists
+        var hasNote = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='note'");
+        if (hasNote == 0)
+        {
+            Console.WriteLine("[DB] Adding note column to models");
+            try
+            {
+                conn.Execute("ALTER TABLE models ADD COLUMN note TEXT");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to add note column to models: {ex.Message}");
+            }
+        }
+
         // Migration: Rename test_code to test_group if needed
         var hasTestCode = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('model_test_runs') WHERE name='test_code'");
         var hasTestGroup = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('model_test_runs') WHERE name='test_group'");
@@ -1573,8 +1671,39 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
 
     private static string SelectModelColumns()
     {
-        // Return only core model columns (Skill* and Last* columns removed)
-        return string.Join(", ", new[] { "Id", "Name", "Provider", "Endpoint", "IsLocal", "MaxContext", "ContextToUse", "FunctionCallingScore", "WriterScore", "CostInPerToken", "CostOutPerToken", "LimitTokensDay", "LimitTokensWeek", "LimitTokensMonth", "Metadata", "Enabled", "CreatedAt", "UpdatedAt", "TestDurationSeconds", "NoTools" });
+        // Return columns in the EXACT order they appear in the database table
+        // This order MUST match the database schema, not the ModelInfo class property order
+        // Note: 'speed' column is excluded as it's not in ModelInfo
+        return string.Join(", ", new[] { 
+            "Id", 
+            "Name", 
+            "Provider", 
+            "Endpoint", 
+            "IsLocal", 
+            "MaxContext", 
+            "ContextToUse", 
+            "FunctionCallingScore",
+            "CostInPerToken", 
+            "CostOutPerToken", 
+            "LimitTokensDay", 
+            "LimitTokensWeek", 
+            "LimitTokensMonth", 
+            "Metadata", 
+            "Note",
+            "Enabled", 
+            "CreatedAt", 
+            "UpdatedAt", 
+            "TestDurationSeconds",
+            "NoTools",
+            "WriterScore",
+            "BaseScore", 
+            "TextEvalScore", 
+            "TtsScore", 
+            "MusicScore", 
+            "FxScore", 
+            "AmbientScore",
+            "TotalScore"
+        });
     }
 
     // Retrieve recent log entries with optional filtering by level or category and support offset for pagination.
@@ -1826,6 +1955,9 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
 
         foreach (var group in groups)
         {
+            // Calculate group-specific score
+            RecalculateModelGroupScore(modelName, group);
+            
             // Get latest run for this group
             var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = group });
             if (!runId.HasValue) continue;
@@ -1884,6 +2016,64 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
         // Update model's FunctionCallingScore
         conn.Execute("UPDATE models SET FunctionCallingScore = @score, UpdatedAt = @now WHERE Id = @id",
             new { score = finalScore, id = modelId.Value, now = DateTime.UtcNow.ToString("o") });
+        
+        // Recalculate TotalScore after updating individual scores
+        RecalculateTotalScore(conn, modelId.Value);
+    }
+
+    /// <summary>
+    /// Recalculate the score for a specific test group and update the corresponding column.
+    /// Call this after completing a test run for a group.
+    /// </summary>
+    public void RecalculateModelGroupScore(string modelName, string groupName)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        
+        var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        if (!modelId.HasValue) return;
+        
+        // Map group name to score column
+        string? scoreColumn = groupName.ToLower() switch
+        {
+            "base" => "BaseScore",
+            "texteval" => "TextEvalScore",
+            "tts" => "TtsScore",
+            "music" => "MusicScore",
+            "fx" => "FxScore",
+            "ambient" => "AmbientScore",
+            "writer" => "WriterScore", // writer uses complex calculation, skip here
+            _ => null
+        };
+        
+        if (scoreColumn == null || scoreColumn == "WriterScore") return;
+        
+        // Calculate score for this group
+        RecalculateGroupScore(conn, groupName, scoreColumn);
+        
+        // Recalculate TotalScore
+        RecalculateTotalScore(conn, modelId.Value);
+    }
+
+    /// <summary>
+    /// Recalculate TotalScore as the average of all non-zero scores.
+    /// </summary>
+    private void RecalculateTotalScore(System.Data.IDbConnection conn, int modelId)
+    {
+        var sql = @"
+UPDATE models
+SET TotalScore = (
+    WriterScore +
+    BaseScore +
+    TextEvalScore +
+    TtsScore +
+    MusicScore +
+    FxScore +
+    AmbientScore
+)
+WHERE Id = @modelId;";
+        
+        conn.Execute(sql, new { modelId });
     }
 }
 

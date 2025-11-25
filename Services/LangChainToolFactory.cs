@@ -78,7 +78,9 @@ namespace TinyGenerator.Services
         public HybridLangChainOrchestrator CreateOrchestratorWithTools(
             IEnumerable<string> allowedTools,
             int? agentId = null,
-            int? modelId = null)
+            int? modelId = null,
+            string? ttsWorkingFolder = null,
+            string? ttsStoryText = null)
         {
             var orchestrator = new HybridLangChainOrchestrator(_logger);
             var allowedSet = new HashSet<string>(allowedTools.Select(t => t.ToLowerInvariant()), StringComparer.OrdinalIgnoreCase);
@@ -121,6 +123,10 @@ namespace TinyGenerator.Services
 
             if (allowedSet.Contains("storyevaluator"))
                 RegisterStoryEvaluatorTool(orchestrator, modelId, agentId);
+
+            // Register TtsSchemaTool if working folder provided (TTS test context)
+            if (!string.IsNullOrWhiteSpace(ttsWorkingFolder))
+                RegisterTtsSchemaTool(orchestrator, modelId, agentId, ttsWorkingFolder, ttsStoryText);
 
             _logger?.Log("Info", "ToolFactory", $"Created orchestrator with {orchestrator.GetToolSchemas().Count} tools");
             return orchestrator;
@@ -369,6 +375,24 @@ namespace TinyGenerator.Services
             catch (Exception ex)
             {
                 _logger?.Log("Error", "ToolFactory", $"Failed to register StoryEvaluatorTool: {ex.Message}");
+            }
+        }
+
+        private void RegisterTtsSchemaTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId, string workingFolder, string? storyText = null)
+        {
+            try
+            {
+                var tool = new TtsSchemaTool(workingFolder, storyText, _logger)
+                {
+                    ModelId = modelId,
+                    AgentId = agentId
+                };
+                orchestrator.RegisterTool(tool);
+                _logger?.Log("Info", "ToolFactory", $"Registered TtsSchemaTool with folder: {workingFolder}");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "ToolFactory", $"Failed to register TtsSchemaTool: {ex.Message}");
             }
         }
 

@@ -16,6 +16,7 @@ namespace TinyGenerator.Skills
     {
         private readonly HttpClient _http;
         private readonly bool _forceCpu;
+        private readonly string _baseUrl = "http://localhost:8000";
 
         public string? LastGeneratedMusicFile { get; set; }
         public string? LastGeneratedSoundFile { get; set; }
@@ -31,7 +32,7 @@ namespace TinyGenerator.Skills
         {
             _http = httpClient;
             _forceCpu = forceCpu;
-            _http.BaseAddress = new Uri("http://localhost:8000");
+            // Don't set BaseAddress - HttpClient may already be in use
         }
 
         public override Dictionary<string, object> GetSchema()
@@ -118,7 +119,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var response = await _http.GetAsync("/health");
+                var response = await _http.GetAsync($"{_baseUrl}/health");
                 return response.IsSuccessStatusCode
                     ? SerializeResult(new { result = "AudioCraft is online ✅" })
                     : SerializeResult(new { error = $"AudioCraft error: {response.StatusCode}" });
@@ -133,7 +134,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var models = await _http.GetStringAsync("/api/models");
+                var models = await _http.GetStringAsync($"{_baseUrl}/api/models");
                 return SerializeResult(new { result = models });
             }
             catch (Exception ex)
@@ -154,7 +155,7 @@ namespace TinyGenerator.Skills
                 };
                 if (_forceCpu) payload["device"] = "cpu";
 
-                var response = await _http.PostAsJsonAsync("/api/musicgen", payload);
+                var response = await _http.PostAsJsonAsync($"{_baseUrl}/api/musicgen", payload);
                 if (response.IsSuccessStatusCode)
                 {
                     var respBody = await response.Content.ReadAsStringAsync();
@@ -172,7 +173,7 @@ namespace TinyGenerator.Skills
                         ["duration"] = request.Duration ?? 30,
                         ["device"] = "cpu"
                     };
-                    var r2 = await _http.PostAsJsonAsync("/api/musicgen", retryPayload);
+                    var r2 = await _http.PostAsJsonAsync($"{_baseUrl}/api/musicgen", retryPayload);
                     if (r2.IsSuccessStatusCode)
                     {
                         var body2 = await r2.Content.ReadAsStringAsync();
@@ -203,7 +204,7 @@ namespace TinyGenerator.Skills
                 };
                 if (_forceCpu) payload["device"] = "cpu";
 
-                var response = await _http.PostAsJsonAsync("/api/audiogen", payload);
+                var response = await _http.PostAsJsonAsync($"{_baseUrl}/api/audiogen", payload);
                 if (response.IsSuccessStatusCode)
                 {
                     var respBody = await response.Content.ReadAsStringAsync();
@@ -221,7 +222,7 @@ namespace TinyGenerator.Skills
                         ["duration"] = request.Duration ?? 10,
                         ["device"] = "cpu"
                     };
-                    var r2 = await _http.PostAsJsonAsync("/api/audiogen", retryPayload);
+                    var r2 = await _http.PostAsJsonAsync($"{_baseUrl}/api/audiogen", retryPayload);
                     if (r2.IsSuccessStatusCode)
                     {
                         var body2 = await r2.Content.ReadAsStringAsync();
@@ -244,7 +245,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var response = await _http.GetAsync($"/download/{request.File}");
+                var response = await _http.GetAsync($"{_baseUrl}/download/{request.File}");
                 if (response.IsSuccessStatusCode)
                 {
                     var audioBytes = await response.Content.ReadAsByteArrayAsync();

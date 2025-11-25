@@ -9,16 +9,23 @@ using TinyGenerator.Models;
 namespace TinyGenerator.Services
 {
     /// <summary>
-    /// LangChain-based TestService (new implementation, replaces deprecated SK TestService)
+    /// Custom LangChain-inspired TestService (replaces deprecated SK TestService)
     /// 
-    /// Uses HybridLangChainOrchestrator and LangChainChatBridge for all test execution.
-    /// Provides comprehensive testing interface with:
-    /// - Fixed function calling via explicit ReAct loop
-    /// - Better error diagnostics
-    /// - Standard OpenAI tool schema
-    /// - No Semantic Kernel dependencies
+    /// NOTE: This is a custom implementation inspired by LangChain architecture,
+    /// NOT using the official LangChain C# SDK (which is still in beta/dev).
     /// 
-    /// This is the new standard testing service for LangChain-based projects.
+    /// Features:
+    /// - Manual ReAct loop implementation with full control
+    /// - OpenAI-compatible tool schema (works with Ollama, OpenAI, etc.)
+    /// - Robust tool call parsing (handles JSON objects as arguments)
+    /// - Comprehensive error handling, retry logic, and timeout management
+    /// - Real-time progress tracking via SignalR
+    /// - Database-backed logging and test result persistence
+    /// - Selective tool loading per test (0-N tools)
+    /// - Ollama structured output support (format parameter)
+    /// 
+    /// This custom implementation provides more control and stability than
+    /// the current LangChain C# SDK (0.17.x-dev) for our specific use cases.
     /// </summary>
     public class LangChainTestService
     {
@@ -98,7 +105,7 @@ namespace TinyGenerator.Services
             var testStartUtc = DateTime.UtcNow;
 
             int idx = 0;
-            foreach (var test in tests)
+            foreach (var test in tests.OrderBy(t => t.Priority).ToList())
             {
                 idx++;
                 await ExecuteTestAsync(runId, idx, test, model, modelInfo, string.Empty, null, testFolder);
@@ -252,6 +259,9 @@ namespace TinyGenerator.Services
         {
             var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null);
             var chatBridge = _kernelFactory.CreateChatBridge(model);
+            // Apply per-test sampling parameters if provided
+            if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
+            if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
             var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 30;
 
             var instructions = LoadExecutionPlan(test.ExecutionPlan);
@@ -327,6 +337,8 @@ namespace TinyGenerator.Services
         {
             var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null);
             var chatBridge = _kernelFactory.CreateChatBridge(model);
+            if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
+            if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
             var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 30;
 
             var instructions = LoadExecutionPlan(test.ExecutionPlan);
@@ -377,14 +389,30 @@ namespace TinyGenerator.Services
                     $"Timeout after {timeout}s",
                     (long?)sw.ElapsedMilliseconds);
             }
+            catch (ModelNoToolsSupportException ex)
+            {
+                sw.Stop();
+                // Mark model as not supporting tools
+                modelInfo.NoTools = true;
+                _database.UpsertModel(modelInfo);
+                _progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                
+                _database.UpdateTestStepResult(
+                    stepId,
+                    false,
+                    null,
+                    $"Model does not support tool calling: {ex.Message}",
+                    (long?)sw.ElapsedMilliseconds);
+            }
             catch (Exception ex)
             {
                 sw.Stop();
+                // Fallback: check message content for "does not support tools"
                 if (ex.Message.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
                 {
                     modelInfo.NoTools = true;
                     _database.UpsertModel(modelInfo);
-                    _progress?.Append(runId.ToString(), $"[{model}] Marked model as NoTools");
+                    _progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
                 }
 
                 _database.UpdateTestStepResult(
@@ -408,6 +436,8 @@ namespace TinyGenerator.Services
         {
             var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null);
             var chatBridge = _kernelFactory.CreateChatBridge(model);
+            if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
+            if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
             var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 120;
 
             var instructions = LoadExecutionPlan(test.ExecutionPlan) ?? 
@@ -487,6 +517,21 @@ IMPORTANT: Write the story in Italian language.";
                     $"Timeout after {timeout}s",
                     (long?)sw.ElapsedMilliseconds);
             }
+            catch (ModelNoToolsSupportException ex)
+            {
+                sw.Stop();
+                // Mark model as not supporting tools
+                modelInfo.NoTools = true;
+                _database.UpsertModel(modelInfo);
+                _progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                
+                _database.UpdateTestStepResult(
+                    stepId,
+                    false,
+                    null,
+                    $"Model does not support tool calling: {ex.Message}",
+                    (long?)sw.ElapsedMilliseconds);
+            }
             catch (Exception ex)
             {
                 sw.Stop();
@@ -512,36 +557,24 @@ IMPORTANT: Write the story in Italian language.";
         {
             _progress?.Append(runId.ToString(), $"[{model}] === TTS TEST ===");
             
-            string? ttsStoryText = null;
-            if (!string.IsNullOrWhiteSpace(testFolder))
+            var ttsStoryText = prompt;
+            if (!string.IsNullOrWhiteSpace(ttsStoryText))
             {
-                var storyFile = Path.Combine(testFolder, "tts_storia");
-                if (File.Exists(storyFile))
-                {
-                    try
-                    {
-                        ttsStoryText = await File.ReadAllTextAsync(storyFile);
-                        _progress?.Append(runId.ToString(), $"[{model}] Loaded TTS story ({ttsStoryText?.Length ?? 0} chars)");
-                    }
-                    catch (Exception ex)
-                    {
-                        _progress?.Append(runId.ToString(), $"[{model}] Failed to load TTS story: {ex.Message}");
-                    }
-                }
+                _progress?.Append(runId.ToString(), $"[{model}] Provided TTS prompt ({ttsStoryText.Length} chars)");
             }
 
             const int maxRetries = 3;
             var chatBridge = _kernelFactory.CreateChatBridge(model);
+            if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
+            if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
             
             for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null);
+                var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null, testFolder, ttsStoryText);
                 var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 60;
 
                 var executionPlan = LoadExecutionPlan(test.ExecutionPlan);
-                var fullPrompt = !string.IsNullOrWhiteSpace(executionPlan)
-                    ? $"{executionPlan}\n\n{prompt}"
-                    : prompt;
+                var fullPrompt = prompt;
 
                 var hasTools = orchestrator.GetToolSchemas().Any();
                 fullPrompt = AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
@@ -556,12 +589,14 @@ IMPORTANT: Write the story in Italian language.";
                     var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
                     
                     // Create ReAct loop to execute TTS schema generation
-                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, maxIterations: 5, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
+                    // Pass execution plan as system message instead of concatenating to user prompt
+                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, maxIterations: 5, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge, systemMessage: executionPlan);
                     var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
                     sw.Stop();
                     
                     var response = reactResult.FinalResponse;
-                    _progress?.Append(runId.ToString(), $"[{model}] Model Response (attempt {attempt}): {response?.Substring(0, 100) ?? "empty"}");
+                    var responsePreview = string.IsNullOrEmpty(response) ? "empty" : response;
+                    _progress?.Append(runId.ToString(), $"[{model}] Model Response (attempt {attempt}): {responsePreview}");
 
                     string? generatedFile = null;
                     if (!string.IsNullOrWhiteSpace(testFolder))
@@ -738,10 +773,18 @@ IMPORTANT: Write the story in Italian language.";
             try
             {
                 using var doc = JsonDocument.Parse(text);
+                // Try "result" first (tool output format)
                 if (doc.RootElement.TryGetProperty("result", out var resultProp))
-                    return resultProp.GetString();
+                {
+                    if (resultProp.ValueKind == JsonValueKind.String)
+                        return resultProp.GetString();
+                }
+                // Try "story" for story generation
                 if (doc.RootElement.TryGetProperty("story", out var storyProp))
-                    return storyProp.GetString();
+                {
+                    if (storyProp.ValueKind == JsonValueKind.String)
+                        return storyProp.GetString();
+                }
             }
             catch { }
 
@@ -753,26 +796,73 @@ IMPORTANT: Write the story in Italian language.";
             failReason = null;
             var response = responseText?.Trim() ?? string.Empty;
 
+            // Try to extract "result" field from JSON if present
+            var extractedValue = ExtractResultFromJson(response) ?? response;
+
             if (!string.IsNullOrWhiteSpace(test.ExpectedPromptValue))
             {
                 var expected = test.ExpectedPromptValue.Trim();
-                if (response.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                if (extractedValue.Equals(expected, StringComparison.OrdinalIgnoreCase))
                     return true;
 
-                failReason = $"Expected '{expected}' but got '{response}'";
+                failReason = $"Expected '{expected}' but got '{extractedValue}'";
                 return false;
             }
 
             if (!string.IsNullOrWhiteSpace(test.ValidScoreRange))
-                return ValidateRange(response, test.ValidScoreRange, out failReason);
+                return ValidateRange(extractedValue, test.ValidScoreRange, out failReason);
 
-            if (string.IsNullOrWhiteSpace(response))
+            if (string.IsNullOrWhiteSpace(extractedValue))
             {
                 failReason = "Response is empty";
                 return false;
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Extract the value from {"result": "value"} or {"score": N} JSON format, or return original text
+        /// </summary>
+        private string? ExtractResultFromJson(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text) || !text.Trim().StartsWith("{"))
+                return null;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(text);
+                
+                // Try "result" first (tool output format)
+                if (doc.RootElement.TryGetProperty("result", out var resultProp))
+                {
+                    return ExtractJsonValue(resultProp);
+                }
+                
+                // Try "score" for evaluation responses
+                if (doc.RootElement.TryGetProperty("score", out var scoreProp))
+                {
+                    return ExtractJsonValue(scoreProp);
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Extract value from JsonElement handling different types
+        /// </summary>
+        private string ExtractJsonValue(JsonElement element)
+        {
+            return element.ValueKind switch
+            {
+                JsonValueKind.String => element.GetString() ?? string.Empty,
+                JsonValueKind.Number => element.GetInt32().ToString(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => element.GetRawText()
+            };
         }
 
         private bool ValidateFunctionCallResponse(string? responseText, TestDefinition test, out string? failReason)

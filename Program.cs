@@ -45,6 +45,8 @@ if (File.Exists(secretsPath))
 
 // === Razor Pages ===
 builder.Services.AddRazorPages();
+// Session state for chat conversations
+builder.Services.AddSession();
 // Controllers for API endpoints (e.g. /api/stories/..)
 builder.Services.AddControllers();
 
@@ -95,11 +97,17 @@ builder.Services.AddSingleton<LangChainToolFactory>(sp => new LangChainToolFacto
     sp.GetRequiredService<StoriesService>()));
 
 // LangChain kernel factory (creates and caches orchestrators)
-builder.Services.AddSingleton<ILangChainKernelFactory>(sp => new LangChainKernelFactory(
-    builder.Configuration,
-    sp.GetRequiredService<DatabaseService>(),
-    sp.GetService<ICustomLogger>(),
-    sp.GetRequiredService<LangChainToolFactory>()));
+builder.Services.AddSingleton<LangChainKernelFactory>(sp => 
+{
+    var factory = new LangChainKernelFactory(
+        builder.Configuration,
+        sp.GetRequiredService<DatabaseService>(),
+        sp.GetService<ICustomLogger>(),
+        sp.GetRequiredService<LangChainToolFactory>());
+    return factory;
+});
+
+builder.Services.AddSingleton<ILangChainKernelFactory>(sp => sp.GetRequiredService<LangChainKernelFactory>());
 
 // LangChain agent service (retrieves agents and provides orchestrators)
 builder.Services.AddSingleton<LangChainAgentService>(sp => new LangChainAgentService(
@@ -115,8 +123,8 @@ builder.Services.AddTransient<LangChainTestService>();
 
 // Database access service + cost controller (sqlite) - register as factory to avoid heavy constructor work during registration
 builder.Services.AddSingleton(sp => new DatabaseService("data/storage.db"));
-// Configure custom logger options from configuration (section: CustomLogger)
-builder.Services.Configure<CustomLoggerOptions>(builder.Configuration.GetSection("CustomLogger"));
+// Configure custom logger options from configuration (section: AppLog)
+builder.Services.Configure<CustomLoggerOptions>(builder.Configuration.GetSection("AppLog"));
 // Register the async database-backed logger (ensure DatabaseService is available)
 builder.Services.AddSingleton<ICustomLogger>(sp => new CustomLogger(sp.GetRequiredService<DatabaseService>(), sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CustomLoggerOptions>>().Value, sp.GetService<ProgressService>()));
 // Register the CustomLoggerProvider and inject NotificationService so logs can be broadcast as notifications
@@ -241,6 +249,7 @@ if (!app.Environment.IsDevelopment())
 }
 app.UseStaticFiles();
 app.UseRouting();
+app.UseSession();
 app.UseAuthorization();
 
 // SignalR hubs

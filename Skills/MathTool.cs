@@ -20,7 +20,7 @@ namespace TinyGenerator.Skills
         public string? LastFunctionResult { get; set; }
 
         public MathTool(ICustomLogger? logger = null) 
-            : base("math", "Arithmetic operations: add, subtract, multiply, divide", logger)
+            : base("math", "Math operations", logger)
         {
         }
 
@@ -32,7 +32,7 @@ namespace TinyGenerator.Skills
                     {
                         { "type", "string" },
                         { "enum", new List<string> { "add", "subtract", "multiply", "divide" } },
-                        { "description", "The math operation: add, subtract, multiply, or divide" }
+                        { "description", "Operation" }
                     }
                 },
                 { "a", new Dictionary<string, object>
@@ -49,7 +49,7 @@ namespace TinyGenerator.Skills
                 }
             };
 
-            return CreateFunctionSchema("math", "Arithmetic operations", properties, new List<string> { "operation", "a", "b" });
+            return CreateFunctionSchema("math", "Math operations", properties, new List<string> { "operation", "a", "b" });
         }
 
         public override async Task<string> ExecuteAsync(string jsonInput)

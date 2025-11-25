@@ -19,7 +19,7 @@ namespace TinyGenerator.Skills
         public string? LastFunctionResult { get; set; }
 
         public TimeTool(ICustomLogger? logger = null) 
-            : base("time", "Provides time-related functions such as getting the current date and time, and date arithmetic.", logger)
+            : base("time", "Time operations", logger)
         {
         }
 
@@ -35,7 +35,7 @@ namespace TinyGenerator.Skills
                         new Dictionary<string, object>
                         {
                             { "type", "string" },
-                            { "description", "The time operation: 'now', 'today', 'adddays', 'addhours', 'describe'" }
+                            { "description", "Operation" }
                         }
                     },
                     {
@@ -43,7 +43,7 @@ namespace TinyGenerator.Skills
                         new Dictionary<string, object>
                         {
                             { "type", "integer" },
-                            { "description", "Number of days to add (for adddays operation)" }
+                            { "description", "Days to add" }
                         }
                     },
                     {
@@ -51,7 +51,7 @@ namespace TinyGenerator.Skills
                         new Dictionary<string, object>
                         {
                             { "type", "integer" },
-                            { "description", "Number of hours to add (for addhours operation)" }
+                            { "description", "Hours to add" }
                         }
                     }
                 },

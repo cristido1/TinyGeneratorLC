@@ -12,7 +12,21 @@
         wrapper.style.minWidth = '220px';
         wrapper.style.marginTop = '4px';
 
-        // color by level
+        // Check message content for passed/failed keywords and apply pastel colors
+        const msgLower = (message || '').toLowerCase();
+        if(msgLower.includes('passed')){
+            wrapper.style.backgroundColor = '#d4edda'; // pastel green
+            wrapper.style.borderColor = '#c3e6cb';
+            wrapper.style.borderWidth = '1px';
+            wrapper.style.borderStyle = 'solid';
+        } else if(msgLower.includes('failed')){
+            wrapper.style.backgroundColor = '#f8d7da'; // pastel red
+            wrapper.style.borderColor = '#f5c6cb';
+            wrapper.style.borderWidth = '1px';
+            wrapper.style.borderStyle = 'solid';
+        }
+
+        // color by level (fallback for non-passed/failed messages)
         if(level === 'success') wrapper.classList.add('border-success');
         if(level === 'warning') wrapper.classList.add('border-warning');
         if(level === 'error') wrapper.classList.add('border-danger');

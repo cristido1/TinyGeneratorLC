@@ -21,7 +21,7 @@ namespace TinyGenerator.Skills
         public string? LastCalled { get; set; }
 
         public TextTool(ICustomLogger? logger = null) 
-            : base("text", "Text manipulation functions for uppercase, lowercase, trimming, substring, join, split operations", logger)
+            : base("text", "Text operations", logger)
         {
         }
 
@@ -35,36 +35,36 @@ namespace TinyGenerator.Skills
                     {
                         { "type", "string" },
                         { "enum", functionEnum },
-                        { "description", "The text function to call" }
+                        { "description", "Function to call" }
                     }
                 },
                 { "text", new Dictionary<string, object>
                     {
                         { "type", "string" },
-                        { "description", "The input text" }
+                        { "description", "Input text" }
                     }
                 },
                 { "startIndex", new Dictionary<string, object>
                     {
                         { "type", "integer" },
-                        { "description", "Start index for substring" }
+                        { "description", "Start index" }
                     }
                 },
                 { "length", new Dictionary<string, object>
                     {
                         { "type", "integer" },
-                        { "description", "Length for substring or join" }
+                        { "description", "Length" }
                     }
                 },
                 { "separator", new Dictionary<string, object>
                     {
                         { "type", "string" },
-                        { "description", "Separator for join/split" }
+                        { "description", "Separator" }
                     }
                 }
             };
 
-            return CreateFunctionSchema("text", "Text manipulation functions", properties, new List<string> { "function" });
+            return CreateFunctionSchema("text", "Text functions", properties, new List<string> { "function" });
         }
 
         public override async Task<string> ExecuteAsync(string jsonInput)

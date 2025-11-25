@@ -1,116 +1,199 @@
 # TinyGenerator
 
-> ATTENZIONE PER SVILUPPATORI
+> **NOTA IMPORTANTE PER GLI SVILUPPATORI**
 >
-> Questo progetto usa agenti costruiti con Microsoft Semantic Kernel. È obbligatorio usare le function/skill e le API fornite da Semantic Kernel per qualsiasi integrazione di funzioni (es. salvataggio/lettura memoria, accesso al DB, skill esterne). Non "inventare" nomi di funzioni o meccaniche di invocation alternative nei prompt degli agenti che vadano a modificare il comportamento degli agenti writer o evaluator in produzione. I test di function-calling devono essere isolati e non influire sui prompt usati dagli agenti di generazione.
+> Questo progetto è stato migrato da Microsoft Semantic Kernel a LangChain.NET. Tutte le nuove funzionalità devono utilizzare LangChain per l'orchestrazione degli agenti e l'invocazione delle funzioni. Il codice legacy di Semantic Kernel è mantenuto solo per compatibilità durante la transizione.
 
-> NOTE DI PROGETTO (importante)
->
-> - Questo repository è specificamente progettato per testare e validare il comportamento di Microsoft Semantic Kernel. Pertanto:
->   1. Non usare workaround che bypassano Semantic Kernel (compatibility shims, wrapper che trasformano risposte in stringhe o che reinterpretano invocation). Se il kernel non è presente o genera errori, i test devono fallire visibilmente (fail-fast) per evidenziare problemi di integrazione.
->   2. Evitare fallback automatici che trasformano chiamate di funzione in testo o JSON nel prompt. Gli agenti devono invocare le skill/addin tramite il meccanismo ufficiale del Semantic Kernel.
->   3. Se si aggiungono compatibility helpers (per sviluppo locale), documentarli chiaramente e assicurarsi che possano essere disabilitati con una flag di configurazione in modo che l'app possa eseguire un'esperienza "pure SK" senza shim.
->   4. Qualsiasi modifica che cambia il flusso di invocation degli agenti richiede revisione e approvazione prima del merge.
-
-> Rileggi queste note prima di modificare il comportamento degli agenti o la compatibility layer.
-
-Un'applicazione web ASP.NET Core per la generazione di storie usando agenti AI basati su Semantic Kernel e modelli locali Ollama.
+Un'applicazione web ASP.NET Core per la generazione di storie usando agenti AI basati su LangChain e modelli locali Ollama.
 
 ## Descrizione
 
-TinyGenerator permette di creare storie complete attraverso un processo strutturato che utilizza un planner per orchestrare agenti AI. Gli agenti seguono un piano multi-pass per generare trame, personaggi, capitoli e riassunti, producendo narrazioni coerenti e ben strutturate.
+TinyGenerator permette di creare storie complete attraverso un processo strutturato che utilizza agenti AI specializzati. Gli agenti seguono un approccio ReAct (Reasoning + Acting) per generare narrazioni coerenti utilizzando tool specializzati per manipolazione testo, memoria persistente, operazioni matematiche, e altro.
 
-## Caratteristiche
+## Caratteristiche Principali
 
-- **Generazione guidata da planner**: Utilizza il planner di Semantic Kernel per coordinare passi sequenziali di creazione storia.
-- **Agenti specializzati**: Due agenti scrittori (basati su modelli locali) e due valutatori per garantire qualità.
-- **Controllo costi e token**: Monitoraggio e limiti sui costi di generazione.
-- **Persistenza**: Salvataggio storie e log in database SQLite.
-- **Interfaccia utente**: Design ispirato a Google Keep con sidebar collassabile.
-- **Logging**: Registrazione attività in SQLite per auditing.
+- **Generazione basata su LangChain**: Utilizza LangChain.NET per orchestrare agenti AI con tool calling
+- **Agenti specializzati**: Agenti writer e evaluator basati su modelli locali Ollama
+- **Tool System completo**: Oltre 10 tool specializzati (text, math, memory, time, filesystem, TTS, etc.)
+- **ReAct Loop**: Implementazione completa del pattern Reasoning + Acting per tool usage
+- **Controllo costi e token**: Monitoraggio dettagliato dei costi di generazione
+- **Persistenza completa**: Database SQLite per storie, log, agenti, modelli, valutazioni
+- **Interfaccia utente moderna**: Design responsive con Bootstrap 5 e DataTables
+- **SignalR**: Aggiornamenti real-time del progresso durante la generazione
+- **Logging configurabile**: Sistema di logging avanzato con filtri per request/response JSON
+- **Test framework**: Suite completa per testare function calling e tool execution
 
 ## Requisiti
 
-- .NET 9.0
-- SQLite
-- Ollama con modelli locali:
-  - Scrittori: `llama2-uncensored:7b`, `qwen2.5:7b`
-  - Valutatori: `qwen2.5:3b`, `llama3.2:3b`
+- **.NET 9.0**
+- **SQLite**
+- **Ollama** con modelli locali:
+  - Modelli principali: `phi3:mini-128k`, `llama3.1:8b`, `qwen2.5:7b`
+  - Modelli leggeri: `qwen2.5:3b`, `llama3.2:3b`
 
 ## Installazione
 
-1. Clona il repository:
+1. **Clona il repository:**
    ```bash
-   git clone https://github.com/cristido1/TinyGenerator.git
-   cd TinyGenerator
+   git clone https://github.com/cristido1/TinyGeneratorLC.git
+   cd TinyGeneratorLC
    ```
 
-2. Installa dipendenze:
+2. **Installa dipendenze:**
    ```bash
    dotnet restore
    ```
 
-3. Assicurati che Ollama sia installato e i modelli scaricati:
+3. **Configura Ollama:**
    ```bash
+   # Avvia Ollama
+   ./scripts/start_ollama.sh
+
+   # Scarica i modelli richiesti
+   ollama pull phi3:mini-128k
    ollama pull llama3.1:8b
    ollama pull qwen2.5:7b
    ollama pull qwen2.5:3b
    ollama pull llama3.2:3b
    ```
 
-4. Avvia l'applicazione:
+4. **Avvia l'applicazione:**
    ```bash
    dotnet run
    ```
 
-5. Apri http://localhost:5077 nel browser.
+5. **Apri nel browser:** http://localhost:5077
 
 ## Utilizzo
 
-1. Nella pagina principale, inserisci un tema per la storia (es. "un'avventura fantasy con draghi").
-2. Clicca "Genera" per avviare il processo.
-3. Il planner coordina gli agenti per:
-   - Creare una trama in 6 capitoli.
-   - Definire personaggi e caratteri.
-   - Scrivere ciascun capitolo con narratore e dialoghi.
-   - Generare riassunti cumulativi.
-4. La storia completa viene valutata e, se supera il punteggio minimo (7/10), salvata.
+### Generazione Storie
+1. Nella pagina principale, inserisci un tema per la storia
+2. Seleziona il tipo di generazione (Tutti/A/B/C agenti)
+3. Monitora il progresso real-time via SignalR
+4. La storia viene valutata automaticamente e salvata se supera il punteggio minimo
+
+### Amministrazione
+- **Agenti**: Gestisci agenti AI con configurazioni JSON personalizzate
+- **Modelli**: Testa function calling sui modelli Ollama
+- **Log**: Visualizza log dettagliati con filtri per categoria
+- **Storie**: Gestisci storie generate e valutazioni
+- **Test**: Esegui test di function calling e tool execution
 
 ## Architettura
 
-- **StoryGeneratorService**: Coordina generazione usando planner.
-- **Planner**: HandlebarsPlanner stub che definisce passi sequenziali.
-- **Agenti**: ChatCompletionAgent per scrittura e valutazione.
-- **Memoria**: Contesto in-memory per stato generazione.
-- **Database**: SQLite per storie, log, costi.
+### Servizi Core (`Services/`)
+- **LangChain Services**:
+  - `LangChainChatBridge`: Bridge per chiamate ai modelli con tool support
+  - `ReActLoopOrchestrator`: Implementazione del pattern ReAct
+  - `HybridLangChainOrchestrator`: Orchestrazione ibrida LangChain + legacy
+  - `LangChainKernelFactory`: Factory per creazione orchestratori
+  - `LangChainAgentService`: Gestione agenti con configurazioni DB
+
+- **Tool System**:
+  - `LangChainToolFactory`: Factory per creazione tool specializzati
+  - Tool implementati in `Skills/`: TextTool, MathTool, MemoryTool, TimeTool, etc.
+
+- **Persistence & Monitoring**:
+  - `DatabaseService`: Gestione database SQLite
+  - `CustomLogger`: Logging configurabile con batching
+  - `ProgressService`: Aggiornamenti real-time via SignalR
+  - `NotificationService`: Sistema notifiche
+
+- **External Services**:
+  - `OllamaManagementService`: Gestione modelli Ollama
+  - `TtsService`: Text-to-Speech via API esterna
+  - `CostController`: Monitoraggio costi token
+
+### Tool Disponibili (`Skills/`)
+- **BaseLangChainTool**: Classe base astratta per tool
+- **TextTool**: Manipolazione testo (toupper, tolower, trim, substring, etc.)
+- **MathTool**: Operazioni aritmetiche (add, subtract, multiply, divide)
+- **MemoryTool**: Memoria persistente SQLite (remember, recall, forget)
+- **TimeTool**: Operazioni temporali (now, today, adddays, addhours)
+- **FileSystemTool**: Operazioni file system
+- **HttpTool**: Chiamate HTTP
+- **TtsApiTool**: Text-to-Speech via API
+- **AudioCraftTool**: Generazione audio
+- **StoryWriterTool**: Scrittura storie assistita
+- **StoryEvaluatorTool**: Valutazione storie
+- **TtsSchemaTool**: Gestione schemi TTS
+
+### Interfaccia Utente (`Pages/`)
+- **Pagine principali**:
+  - `Index`: Homepage con generazione storie
+  - `Genera`: Pagina generazione con progresso real-time
+  - `Admin`: Dashboard amministrativa
+
+- **Gestione**:
+  - `Agents/`: CRUD agenti con configurazioni JSON
+  - `Models/`: Test modelli e function calling
+  - `Stories/`: Gestione storie generate
+  - `Logs/`: Visualizzazione log filtrati
+
+- **Test & Monitoraggio**:
+  - `LangChainTest`: Test framework LangChain
+  - `OllamaMonitor`: Monitoraggio modelli Ollama
+  - `Chat`: Interfaccia chat diretta
+
+### Modelli Dati (`Models/`)
+- **Agent.cs**: Configurazione agenti
+- **ModelInfo.cs**: Metadati modelli
+- **StoryRecord.cs**: Storie generate
+- **LogEntry.cs**: Record log
+- **TestDefinition.cs**: Definizioni test
+
+### API (`Controllers/`)
+- **StoriesApiController**: API REST per storie
+- **LogsApiController**: API per log
+- **ChatController**: Controller chat
 
 ## Configurazione
 
-- Modifica `appsettings.json` per limiti costi/token.
-- I modelli sono hardcoded in `StoryGeneratorService.cs`.
+### appsettings.json
+```json
+{
+  "AppLog": {
+    "LogRequestResponse": true,
+    "OtherLogs": false
+  },
+  "Ollama": {
+    "endpoint": "http://localhost:11434"
+  }
+}
+```
+
+### Database
+Il database SQLite (`data/storage.db`) contiene:
+- `agents`: Configurazioni agenti
+- `models`: Metadati modelli
+- `stories`: Storie generate
+- `logs`: Record di log
+- `calls`: Tracciamento function calls
+
+## Workflow di Sviluppo
+
+1. **Aggiunta Tool**: Implementare classe in `Skills/` ereditando `BaseLangChainTool`
+2. **Registrazione**: Aggiungere al `LangChainToolFactory.CreateOrchestratorWithTools()`
+3. **Test**: Creare test in `Tests/` per validare function calling
+4. **UI**: Aggiungere pagine Razor se necessario
+
+## Best Practices
+
+- **LangChain First**: Tutte le nuove funzionalità usano LangChain
+- **Tool Schema**: Mantenere description concise nei tool schemas
+- **Logging**: Usare `ICustomLogger` per logging consistente
+- **Database**: Usare Dapper per query, transazioni per operazioni critiche
+- **UI**: Bootstrap 5 + DataTables per tabelle, SignalR per real-time
+- **Error Handling**: Fail-fast per problemi di integrazione, graceful degradation per errori runtime
 
 ## Contributi
 
-Contributi benvenuti! Segui le linee guida standard per pull request.
+Contributi benvenuti! Seguire il workflow:
+1. Fork del repository
+2. Branch per feature (`feature/nome-feature`)
+3. Pull request con descrizione dettagliata
+4. Code review obbligatoria
 
 ## Licenza
 
 MIT
-
-## Note operative e best practice
-
-Per le pagine che gestiscono la lista e la modifica degli agenti seguire le best practice di Razor Pages, DataTables.net e Bootstrap 5:
-
-- Centralizzare i riferimenti a JS/CSS critici (jQuery, Bootstrap, DataTables) in `Pages/Shared/_Layout.cshtml` e usare fallback CDN quando necessario.
-- Usare le Tag Helpers Razor per i form (`asp-for`, `asp-page`, `asp-route-*`) e `SelectList`/`select` per le combo valorizzate dal server.
-- Inizializzare DataTables in un file JS separato (es. `wwwroot/js/agents-index.js`) e usare l'estensione `Buttons` per toolbar coese, `responsive.renderer` per i dettagli e la paginazione/filtro forniti da DataTables (evitare duplicazioni UI).
-- Mettere la logica di rendering dei dettagli (prompt/instructions/execution_plan) nel renderer di DataTables o usare colonne nascoste solo come fonte dati; non duplicare icone o handler JS manuali quando DataTables fornisce lo stesso comportamento.
-- Validare sempre i campi JSON lato server (es. `Skills`, `Config`, `ExecutionPlan`) e fornire messaggi di errore chiari nella pagina `Edit`.
-
-Pagine di riferimento per queste modifiche e per la UI Agents:
-
-- `Pages/Agents/Index.cshtml`
-- `Pages/Agents/Edit.cshtml`
-- `Pages/Agents/Create.cshtml`
-
-Seguire questi punti garantisce coerenza visiva, migliore manutenzione e comportamenti prevedibili tra client/server.

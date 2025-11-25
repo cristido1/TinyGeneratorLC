@@ -14,10 +14,10 @@ namespace TinyGenerator.Skills
     /// Converted from TtsSchemaSkill (Semantic Kernel).
     /// Manages character definitions, phrases, pauses, and schema validation for text-to-speech.
     /// </summary>
-    public class TtsSchemaUtil : BaseLangChainTool, ITinyTool
+    public class TtsSchemaTool : BaseLangChainTool, ITinyTool
     {
-        private string _storyText;
         private readonly string _workingFolder;
+        private readonly string _storyText;
         private TtsSchema _schema;
 
         private static readonly HashSet<string> SupportedEmotions = new(StringComparer.OrdinalIgnoreCase)
@@ -37,12 +37,17 @@ namespace TinyGenerator.Skills
         public string? LastFunctionCalled { get; set; }
         public string? LastFunctionResult { get; set; }
 
-        public TtsSchemaUtil(string workingFolder, string? storyText = null, ICustomLogger? logger = null) 
-            : base("ttsschema", "Manages TTS schema building: characters, phrases, pauses, validation.", logger)
+        public TtsSchemaTool(string workingFolder, string? storyText = null, ICustomLogger? logger = null) 
+            : base("ttsschema", "TTS schema operations", logger)
         {
             _workingFolder = workingFolder;
-            _storyText = storyText ?? string.Empty;
             _schema = new TtsSchema();
+            _storyText = ExtractStorySegment(storyText);
+
+            if (!string.IsNullOrWhiteSpace(_storyText))
+            {
+                CustomLogger?.Log("Info", "TtsSchemaTool", $"Loaded story text ({_storyText.Length} chars)");
+            }
         }
 
         public override Dictionary<string, object> GetSchema()
@@ -57,17 +62,13 @@ namespace TinyGenerator.Skills
                         new Dictionary<string, object>
                         {
                             { "type", "string" },
-                            { "description", "Operation: read_story_text, set_story_text, reset_schema, add_character, add_character_with_voice, delete_character, add_phrase, add_narration, add_pause, delete_last, read_schema, confirm_schema, check_schema, describe" }
+                            { "description", "Operation" }
                         }
                     },
-                    { "name", new Dictionary<string, object> { { "type", "string" }, { "description", "Character name" } } },
-                    { "gender", new Dictionary<string, object> { { "type", "string" }, { "description", "Character gender" } } },
-                    { "voice", new Dictionary<string, object> { { "type", "string" }, { "description", "Voice name" } } },
-                    { "character", new Dictionary<string, object> { { "type", "string" }, { "description", "Character name for phrase" } } },
-                    { "text", new Dictionary<string, object> { { "type", "string" }, { "description", "Phrase or narration text" } } },
-                    { "emotion", new Dictionary<string, object> { { "type", "string" }, { "description", "Emotion for phrase" } } },
-                    { "seconds", new Dictionary<string, object> { { "type", "integer" }, { "description", "Pause duration in seconds" } } },
-                    { "storyText", new Dictionary<string, object> { { "type", "string" }, { "description", "Story text to set" } } }
+                    { "character", new Dictionary<string, object> { { "type", "string" }, { "description", "Character name" } } },
+                    { "text", new Dictionary<string, object> { { "type", "string" }, { "description", "Text" } } },
+                    { "emotion", new Dictionary<string, object> { { "type", "string" }, { "description", "Emotion" } } },
+                    
                 },
                 new List<string> { "operation" }
             );
@@ -77,78 +78,44 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var request = ParseInput<TtsSchemaUtilRequest>(input);
+                var request = ParseInput<TtsSchemaToolRequest>(input);
                 if (request == null)
+                {
+                    CustomLogger?.Log("Error", "TtsSchemaTool", "Invalid input format");
                     return SerializeResult(new { error = "Invalid input format" });
+                }
 
-                CustomLogger?.Log("Info", "TtsSchemaUtil", $"Executing operation: {request.Operation}");
+                // Log operation with all parameters
+                var paramDetails = new List<string>();
+                if (!string.IsNullOrEmpty(request.Operation)) paramDetails.Add($"operation={request.Operation}");
+                if (!string.IsNullOrEmpty(request.Name)) paramDetails.Add($"name={request.Name}");
+                if (!string.IsNullOrEmpty(request.Gender)) paramDetails.Add($"gender={request.Gender}");
+                if (!string.IsNullOrEmpty(request.Voice)) paramDetails.Add($"voice={request.Voice}");
+                if (!string.IsNullOrEmpty(request.Character)) paramDetails.Add($"character={request.Character}");
+                if (!string.IsNullOrEmpty(request.Text)) paramDetails.Add($"text={request.Text}");
+                if (!string.IsNullOrEmpty(request.Emotion)) paramDetails.Add($"emotion={request.Emotion}");
+                if (request.Seconds.HasValue) paramDetails.Add($"seconds={request.Seconds}");
+                
+
+                CustomLogger?.Log("Info", "TtsSchemaTool", $"Executing: {string.Join(", ", paramDetails)}");
 
                 return request.Operation?.ToLowerInvariant() switch
                 {
-                    "read_story_text" => ReadStoryText(),
-                    "set_story_text" => SetStoryText(request.StoryText),
-                    "reset_schema" => ResetSchema(),
-                    "add_character" => AddCharacter(request.Name, request.Gender),
-                    "add_character_with_voice" => AddCharacterWithVoice(request.Name, request.Voice, request.Gender),
-                    "delete_character" => DeleteCharacter(request.Name),
-                    "add_phrase" => AddPhrase(request.Character, request.Text, request.Emotion),
-                    "add_narration" => AddNarration(request.Text),
-                    "add_pause" => AddPause(request.Seconds ?? 0),
-                    "delete_last" => DeleteLast(),
-                    "read_schema" => ReadSchema(),
-                    "confirm_schema" => ConfirmSchema(),
-                    "check_schema" => CheckSchema(),
-                    "describe" => SerializeResult(new { result = "Operations: read_story_text(), set_story_text(storyText), reset_schema(), add_character(name, gender), add_phrase(character, text, emotion), add_narration(text), add_pause(seconds), delete_last(), read_schema(), confirm_schema(), check_schema()." }),
+                    "add_narrator" => AddNarration(request.Text),
+                    "add_phrase" => AddPhraseAutoCreate(request.Character, request.Text, request.Emotion),
+                    "confirm" => ConfirmSchemaAllowSave(),
+                    "describe" => SerializeResult(new { result = "Operations: add_narrator(text), add_phrase(character, text, emotion), confirm()" }),
                     _ => SerializeResult(new { error = $"Unknown operation: {request.Operation}" })
                 };
             }
             catch (Exception ex)
             {
-                CustomLogger?.Log("Error", "TtsSchemaUtil", $"Error executing operation: {ex.Message}", ex.ToString());
+                CustomLogger?.Log("Error", "TtsSchemaTool", $"Error executing operation: {ex.Message}", ex.ToString());
                 return SerializeResult(new { error = ex.Message });
             }
         }
 
-        private string ReadStoryText()
-        {
-            if (!string.IsNullOrWhiteSpace(_storyText))
-                return SerializeResult(new { result = _storyText });
-
-            var storyFilePath = Path.Combine(_workingFolder, "tts_storia.txt");
-            if (File.Exists(storyFilePath))
-            {
-                try
-                {
-                    _storyText = File.ReadAllText(storyFilePath);
-                    return SerializeResult(new { result = _storyText });
-                }
-                catch (Exception ex)
-                {
-                    return SerializeResult(new { error = $"Could not read story file: {ex.Message}" });
-                }
-            }
-
-            return SerializeResult(new { result = _storyText });
-        }
-
-        private string SetStoryText(string? storyText)
-        {
-            _storyText = storyText ?? string.Empty;
-            return SerializeResult(new { result = "Story text set" });
-        }
-
-        private string ResetSchema()
-        {
-            _schema = new TtsSchema();
-            return SerializeResult(new { result = "Schema reset" });
-        }
-
         private string AddCharacter(string? name, string? gender)
-        {
-            return AddCharacterWithVoice(name, null, gender);
-        }
-
-        private string AddCharacterWithVoice(string? name, string? voice, string? gender)
         {
             if (string.IsNullOrWhiteSpace(name))
                 return SerializeResult(new { error = "Character name is required" });
@@ -159,20 +126,11 @@ namespace TinyGenerator.Skills
             _schema.Characters.Add(new TtsCharacter
             {
                 Name = name,
-                Voice = string.IsNullOrWhiteSpace(voice) ? "default" : voice,
+                Voice = "default",
                 Gender = gender ?? "neutral"
             });
 
             return SerializeResult(new { result = "Character added" });
-        }
-
-        private string DeleteCharacter(string? name)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-                return SerializeResult(new { error = "Character name is required" });
-
-            _schema.Characters.RemoveAll(c => c.Name == name);
-            return SerializeResult(new { result = "Character deleted" });
         }
 
         private string AddPhrase(string? character, string? text, string? emotion)
@@ -214,21 +172,55 @@ namespace TinyGenerator.Skills
             return SerializeResult(new { result = "Pause added" });
         }
 
-        private string DeleteLast()
+        private string AddPhraseAutoCreate(string? character, string? text, string? emotion)
         {
-            if (_schema.Timeline.Count == 0)
-                return SerializeResult(new { result = "No entries to delete" });
+            if (string.IsNullOrWhiteSpace(text))
+                return SerializeResult(new { error = "Phrase text is required" });
 
-            _schema.Timeline.RemoveAt(_schema.Timeline.Count - 1);
-            return SerializeResult(new { result = "Last entry deleted" });
+            var charName = character;
+            if (string.IsNullOrWhiteSpace(charName))
+            {
+                // create a generic character name if none provided
+                charName = $"Character{_schema.Characters.Count + 1}";
+            }
+
+            if (string.IsNullOrWhiteSpace(emotion))
+            {
+                emotion = "neutral";
+            }
+
+            if (!SupportedEmotions.Contains(emotion))
+                return SerializeResult(new { error = $"Unsupported emotion '{emotion}'. Supported: {string.Join(", ", SupportedEmotions)}" });
+
+            // If character not defined, add it automatically
+            if (!_schema.Characters.Any(c => c.Name.Equals(charName, StringComparison.OrdinalIgnoreCase)))
+            {
+                _schema.Characters.Add(new TtsCharacter { Name = charName, Voice = "default", Gender = "neutral" });
+            }
+
+            _schema.Timeline.Add(new TtsPhrase { Character = charName, Text = text, Emotion = emotion });
+            return SerializeResult(new { result = "Phrase added" });
         }
 
-        private string ReadSchema()
+        private string ConfirmSchemaAllowSave()
         {
             try
             {
-                var json = JsonSerializer.Serialize(_schema, DefaultOptions);
-                return SerializeResult(new { result = json });
+                var validationResult = CheckSchema();
+
+                var filePath = Path.Combine(_workingFolder, "tts_schema.json");
+                File.WriteAllText(filePath, JsonSerializer.Serialize(_schema, DefaultOptions));
+
+                try
+                {
+                    var parsed = JsonDocument.Parse(validationResult).RootElement;
+                    return SerializeResult(new { validation = parsed, saved = true });
+                }
+                catch
+                {
+                    // if parsing fails, return raw validation string
+                    return SerializeResult(new { validation = validationResult, saved = true });
+                }
             }
             catch (Exception ex)
             {
@@ -236,6 +228,7 @@ namespace TinyGenerator.Skills
             }
         }
 
+        
         private string ConfirmSchema()
         {
             try
@@ -266,7 +259,7 @@ namespace TinyGenerator.Skills
                 return SerializeResult(new { error = "No timeline entries" });
 
             if (string.IsNullOrWhiteSpace(_storyText))
-                return SerializeResult(new { error = "Story text is empty" });
+                return SerializeResult(new { error = "Missing story text" });
 
             var unusedError = CheckUnusedCharacters();
             if (unusedError != null)
@@ -322,7 +315,7 @@ namespace TinyGenerator.Skills
             return null;
         }
 
-        private class TtsSchemaUtilRequest
+            private class TtsSchemaToolRequest
         {
             public string? Operation { get; set; }
             public string? Name { get; set; }
@@ -332,7 +325,35 @@ namespace TinyGenerator.Skills
             public string? Text { get; set; }
             public string? Emotion { get; set; }
             public int? Seconds { get; set; }
-            public string? StoryText { get; set; }
+        }
+
+        private static string ExtractStorySegment(string? promptText)
+        {
+            if (string.IsNullOrWhiteSpace(promptText))
+                return string.Empty;
+
+            const string marker = "questa \u00E8 la storia";
+            var lower = promptText.ToLowerInvariant();
+            var markerIndex = lower.IndexOf(marker, StringComparison.Ordinal);
+            int colonIndex = -1;
+
+            if (markerIndex >= 0)
+            {
+                colonIndex = promptText.IndexOf(':', markerIndex + marker.Length);
+            }
+
+            if (colonIndex < 0)
+            {
+                colonIndex = promptText.IndexOf(':');
+            }
+
+            if (colonIndex < 0 || colonIndex + 1 >= promptText.Length)
+            {
+                return promptText.Trim();
+            }
+
+            var extracted = promptText[(colonIndex + 1)..].Trim();
+            return extracted;
         }
     }
 }

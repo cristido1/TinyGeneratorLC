@@ -10,7 +10,7 @@
         <a class="btn btn-sm btn-primary" asp-page="./Create">Create Test Definition</a>
     </div>
     <div class="form-check">
-        <input class="form-check-input" type="checkbox" id="chkShowDisabled" asp-for="ShowDisabled" onchange="window.location.href='?ShowDisabled=' + this.checked;" />
+        <input class="form-check-input" type="checkbox" id="chkShowDisabled" checked="@Model.ShowDisabled" onchange="window.location.href='?ShowDisabled=' + (this.checked ? 'true' : 'false');" />
         <label class="form-check-label" for="chkShowDisabled">
             Show Disabled Tests
         </label>

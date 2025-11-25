@@ -24,6 +24,13 @@
         <span asp-validation-for="Model.Provider" class="text-danger"></span>
     </div>
 
+    <div class="mb-3">
+        <label class="form-label">Endpoint</label>
+        <input asp-for="Model.Endpoint" class="form-control" placeholder="http://localhost:11434 (leave empty for default)" />
+        <span asp-validation-for="Model.Endpoint" class="text-danger"></span>
+        <small class="form-text text-muted">Custom API endpoint URL (optional)</small>
+    </div>
+
     <div class="row">
         <div class="col-md-4 mb-3">
             <label class="form-label">MaxContext</label>
@@ -71,6 +78,19 @@
     <div class="form-check mb-3">
         <input asp-for="Model.Enabled" class="form-check-input" />
         <label class="form-check-label">Enabled</label>
+    </div>
+
+    <div class="form-check mb-3">
+        <input asp-for="Model.NoTools" class="form-check-input" />
+        <label class="form-check-label">NoTools</label>
+        <small class="form-text text-muted d-block">Check if model does not support function calling/tools</small>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Note</label>
+        <textarea asp-for="Model.Note" class="form-control" rows="3"></textarea>
+        <span asp-validation-for="Model.Note" class="text-danger"></span>
+        <small class="form-text text-muted">Free-form note or comment for this model.</small>
     </div>
 
     <div class="mb-3">

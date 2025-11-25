@@ -10,6 +10,8 @@
     <!-- LangChain packages for agent orchestration -->
     <PackageReference Include="LangChain" Version="0.17.1-dev.51" />
     <PackageReference Include="LangChain.Providers.OpenAI" Version="0.17.1-dev.48" />
+    <PackageReference Include="LangChain.Providers.Ollama" Version="0.17.1-dev.48" />
+    <PackageReference Include="LangChain.Core" Version="0.17.1-dev.51" />
     
     <!-- Semantic Kernel (DEPRECATED: gradual migration to LangChain) -->
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.67.1" />

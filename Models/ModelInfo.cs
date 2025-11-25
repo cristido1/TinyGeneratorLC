@@ -12,7 +12,6 @@ public class ModelInfo
     public int MaxContext { get; set; }
     public int ContextToUse { get; set; }
     public int FunctionCallingScore { get; set; }
-    public double WriterScore { get; set; }
     public double CostInPerToken { get; set; }
     public double CostOutPerToken { get; set; }
     public long LimitTokensDay { get; set; }
@@ -20,13 +19,21 @@ public class ModelInfo
     public long LimitTokensMonth { get; set; }
     public string Metadata { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
-    // Indicates the model does NOT support tools/function-calling (true = no tools supported)
-    public bool NoTools { get; set; } = false;
     public string? CreatedAt { get; set; }
     public string? UpdatedAt { get; set; }
-
-    // Duration in seconds taken to run the full battery of tests
     public double? TestDurationSeconds { get; set; }
+    // Indicates the model does NOT support tools/function-calling (true = no tools supported)
+    public bool NoTools { get; set; } = false;
+    public double WriterScore { get; set; }
+    public double BaseScore { get; set; }
+    public double TextEvalScore { get; set; }
+    public double TtsScore { get; set; }
+    public double MusicScore { get; set; }
+    public double FxScore { get; set; }
+    public double AmbientScore { get; set; }
+    public double TotalScore { get; set; }
+    // Free-form note for the model (shown in grid and edit form)
+    public string? Note { get; set; }
     // JSON-serialized last test results (array of { name, ok, message })
     public string? LastTestResults { get; set; }
     // Last generated test audio files (relative paths under wwwroot)

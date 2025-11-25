@@ -1,0 +1,342 @@
+@page "{model?}"
+@model ChatModel
+@{
+    ViewData["Title"] = "Chat";
+}
+
+<style>
+    /* Hacker-style dark theme */
+    .chat-container {
+        height: calc(100vh - 200px);
+        max-height: 600px;
+    }
+    
+    .hacker-sidebar {
+        background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+        border: 1px solid #00ff00;
+        box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+    }
+    
+    .hacker-sidebar .card-header {
+        background: #000000 !important;
+        border-bottom: 2px solid #00ff00;
+        color: #00ff00 !important;
+        font-family: 'Courier New', monospace;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+    }
+    
+    .hacker-sidebar .card-body {
+        background: #0a0a0a;
+        color: #00ff00;
+        font-family: 'Courier New', monospace;
+    }
+    
+    .hacker-select {
+        background: #000000 !important;
+        border: 1px solid #00ff00 !important;
+        color: #00ff00 !important;
+        font-family: 'Courier New', monospace;
+    }
+    
+    .hacker-select option {
+        background: #000000;
+        color: #00ff00;
+    }
+    
+    .hacker-info {
+        background: #001100 !important;
+        border: 1px solid #00ff00 !important;
+        color: #00ff00 !important;
+        font-size: 0.85rem;
+    }
+    
+    .hacker-btn-danger {
+        background: #ff0000 !important;
+        border: 1px solid #ff0000 !important;
+        color: #000000 !important;
+        font-family: 'Courier New', monospace;
+        font-weight: bold;
+    }
+    
+    .hacker-btn-danger:hover {
+        background: #cc0000 !important;
+        box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+    }
+    
+    .hacker-chat {
+        background: #000000;
+        border: 1px solid #00ff00;
+        box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+        height: 100%;
+    }
+    
+    .hacker-chat .card-header {
+        background: #000000 !important;
+        border-bottom: 2px solid #00ff00;
+        color: #00ff00 !important;
+        font-family: 'Courier New', monospace;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+    }
+    
+    .hacker-messages {
+        background: #000000;
+        min-height: 300px;
+        max-height: 400px;
+        overflow-y: auto;
+        padding: 15px;
+    }
+    
+    /* Custom scrollbar */
+    .hacker-messages::-webkit-scrollbar {
+        width: 8px;
+    }
+    
+    .hacker-messages::-webkit-scrollbar-track {
+        background: #000000;
+        border-left: 1px solid #00ff00;
+    }
+    
+    .hacker-messages::-webkit-scrollbar-thumb {
+        background: #00ff00;
+        border-radius: 4px;
+    }
+    
+    .user-message {
+        background: linear-gradient(135deg, #003300 0%, #005500 100%);
+        border: 1px solid #00ff00;
+        color: #00ff00;
+        font-family: 'Courier New', monospace;
+        box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+    }
+    
+    .user-message small {
+        color: #00ff00 !important;
+        opacity: 0.8;
+    }
+    
+    .assistant-message {
+        background: #0a0a0a;
+        border: 1px solid #00aa00;
+        color: #00ff00;
+        font-family: 'Courier New', monospace;
+        box-shadow: 0 0 10px rgba(0, 170, 0, 0.2);
+    }
+    
+    .assistant-message small {
+        color: #00aa00 !important;
+        opacity: 0.8;
+    }
+    
+    .hacker-chat .card-footer {
+        background: #000000;
+        border-top: 2px solid #00ff00;
+        padding: 15px;
+    }
+    
+    .hacker-input {
+        background: #000000 !important;
+        border: 1px solid #00ff00 !important;
+        color: #00ff00 !important;
+        font-family: 'Courier New', monospace;
+    }
+    
+    .hacker-input::placeholder {
+        color: #006600 !important;
+    }
+    
+    .hacker-input:focus {
+        background: #000000 !important;
+        border-color: #00ff00 !important;
+        box-shadow: 0 0 10px rgba(0, 255, 0, 0.3) !important;
+        color: #00ff00 !important;
+    }
+    
+    .hacker-btn-send {
+        background: #00ff00 !important;
+        border: 1px solid #00ff00 !important;
+        color: #000000 !important;
+        font-family: 'Courier New', monospace;
+        font-weight: bold;
+        text-transform: uppercase;
+    }
+    
+    .hacker-btn-send:hover {
+        background: #00cc00 !important;
+        box-shadow: 0 0 15px rgba(0, 255, 0, 0.5);
+    }
+    
+    .hacker-alert {
+        background: #330000 !important;
+        border: 1px solid #ff0000 !important;
+        color: #ff0000 !important;
+        font-family: 'Courier New', monospace;
+    }
+    
+    .hacker-info-alert {
+        background: #001a00 !important;
+        border: 1px solid #00ff00 !important;
+        color: #00ff00 !important;
+        font-family: 'Courier New', monospace;
+    }
+    
+    .form-label {
+        color: #00ff00 !important;
+        font-family: 'Courier New', monospace;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+    }
+</style>
+
+<div class="container-fluid mt-3">
+    <div class="row chat-container">
+        <!-- Sidebar -->
+        <div class="col-md-3">
+            <div class="card hacker-sidebar">
+                <div class="card-header">
+                    <h5 class="mb-0">[ MODEL ]</h5>
+                </div>
+                <div class="card-body">
+                    <form method="get" id="modelForm">
+                        <div class="mb-3">
+                            <label for="modelSelect" class="form-label">// Select Model</label>
+                            <select class="form-select hacker-select" id="modelSelect" name="model" onchange="document.getElementById('modelForm').submit();">
+                                <option value="">-- Choose --</option>
+                                @if (Model?.AvailableModels != null)
+                                {
+                                    @foreach (var m in Model.AvailableModels)
+                                    {
+                                        if (m.Name == Model.SelectedModel)
+                                        {
+                                            <option value="@m.Name" selected>@m.Name</option>
+                                        }
+                                        else
+                                        {
+                                            <option value="@m.Name">@m.Name</option>
+                                        }
+                                    }
+                                }
+                            </select>
+                        </div>
+                    </form>
+
+                    @if (!string.IsNullOrEmpty(Model?.SelectedModel) && Model?.SelectedModelInfo != null)
+                    {
+                        <div class="alert hacker-info small">
+                            <strong>&gt; Provider:</strong> @Model.SelectedModelInfo.Provider<br/>
+                            <strong>&gt; Endpoint:</strong> @Model.SelectedModelInfo.Endpoint<br/>
+                            <strong>&gt; Context:</strong> @Model.SelectedModelInfo.MaxContext tokens
+                        </div>
+                        
+                        <button type="button" class="btn hacker-btn-danger btn-sm w-100" id="clearChatBtn">
+                            [X] DELETE HISTORY
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Area -->
+        <div class="col-md-9">
+            <div class="card hacker-chat d-flex flex-column">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        @if (string.IsNullOrEmpty(Model?.SelectedModel))
+                        {
+                            <span>[ AWAITING MODEL SELECTION ]</span>
+                        }
+                        else
+                        {
+                            <span>&gt;&gt; SESSION: @Model.SelectedModel</span>
+                        }
+                    </h5>
+                </div>
+
+                <div class="card-body hacker-messages flex-grow-1" id="chatMessages">
+                    @if (Model?.ConversationHistory != null && Model.ConversationHistory.Any())
+                    {
+                        @foreach (var msg in Model.ConversationHistory)
+                        {
+                            @if (msg.Role == "user")
+                            {
+                                <div class="mb-3 d-flex justify-content-end">
+                                    <div class="user-message p-2 rounded" style="max-width: 70%; word-wrap: break-word;">
+                                        <small>&gt; USER:</small>
+                                        <p class="mb-0">@msg.Content</p>
+                                    </div>
+                                </div>
+                            }
+                            else if (msg.Role == "assistant")
+                            {
+                                <div class="mb-3 d-flex justify-content-start">
+                                    <div class="assistant-message p-2 rounded" style="max-width: 70%; word-wrap: break-word;">
+                                        <small>&gt; @Model.SelectedModel:</small>
+                                        <p class="mb-0" style="white-space: pre-wrap;">@msg.Content</p>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(Model?.SelectedModel))
+                    {
+                        <div class="alert hacker-info-alert text-center">
+                            <strong>&gt;&gt; SYSTEM:</strong> No messages. Initialize conversation...
+                        </div>
+                    }
+                </div>
+
+                @if (!string.IsNullOrEmpty(Model?.SelectedModel))
+                {
+                    <div class="card-footer">
+                        <form method="post" asp-page-handler="SendMessage" asp-route-model="@Model.SelectedModel" class="input-group">
+                            <input type="text" class="form-control hacker-input" name="message" 
+                                   placeholder="$ Enter command..." required />
+                            <button class="btn hacker-btn-send" type="submit">
+                                &gt; SEND
+                            </button>
+                        </form>
+                        @if (TempData["Error"] != null)
+                        {
+                            <div class="alert hacker-alert mt-2 mb-0">
+                                <strong>[ERROR]:</strong> @TempData["Error"]
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Auto-scroll to bottom on page load
+    scrollToBottom();
+
+    // Clear chat button
+    document.getElementById('clearChatBtn')?.addEventListener('click', function() {
+        const model = '@Model?.SelectedModel';
+        if (confirm('[SYSTEM] Confirm deletion of conversation history?')) {
+            window.location.href = '/Chat/ClearChat?model=' + model + '&returnUrl=' + encodeURIComponent(window.location.pathname + window.location.search);
+        }
+    });
+    
+    // Add typing effect on messages (optional enhancement)
+    const messages = document.querySelectorAll('.assistant-message');
+    messages.forEach(msg => {
+        msg.style.opacity = '0';
+        setTimeout(() => {
+            msg.style.transition = 'opacity 0.3s';
+            msg.style.opacity = '1';
+        }, 100);
+    });
+});
+
+function scrollToBottom() {
+    const chatMessages = document.getElementById('chatMessages');
+    if (chatMessages) {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+}
+</script>

@@ -33,7 +33,7 @@ namespace TinyGenerator.Services
         public ReActLoopOrchestrator(
             HybridLangChainOrchestrator tools,
             ICustomLogger? logger = null,
-            int maxIterations = 10,
+            int maxIterations = 100,
             ProgressService? progress = null,
             string? runId = null,
             LangChainChatBridge? modelBridge = null,
@@ -88,7 +88,9 @@ namespace TinyGenerator.Services
             _logger?.Log("Info", "ReActLoop", $"Starting ReAct loop with prompt length={userPrompt.Length}");
 
             // Main loop: reasoning → tool call → execution → feedback
-            for (int iteration = 0; iteration < _maxIterations; iteration++)
+            var unlimited = _maxIterations <= 0;
+            int iteration = 0;
+            while (unlimited || iteration < _maxIterations)
             {
                 if (ct.IsCancellationRequested)
                 {
@@ -96,7 +98,7 @@ namespace TinyGenerator.Services
                     return result;
                 }
 
-                _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}/{_maxIterations}");
+                _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}/{(unlimited ? "∞" : _maxIterations.ToString())}");
 
                 try
                 {
@@ -188,6 +190,8 @@ namespace TinyGenerator.Services
                     result.IterationCount = iteration + 1;
                     return result;
                 }
+
+                iteration++;
             }
 
             // Reached max iterations

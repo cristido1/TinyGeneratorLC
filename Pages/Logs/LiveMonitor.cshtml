@@ -275,28 +275,54 @@
 <script src="~/lib/signalr/signalr.min.js"></script>
 <script>
     // State management
+    const MAX_LOG_ENTRIES = 1000;
     let stats = { total: 0, info: 0, success: 0, warning: 0, error: 0 };
     
     const logsContent = document.getElementById('logs-content');
     
     const iconSVG = { info: '⊙', success: '✓', warning: '⚠', error: '✕' };
     
-    function addLogEntry(level = 'info', message = '', category = 'System', extraClass = '') {
+    function normalizeLevel(level) {
+        const map = {
+            information: 'info',
+            info: 'info',
+            debug: 'info',
+            trace: 'info',
+            warning: 'warning',
+            warn: 'warning',
+            error: 'error',
+            critical: 'error',
+            fatal: 'error',
+            success: 'success'
+        };
+        const key = (level || '').toLowerCase();
+        return map[key] || (key || 'info');
+    }
+
+    function formatTimestamp(ts) {
+        if (!ts) return new Date().toLocaleString('it-IT');
+        const date = new Date(ts);
+        if (Number.isNaN(date.getTime())) return ts;
+        const pad = (value, len = 2) => String(value).padStart(len, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+               `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.` +
+               `${pad(date.getMilliseconds(), 3)}`;
+    }
+
+    function addLogEntry(level = 'info', message = '', category = 'System', extraClass = '', timestamp = null) {
         const placeholder = logsContent.querySelector('.logs-placeholder');
         if (placeholder) placeholder.remove();
         
         const entry = document.createElement('div');
-        entry.className = `log-entry entry-${level}`;
-        
-        const now = new Date();
-        const timestamp = now.toLocaleTimeString('it-IT', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+        const normalizedLevel = normalizeLevel(level);
+        entry.className = `log-entry entry-${normalizedLevel}`;
         
         const messageClass = extraClass ? `log-message ${extraClass}` : 'log-message';
         
         entry.innerHTML = `
-            <div class="log-icon">${iconSVG[level] || '·'}</div>
-            <div class="log-timestamp">${timestamp}</div>
-            <div class="log-level ${level}">${level.toUpperCase()}</div>
+            <div class="log-icon">${iconSVG[normalizedLevel] || '·'}</div>
+            <div class="log-timestamp">${formatTimestamp(timestamp)}</div>
+            <div class="log-level ${normalizedLevel}">${normalizedLevel.toUpperCase()}</div>
             <div class="log-category">[${category}]</div>
             <div class="${messageClass}">${escapeHtml(message)}</div>
         `;
@@ -304,10 +330,11 @@
         logsContent.insertBefore(entry, logsContent.firstChild);
         
         stats.total++;
-        stats[level]++;
+        if (typeof stats[normalizedLevel] !== 'number') stats[normalizedLevel] = 0;
+        stats[normalizedLevel]++;
         updateStats();
         
-        while (logsContent.children.length > 500) {
+        while (logsContent.querySelectorAll('.log-entry').length > MAX_LOG_ENTRIES) {
             logsContent.removeChild(logsContent.lastChild);
         }
     }
@@ -352,13 +379,20 @@
     connection.on('AgentActivityEnded', (agentId) => {
         addLogEntry('success', `Agent completed: ${agentId}`, 'Agent');
     });
+
+    connection.on('LogEntriesAppended', entries => {
+        if (!Array.isArray(entries)) return;
+        entries.forEach(entry => {
+            addLogEntry(entry.level || 'info', entry.message || '', entry.category || '', '', entry.ts);
+        });
+    });
     
     // Load initial logs
     fetch('/api/logs/recent?limit=1000')
         .then(r => r.json())
         .then(logs => {
-            logs.reverse().forEach(log => {
-                addLogEntry(log.level.toLowerCase(), log.message, log.category);
+            (logs || []).reverse().forEach(log => {
+                addLogEntry(log.level || 'info', log.message || '', log.category || '', '', log.ts);
             });
         })
         .catch(e => console.warn('Failed to load initial logs', e));
@@ -373,10 +407,10 @@
     
     // Export functionality
     document.getElementById('exportBtn').addEventListener('click', function() {
-        // Get all log entries (in reverse order, so we need to reverse them)
+        // Get all log entries (in reverse order for chronological export)
         const entries = Array.from(logsContent.querySelectorAll('.log-entry')).reverse();
         
-        // Take last 100 entries
+        // Take last 1000 entries
         const lastEntries = entries.slice(0, 1000);
         
         // Build text content

@@ -1,0 +1,58 @@
+@page "{id?}"
+@model TinyGenerator.Pages.StoriesStatus.EditModel
+@{
+    ViewData["Title"] = Model.Status != null && Model.Status.Id > 0 ? "Edit Story Status" : "Create Story Status";
+}
+
+@* Title rendered by layout using ViewData["Title"] *@
+
+<form method="post">
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label asp-for="Status.Code" class="form-label"></label>
+            <input asp-for="Status.Code" class="form-control" />
+            <span asp-validation-for="Status.Code" class="text-danger"></span>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="Status.Step" class="form-label"></label>
+            <input asp-for="Status.Step" class="form-control" type="number" />
+            <span asp-validation-for="Status.Step" class="text-danger"></span>
+        </div>
+    </div>
+    <div class="mb-3">
+        <label asp-for="Status.Description" class="form-label"></label>
+        <textarea asp-for="Status.Description" class="form-control" rows="3"></textarea>
+        <span asp-validation-for="Status.Description" class="text-danger"></span>
+    </div>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label asp-for="Status.Color" class="form-label"></label>
+            <input asp-for="Status.Color" class="form-control" />
+            <span asp-validation-for="Status.Color" class="text-danger"></span>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="Status.OperationType" class="form-label"></label>
+            <input asp-for="Status.OperationType" class="form-control" />
+            <span asp-validation-for="Status.OperationType" class="text-danger"></span>
+        </div>
+    </div>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label asp-for="Status.AgentType" class="form-label"></label>
+            <input asp-for="Status.AgentType" class="form-control" />
+            <span asp-validation-for="Status.AgentType" class="text-danger"></span>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="Status.FunctionName" class="form-label"></label>
+            <input asp-for="Status.FunctionName" class="form-control" />
+            <span asp-validation-for="Status.FunctionName" class="text-danger"></span>
+        </div>
+    </div>
+    <input type="hidden" asp-for="Status.Id" />
+    <button type="submit" class="btn btn-primary">Save</button>
+    <a asp-page="./Index" class="btn btn-secondary">Cancel</a>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

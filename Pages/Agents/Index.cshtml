@@ -7,8 +7,18 @@
 }
 
 <div class="mb-3 d-flex justify-content-between align-items-center">
-    <form method="get" class="d-flex" asp-page="./Index">
-        <input type="search" name="Search" id="searchBox" value="@Model.Search" class="form-control me-2" placeholder="Search agents..." />
+    <form method="get" class="d-flex align-items-center gap-2" asp-page="./Index" id="agentFilterForm">
+        <input type="hidden" name="Page" value="1" />
+        <input type="search" name="Search" id="searchBox" value="@Model.Search" class="form-control" placeholder="Search agents..." />
+        <select name="ModelFilter" id="modelFilterSelect" class="form-select" style="width: 220px">
+            <option value="" selected="@(string.IsNullOrWhiteSpace(Model.ModelFilter) ? "selected" : null)">All models</option>
+            <option value="__none__" selected="@(Model.ModelFilter == "__none__" ? "selected" : null)">No model assigned</option>
+            @foreach (var m in Model.Models)
+            {
+                var isSelected = !string.IsNullOrWhiteSpace(Model.ModelFilter) && string.Equals(Model.ModelFilter, m.Name, StringComparison.OrdinalIgnoreCase);
+                <option value="@m.Name" selected="@(isSelected ? "selected" : null)">@m.Name @((!string.IsNullOrWhiteSpace(m.Provider)) ? "(" + m.Provider + ")" : "")</option>
+            }
+        </select>
         <button type="submit" class="btn btn-outline-primary">Search</button>
     </form>
     <a class="btn btn-primary" asp-page="./Create">Create Agent</a>
@@ -126,6 +136,13 @@
                             }
                         });
                     });
+
+                    const modelSelect = document.getElementById('modelFilterSelect');
+                    if (modelSelect && modelSelect.form) {
+                        modelSelect.addEventListener('change', () => {
+                            modelSelect.form.submit();
+                        });
+                    }
                 } catch (e) {
                     console.warn('Failed to initialize Agents DataTable', e);
                 }
@@ -136,4 +153,3 @@
         })();
     </script>
 }
-

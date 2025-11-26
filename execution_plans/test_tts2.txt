@@ -9,7 +9,7 @@
         c) If it is a character, add the sentence using add_phrase(character_name, text, emotion);
         d) Choose the emotion that best fits the context from the available ones (if unsure, use neutral);
         e) Split the text whenever the speaker changes or when it is the narrator speaking.
-    4.	Once added all the sentences, confirm the structure using confirm_schema.
+    4.	Once added all the sentences, confirm the structure using confirm.
     - You are inside a program not in a chat, DO NOT ASK QUESTION
     - DO NOT respond with summary.
     - Use the function-call system to call functions.

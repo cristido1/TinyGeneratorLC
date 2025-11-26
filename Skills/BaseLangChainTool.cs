@@ -25,14 +25,46 @@ namespace TinyGenerator.Skills
         }
 
         /// <summary>
-        /// Returns the tool schema in JSON format compatible with OpenAI function calling.
+        /// Indicates if this tool should be exposed to the language model as a callable function.
+        /// Some tools act only as coordinators for other public tools and can stay hidden.
+        /// </summary>
+        public virtual bool ExposeToModel => true;
+
+        /// <summary>
+        /// Returns the default tool schema in JSON format compatible with OpenAI function calling.
+        /// Tools that expose multiple functions can override GetFunctionSchemas instead.
         /// </summary>
         public abstract Dictionary<string, object> GetSchema();
+
+        /// <summary>
+        /// Returns all function schemas that this tool exposes. Default implementation returns GetSchema().
+        /// </summary>
+        public virtual IEnumerable<Dictionary<string, object>> GetFunctionSchemas()
+        {
+            yield return GetSchema();
+        }
+
+        /// <summary>
+        /// Gets the names of the functions exposed by this tool. Defaults to the tool name.
+        /// </summary>
+        public virtual IEnumerable<string> FunctionNames
+        {
+            get { yield return Name; }
+        }
 
         /// <summary>
         /// Executes the tool with the given input (typically a JSON string).
         /// </summary>
         public abstract Task<string> ExecuteAsync(string input);
+
+        /// <summary>
+        /// Executes the specified function exposed by this tool.
+        /// Default implementation forwards to ExecuteAsync for backward compatibility.
+        /// </summary>
+        public virtual Task<string> ExecuteFunctionAsync(string functionName, string input)
+        {
+            return ExecuteAsync(input);
+        }
 
         /// <summary>
         /// Helper to generate OpenAI-compatible function schema.

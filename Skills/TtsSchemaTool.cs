@@ -50,27 +50,92 @@ namespace TinyGenerator.Skills
             }
         }
 
+        public override IEnumerable<string> FunctionNames
+        {
+            get
+            {
+                yield return Name;
+                yield return "add_narration";
+                yield return "add_phrase";
+                yield return "confirm";
+            }
+        }
+
         public override Dictionary<string, object> GetSchema()
         {
+            return CreateAddNarrationSchema();
+        }
+
+        public override IEnumerable<Dictionary<string, object>> GetFunctionSchemas()
+        {
+            yield return CreateAddNarrationSchema();
+            yield return CreateAddPhraseSchema();
+            yield return CreateConfirmSchema();
+        }
+
+        private Dictionary<string, object> CreateAddNarrationSchema()
+        {
             return CreateFunctionSchema(
-                Name,
-                Description,
+                "add_narration",
+                "Adds narration text to the story timeline",
                 new Dictionary<string, object>
                 {
                     {
-                        "operation",
+                        "text",
                         new Dictionary<string, object>
                         {
                             { "type", "string" },
-                            { "description", "Operation" }
+                            { "description", "Narrator text to append" }
+                        }
+                    }
+                },
+                new List<string> { "text" }
+            );
+        }
+
+        private Dictionary<string, object> CreateAddPhraseSchema()
+        {
+            return CreateFunctionSchema(
+                "add_phrase",
+                "Adds a character line to the story timeline",
+                new Dictionary<string, object>
+                {
+                    {
+                        "character",
+                        new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "description", "Character name" }
                         }
                     },
-                    { "character", new Dictionary<string, object> { { "type", "string" }, { "description", "Character name" } } },
-                    { "text", new Dictionary<string, object> { { "type", "string" }, { "description", "Text" } } },
-                    { "emotion", new Dictionary<string, object> { { "type", "string" }, { "description", "Emotion" } } },
-                    
+                    {
+                        "text",
+                        new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "description", "Line that the character speaks" }
+                        }
+                    },
+                    {
+                        "emotion",
+                        new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "description", "Emotion for the line. Allowed: neutral, happy, sad, angry, fearful, disgusted, surprised" }
+                        }
+                    }
                 },
-                new List<string> { "operation" }
+                new List<string> { "character", "text", "emotion" }
+            );
+        }
+
+        private Dictionary<string, object> CreateConfirmSchema()
+        {
+            return CreateFunctionSchema(
+                "confirm",
+                "Validates and saves the generated TTS schema",
+                new Dictionary<string, object>(),
+                new List<string>()
             );
         }
 
@@ -101,10 +166,11 @@ namespace TinyGenerator.Skills
 
                 return request.Operation?.ToLowerInvariant() switch
                 {
-                    "add_narrator" => AddNarration(request.Text),
+                    "add_narration" => AddNarration(request.Text),
                     "add_phrase" => AddPhraseAutoCreate(request.Character, request.Text, request.Emotion),
+                    "set_gender" => SetGender(request.Character, request.Gender),
                     "confirm" => ConfirmSchemaAllowSave(),
-                    "describe" => SerializeResult(new { result = "Operations: add_narrator(text), add_phrase(character, text, emotion), confirm()" }),
+                    "describe" => SerializeResult(new { result = "Operations: add_narration(text), add_phrase(character, text, emotion), set_gender(character, gender), confirm()" }),
                     _ => SerializeResult(new { error = $"Unknown operation: {request.Operation}" })
                 };
             }
@@ -113,6 +179,55 @@ namespace TinyGenerator.Skills
                 CustomLogger?.Log("Error", "TtsSchemaTool", $"Error executing operation: {ex.Message}", ex.ToString());
                 return SerializeResult(new { error = ex.Message });
             }
+        }
+
+        public override Task<string> ExecuteFunctionAsync(string functionName, string input)
+        {
+            if (functionName.Equals(Name, StringComparison.OrdinalIgnoreCase))
+            {
+                return ExecuteAsync(input);
+            }
+            return functionName switch
+            {
+                "add_narration" => Task.FromResult(ExecuteAddNarration(input)),
+                "add_phrase" => Task.FromResult(ExecuteAddPhrase(input)),
+                "confirm" => Task.FromResult(ExecuteConfirm()),
+                _ => Task.FromResult(SerializeResult(new { error = $"Unknown function: {functionName}" }))
+            };
+        }
+
+        private string ExecuteAddNarration(string input)
+        {
+            var request = ParseInput<NarrationRequest>(input);
+            if (request == null)
+            {
+                return SerializeResult(new { error = "Invalid input format" });
+            }
+            LastFunctionCalled = "add_narration";
+            var result = AddNarration(request.Text);
+            LastFunctionResult = result;
+            return result;
+        }
+
+        private string ExecuteAddPhrase(string input)
+        {
+            var request = ParseInput<PhraseRequest>(input);
+            if (request == null)
+            {
+                return SerializeResult(new { error = "Invalid input format" });
+            }
+            LastFunctionCalled = "add_phrase";
+            var result = AddPhraseAutoCreate(request.Character, request.Text, request.Emotion);
+            LastFunctionResult = result;
+            return result;
+        }
+
+        private string ExecuteConfirm()
+        {
+            LastFunctionCalled = "confirm";
+            var result = ConfirmSchemaAllowSave();
+            LastFunctionResult = result;
+            return result;
         }
 
         private string AddCharacter(string? name, string? gender)
@@ -152,7 +267,7 @@ namespace TinyGenerator.Skills
             return SerializeResult(new { result = "Phrase added" });
         }
 
-        private string AddNarration(string? text)
+        internal string AddNarration(string? text)
         {
             if (string.IsNullOrWhiteSpace(text))
                 return SerializeResult(new { error = "Narration text is required" });
@@ -166,13 +281,29 @@ namespace TinyGenerator.Skills
             return SerializeResult(new { result = "Narration added" });
         }
 
+        internal string SetGender(string? character, string? gender)
+        {
+            if (string.IsNullOrWhiteSpace(character))
+                return SerializeResult(new { error = "Character name is required" });
+
+            if (string.IsNullOrWhiteSpace(gender))
+                return SerializeResult(new { error = "Gender is required" });
+
+            var existing = _schema.Characters.FirstOrDefault(c => c.Name.Equals(character, StringComparison.OrdinalIgnoreCase));
+            if (existing == null)
+                return SerializeResult(new { error = $"Character '{character}' not defined. Use add_phrase to create it first." });
+
+            existing.Gender = gender;
+            return SerializeResult(new { result = $"Gender for '{existing.Name}' set to {gender}" });
+        }
+
         private string AddPause(int seconds)
         {
             _schema.Timeline.Add(new TtsPause(seconds));
             return SerializeResult(new { result = "Pause added" });
         }
 
-        private string AddPhraseAutoCreate(string? character, string? text, string? emotion)
+        internal string AddPhraseAutoCreate(string? character, string? text, string? emotion)
         {
             if (string.IsNullOrWhiteSpace(text))
                 return SerializeResult(new { error = "Phrase text is required" });
@@ -202,7 +333,7 @@ namespace TinyGenerator.Skills
             return SerializeResult(new { result = "Phrase added" });
         }
 
-        private string ConfirmSchemaAllowSave()
+        internal string ConfirmSchemaAllowSave()
         {
             try
             {
@@ -244,6 +375,28 @@ namespace TinyGenerator.Skills
             catch (Exception ex)
             {
                 return SerializeResult(new { error = ex.Message });
+            }
+        }
+
+        public bool HasSchemaEntries => _schema.Timeline.Count > 0;
+
+        public bool TrySaveSnapshot(out string? savedPath)
+        {
+            savedPath = null;
+            if (!HasSchemaEntries)
+                return false;
+
+            try
+            {
+                Directory.CreateDirectory(_workingFolder);
+                savedPath = Path.Combine(_workingFolder, "tts_schema.json");
+                File.WriteAllText(savedPath, JsonSerializer.Serialize(_schema, DefaultOptions));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                CustomLogger?.Log("Error", "TtsSchemaTool", $"Failed to save snapshot: {ex.Message}");
+                return false;
             }
         }
 
@@ -315,7 +468,7 @@ namespace TinyGenerator.Skills
             return null;
         }
 
-            private class TtsSchemaToolRequest
+        private class TtsSchemaToolRequest
         {
             public string? Operation { get; set; }
             public string? Name { get; set; }
@@ -325,6 +478,18 @@ namespace TinyGenerator.Skills
             public string? Text { get; set; }
             public string? Emotion { get; set; }
             public int? Seconds { get; set; }
+        }
+
+        private class NarrationRequest
+        {
+            public string? Text { get; set; }
+        }
+
+        private class PhraseRequest
+        {
+            public string? Character { get; set; }
+            public string? Text { get; set; }
+            public string? Emotion { get; set; }
         }
 
         private static string ExtractStorySegment(string? promptText)

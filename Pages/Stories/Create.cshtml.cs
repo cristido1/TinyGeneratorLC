@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TinyGenerator.Services;
+using TinyGenerator.Models;
 
 namespace TinyGenerator.Pages.Stories
 {
@@ -19,12 +20,34 @@ namespace TinyGenerator.Pages.Stories
         [BindProperty]
         public string StoryText { get; set; } = string.Empty;
 
-        public IActionResult OnGet() => Page();
+        [BindProperty]
+        public int? StatusId { get; set; }
+
+        public List<StoryStatus> Statuses { get; set; } = new();
+
+        public IActionResult OnGet()
+        {
+            LoadStatuses();
+            return Page();
+        }
 
         public IActionResult OnPost()
         {
-            var id = _stories.InsertSingleStory(Prompt, StoryText);
+            LoadStatuses();
+            var id = _stories.InsertSingleStory(Prompt, StoryText, statusId: StatusId);
             return RedirectToPage("/Stories/Details", new { id = id });
+        }
+
+        private void LoadStatuses()
+        {
+            try
+            {
+                Statuses = _stories.GetAllStoryStatuses();
+            }
+            catch
+            {
+                Statuses = new List<StoryStatus>();
+            }
         }
     }
 }

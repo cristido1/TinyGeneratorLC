@@ -7,6 +7,7 @@ class ActiveAgentsManager {
     constructor() {
         this.container = document.getElementById('active-agents-container');
         this.activeBadges = new Map(); // agentId -> badge element
+        this.modelBadges = new Map(); // modelName -> badge element
         
         if (!this.container) {
             console.error('Active agents container not found');
@@ -43,15 +44,28 @@ class ActiveAgentsManager {
         connection.on('ProgressAppended', (id, message, extraClass) => {
             this.handleProgressMessage(id, message, extraClass);
         });
-        
+
+        // Stato modelli occupati
+        connection.on('BusyModelsUpdated', (models) => {
+            this.updateModelBadges(Array.isArray(models) ? models : []);
+        });
+
         connection.start()
             .then(() => {
                 console.log('Active agents manager connected to SignalR');
                 console.log('Container element:', this.container);
+                this.fetchBusyModelsSnapshot();
             })
             .catch(err => {
                 console.error('SignalR connection error:', err);
             });
+    }
+
+    fetchBusyModelsSnapshot() {
+        fetch('/api/v1/models/busy')
+            .then(resp => resp.ok ? resp.json() : [])
+            .then(models => this.updateModelBadges(Array.isArray(models) ? models : []))
+            .catch(err => console.warn('Failed to fetch busy models snapshot', err));
     }
     
     handleProgressMessage(id, message, extraClass) {
@@ -172,7 +186,52 @@ class ActiveAgentsManager {
             this.activeBadges.delete(agentId);
         }, 300);
     }
-    
+
+    updateModelBadges(models) {
+        const normalized = new Set(models.map(m => (m || '').trim()).filter(Boolean));
+
+        Array.from(this.modelBadges.keys()).forEach(model => {
+            if (!normalized.has(model)) {
+                this.removeModelBadge(model);
+            }
+        });
+
+        normalized.forEach(model => {
+            if (!this.modelBadges.has(model)) {
+                this.addModelBadge(model);
+            }
+        });
+    }
+
+    addModelBadge(modelName) {
+        if (!modelName) return;
+        const badge = document.createElement('div');
+        badge.className = 'agent-badge model-badge';
+        badge.innerHTML = `
+            <div class="agent-badge-icon icon-busy">🚀</div>
+            <div class="agent-badge-content">
+                <div class="agent-badge-name">${this.escapeHtml(modelName)}</div>
+                <div class="agent-badge-status">In progress</div>
+            </div>
+        `;
+
+        this.container.appendChild(badge);
+        this.modelBadges.set(modelName, badge);
+    }
+
+    removeModelBadge(modelName) {
+        const badge = this.modelBadges.get(modelName);
+        if (!badge) return;
+
+        badge.classList.add('removing');
+        setTimeout(() => {
+            if (badge.parentNode) {
+                badge.parentNode.removeChild(badge);
+            }
+            this.modelBadges.delete(modelName);
+        }, 300);
+    }
+
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
@@ -193,6 +252,9 @@ class ActiveAgentsManager {
     clearAll() {
         this.activeBadges.forEach((badge, id) => {
             this.removeBadge(id);
+        });
+        this.modelBadges.forEach((badge, name) => {
+            this.removeModelBadge(name);
         });
     }
 }

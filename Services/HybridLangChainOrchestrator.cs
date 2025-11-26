@@ -16,6 +16,7 @@ namespace TinyGenerator.Services
     {
         private readonly ICustomLogger? _logger;
         private readonly Dictionary<string, BaseLangChainTool> _langChainTools;
+        private readonly Dictionary<string, BaseLangChainTool> _functionToolMap;
         private readonly Dictionary<string, object> _fallbackSkillsRegistry; // SK legacy skills
         private List<string> _conversationHistory;
 
@@ -23,6 +24,7 @@ namespace TinyGenerator.Services
         {
             _logger = logger;
             _langChainTools = new Dictionary<string, BaseLangChainTool>(StringComparer.OrdinalIgnoreCase);
+            _functionToolMap = new Dictionary<string, BaseLangChainTool>(StringComparer.OrdinalIgnoreCase);
             _fallbackSkillsRegistry = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             _conversationHistory = new List<string>();
         }
@@ -33,6 +35,11 @@ namespace TinyGenerator.Services
         public void RegisterTool(BaseLangChainTool tool)
         {
             _langChainTools[tool.Name] = tool;
+            RemoveFunctionMappings(tool);
+            foreach (var functionName in tool.FunctionNames)
+            {
+                _functionToolMap[functionName] = tool;
+            }
             _logger?.Log("Info", "HybridOrchestrator", $"Registered LangChain tool: {tool.Name}");
         }
 
@@ -43,6 +50,7 @@ namespace TinyGenerator.Services
         {
             if (_langChainTools.Remove(toolName))
             {
+                RemoveFunctionMappings(toolName);
                 _logger?.Log("Info", "HybridOrchestrator", $"Removed LangChain tool: {toolName}");
             }
             else
@@ -69,10 +77,16 @@ namespace TinyGenerator.Services
             try
             {
                 // Try LangChain tools first (preferred)
-                if (_langChainTools.TryGetValue(toolName, out var tool))
+                if (_functionToolMap.TryGetValue(toolName, out var tool))
                 {
                     _logger?.Log("Info", "HybridOrchestrator", $"Executing LangChain tool: {toolName}");
-                    return await tool.ExecuteAsync(jsonInput);
+                    return await tool.ExecuteFunctionAsync(toolName, jsonInput);
+                }
+
+                if (_langChainTools.TryGetValue(toolName, out var fallbackTool))
+                {
+                    _logger?.Log("Info", "HybridOrchestrator", $"Executing LangChain tool: {toolName}");
+                    return await fallbackTool.ExecuteFunctionAsync(toolName, jsonInput);
                 }
 
                 // Fallback to SK legacy skills
@@ -92,6 +106,39 @@ namespace TinyGenerator.Services
             }
         }
 
+        public T? GetTool<T>(string toolName) where T : BaseLangChainTool
+        {
+            if (_langChainTools.TryGetValue(toolName, out var tool))
+            {
+                return tool as T;
+            }
+            return null;
+        }
+
+        private void RemoveFunctionMappings(BaseLangChainTool tool)
+        {
+            var removeKeys = _functionToolMap
+                .Where(kvp => kvp.Value == tool)
+                .Select(kvp => kvp.Key)
+                .ToList();
+            foreach (var key in removeKeys)
+            {
+                _functionToolMap.Remove(key);
+            }
+        }
+
+        private void RemoveFunctionMappings(string toolName)
+        {
+            var removeKeys = _functionToolMap
+                .Where(kvp => kvp.Value.Name.Equals(toolName, StringComparison.OrdinalIgnoreCase))
+                .Select(kvp => kvp.Key)
+                .ToList();
+            foreach (var key in removeKeys)
+            {
+                _functionToolMap.Remove(key);
+            }
+        }
+
         /// <summary>
         /// Get available tools as JSON schema for model function calling.
         /// </summary>
@@ -103,7 +150,13 @@ namespace TinyGenerator.Services
             {
                 try
                 {
-                    schemas.Add(tool.GetSchema());
+                    if (tool.ExposeToModel)
+                    {
+                        foreach (var schema in tool.GetFunctionSchemas())
+                        {
+                            schemas.Add(schema);
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {

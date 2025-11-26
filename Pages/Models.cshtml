@@ -73,10 +73,18 @@
         <tbody>
             @foreach (var m in Model.Models ?? new System.Collections.Generic.List<TinyGenerator.Models.ModelInfo>())
             {
+                var hasTestResults = m.TestDurationSeconds.HasValue && m.TestDurationSeconds.Value > 0;
+                Func<double, string> renderScore = score =>
+                {
+                    if (!hasTestResults) return "-";
+                    return score > 0
+                        ? score.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
+                        : "0";
+                };
+
                 <tr data-model="@m.Name">
                     <td class="dt-control"></td>
                     <td>@m.Name</td>
-                    <td>@(m.Note ?? "")</td>
                     <td>
                         @if (m.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
                         {
@@ -91,17 +99,18 @@
                             <span class="badge bg-secondary">@m.Provider</span>
                         }
                     </td>
+                    <td>@(m.Note ?? "")</td>
                     <td>@(m.IsLocal ? "Yes" : "No")</td>
                     <td>@m.MaxContext</td>
                     <td>@m.ContextToUse</td>
-                    <td class="text-center">@(m.TotalScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.TotalScore) : "-")</td>
-                    <td class="text-center">@(m.BaseScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.BaseScore) : "-")</td>
-                    <td class="text-center">@(m.TextEvalScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.TextEvalScore) : "-")</td>
-                    <td class="text-center">@(m.WriterScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.WriterScore) : "-")</td>
-                    <td class="text-center">@(m.TtsScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.TtsScore) : "-")</td>
-                    <td class="text-center">@(m.MusicScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.MusicScore) : "-")</td>
-                    <td class="text-center">@(m.FxScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.FxScore) : "-")</td>
-                    <td class="text-center">@(m.AmbientScore > 0 ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}", m.AmbientScore) : "-")</td>
+                    <td class="text-center">@renderScore(m.TotalScore)</td>
+                    <td class="text-center">@renderScore(m.BaseScore)</td>
+                    <td class="text-center">@renderScore(m.TextEvalScore)</td>
+                    <td class="text-center">@renderScore(m.WriterScore)</td>
+                    <td class="text-center">@renderScore(m.TtsScore)</td>
+                    <td class="text-center">@renderScore(m.MusicScore)</td>
+                    <td class="text-center">@renderScore(m.FxScore)</td>
+                    <td class="text-center">@renderScore(m.AmbientScore)</td>
                     <td class="text-center">@(m.NoTools ? "✓" : "")</td>
                     <td class="text-center">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}", m.TestDurationSeconds.Value) : "-")</td>
                     <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</td>

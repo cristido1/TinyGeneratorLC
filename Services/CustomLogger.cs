@@ -40,7 +40,13 @@ namespace TinyGenerator.Services
 
         public void Log(string level, string category, string message, string? exception = null, string? state = null)
         {
-            if (_disposed || !_otherLogs) return;
+            if (_disposed) return;
+
+            // Broadcast to live monitor regardless of database logging setting
+            BroadcastLiveLog(level, category, message);
+
+            if (!ShouldPersist(category))
+                return;
 
             var entry = new LogEntry
             {
@@ -60,17 +66,6 @@ namespace TinyGenerator.Services
             {
                 _buffer.Add(entry);
                 if (_buffer.Count >= _batchSize) shouldFlush = true;
-            }
-
-            // Broadcast important log categories to Live Monitor via ProgressService
-            // Categories like PromptRendering, FunctionInvocation, ModelCompletion should appear in real-time
-            if (_progress != null && (category == "PromptRendering" || category == "FunctionInvocation" || category == "ModelCompletion"))
-            {
-                try
-                {
-                    _progress.Append("live-logs", $"[{category}] {message}");
-                }
-                catch { /* best-effort */ }
             }
 
             if (shouldFlush)
@@ -164,6 +159,11 @@ namespace TinyGenerator.Services
 
                 // Write via DatabaseService in a single batch
                 await _db.InsertLogsAsync(toWrite).ConfigureAwait(false);
+
+                if (_progress != null)
+                {
+                    await _progress.BroadcastLogsAsync(toWrite).ConfigureAwait(false);
+                }
             }
             catch (Exception)
             {
@@ -206,6 +206,50 @@ namespace TinyGenerator.Services
             catch { }
 
             _writeLock?.Dispose();
+        }
+
+        private void BroadcastLiveLog(string? level, string? category, string? message)
+        {
+            if (_progress == null) return;
+
+            // Only forward categories that are useful to follow in real-time
+            if (category != "PromptRendering" && category != "FunctionInvocation" && category != "ModelCompletion")
+                return;
+
+            var safeLevel = string.IsNullOrWhiteSpace(level) ? "Information" : level;
+            var safeCategory = string.IsNullOrWhiteSpace(category) ? "Log" : category;
+            var safeMessage = message ?? string.Empty;
+
+            try
+            {
+                _progress.Append("live-logs", $"[{safeLevel}][{safeCategory}] {safeMessage}");
+            }
+            catch
+            {
+                // best-effort broadcast
+            }
+        }
+
+        private bool ShouldPersist(string? category)
+        {
+            var cat = category ?? string.Empty;
+
+            // Always persist test results regardless of configuration
+            if (string.Equals(cat, "LangChainTestService", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cat, "TestResult", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (_otherLogs) return true;
+            if (!_logRequestResponse) return false;
+
+            return cat == "ModelPrompt"
+                || cat == "ModelCompletion"
+                || cat == "ModelRequest"
+                || cat == "ModelResponse"
+                || cat == "PromptRendering"
+                || cat == "FunctionInvocation";
         }
     }
 }

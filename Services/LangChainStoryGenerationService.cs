@@ -52,7 +52,7 @@ namespace TinyGenerator.Services
             _memoryService = memoryService ?? throw new ArgumentNullException(nameof(memoryService));
             _logger = logger;
             _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-            _toolFactory = new LangChainToolFactory(memoryService, database, logger);
+            _toolFactory = new LangChainToolFactory(memoryService, database, logger, null, () => storiesService, null);
         }
 
         /// <summary>

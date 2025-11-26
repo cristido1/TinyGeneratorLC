@@ -26,18 +26,21 @@ namespace TinyGenerator.Services
         private readonly DatabaseService _database;
         private readonly ICustomLogger? _logger;
         private readonly LangChainToolFactory _toolFactory;
+        private readonly ProgressService? _progress;
         private readonly Dictionary<int, HybridLangChainOrchestrator> _agentOrchestrators;
 
         public LangChainKernelFactory(
             IConfiguration config,
             DatabaseService database,
             ICustomLogger? logger = null,
-            LangChainToolFactory? toolFactory = null)
+            LangChainToolFactory? toolFactory = null,
+            ProgressService? progressService = null)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _logger = logger;
             _toolFactory = toolFactory ?? throw new ArgumentNullException(nameof(toolFactory));
+            _progress = progressService;
             _agentOrchestrators = new Dictionary<int, HybridLangChainOrchestrator>();
         }
 
@@ -279,7 +282,7 @@ namespace TinyGenerator.Services
                 _logger?.Log("Info", "LangChainKernelFactory",
                     $"Creating ChatBridge for model '{model}' with provider '{modelInfo.Provider}' and endpoint '{endpoint}'");
 
-                return new LangChainChatBridge(endpoint, model, apiKey, null, _logger);
+                return new LangChainChatBridge(endpoint, model, apiKey, null, _logger, _progress);
             }
             catch (Exception ex)
             {

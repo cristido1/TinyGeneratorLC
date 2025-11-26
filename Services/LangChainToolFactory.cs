@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Extensions.Logging;
 using TinyGenerator.Skills;
 using TinyGenerator.Services;
@@ -16,20 +17,23 @@ namespace TinyGenerator.Services
         private readonly DatabaseService? _database;
         private readonly ICustomLogger? _logger;
         private readonly HttpClient? _httpClient;
-        private readonly StoriesService? _storiesService;
+        private readonly Func<StoriesService?>? _storiesAccessor;
+        private readonly TtsService? _ttsService;
 
         public LangChainToolFactory(
             PersistentMemoryService? memoryService = null,
             DatabaseService? database = null,
             ICustomLogger? logger = null,
             HttpClient? httpClient = null,
-            StoriesService? storiesService = null)
+            Func<StoriesService?>? storiesAccessor = null,
+            TtsService? ttsService = null)
         {
             _memoryService = memoryService;
             _database = database;
             _logger = logger;
             _httpClient = httpClient;
-            _storiesService = storiesService;
+            _storiesAccessor = storiesAccessor;
+            _ttsService = ttsService;
         }
 
         /// <summary>
@@ -124,9 +128,14 @@ namespace TinyGenerator.Services
             if (allowedSet.Contains("storyevaluator"))
                 RegisterStoryEvaluatorTool(orchestrator, modelId, agentId);
 
+            var wantsVoiceTool = allowedSet.Contains("voicechoser") || allowedSet.Contains("voicechooser");
             // Register TtsSchemaTool if working folder provided (TTS test context)
             if (!string.IsNullOrWhiteSpace(ttsWorkingFolder))
+            {
                 RegisterTtsSchemaTool(orchestrator, modelId, agentId, ttsWorkingFolder, ttsStoryText);
+                if (wantsVoiceTool)
+                    RegisterVoiceChoserTool(orchestrator, modelId, agentId, ttsWorkingFolder);
+            }
 
             _logger?.Log("Info", "ToolFactory", $"Created orchestrator with {orchestrator.GetToolSchemas().Count} tools");
             return orchestrator;
@@ -340,13 +349,20 @@ namespace TinyGenerator.Services
         {
             try
             {
-                if (_storiesService == null || _database == null)
+                if (_database == null)
+                {
+                    _logger?.Log("Warn", "ToolFactory", "Database not available, skipping StoryWriterTool");
+                    return;
+                }
+
+                var storiesService = _storiesAccessor?.Invoke();
+                if (storiesService == null)
                 {
                     _logger?.Log("Warn", "ToolFactory", "StoriesService or DatabaseService not available, skipping StoryWriterTool");
                     return;
                 }
 
-                var tool = new StoryWriterTool(_storiesService, _database, _logger)
+                var tool = new StoryWriterTool(storiesService, _database, _logger)
                 {
                     ModelId = modelId,
                     AgentId = agentId
@@ -393,6 +409,30 @@ namespace TinyGenerator.Services
             catch (Exception ex)
             {
                 _logger?.Log("Error", "ToolFactory", $"Failed to register TtsSchemaTool: {ex.Message}");
+            }
+        }
+
+        private void RegisterVoiceChoserTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId, string workingFolder)
+        {
+            try
+            {
+                if (_ttsService == null)
+                {
+                    _logger?.Log("Warn", "ToolFactory", "TtsService not available, skipping VoiceChoserTool");
+                    return;
+                }
+
+                var tool = new VoiceChoserTool(workingFolder, _ttsService, _logger)
+                {
+                    ModelId = modelId,
+                    AgentId = agentId
+                };
+                orchestrator.RegisterTool(tool);
+                _logger?.Log("Info", "ToolFactory", $"Registered VoiceChoserTool with folder: {workingFolder}");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "ToolFactory", $"Failed to register VoiceChoserTool: {ex.Message}");
             }
         }
 

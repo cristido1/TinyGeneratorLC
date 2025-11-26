@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
 using TinyGenerator.Hubs;
+using TinyGenerator.Models;
 
 namespace TinyGenerator.Services
 {
@@ -13,6 +15,7 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, List<string>> _store = new();
         private readonly ConcurrentDictionary<string, bool> _completed = new();
         private readonly ConcurrentDictionary<string, string?> _result = new();
+        private readonly ConcurrentDictionary<string, int> _busyModels = new(StringComparer.OrdinalIgnoreCase);
         private readonly IHubContext<ProgressHub>? _hubContext;
         private readonly Microsoft.Extensions.Logging.ILogger<ProgressService>? _logger;
 
@@ -132,5 +135,68 @@ namespace TinyGenerator.Services
 
         public void HideAgentActivity(string agentId) 
             => HideAgentActivityAsync(agentId).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public async Task BroadcastLogsAsync(IEnumerable<LogEntry> entries)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("LogEntriesAppended", entries);
+            }
+            catch (Exception ex)
+            {
+                try { _logger?.LogWarning(ex, "Failed broadcasting LogEntriesAppended"); } catch { }
+            }
+        }
+
+        public void BroadcastLogs(IEnumerable<LogEntry> entries)
+            => BroadcastLogsAsync(entries).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public Task ModelRequestStartedAsync(string modelName)
+        {
+            if (string.IsNullOrWhiteSpace(modelName)) return Task.CompletedTask;
+            _busyModels.AddOrUpdate(modelName, 1, (_, current) => current + 1);
+            return BroadcastBusyModelsAsync();
+        }
+
+        public Task ModelRequestFinishedAsync(string modelName)
+        {
+            if (string.IsNullOrWhiteSpace(modelName)) return Task.CompletedTask;
+
+            _busyModels.AddOrUpdate(modelName, 0, (_, current) =>
+            {
+                var next = current - 1;
+                return next < 0 ? 0 : next;
+            });
+
+            if (_busyModels.TryGetValue(modelName, out var remaining) && remaining <= 0)
+            {
+                _busyModels.TryRemove(modelName, out _);
+            }
+
+            return BroadcastBusyModelsAsync();
+        }
+
+        public void ModelRequestStarted(string modelName)
+            => ModelRequestStartedAsync(modelName).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public void ModelRequestFinished(string modelName)
+            => ModelRequestFinishedAsync(modelName).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public IReadOnlyList<string> GetBusyModelsSnapshot()
+        {
+            return _busyModels
+                .Where(kvp => kvp.Value > 0)
+                .Select(kvp => kvp.Key)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private Task BroadcastBusyModelsAsync()
+        {
+            if (_hubContext == null) return Task.CompletedTask;
+            var snapshot = GetBusyModelsSnapshot();
+            return _hubContext.Clients.All.SendAsync("BusyModelsUpdated", snapshot);
+        }
     }
 }

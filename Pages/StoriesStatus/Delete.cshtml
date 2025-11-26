@@ -1,0 +1,30 @@
+@page "{id:int}"
+@model TinyGenerator.Pages.StoriesStatus.DeleteModel
+@{
+    ViewData["Title"] = "Delete Story Status";
+}
+
+@* Title rendered by layout using ViewData["Title"] *@
+
+@if (Model.Status == null)
+{
+    <div class="alert alert-warning">Story status not found.</div>
+}
+else
+{
+    <div class="card">
+        <div class="card-body">
+            <h5>@Model.Status.Code</h5>
+            <p><strong>Description:</strong> @Model.Status.Description</p>
+            <p><strong>Step:</strong> @Model.Status.Step</p>
+            <p><strong>Color:</strong> @Model.Status.Color</p>
+            <p><strong>Operation Type:</strong> @Model.Status.OperationType</p>
+            <p><strong>Agent Type:</strong> @Model.Status.AgentType</p>
+            <p><strong>Function Name:</strong> @Model.Status.FunctionName</p>
+            <form method="post">
+                <button type="submit" class="btn btn-danger">Delete</button>
+                <a asp-page="./Index" class="btn btn-secondary">Cancel</a>
+            </form>
+        </div>
+    </div>
+}

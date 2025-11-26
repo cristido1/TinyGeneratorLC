@@ -18,7 +18,15 @@ namespace TinyGenerator.Models
         public double Score { get; set; }
         public bool Approved { get; set; }
         public string Status { get; set; } = string.Empty;
+        public int? StatusId { get; set; }
+        public string? StatusDescription { get; set; }
+        public string? StatusColor { get; set; }
+        public string? StatusOperationType { get; set; }
+        public string? StatusAgentType { get; set; }
+        public string? StatusFunctionName { get; set; }
+        public int? StatusStep { get; set; }
         public string? Folder { get; set; }
+        public bool HasVoiceSource { get; set; }
 
         // Test information (if story was generated from a test)
         public int? TestRunId { get; set; }

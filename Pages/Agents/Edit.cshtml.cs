@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.Mvc;
 using TinyGenerator.Services;
@@ -17,7 +18,7 @@ namespace TinyGenerator.Pages.Agents
         public string? SelectedModelName { get; set; }
         [BindProperty]
         public string[] SelectedSkills { get; set; } = new string[] { };
-        public string[] AvailableSkills { get; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "ttsschema", "evaluator", "story" };
+        public string[] AvailableSkills { get; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "ttsschema", "voicechoser", "evaluator", "story" };
 
         public EditModel(DatabaseService database)
         {
@@ -66,8 +67,22 @@ namespace TinyGenerator.Pages.Agents
                 // Ensure Agent.Skills is serialised from SelectedSkills
                 try { Agent.Skills = System.Text.Json.JsonSerializer.Serialize(SelectedSkills ?? new string[] {}); } catch { Agent.Skills = "[]"; }
 
-                // Model ID should be set directly via UI input
-                try { Agent.ModelId = string.IsNullOrWhiteSpace(SelectedModelName) ? null : null; } catch { }
+                // Resolve model ID from the selected model name (names are shown to the user in the dropdown)
+                if (string.IsNullOrWhiteSpace(SelectedModelName))
+                {
+                    Agent.ModelId = null;
+                }
+                else
+                {
+                    var selected = Models.FirstOrDefault(m => string.Equals(m.Name, SelectedModelName, StringComparison.OrdinalIgnoreCase))
+                        ?? _database.GetModelInfo(SelectedModelName);
+                    if (selected == null)
+                    {
+                        ModelState.AddModelError("SelectedModelName", "Selected model could not be found.");
+                        return Page();
+                    }
+                    Agent.ModelId = selected.Id;
+                }
                 if (!string.IsNullOrWhiteSpace(Agent.Skills))
                 {
                     var doc = System.Text.Json.JsonDocument.Parse(Agent.Skills);

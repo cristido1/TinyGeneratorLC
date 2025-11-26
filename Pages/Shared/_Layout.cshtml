@@ -206,6 +206,11 @@
             align-items: center;
             gap: 8px;
         }
+
+        .agent-badge.model-badge {
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            box-shadow: 0 3px 8px rgba(37, 99, 235, 0.4);
+        }
         
         .agent-badge::before {
             content: '';
@@ -222,6 +227,10 @@
             font-size: 16px;
             animation: thinking 1.5s ease-in-out infinite;
             z-index: 1;
+        }
+
+        .agent-badge-icon.icon-busy {
+            animation: pulseBusy 1.4s ease-in-out infinite;
         }
         
         .agent-badge-content {
@@ -269,6 +278,11 @@
                 transform: scale(1.15) rotate(8deg);
             }
         }
+
+        @@keyframes pulseBusy {
+            0%, 100% { transform: scale(1); opacity: 0.85; }
+            50% { transform: scale(1.2); opacity: 1; }
+        }
         
         .agent-badge.removing {
             animation: slideOutLeft 0.3s ease-in forwards;
@@ -291,6 +305,10 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+
+        .agent-badge.model-badge .agent-badge-status {
+            opacity: 1;
         }
     </style>
     

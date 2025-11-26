@@ -77,7 +77,10 @@ builder.Services.AddSingleton<NotificationService>();
 // Stories persistence service (updated to not require AgentService or deprecated KernelFactory)
 builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetRequiredService<DatabaseService>(), 
-    sp.GetRequiredService<TtsService>(), 
+    sp.GetRequiredService<TtsService>(),
+    sp.GetService<ILangChainKernelFactory>(),
+    sp.GetService<ICustomLogger>(),
+    sp.GetService<ProgressService>(),
     sp.GetService<ILogger<StoriesService>>()));
 
 // DEPRECATED - These services require SK IKernelFactory which is no longer registered
@@ -94,7 +97,8 @@ builder.Services.AddSingleton<LangChainToolFactory>(sp => new LangChainToolFacto
     sp.GetRequiredService<DatabaseService>(),
     sp.GetService<ICustomLogger>(),
     sp.GetRequiredService<HttpClient>(),
-    sp.GetRequiredService<StoriesService>()));
+    () => sp.GetRequiredService<StoriesService>(),
+    sp.GetRequiredService<TtsService>()));
 
 // LangChain kernel factory (creates and caches orchestrators)
 builder.Services.AddSingleton<LangChainKernelFactory>(sp => 
@@ -103,7 +107,8 @@ builder.Services.AddSingleton<LangChainKernelFactory>(sp =>
         builder.Configuration,
         sp.GetRequiredService<DatabaseService>(),
         sp.GetService<ICustomLogger>(),
-        sp.GetRequiredService<LangChainToolFactory>());
+        sp.GetRequiredService<LangChainToolFactory>(),
+        sp.GetService<ProgressService>());
     return factory;
 });
 
@@ -260,5 +265,6 @@ app.MapControllers();
 
 // Minimal API endpoint for story evaluations (convenience for AJAX/UI)
 app.MapGet("/api/v1/stories/{id:int}/evaluations", (int id, TinyGenerator.Services.StoriesService s) => Results.Json(s.GetEvaluationsForStory(id)));
+app.MapGet("/api/v1/models/busy", (ProgressService progress) => Results.Json(progress.GetBusyModelsSnapshot()));
 
 app.Run();

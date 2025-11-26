@@ -17,7 +17,7 @@
         <div class="col-md-6">
             <label class="form-label">Role</label>
             @{ 
-                var roles = new List<string> { "coordinator", "writer", "story_evaluator", "musician", "sfx", "ambient", "tts", "mixer" };
+                var roles = new List<string> { "coordinator", "writer", "story_evaluator", "musician", "sfx", "ambient", "tts_json","tts_voice", "mixer" };
                 if (!string.IsNullOrWhiteSpace(Model.Agent.Role) && !roles.Contains(Model.Agent.Role)) { roles.Insert(0, Model.Agent.Role); }
             }
             <select asp-for="Agent.Role" class="form-select">

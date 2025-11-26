@@ -65,7 +65,7 @@ namespace TinyGenerator.Skills
                         new Dictionary<string, object>
                         {
                             { "type", "string" },
-                            { "description", "Story status (for update_story)" }
+                            { "description", "Story status code (stories_status.code value used for create/update)" }
                         }
                     }
                 },
@@ -105,8 +105,18 @@ namespace TinyGenerator.Skills
             try
             {
                 var modelInfo = ModelName ?? (_database != null && ModelId.HasValue ? _database.GetModelInfoById(ModelId.Value)?.Name : null) ?? string.Empty;
-                var id = _stories.InsertSingleStory(string.Empty, request.Story ?? string.Empty, ModelId, AgentId, 0.0, null, 0, null, memoryKey: null);
-                var obj = new { id, story = request.Story, model = modelInfo, model_id = ModelId, agent_id = AgentId };
+                int? statusId = null;
+                if (!string.IsNullOrWhiteSpace(request.Status))
+                {
+                    statusId = ResolveStatusId(request.Status);
+                    if (statusId == null)
+                    {
+                        return SerializeResult(new { error = $"Unknown status code '{request.Status}'" });
+                    }
+                }
+
+                var id = _stories.InsertSingleStory(string.Empty, request.Story ?? string.Empty, ModelId, AgentId, 0.0, null, 0, statusId, memoryKey: null);
+                var obj = new { id, story = request.Story, model = modelInfo, model_id = ModelId, agent_id = AgentId, status = request.Status, status_id = statusId };
                 LastResult = JsonSerializer.Serialize(obj);
                 return LastResult;
             }
@@ -140,7 +150,9 @@ namespace TinyGenerator.Skills
                     eval = row.Eval,
                     score = row.Score,
                     approved = row.Approved,
-                    status = row.Status
+                    status = row.Status,
+                    status_id = row.StatusId,
+                    status_description = row.StatusDescription
                 };
                 LastResult = JsonSerializer.Serialize(obj);
                 return LastResult;
@@ -163,10 +175,31 @@ namespace TinyGenerator.Skills
                     return SerializeResult(new { error = "not found", id = request.Id });
 
                 var newStory = request.Story ?? existing.Story;
-                var newStatus = request.Status ?? existing.Status;
-                _stories.UpdateStoryById(request.Id.Value, newStory, status: newStatus);
+                int? statusId = existing.StatusId;
+                var statusCode = existing.Status;
+                var statusProvided = request.Status != null;
+                if (statusProvided)
+                {
+                    if (string.IsNullOrWhiteSpace(request.Status))
+                    {
+                        statusId = null;
+                        statusCode = string.Empty;
+                    }
+                    else
+                    {
+                        var resolved = ResolveStatusId(request.Status);
+                        if (resolved == null)
+                        {
+                            return SerializeResult(new { error = $"Unknown status code '{request.Status}'" });
+                        }
+                        statusId = resolved;
+                        statusCode = request.Status;
+                    }
+                }
 
-                var obj = new { id = request.Id, story = newStory, status = newStatus };
+                _stories.UpdateStoryById(request.Id.Value, newStory, statusId: statusId, updateStatus: statusProvided);
+
+                var obj = new { id = request.Id, story = newStory, status = statusCode, status_id = statusId };
                 LastResult = JsonSerializer.Serialize(obj);
                 return LastResult;
             }
@@ -198,6 +231,18 @@ namespace TinyGenerator.Skills
             public long? Id { get; set; }
             public string? Story { get; set; }
             public string? Status { get; set; }
+        }
+
+        private int? ResolveStatusId(string? statusCode)
+        {
+            try
+            {
+                return _stories.ResolveStatusId(statusCode);
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }

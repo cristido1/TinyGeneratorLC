@@ -1192,22 +1192,24 @@ SET TotalScore = (
         var aidA = (int?)null;
         try { aidA = GetAgentIdByName("WriterA"); } catch { }
         var charCountA = (r.StoryA ?? string.Empty).Length;
-        var sqlA = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@st,@mid,@aid);";
-        conn.Execute(sqlA, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryA ?? string.Empty, cc = charCountA, e = r.EvalA ?? string.Empty, s = r.ScoreA, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, st = string.IsNullOrEmpty(r.Approved) ? "rejected" : "approved", mid = midA, aid = aidA });
+        var defaultStatusCode = string.IsNullOrEmpty(r.Approved) ? "rejected" : "approved";
+        var defaultStatusId = ResolveStoryStatusId(conn, defaultStatusCode);
+        var sqlA = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@mid,@aid);";
+        conn.Execute(sqlA, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryA ?? string.Empty, cc = charCountA, e = r.EvalA ?? string.Empty, s = r.ScoreA, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, stid = defaultStatusId, mid = midA, aid = aidA });
 
         var midB = (long?)null;
         var aidB = (int?)null;
         try { aidB = GetAgentIdByName("WriterB"); } catch { }
         var charCountB = (r.StoryB ?? string.Empty).Length;
-        var sqlB = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@st,@mid,@aid); SELECT last_insert_rowid();";
-        var idRowB = conn.ExecuteScalar<long>(sqlB, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryB ?? string.Empty, cc = charCountB, e = r.EvalB ?? string.Empty, s = r.ScoreB, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, st = string.IsNullOrEmpty(r.Approved) ? "rejected" : "approved", mid = midB, aid = aidB });
+        var sqlB = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@mid,@aid); SELECT last_insert_rowid();";
+        var idRowB = conn.ExecuteScalar<long>(sqlB, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryB ?? string.Empty, cc = charCountB, e = r.EvalB ?? string.Empty, s = r.ScoreB, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, stid = defaultStatusId, mid = midB, aid = aidB });
 
         var midC = (long?)null;
         var aidC = (int?)null;
         try { aidC = GetAgentIdByName("WriterC"); } catch { }
         var charCountC = (r.StoryC ?? string.Empty).Length;
-        var sqlC = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@st,@mid,@aid); SELECT last_insert_rowid();";
-        var idRowC = conn.ExecuteScalar<long>(sqlC, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryC ?? string.Empty, cc = charCountC, e = r.EvalC ?? string.Empty, s = r.ScoreC, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, st = string.IsNullOrEmpty(r.Approved) ? "rejected" : "approved", mid = midC, aid = aidC });
+        var sqlC = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@mid,@aid); SELECT last_insert_rowid();";
+        var idRowC = conn.ExecuteScalar<long>(sqlC, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryC ?? string.Empty, cc = charCountC, e = r.EvalC ?? string.Empty, s = r.ScoreC, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, stid = defaultStatusId, mid = midC, aid = aidC });
         var finalId = idRowC == 0 ? idRowB : idRowC;
         return finalId;
     }
@@ -1216,8 +1218,9 @@ SET TotalScore = (
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Timestamp, s.prompt AS Prompt, s.story AS Story, s.char_count AS CharCount, m.name AS Model, a.name AS Agent, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status AS Status, s.folder AS Folder 
+        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Timestamp, s.prompt AS Prompt, s.story AS Story, s.char_count AS CharCount, m.name AS Model, a.name AS Agent, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status_id AS StatusId, COALESCE(ss.code, '') AS Status, ss.description AS StatusDescription, ss.color AS StatusColor, ss.step AS StatusStep, ss.operation_type AS StatusOperationType, ss.agent_type AS StatusAgentType, ss.function_name AS StatusFunctionName, s.folder AS Folder 
                     FROM stories s 
+                    LEFT JOIN stories_status ss ON s.status_id = ss.id
                     LEFT JOIN models m ON s.model_id = m.id 
                     LEFT JOIN agents a ON s.agent_id = a.id 
                     ORDER BY s.id DESC";
@@ -1228,7 +1231,7 @@ SET TotalScore = (
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Timestamp, s.prompt AS Prompt, s.story AS Story, s.char_count AS CharCount, m.name AS Model, a.name AS Agent, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status AS Status, s.folder AS Folder FROM stories s LEFT JOIN models m ON s.model_id = m.id LEFT JOIN agents a ON s.agent_id = a.id WHERE s.id = @id LIMIT 1";
+        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Timestamp, s.prompt AS Prompt, s.story AS Story, s.char_count AS CharCount, m.name AS Model, a.name AS Agent, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status_id AS StatusId, COALESCE(ss.code, '') AS Status, ss.description AS StatusDescription, ss.color AS StatusColor, ss.step AS StatusStep, ss.operation_type AS StatusOperationType, ss.agent_type AS StatusAgentType, ss.function_name AS StatusFunctionName, s.folder AS Folder FROM stories s LEFT JOIN stories_status ss ON s.status_id = ss.id LEFT JOIN models m ON s.model_id = m.id LEFT JOIN agents a ON s.agent_id = a.id WHERE s.id = @id LIMIT 1";
         var row = conn.QueryFirstOrDefault<TinyGenerator.Models.StoryRecord>(sql, new { id = id });
         if (row == null) return null;
         if (row.Approved) row.Approved = true; // Ensure boolean conversion
@@ -1258,7 +1261,7 @@ SET TotalScore = (
         return (null, null);
     }
 
-    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, string? status = null, string? memoryKey = null)
+    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -1276,9 +1279,22 @@ SET TotalScore = (
         }
         
         var charCount = (story ?? string.Empty).Length;
-        var sql = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status, folder, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@st,@folder,@mid,@aid); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, new { gid = genId, mk = memoryKey ?? genId, ts = ts, p = prompt ?? string.Empty, c = story ?? string.Empty, cc = charCount, mid = modelId, aid = agentId, e = eval ?? string.Empty, s = score, ap = approved, st = status ?? string.Empty, folder = folder });
+        var sql = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, folder, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@folder,@mid,@aid); SELECT last_insert_rowid();";
+        var id = conn.ExecuteScalar<long>(sql, new { gid = genId, mk = memoryKey ?? genId, ts = ts, p = prompt ?? string.Empty, c = story ?? string.Empty, cc = charCount, mid = modelId, aid = agentId, e = eval ?? string.Empty, s = score, ap = approved, stid = statusId, folder = folder });
         return id;
+    }
+
+    private int? ResolveStoryStatusId(IDbConnection conn, string? statusCode)
+    {
+        if (conn == null || string.IsNullOrWhiteSpace(statusCode)) return null;
+        try
+        {
+            return conn.ExecuteScalar<int?>("SELECT id FROM stories_status WHERE code = @code LIMIT 1", new { code = statusCode });
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private string SanitizeFolderName(string name)
@@ -1292,7 +1308,7 @@ SET TotalScore = (
         return name.Trim().Replace(" ", "_").ToLowerInvariant();
     }
 
-    public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, string? status = null)
+    public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -1307,7 +1323,11 @@ SET TotalScore = (
         }
         if (modelId.HasValue) { updates.Add("model_id = @model_id"); parms["model_id"] = modelId.Value; }
         if (agentId.HasValue) { updates.Add("agent_id = @agent_id"); parms["agent_id"] = agentId.Value; }
-        if (status != null) { updates.Add("status = @status"); parms["status"] = status; }
+        if (updateStatus)
+        {
+            updates.Add("status_id = @status_id");
+            parms["status_id"] = statusId;
+        }
         if (updates.Count == 0) return false;
         parms["id"] = id;
         var sql = $"UPDATE stories SET {string.Join(", ", updates)} WHERE id = @id";
@@ -1503,6 +1523,45 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
     /// </summary>
     private void RunMigrations(IDbConnection conn)
     {
+        // Migration: Consolidate legacy lowercase 'logs' table into canonical 'Log'
+        try
+        {
+            var legacyLogs = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='logs'");
+            if (legacyLogs > 0)
+            {
+                Console.WriteLine("[DB] Migrating legacy 'logs' table into 'Log'");
+                try
+                {
+                    conn.Execute(@"
+                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context)
+                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL
+                        FROM logs l
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM Log existing 
+                            WHERE existing.Ts = l.ts AND existing.Level = l.level AND existing.Message = l.message
+                        )");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[DB] Warning: failed to copy legacy logs: {ex.Message}");
+                }
+
+                try
+                {
+                    conn.Execute("DROP TABLE IF EXISTS logs");
+                    Console.WriteLine("[DB] Dropped legacy 'logs' table");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[DB] Warning: failed to drop legacy logs table: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to inspect legacy logs table: {ex.Message}");
+        }
+
         // Migration: Add files_to_copy column if not exists
         var hasFilesToCopy = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('test_definitions') WHERE name='files_to_copy'");
         if (hasFilesToCopy == 0)
@@ -2075,6 +2134,54 @@ WHERE Id = @modelId;";
         
         conn.Execute(sql, new { modelId });
     }
+
+    // Story Status CRUD operations
+    public List<StoryStatus> ListAllStoryStatuses()
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName FROM stories_status ORDER BY step, code";
+        return conn.Query<StoryStatus>(sql).ToList();
+    }
+
+    public StoryStatus? GetStoryStatusById(int id)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName FROM stories_status WHERE id = @id LIMIT 1";
+        return conn.QueryFirstOrDefault<StoryStatus>(sql, new { id });
+    }
+
+    public StoryStatus? GetStoryStatusByCode(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return null;
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName FROM stories_status WHERE code = @code LIMIT 1";
+        return conn.QueryFirstOrDefault<StoryStatus>(sql, new { code });
+    }
+
+    public int InsertStoryStatus(StoryStatus status)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"INSERT INTO stories_status(code, description, step, color, operation_type, agent_type, function_name) VALUES(@Code, @Description, @Step, @Color, @OperationType, @AgentType, @FunctionName); SELECT last_insert_rowid();";
+        var id = conn.ExecuteScalar<long>(sql, status);
+        return (int)id;
+    }
+
+    public void UpdateStoryStatus(StoryStatus status)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"UPDATE stories_status SET code=@Code, description=@Description, step=@Step, color=@Color, operation_type=@OperationType, agent_type=@AgentType, function_name=@FunctionName WHERE id = @Id";
+        conn.Execute(sql, status);
+    }
+
+    public void DeleteStoryStatus(int id)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("DELETE FROM stories_status WHERE id = @id", new { id });
+    }
 }
-
-

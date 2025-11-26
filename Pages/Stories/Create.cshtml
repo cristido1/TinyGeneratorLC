@@ -17,6 +17,16 @@
                 <textarea class="form-control" rows="10" asp-for="StoryText"></textarea>
             </div>
             <div class="mb-3">
+                <label class="form-label">Status</label>
+                <select class="form-select" asp-for="StatusId">
+                    <option value="">-- nessuno --</option>
+                    @foreach (var status in Model.Statuses)
+                    {
+                        <option value="@status.Id">@((status.Description ?? status.Code) ?? "N/D") (@status.Code)</option>
+                    }
+                </select>
+            </div>
+            <div class="mb-3">
                 <button type="submit" class="btn btn-primary">Salva</button>
                 <a class="btn btn-secondary" asp-page="/Stories/Index">Annulla</a>
             </div>

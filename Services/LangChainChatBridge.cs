@@ -24,6 +24,7 @@ namespace TinyGenerator.Services
         private readonly string _apiKey;
         private readonly HttpClient _httpClient;
         private readonly ICustomLogger? _logger;
+        private readonly ProgressService? _progressService;
         public double Temperature { get; set; } = 0.7;
         public double TopP { get; set; } = 1.0;
 
@@ -32,7 +33,8 @@ namespace TinyGenerator.Services
             string modelId,
             string apiKey,
             HttpClient? httpClient = null,
-            ICustomLogger? logger = null)
+            ICustomLogger? logger = null,
+            ProgressService? progressService = null)
         {
             // Normalize endpoint - don't add /v1 suffix, just use endpoint as-is
             _modelEndpoint = new Uri(modelEndpoint.TrimEnd('/'));
@@ -40,6 +42,7 @@ namespace TinyGenerator.Services
             _apiKey = apiKey;
             _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             _logger = logger;
+            _progressService = progressService;
         }
 
         /// <summary>
@@ -112,6 +115,11 @@ namespace TinyGenerator.Services
             List<Dictionary<string, object>> tools,
             CancellationToken ct = default)
         {
+            if (_progressService != null)
+            {
+                await _progressService.ModelRequestStartedAsync(_modelId);
+            }
+
             try
             {
                 var isOllama = _modelEndpoint.ToString().Contains("11434", StringComparison.OrdinalIgnoreCase);
@@ -264,6 +272,13 @@ namespace TinyGenerator.Services
             {
                 _logger?.Log("Error", "LangChainBridge", $"Model call failed: {ex.Message}", ex.ToString());
                 throw;
+            }
+            finally
+            {
+                if (_progressService != null)
+                {
+                    await _progressService.ModelRequestFinishedAsync(_modelId);
+                }
             }
         }
 

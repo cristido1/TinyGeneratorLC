@@ -1,0 +1,135 @@
+@page
+@model TinyGenerator.Pages.StoriesStatus.IndexModel
+@{
+    ViewData["Title"] = "Stories Status";
+    ViewData["PageDescription"] = "Gestisci gli stati delle storie";
+}
+
+<div class="mb-3 d-flex justify-content-between align-items-center">
+    <div class="d-flex">
+        <a class="btn btn-sm btn-primary" asp-page="./Create">Create Story Status</a>
+    </div>
+</div>
+
+<table id="tabStatuses" class="table table-bordered table-sm table-pastel table-compact">
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Description</th>
+            <th>Step</th>
+            <th>Color</th>
+            <th>Operation Type</th>
+            <th>Agent Type</th>
+            <th>Function Name</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    @if (Model.Statuses != null && Model.Statuses.Any())
+    {
+        foreach (var s in Model.Statuses)
+        {
+            <tr>
+                <td class="code">@s.Code</td>
+                <td class="description">@s.Description</td>
+                <td class="step" data-step="@s.Step">@s.Step</td>
+                <td class="color">
+                    @if (!string.IsNullOrEmpty(s.Color))
+                    {
+                        <span class="badge text-white" style="background-color: @s.Color;">@s.Color</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">No color</span>
+                    }
+                </td>
+                <td class="operationtype">@s.OperationType</td>
+                <td class="agenttype">@s.AgentType</td>
+                <td class="functionname">@s.FunctionName</td>
+                <td class="actions">
+                    <button type="button" class="btn btn-sm btn-outline-secondary dt-expand me-1">+</button>
+                    <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@s.Id">Edit</a>
+                    <a class="btn btn-sm btn-outline-danger" asp-page="./Delete" asp-route-id="@s.Id">Delete</a>
+                </td>
+            </tr>
+        }
+    }
+    else
+    {
+        <tr>
+            <td colspan="8">No story statuses found.</td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
+}
+
+@section Scripts {
+    <script>
+        $(document).ready(function() {
+            // Initialize DataTable (Bootstrap 5 integration assumed in _Layout)
+            var table = $('#tabStatuses').DataTable({
+                paging: true,
+                searching: true,
+                ordering: true,
+                info: true,
+                lengthChange: true,
+                lengthMenu: [ [10, 25, 50, 100], [10, 25, 50, 100] ],
+                pageLength: 25,
+                responsive: true,
+                columnDefs: [{ orderable: false, targets: -1 }], // actions column not sortable
+                // Add Buttons colvis so user can toggle visible columns
+                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
+                     "rt" +
+                     "<'row'<'col-sm-6'i><'col-sm-6'p>>",
+                buttons: [ 'colvis' ],
+                stateSave: true,
+                stateSaveName: 'DataTables_storiesstatus',
+                stateDuration: -1
+            });
+
+            // Format detail content showing all fields
+            function formatDetails(rowNode) {
+                var code = $(rowNode).find('td.code').text() || '';
+                var description = $(rowNode).find('td.description').text() || '';
+                var step = $(rowNode).find('td.step').data('step') || '';
+                var color = $(rowNode).find('td.color').text() || '';
+                var operationType = $(rowNode).find('td.operationtype').text() || '';
+                var agentType = $(rowNode).find('td.agenttype').text() || '';
+                var functionName = $(rowNode).find('td.functionname').text() || '';
+
+                var html = '<div style="padding:6px 8px;font-size:0.9rem;color:#333">';
+                html += '<strong>Code:</strong> ' + code + '<br>';
+                html += '<strong>Description:</strong> ' + description + '<br>';
+                html += '<strong>Step:</strong> ' + step + '<br>';
+                html += '<strong>Color:</strong> ' + color + '<br>';
+                html += '<strong>Operation Type:</strong> ' + operationType + '<br>';
+                html += '<strong>Agent Type:</strong> ' + agentType + '<br>';
+                html += '<strong>Function Name:</strong> ' + functionName + '<br>';
+                html += '</div>';
+                return html;
+            }
+
+            // Toggle details on expand button click
+            $('#tabStatuses tbody').on('click', 'button.dt-expand', function () {
+                var tr = $(this).closest('tr');
+                var row = table.row(tr);
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $(this).text('+');
+                } else {
+                    row.child(formatDetails(tr)).show();
+                    $(this).text('−');
+                }
+            });
+
+            // Wire the external searchBox to DataTables
+            $('#searchBox').on('input', function() {
+                table.search(this.value).draw();
+            });
+        });
+    </script>
+}

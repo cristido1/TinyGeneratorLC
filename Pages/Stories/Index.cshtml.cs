@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using TinyGenerator.Services;
@@ -55,6 +56,36 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public async Task<IActionResult> OnPostGenerateTtsJsonAsync(long id)
+        {
+            var (success, message) = await _stories.GenerateTtsSchemaJsonAsync(id);
+            if (success)
+            {
+                TempData["StatusMessage"] = message ?? "Schema TTS generato con successo";
+            }
+            else
+            {
+                TempData["ErrorMessage"] = message ?? "Errore durante la generazione del JSON TTS";
+            }
+
+            return RedirectToPage();
+        }
+
+        public async Task<IActionResult> OnPostAssignVoicesAsync(long id)
+        {
+            var (success, message) = await _stories.AssignVoicesAsync(id);
+            if (success)
+            {
+                TempData["StatusMessage"] = message ?? "Assegnazione voci completata";
+            }
+            else
+            {
+                TempData["ErrorMessage"] = message ?? "Errore durante l'assegnazione delle voci";
+            }
+
+            return RedirectToPage();
+        }
+
         private void LoadData()
         {
             var allStories = _stories.GetAllStories().ToList();
@@ -63,6 +94,15 @@ namespace TinyGenerator.Pages.Stories
             foreach (var story in allStories)
             {
                 story.Evaluations = _stories.GetEvaluationsForStory(story.Id);
+                if (!string.IsNullOrWhiteSpace(story.Folder))
+                {
+                    try
+                    {
+                        var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
+                        story.HasVoiceSource = System.IO.File.Exists(Path.Combine(folderPath, "tts_storia.json"));
+                    }
+                    catch { story.HasVoiceSource = false; }
+                }
             }
             
             Stories = allStories;

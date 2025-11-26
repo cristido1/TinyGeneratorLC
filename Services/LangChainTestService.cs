@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
+using TinyGenerator.Skills;
 
 namespace TinyGenerator.Services
 {
@@ -36,6 +37,7 @@ namespace TinyGenerator.Services
         private readonly LangChainAgentService _agentService;
         private readonly ICustomLogger _customLogger;
         private readonly IOllamaManagementService _ollamaService;
+        private readonly Dictionary<int, int> _ttsEmotionPenalties = new();
 
         public LangChainTestService(
             DatabaseService database,
@@ -117,6 +119,14 @@ namespace TinyGenerator.Services
             var passedCount = counts.passed;
             var steps = counts.total;
             var score = steps > 0 ? (int)Math.Round((double)passedCount / steps * 10) : 0;
+            if (_ttsEmotionPenalties.TryGetValue(runId, out var penaltyCount) && penaltyCount > 0)
+            {
+                var originalScore = score;
+                score = Math.Max(0, score - penaltyCount);
+                var penaltyMessage = $"[{model}] Penalità TTS: -{penaltyCount} punti per emozioni tutte 'neutral' (score {originalScore} -> {score})";
+                _progress?.Append(runId.ToString(), penaltyMessage);
+                LogTestMessage(runId.ToString(), penaltyMessage, "Warning");
+            }
             var passedFlag = steps > 0 && passedCount == steps;
 
             _database.UpdateTestRunResult(runId, passedFlag, durationMs);
@@ -276,7 +286,7 @@ namespace TinyGenerator.Services
                 var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
                 
                 // Create ReAct loop to execute the question test
-                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, maxIterations: 5, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
+                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
                 var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
                 sw.Stop();
                 
@@ -353,7 +363,7 @@ namespace TinyGenerator.Services
                 var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
                 
                 // Create ReAct loop to execute function calls
-                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, maxIterations: 5, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
+                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
                 var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
                 sw.Stop();
 
@@ -455,7 +465,7 @@ IMPORTANT: Write the story in Italian language.";
                 var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
                 
                 // Create ReAct loop to execute story generation
-                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, maxIterations: 10, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
+                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
                 var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
                 sw.Stop();
 
@@ -474,6 +484,7 @@ IMPORTANT: Write the story in Italian language.";
 
                 var cleanStoryText = ExtractJsonContent(storyText) ?? storyText;
 
+                var generatedStatusId = _stories.ResolveStatusId("generated");
                 var storyId = _stories.InsertSingleStory(
                     test.Prompt ?? string.Empty,
                     cleanStoryText,
@@ -482,7 +493,7 @@ IMPORTANT: Write the story in Italian language.";
                     0.0,
                     null,
                     0,
-                    "generated",
+                    generatedStatusId,
                     null);
 
                 _database.AddTestAsset(
@@ -567,96 +578,142 @@ IMPORTANT: Write the story in Italian language.";
             var chatBridge = _kernelFactory.CreateChatBridge(model);
             if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
             if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
-            
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            HybridLangChainOrchestrator? lastOrchestrator = null;
+            try
             {
-                var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null, testFolder, ttsStoryText);
-                var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 60;
-
-                var executionPlan = LoadExecutionPlan(test.ExecutionPlan);
-                var fullPrompt = prompt;
-
-                var hasTools = orchestrator.GetToolSchemas().Any();
-                fullPrompt = AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
-
-                if (attempt > 1)
+                for (int attempt = 1; attempt <= maxRetries; attempt++)
                 {
-                    fullPrompt += $"\n\n[RETRY {attempt}/{maxRetries}] The schema file was not generated. Call ConfirmSchema() to save it.";
-                }
+                    var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null, testFolder, ttsStoryText);
+                    lastOrchestrator = orchestrator;
+                    var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 60;
 
-                try
-                {
-                    var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-                    
-                    // Create ReAct loop to execute TTS schema generation
-                    // Pass execution plan as system message instead of concatenating to user prompt
-                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, maxIterations: 5, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge, systemMessage: executionPlan);
-                    var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
-                    sw.Stop();
-                    
-                    var response = reactResult.FinalResponse;
-                    var responsePreview = string.IsNullOrEmpty(response) ? "empty" : response;
-                    _progress?.Append(runId.ToString(), $"[{model}] Model Response (attempt {attempt}): {responsePreview}");
+                    var executionPlan = LoadExecutionPlan(test.ExecutionPlan);
+                    var fullPrompt = prompt;
 
-                    string? generatedFile = null;
-                    if (!string.IsNullOrWhiteSpace(testFolder))
+                    var hasTools = orchestrator.GetToolSchemas().Any();
+                    fullPrompt = AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
+
+                    if (attempt > 1)
                     {
-                        var jsonFiles = Directory.GetFiles(testFolder, "*.json")
-                            .Where(f => !f.EndsWith("_expected_result.json"))
-                            .OrderByDescending(f => File.GetCreationTimeUtc(f))
-                            .ToList();
+                        fullPrompt += $"\n\n[RETRY {attempt}/{maxRetries}] The schema file was not generated. Call ConfirmSchema() to save it.";
+                    }
+
+                    var stepLabel = test.FunctionName ?? $"id_{test.Id}";
+
+                    try
+                    {
+                        var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
                         
-                        generatedFile = jsonFiles.FirstOrDefault();
+                        // Create ReAct loop to execute TTS schema generation
+                        // Pass execution plan as system message instead of concatenating to user prompt
+                        var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge, systemMessage: executionPlan);
+                        var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
+                        sw.Stop();
+                        
+                        var response = reactResult.FinalResponse;
+                        var responsePreview = string.IsNullOrEmpty(response) ? "empty" : response;
+                        _progress?.Append(runId.ToString(), $"[{model}] Model Response (attempt {attempt}): {responsePreview}");
+
+                        string? generatedFile = null;
+                        if (!string.IsNullOrWhiteSpace(testFolder))
+                        {
+                            var jsonFiles = Directory.GetFiles(testFolder, "*.json")
+                                .Where(f => !f.EndsWith("_expected_result.json"))
+                                .OrderByDescending(f => File.GetCreationTimeUtc(f))
+                                .ToList();
+                            
+                            generatedFile = jsonFiles.FirstOrDefault();
+                            if (!string.IsNullOrWhiteSpace(generatedFile))
+                            {
+                                _progress?.Append(runId.ToString(), $"[{model}] Found generated file: {Path.GetFileName(generatedFile)}");
+                            }
+                        }
+
                         if (!string.IsNullOrWhiteSpace(generatedFile))
                         {
-                            _progress?.Append(runId.ToString(), $"[{model}] Found generated file: {Path.GetFileName(generatedFile)}");
+                            var resultDetails = JsonSerializer.Serialize(new
+                            {
+                                response = responsePreview,
+                                file = Path.GetFileName(generatedFile)
+                            });
+
+                            _database.UpdateTestStepResult(
+                                stepId,
+                                true,
+                                resultDetails,
+                                null,
+                                (long?)sw.ElapsedMilliseconds);
+
+                            var successMessage = $"[{model}] Step {idx} PASSED: {stepLabel} ({sw.ElapsedMilliseconds}ms) - saved {Path.GetFileName(generatedFile)}";
+                            _progress?.Append(runId.ToString(), successMessage);
+                            LogTestMessage(runId.ToString(), successMessage);
+
+                            if (IsAllNeutralEmotion(generatedFile))
+                            {
+                                AddTtsNeutralPenalty(runId);
+                                var penaltyMsg = $"[{model}] TTS schema contiene solo emozioni 'neutral' ({Path.GetFileName(generatedFile)}): penalità applicata";
+                                _progress?.Append(runId.ToString(), penaltyMsg);
+                                LogTestMessage(runId.ToString(), penaltyMsg, "Warning");
+                            }
+
+                            return; // Success
+                        }
+                        else if (attempt < maxRetries)
+                        {
+                            _progress?.Append(runId.ToString(), $"[{model}] No file generated, retrying... ({attempt}/{maxRetries})");
+                            continue;
+                        }
+                        else
+                        {
+                            const string errorReason = "No JSON file generated after retries";
+                            _database.UpdateTestStepResult(stepId, false, response, errorReason, (int)sw.ElapsedMilliseconds);
+                            var failMessage = $"[{model}] Step {idx} FAILED: {stepLabel} - {errorReason}";
+                            _progress?.Append(runId.ToString(), failMessage);
+                            LogTestMessage(runId.ToString(), failMessage, "Error");
+                            return;
                         }
                     }
-
-                    if (!string.IsNullOrWhiteSpace(generatedFile))
+                    catch (OperationCanceledException)
                     {
-                        return; // Success
+                        sw.Stop();
+                        if (attempt < maxRetries)
+                        {
+                            _progress?.Append(runId.ToString(), $"[{model}] Timeout on attempt {attempt}, retrying...");
+                            continue;
+                        }
+                        else
+                        {
+                            var errorReason = $"Timeout after {timeout}s on all {maxRetries} attempts";
+                            _database.UpdateTestStepResult(stepId, false, null, errorReason, (int)sw.ElapsedMilliseconds);
+                            var timeoutMessage = $"[{model}] Step {idx} FAILED: {stepLabel} - {errorReason}";
+                            _progress?.Append(runId.ToString(), timeoutMessage);
+                            LogTestMessage(runId.ToString(), timeoutMessage, "Error");
+                            return;
+                        }
                     }
-                    else if (attempt < maxRetries)
+                    catch (Exception ex)
                     {
-                        _progress?.Append(runId.ToString(), $"[{model}] No file generated, retrying... ({attempt}/{maxRetries})");
-                        continue;
-                    }
-                    else
-                    {
-                        _database.UpdateTestStepResult(stepId, false, response, "No JSON file generated after retries", (int)sw.ElapsedMilliseconds);
-                        _progress?.Append(runId.ToString(), $"[{model}] Step {idx} FAILED: No file generated");
-                        return;
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    sw.Stop();
-                    if (attempt < maxRetries)
-                    {
-                        _progress?.Append(runId.ToString(), $"[{model}] Timeout on attempt {attempt}, retrying...");
-                        continue;
-                    }
-                    else
-                    {
-                        _database.UpdateTestStepResult(stepId, false, null, $"Timeout after {timeout}s on all {maxRetries} attempts", (int)sw.ElapsedMilliseconds);
-                        return;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    sw.Stop();
-                    if (attempt < maxRetries)
-                    {
-                        _progress?.Append(runId.ToString(), $"[{model}] Error on attempt {attempt}: {ex.Message}, retrying...");
-                        continue;
-                    }
-                    else
-                    {
-                        _database.UpdateTestStepResult(stepId, false, null, $"{ex.Message} after {maxRetries} attempts", (int)sw.ElapsedMilliseconds);
-                        return;
+                        sw.Stop();
+                        if (attempt < maxRetries)
+                        {
+                            _progress?.Append(runId.ToString(), $"[{model}] Error on attempt {attempt}: {ex.Message}, retrying...");
+                            continue;
+                        }
+                        else
+                        {
+                            var errorReason = $"{ex.Message} after {maxRetries} attempts";
+                            _database.UpdateTestStepResult(stepId, false, null, errorReason, (int)sw.ElapsedMilliseconds);
+                            var errorMessage = $"[{model}] Step {idx} FAILED: {stepLabel} - {ex.Message}";
+                            _progress?.Append(runId.ToString(), errorMessage);
+                            LogTestMessage(runId.ToString(), errorMessage, "Error");
+                            return;
+                        }
                     }
                 }
+            }
+            finally
+            {
+                await FinalizeTtsArtifactsAsync(lastOrchestrator, testFolder, model, runId);
             }
         }
 
@@ -732,6 +789,46 @@ IMPORTANT: Write the story in Italian language.";
             return null;
         }
 
+        private async Task FinalizeTtsArtifactsAsync(HybridLangChainOrchestrator? orchestrator, string? testFolder, string model, int runId)
+        {
+            try
+            {
+                var ttsTool = orchestrator?.GetTool<TtsSchemaTool>("ttsschema");
+                if (ttsTool != null && ttsTool.HasSchemaEntries)
+                {
+                    if (ttsTool.TrySaveSnapshot(out var savedPath) && !string.IsNullOrWhiteSpace(savedPath))
+                    {
+                        _progress?.Append(runId.ToString(), $"[{model}] Schema TTS salvata ({Path.GetFileName(savedPath)})");
+                    }
+                    return;
+                }
+
+                await CleanupTestFolderAsync(testFolder, model, runId);
+            }
+            catch (Exception ex)
+            {
+                _progress?.Append(runId.ToString(), $"[{model}] Errore finalizzazione TTS: {ex.Message}");
+            }
+        }
+
+        private Task CleanupTestFolderAsync(string? testFolder, string model, int runId)
+        {
+            if (string.IsNullOrWhiteSpace(testFolder) || !Directory.Exists(testFolder))
+                return Task.CompletedTask;
+
+            try
+            {
+                Directory.Delete(testFolder, true);
+                _progress?.Append(runId.ToString(), $"[{model}] Cartella test rimossa (nessuna generazione TTS) ");
+            }
+            catch (Exception ex)
+            {
+                _progress?.Append(runId.ToString(), $"[{model}] Impossibile cancellare cartella test: {ex.Message}");
+            }
+
+            return Task.CompletedTask;
+        }
+
         private string? LoadResponseFormat(string? formatName)
         {
             if (string.IsNullOrWhiteSpace(formatName))
@@ -746,6 +843,51 @@ IMPORTANT: Write the story in Italian language.";
             catch { }
 
             return null;
+        }
+
+        private void AddTtsNeutralPenalty(int runId)
+        {
+            if (_ttsEmotionPenalties.ContainsKey(runId))
+            {
+                _ttsEmotionPenalties[runId]++;
+            }
+            else
+            {
+                _ttsEmotionPenalties[runId] = 1;
+            }
+        }
+
+        private bool IsAllNeutralEmotion(string jsonFilePath)
+        {
+            try
+            {
+                if (!File.Exists(jsonFilePath))
+                    return false;
+
+                using var stream = File.OpenRead(jsonFilePath);
+                using var doc = JsonDocument.Parse(stream);
+                if (!doc.RootElement.TryGetProperty("Timeline", out var timelineElem) || timelineElem.ValueKind != JsonValueKind.Array)
+                    return false;
+
+                bool foundEmotion = false;
+                foreach (var entry in timelineElem.EnumerateArray())
+                {
+                    if (!entry.TryGetProperty("Emotion", out var emotionElem) || emotionElem.ValueKind != JsonValueKind.String)
+                        return false;
+
+                    foundEmotion = true;
+                    var emotionValue = emotionElem.GetString();
+                    if (!string.Equals(emotionValue, "neutral", StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
+
+                return foundEmotion;
+            }
+            catch (Exception ex)
+            {
+                _customLogger?.Log("Warn", "LangChainTestService", $"Impossibile verificare emozioni nel file TTS: {ex.Message}");
+                return false;
+            }
         }
 
         private string AppendResponseFormatToPrompt(string prompt, string? responseFormat, bool hasTools = false)

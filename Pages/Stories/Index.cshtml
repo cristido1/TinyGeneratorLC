@@ -42,6 +42,7 @@
     <tbody>
     @foreach(var s in Model.Stories) {
         var timestamp = DateTime.TryParse(s.Timestamp, out var dt) ? dt.ToString("dd/MM/yyyy HH:mm") : s.Timestamp;
+        var nextStatus = Model.GetNextStatus(s);
         <tr data-story-id="@s.Id" data-evaluations='@System.Text.Json.JsonSerializer.Serialize(s.Evaluations)'>
             <td class="dt-control"></td>
             <td>@s.Id</td>
@@ -81,6 +82,17 @@
                         Azioni
                     </button>
                     <ul class="dropdown-menu">
+                        @if (nextStatus != null && !string.IsNullOrWhiteSpace(nextStatus.OperationType))
+                        {
+                            <li>
+                                <form method="post" asp-page-handler="AdvanceStatus" asp-route-id="@s.Id" style="display:inline">
+                                    <button type="submit" class="dropdown-item">
+                                        ⚙️ @(nextStatus.CaptionToExecute ?? nextStatus.Description ?? $"Avanza a {nextStatus.Code}")
+                                    </button>
+                                </form>
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
+                        }
                         <li><a class="dropdown-item" asp-page="/Stories/Details" asp-route-id="@s.Id">📄 Dettagli</a></li>
                         <li><a class="dropdown-item" asp-page="/Stories/Edit" asp-route-id="@s.Id">✏️ Modifica</a></li>
                         @if (!string.IsNullOrWhiteSpace(s.Folder))
@@ -285,6 +297,18 @@
                 return html;
             }
 
+            const columnVisibilityKey = 'storiesTable_visibleColumns';
+            let storedVisibility = {};
+            try {
+                const saved = localStorage.getItem(columnVisibilityKey);
+                if (saved) {
+                    storedVisibility = JSON.parse(saved) || {};
+                }
+            } catch (err) {
+                console.warn('Unable to parse stored column visibility', err);
+                storedVisibility = {};
+            }
+
             var table = $('#storiesTable').DataTable({
                 pageLength: 25,
                 lengthChange: true,
@@ -300,6 +324,23 @@
                     { orderable: false, targets: 0 },
                     { orderable: false, targets: -1 }
                 ]
+            });
+
+            // Apply stored column visibility preferences
+            table.columns().every(function () {
+                const idx = this.index();
+                if (Object.prototype.hasOwnProperty.call(storedVisibility, idx)) {
+                    this.visible(storedVisibility[idx]);
+                }
+            });
+
+            table.on('column-visibility.dt', function (e, settings, column, state) {
+                storedVisibility[column] = state;
+                try {
+                    localStorage.setItem(columnVisibilityKey, JSON.stringify(storedVisibility));
+                } catch (err) {
+                    console.warn('Unable to persist column visibility', err);
+                }
             });
 
             // Handle expand/collapse for evaluation details using DataTables child rows API

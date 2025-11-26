@@ -17,6 +17,7 @@ namespace TinyGenerator.Services;
 
 public sealed class DatabaseService
 {
+    private const int EvaluatedStatusId = 2;
 
 
     private readonly string _connectionString;
@@ -981,6 +982,8 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         {
             RecalculateWriterScore(modelId.Value);
         }
+
+        UpdateStoryStatusAfterEvaluation(conn, storyId, agentId);
         
         return id;
     }
@@ -1047,13 +1050,15 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
             var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, ncs = nc, ncd = ncdef, ss = st, sd = stdef, chs = ch, chd = chdef, dlg = dlg, dlgdef = dlgdef, pc = pc, pcdef = pcdef, org = org, orgdef = orgdef, stl = stl, stldef = stldef, wb = wb, wbdef = wbdef, th = th, thdef = thdef, em = em, emdef = emdef, total = totalScore, overall = overall, raw = rawJson, model_id = modelId ?? (int?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
             
             // Recalculate writer score for the model
-            if (modelId.HasValue)
-            {
-                RecalculateWriterScore(modelId.Value);
-            }
-            
-            return id;
+        if (modelId.HasValue)
+        {
+            RecalculateWriterScore(modelId.Value);
         }
+
+        UpdateStoryStatusAfterEvaluation(conn, storyId, agentId);
+        
+        return id;
+    }
         catch (Exception)
         {
             var sql = @"INSERT INTO stories_evaluations(story_id, total_score, raw_json, model_id, agent_id, ts) VALUES(@story_id, @total, @raw, @model_id, @agent_id, @ts); SELECT last_insert_rowid();";
@@ -1064,7 +1069,9 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
             {
                 RecalculateWriterScore(modelId.Value);
             }
-            
+
+            UpdateStoryStatusAfterEvaluation(conn, storyId, agentId);
+
             return id;
         }
     }
@@ -2140,7 +2147,7 @@ WHERE Id = @modelId;";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName FROM stories_status ORDER BY step, code";
+        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName, caption_to_execute AS CaptionToExecute FROM stories_status ORDER BY step, code";
         return conn.Query<StoryStatus>(sql).ToList();
     }
 
@@ -2148,7 +2155,7 @@ WHERE Id = @modelId;";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName FROM stories_status WHERE id = @id LIMIT 1";
+        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName, caption_to_execute AS CaptionToExecute FROM stories_status WHERE id = @id LIMIT 1";
         return conn.QueryFirstOrDefault<StoryStatus>(sql, new { id });
     }
 
@@ -2157,15 +2164,44 @@ WHERE Id = @modelId;";
         if (string.IsNullOrWhiteSpace(code)) return null;
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName FROM stories_status WHERE code = @code LIMIT 1";
+        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName, caption_to_execute AS CaptionToExecute FROM stories_status WHERE code = @code LIMIT 1";
         return conn.QueryFirstOrDefault<StoryStatus>(sql, new { code });
+    }
+
+    public void UpdateStoryFolder(long storyId, string folder)
+    {
+        if (storyId <= 0 || string.IsNullOrWhiteSpace(folder)) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("UPDATE stories SET folder = @folder WHERE id = @id", new { folder, id = storyId });
+    }
+
+    private void UpdateStoryStatusAfterEvaluation(IDbConnection conn, long storyId, int? agentId)
+    {
+        if (conn == null || !agentId.HasValue) return;
+        try
+        {
+            var totalEvaluations = conn.ExecuteScalar<int>(
+                "SELECT COUNT(*) FROM stories_evaluations WHERE story_id = @sid",
+                new { sid = storyId });
+            if (totalEvaluations >= 2)
+            {
+                conn.Execute(
+                    "UPDATE stories SET status_id = @statusId WHERE id = @sid",
+                    new { statusId = EvaluatedStatusId, sid = storyId });
+            }
+        }
+        catch
+        {
+            // ignore best-effort status updates
+        }
     }
 
     public int InsertStoryStatus(StoryStatus status)
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"INSERT INTO stories_status(code, description, step, color, operation_type, agent_type, function_name) VALUES(@Code, @Description, @Step, @Color, @OperationType, @AgentType, @FunctionName); SELECT last_insert_rowid();";
+        var sql = @"INSERT INTO stories_status(code, description, step, color, operation_type, agent_type, function_name, caption_to_execute) VALUES(@Code, @Description, @Step, @Color, @OperationType, @AgentType, @FunctionName, @CaptionToExecute); SELECT last_insert_rowid();";
         var id = conn.ExecuteScalar<long>(sql, status);
         return (int)id;
     }
@@ -2174,7 +2210,7 @@ WHERE Id = @modelId;";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"UPDATE stories_status SET code=@Code, description=@Description, step=@Step, color=@Color, operation_type=@OperationType, agent_type=@AgentType, function_name=@FunctionName WHERE id = @Id";
+        var sql = @"UPDATE stories_status SET code=@Code, description=@Description, step=@Step, color=@Color, operation_type=@OperationType, agent_type=@AgentType, function_name=@FunctionName, caption_to_execute=@CaptionToExecute WHERE id = @Id";
         conn.Execute(sql, status);
     }
 

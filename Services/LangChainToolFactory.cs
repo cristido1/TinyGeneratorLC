@@ -422,7 +422,7 @@ namespace TinyGenerator.Services
                     return;
                 }
 
-                var tool = new VoiceChoserTool(workingFolder, _ttsService, _logger)
+                var tool = new VoiceChoserTool(workingFolder, _database, _ttsService, _logger)
                 {
                     ModelId = modelId,
                     AgentId = agentId

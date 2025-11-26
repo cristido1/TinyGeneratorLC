@@ -10,4 +10,5 @@ public sealed class StoryStatus
     public string? OperationType { get; set; } // none | agent_call | function_call
     public string? AgentType { get; set; } // evaluator | writer | tts | music | fx | ambient | none
     public string? FunctionName { get; set; } // only for function_call
+    public string? CaptionToExecute { get; set; } // caption to execute for this status
 }

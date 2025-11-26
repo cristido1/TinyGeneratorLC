@@ -21,6 +21,7 @@
             <th>Operation Type</th>
             <th>Agent Type</th>
             <th>Function Name</th>
+            <th>Caption to Execute</th>
             <th>Actions</th>
         </tr>
     </thead>
@@ -46,6 +47,7 @@
                 <td class="operationtype">@s.OperationType</td>
                 <td class="agenttype">@s.AgentType</td>
                 <td class="functionname">@s.FunctionName</td>
+                <td class="captiontoexecute">@s.CaptionToExecute</td>
                 <td class="actions">
                     <button type="button" class="btn btn-sm btn-outline-secondary dt-expand me-1">+</button>
                     <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@s.Id">Edit</a>
@@ -57,7 +59,7 @@
     else
     {
         <tr>
-            <td colspan="8">No story statuses found.</td>
+            <td colspan="9">No story statuses found.</td>
         </tr>
     }
     </tbody>
@@ -100,6 +102,7 @@
                 var operationType = $(rowNode).find('td.operationtype').text() || '';
                 var agentType = $(rowNode).find('td.agenttype').text() || '';
                 var functionName = $(rowNode).find('td.functionname').text() || '';
+                var captionToExecute = $(rowNode).find('td.captiontoexecute').text() || '';
 
                 var html = '<div style="padding:6px 8px;font-size:0.9rem;color:#333">';
                 html += '<strong>Code:</strong> ' + code + '<br>';
@@ -109,6 +112,7 @@
                 html += '<strong>Operation Type:</strong> ' + operationType + '<br>';
                 html += '<strong>Agent Type:</strong> ' + agentType + '<br>';
                 html += '<strong>Function Name:</strong> ' + functionName + '<br>';
+                html += '<strong>Caption to Execute:</strong> ' + captionToExecute + '<br>';
                 html += '</div>';
                 return html;
             }

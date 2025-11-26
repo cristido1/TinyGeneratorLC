@@ -61,10 +61,7 @@ namespace TinyGenerator.Skills
             }
         }
 
-        public override Dictionary<string, object> GetSchema()
-        {
-            return CreateAddNarrationSchema();
-        }
+        public override Dictionary<string, object> GetSchema() => CreateAddNarrationSchema();
 
         public override IEnumerable<Dictionary<string, object>> GetFunctionSchemas()
         {
@@ -153,13 +150,9 @@ namespace TinyGenerator.Skills
                 // Log operation with all parameters
                 var paramDetails = new List<string>();
                 if (!string.IsNullOrEmpty(request.Operation)) paramDetails.Add($"operation={request.Operation}");
-                if (!string.IsNullOrEmpty(request.Name)) paramDetails.Add($"name={request.Name}");
-                if (!string.IsNullOrEmpty(request.Gender)) paramDetails.Add($"gender={request.Gender}");
-                if (!string.IsNullOrEmpty(request.Voice)) paramDetails.Add($"voice={request.Voice}");
                 if (!string.IsNullOrEmpty(request.Character)) paramDetails.Add($"character={request.Character}");
                 if (!string.IsNullOrEmpty(request.Text)) paramDetails.Add($"text={request.Text}");
                 if (!string.IsNullOrEmpty(request.Emotion)) paramDetails.Add($"emotion={request.Emotion}");
-                if (request.Seconds.HasValue) paramDetails.Add($"seconds={request.Seconds}");
                 
 
                 CustomLogger?.Log("Info", "TtsSchemaTool", $"Executing: {string.Join(", ", paramDetails)}");
@@ -168,9 +161,8 @@ namespace TinyGenerator.Skills
                 {
                     "add_narration" => AddNarration(request.Text),
                     "add_phrase" => AddPhraseAutoCreate(request.Character, request.Text, request.Emotion),
-                    "set_gender" => SetGender(request.Character, request.Gender),
                     "confirm" => ConfirmSchemaAllowSave(),
-                    "describe" => SerializeResult(new { result = "Operations: add_narration(text), add_phrase(character, text, emotion), set_gender(character, gender), confirm()" }),
+                    "describe" => SerializeResult(new { result = "Operations: add_narration(text), add_phrase(character, text, emotion), confirm()" }),
                     _ => SerializeResult(new { error = $"Unknown operation: {request.Operation}" })
                 };
             }
@@ -230,77 +222,15 @@ namespace TinyGenerator.Skills
             return result;
         }
 
-        private string AddCharacter(string? name, string? gender)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-                return SerializeResult(new { error = "Character name is required" });
-
-            if (_schema.Characters.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                return SerializeResult(new { error = $"Character '{name}' already exists" });
-
-            _schema.Characters.Add(new TtsCharacter
-            {
-                Name = name,
-                Voice = "default",
-                Gender = gender ?? "neutral"
-            });
-
-            return SerializeResult(new { result = "Character added" });
-        }
-
-        private string AddPhrase(string? character, string? text, string? emotion)
-        {
-            if (string.IsNullOrWhiteSpace(character))
-                return SerializeResult(new { error = "Character name is required" });
-            if (string.IsNullOrWhiteSpace(text))
-                return SerializeResult(new { error = "Phrase text is required" });
-            if (string.IsNullOrWhiteSpace(emotion))
-                return SerializeResult(new { error = "Emotion is required" });
-
-            if (!SupportedEmotions.Contains(emotion))
-                return SerializeResult(new { error = $"Unsupported emotion '{emotion}'. Supported: {string.Join(", ", SupportedEmotions)}" });
-
-            if (!_schema.Characters.Any(c => c.Name.Equals(character, StringComparison.OrdinalIgnoreCase)))
-                return SerializeResult(new { error = $"Character '{character}' not defined. Define it first." });
-
-            _schema.Timeline.Add(new TtsPhrase { Character = character, Text = text, Emotion = emotion });
-            return SerializeResult(new { result = "Phrase added" });
-        }
-
         internal string AddNarration(string? text)
         {
             if (string.IsNullOrWhiteSpace(text))
                 return SerializeResult(new { error = "Narration text is required" });
 
-            if (!_schema.Characters.Any(c => c.Name.Equals("Narratore", StringComparison.OrdinalIgnoreCase)))
-            {
-                _schema.Characters.Add(new TtsCharacter { Name = "Narratore", Voice = "default", Gender = "neutral" });
-            }
+            EnsureCharacterExists("Narratore");
 
             _schema.Timeline.Add(new TtsPhrase { Character = "Narratore", Text = text, Emotion = "neutral" });
             return SerializeResult(new { result = "Narration added" });
-        }
-
-        internal string SetGender(string? character, string? gender)
-        {
-            if (string.IsNullOrWhiteSpace(character))
-                return SerializeResult(new { error = "Character name is required" });
-
-            if (string.IsNullOrWhiteSpace(gender))
-                return SerializeResult(new { error = "Gender is required" });
-
-            var existing = _schema.Characters.FirstOrDefault(c => c.Name.Equals(character, StringComparison.OrdinalIgnoreCase));
-            if (existing == null)
-                return SerializeResult(new { error = $"Character '{character}' not defined. Use add_phrase to create it first." });
-
-            existing.Gender = gender;
-            return SerializeResult(new { result = $"Gender for '{existing.Name}' set to {gender}" });
-        }
-
-        private string AddPause(int seconds)
-        {
-            _schema.Timeline.Add(new TtsPause(seconds));
-            return SerializeResult(new { result = "Pause added" });
         }
 
         internal string AddPhraseAutoCreate(string? character, string? text, string? emotion)
@@ -323,14 +253,28 @@ namespace TinyGenerator.Skills
             if (!SupportedEmotions.Contains(emotion))
                 return SerializeResult(new { error = $"Unsupported emotion '{emotion}'. Supported: {string.Join(", ", SupportedEmotions)}" });
 
-            // If character not defined, add it automatically
-            if (!_schema.Characters.Any(c => c.Name.Equals(charName, StringComparison.OrdinalIgnoreCase)))
-            {
-                _schema.Characters.Add(new TtsCharacter { Name = charName, Voice = "default", Gender = "neutral" });
-            }
+            EnsureCharacterExists(charName);
 
             _schema.Timeline.Add(new TtsPhrase { Character = charName, Text = text, Emotion = emotion });
             return SerializeResult(new { result = "Phrase added" });
+        }
+
+        private void EnsureCharacterExists(string characterName)
+        {
+            if (string.IsNullOrWhiteSpace(characterName))
+                return;
+
+            if (_schema.Characters.Any(c => c.Name.Equals(characterName, StringComparison.OrdinalIgnoreCase)))
+                return;
+
+            _schema.Characters.Add(new TtsCharacter
+            {
+                Name = characterName,
+                Gender = "neutral",
+                VoiceId = string.Empty,
+                Voice = "default",
+                EmotionDefault = string.Empty
+            });
         }
 
         internal string ConfirmSchemaAllowSave()
@@ -352,25 +296,6 @@ namespace TinyGenerator.Skills
                     // if parsing fails, return raw validation string
                     return SerializeResult(new { validation = validationResult, saved = true });
                 }
-            }
-            catch (Exception ex)
-            {
-                return SerializeResult(new { error = ex.Message });
-            }
-        }
-
-        
-        private string ConfirmSchema()
-        {
-            try
-            {
-                var validationResult = CheckSchema();
-                if (validationResult.Contains("error"))
-                    return validationResult;
-
-                var filePath = Path.Combine(_workingFolder, "tts_schema.json");
-                File.WriteAllText(filePath, JsonSerializer.Serialize(_schema, DefaultOptions));
-                return SerializeResult(new { result = "Schema saved" });
             }
             catch (Exception ex)
             {
@@ -471,13 +396,9 @@ namespace TinyGenerator.Skills
         private class TtsSchemaToolRequest
         {
             public string? Operation { get; set; }
-            public string? Name { get; set; }
-            public string? Gender { get; set; }
-            public string? Voice { get; set; }
             public string? Character { get; set; }
             public string? Text { get; set; }
             public string? Emotion { get; set; }
-            public int? Seconds { get; set; }
         }
 
         private class NarrationRequest

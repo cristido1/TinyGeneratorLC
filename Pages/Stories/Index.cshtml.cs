@@ -22,6 +22,7 @@ namespace TinyGenerator.Pages.Stories
 
         public IEnumerable<StoryRecord> Stories { get; set; } = new List<StoryRecord>();
         public List<Agent> Evaluators { get; set; } = new List<Agent>();
+        public List<StoryStatus> Statuses { get; set; } = new List<StoryStatus>();
 
         public void OnGet()
         {
@@ -86,6 +87,25 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public StoryStatus? GetNextStatus(StoryRecord story)
+        {
+            return _stories.GetNextStatusForStory(story, Statuses);
+        }
+
+        public async Task<IActionResult> OnPostAdvanceStatusAsync(long id)
+        {
+            var (success, message) = await _stories.ExecuteNextStatusOperationAsync(id);
+            if (success)
+            {
+                TempData["StatusMessage"] = message ?? "Operazione completata.";
+            }
+            else
+            {
+                TempData["ErrorMessage"] = message ?? "Operazione non riuscita.";
+            }
+            return RedirectToPage();
+        }
+
         private void LoadData()
         {
             var allStories = _stories.GetAllStories().ToList();
@@ -99,13 +119,14 @@ namespace TinyGenerator.Pages.Stories
                     try
                     {
                         var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
-                        story.HasVoiceSource = System.IO.File.Exists(Path.Combine(folderPath, "tts_storia.json"));
+                        story.HasVoiceSource = System.IO.File.Exists(Path.Combine(folderPath, "tts_schema.json"));
                     }
                     catch { story.HasVoiceSource = false; }
                 }
             }
             
             Stories = allStories;
+            Statuses = _stories.GetAllStoryStatuses();
 
             // Load active evaluator agents
             Evaluators = _database.ListAgents()

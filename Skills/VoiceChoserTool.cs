@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using TinyGenerator.Models;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Skills
@@ -16,11 +17,14 @@ namespace TinyGenerator.Skills
     {
         private readonly string _storyFolder;
         private readonly string _schemaPath;
+        private readonly DatabaseService? _database;
         private readonly TtsService _ttsService;
+        private readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
         private List<VoiceInfo>? _cachedVoices;
         private DateTime _voicesCachedAt = DateTime.MinValue;
+        private TtsSchema? _schema;
 
-        public VoiceChoserTool(string storyFolder, TtsService ttsService, ICustomLogger? logger = null)
+        public VoiceChoserTool(string storyFolder, DatabaseService? database, TtsService? ttsService, ICustomLogger? logger = null)
             : base("voicechoser", "Utility per leggere e aggiornare il file tts_schema.json scegliendo le voci TTS.", logger)
         {
             if (string.IsNullOrWhiteSpace(storyFolder))
@@ -28,6 +32,7 @@ namespace TinyGenerator.Skills
 
             _storyFolder = storyFolder;
             _schemaPath = Path.Combine(storyFolder, "tts_schema.json");
+            _database = database;
             _ttsService = ttsService ?? throw new ArgumentNullException(nameof(ttsService));
         }
 
@@ -87,11 +92,11 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                if (!File.Exists(_schemaPath))
-                    return SerializeResult(new { error = $"File not found: {_schemaPath}" });
+                var schema = await LoadSchemaAsync(forceReload: true);
+                if (schema == null)
+                    return SerializeResult(new { error = $"Impossibile caricare lo schema {_schemaPath}" });
 
-                var content = await File.ReadAllTextAsync(_schemaPath);
-                return content;
+                return SerializeResult(new { schema });
             }
             catch (Exception ex)
             {
@@ -112,7 +117,7 @@ namespace TinyGenerator.Skills
                     gender = v.Gender,
                     language = v.Language
                 });
-                return JsonSerializer.Serialize(simplified, new JsonSerializerOptions { WriteIndented = true });
+                return SerializeResult(new { voices = simplified });
             }
             catch (Exception ex)
             {
@@ -138,11 +143,8 @@ namespace TinyGenerator.Skills
                 if (string.IsNullOrWhiteSpace(payload.Gender))
                     return SerializeResult(new { error = "gender is required" });
 
-                if (!File.Exists(_schemaPath))
-                    return SerializeResult(new { error = $"File not found: {_schemaPath}" });
-
-                var schema = await LoadSchemaAsync();
-                if (schema == null)
+                var schema = await LoadSchemaAsync(forceReload: true);
+                if (schema?.Characters == null || schema.Characters.Count == 0)
                     return SerializeResult(new { error = "Unable to parse tts_schema.json" });
 
                 var character = schema.Characters
@@ -154,11 +156,16 @@ namespace TinyGenerator.Skills
                 }
 
                 var voices = await EnsureVoicesAsync();
-                var voice = voices.FirstOrDefault(v => 
-                    (!string.IsNullOrWhiteSpace(v.Id) && v.Id.Equals(payload.VoiceId, StringComparison.OrdinalIgnoreCase))
-                    || (!string.IsNullOrWhiteSpace(v.Name) && v.Name.Equals(payload.VoiceId, StringComparison.OrdinalIgnoreCase)));
+                var voice = voices.FirstOrDefault(v =>
+                    !string.IsNullOrWhiteSpace(v.Id) &&
+                    v.Id.Equals(payload.VoiceId, StringComparison.OrdinalIgnoreCase));
 
-                if (voice != null && !string.IsNullOrWhiteSpace(voice.Gender))
+                if (voice == null)
+                {
+                    return SerializeResult(new { error = $"Voice '{payload.VoiceId}' not found. Usa read_voices per la lista completa." });
+                }
+
+                if (!string.IsNullOrWhiteSpace(voice.Gender))
                 {
                     var compareVoiceGender = voice.Gender.Trim();
                     if (!string.IsNullOrWhiteSpace(compareVoiceGender) &&
@@ -169,8 +176,8 @@ namespace TinyGenerator.Skills
                 }
 
                 character.Gender = payload.Gender;
-                character.VoiceId = payload.VoiceId;
-                character.Voice = voice?.Name ?? payload.VoiceId;
+                character.VoiceId = voice.Id;
+                character.Voice = voice.Name ?? voice.Id;
 
                 await SaveSchemaAsync(schema);
 
@@ -178,7 +185,7 @@ namespace TinyGenerator.Skills
                 {
                     character = character.Name,
                     gender = character.Gender,
-                    voice_id = character.VoiceId,
+                    voice_id = voice.Id,
                     voice_name = character.Voice
                 };
 
@@ -198,22 +205,88 @@ namespace TinyGenerator.Skills
                 return _cachedVoices;
             }
 
-            var list = await _ttsService.GetVoicesAsync();
-            _cachedVoices = list ?? new List<VoiceInfo>();
+            List<VoiceInfo> result = new();
+
+            try
+            {
+                var serviceVoices = await _ttsService.GetVoicesAsync();
+                if (serviceVoices != null && serviceVoices.Count > 0)
+                {
+                    if (_database != null)
+                    {
+                        foreach (var voice in serviceVoices)
+                        {
+                            try
+                            {
+                                _database.UpsertTtsVoice(voice);
+                            }
+                            catch (Exception ex)
+                            {
+                                CustomLogger?.Log("Warn", "VoiceChoserTool", $"Failed to upsert voice {voice.Id}: {ex.Message}");
+                            }
+                        }
+
+                        var dbVoices = _database.ListTtsVoices();
+                        result = dbVoices.Select(v => new VoiceInfo
+                        {
+                            Id = v.VoiceId,
+                            Name = v.Name,
+                            Gender = v.Gender,
+                            Language = v.Language,
+                            Age = v.Age,
+                            Confidence = v.Confidence
+                        }).ToList();
+                    }
+                    else
+                    {
+                        result = serviceVoices;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                CustomLogger?.Log("Error", "VoiceChoserTool", $"Failed to fetch voices from service: {ex.Message}");
+            }
+
+            if (result.Count == 0 && _database != null)
+            {
+                try
+                {
+                    var dbVoices = _database.ListTtsVoices();
+                    result = dbVoices.Select(v => new VoiceInfo
+                    {
+                        Id = v.VoiceId,
+                        Name = v.Name,
+                        Gender = v.Gender,
+                        Language = v.Language,
+                        Age = v.Age,
+                        Confidence = v.Confidence
+                    }).ToList();
+                }
+                catch (Exception ex)
+                {
+                    CustomLogger?.Log("Error", "VoiceChoserTool", $"Failed to fetch cached voices from db: {ex.Message}");
+                }
+            }
+
+            _cachedVoices = result;
             _voicesCachedAt = DateTime.UtcNow;
             return _cachedVoices;
         }
 
-        private async Task<TtsSchemaFile?> LoadSchemaAsync()
+        private async Task<TtsSchema?> LoadSchemaAsync(bool forceReload = false)
         {
+            if (!forceReload && _schema != null)
+                return _schema;
+
             try
             {
+                if (!File.Exists(_schemaPath))
+                    return null;
+
                 var content = await File.ReadAllTextAsync(_schemaPath);
-                var schema = JsonSerializer.Deserialize<TtsSchemaFile>(content, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
-                return schema;
+                _schema = JsonSerializer.Deserialize<TtsSchema>(content, _jsonOptions);
+                return _schema;
             }
             catch (Exception ex)
             {
@@ -222,10 +295,11 @@ namespace TinyGenerator.Skills
             }
         }
 
-        private async Task SaveSchemaAsync(TtsSchemaFile schema)
+        private async Task SaveSchemaAsync(TtsSchema schema)
         {
-            var json = JsonSerializer.Serialize(schema, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(schema, _jsonOptions);
             await File.WriteAllTextAsync(_schemaPath, json);
+            _schema = schema;
         }
 
         private Dictionary<string, object> CreateReadJsonSchema()
@@ -273,19 +347,5 @@ namespace TinyGenerator.Skills
             public string? VoiceId { get; set; }
         }
 
-        private class TtsSchemaFile
-        {
-            public List<TtsSchemaCharacter> Characters { get; set; } = new();
-            public List<JsonElement> Timeline { get; set; } = new();
-        }
-
-        private class TtsSchemaCharacter
-        {
-            public string? Name { get; set; }
-            public string? Voice { get; set; }
-            public string? VoiceId { get; set; }
-            public string? Gender { get; set; }
-            public string? EmotionDefault { get; set; }
-        }
     }
 }

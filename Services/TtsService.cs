@@ -46,6 +46,7 @@ namespace TinyGenerator.Services
     {
         private readonly HttpClient _http;
         private readonly TtsOptions _options;
+        private static readonly JsonSerializerOptions VoiceJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
         public TtsService(HttpClient http, TtsOptions? options = null)
         {
@@ -69,17 +70,34 @@ namespace TinyGenerator.Services
                 {
                     var resp = await _http.GetAsync(path);
                     if (!resp.IsSuccessStatusCode) continue;
-                    var list = await resp.Content.ReadFromJsonAsync<List<VoiceInfo>>();
-                    if (list != null) return list;
+                    var payload = await resp.Content.ReadAsStringAsync();
+                    var list = ParseVoicesPayload(payload);
+                    if (list != null && list.Count > 0) return list;
                 }
                 catch
                 {
                     // ignore and try next
                 }
-            }
-
-            return new List<VoiceInfo>();
         }
+
+        return new List<VoiceInfo>();
+    }
+
+    public async Task<byte[]> DownloadAudioAsync(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            throw new ArgumentException("url is required", nameof(url));
+
+        try
+        {
+            return await _http.GetByteArrayAsync(url);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TtsService] Failed to download audio from {url}: {ex}");
+            throw;
+        }
+    }
 
         // POST /synthesize (body: { voice, text, language?, sentiment? }) -> returns SynthesisResult
         // If no language is provided, default to Italian ("it").
@@ -212,9 +230,62 @@ namespace TinyGenerator.Services
             catch (Exception ex)
             {
                 Console.WriteLine($"[TtsService] Exception building/sending alt payload: {ex}");
+        }
+
+        return null;
+    }
+
+    private static List<VoiceInfo>? ParseVoicesPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                return JsonSerializer.Deserialize<List<VoiceInfo>>(payload, VoiceJsonOptions);
             }
 
-            return null;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("voices", out var voicesElement))
+                {
+                    return JsonSerializer.Deserialize<List<VoiceInfo>>(voicesElement.GetRawText(), VoiceJsonOptions);
+                }
+
+                if (root.TryGetProperty("data", out var dataElement) && dataElement.ValueKind == JsonValueKind.Array)
+                {
+                    return JsonSerializer.Deserialize<List<VoiceInfo>>(dataElement.GetRawText(), VoiceJsonOptions);
+                }
+
+                var list = new List<VoiceInfo>();
+                foreach (var prop in root.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.Object)
+                    {
+                        var voice = prop.Value.Deserialize<VoiceInfo>(VoiceJsonOptions) ?? new VoiceInfo();
+                        if (string.IsNullOrWhiteSpace(voice.Id))
+                        {
+                            voice.Id = prop.Name;
+                        }
+                        list.Add(voice);
+                    }
+                }
+
+                if (list.Count > 0)
+                    return list;
+            }
         }
+        catch
+        {
+            // Ignore parsing errors
+        }
+
+        return null;
+    }
     }
 }

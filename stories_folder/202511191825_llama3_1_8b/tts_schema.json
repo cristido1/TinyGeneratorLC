@@ -1,0 +1,97 @@
+{
+  "Characters": [
+    {
+      "Name": "Narratore",
+      "Voice": "default",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    },
+    {
+      "Name": "Capitano Carta",
+      "Voice": "default",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    },
+    {
+      "Name": "L\u0027aiutante del capitano",
+      "Voice": "default",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    },
+    {
+      "Name": "L\u0027ambasciatore dell\u0027Impero dei Nebuloni",
+      "Voice": "default",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    },
+    {
+      "Name": "Capitano Carta e la sua squadra",
+      "Voice": "default",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    },
+    {
+      "Name": "L\u0027imperatore dei Nebuloni",
+      "Voice": "default",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    }
+  ],
+  "Timeline": [
+    {
+      "Character": "Narratore",
+      "Text": "The story begins with the ship Cavour exploring the depths of space.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Capitano Carta",
+      "Text": "Il mio scopo era trovare nuove civilt\u00E0 e tecnologie avanzate.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Capitano Carta",
+      "Text": "Non eravamo sicuri del messaggio che ci veniva inviato da parte dell\u0027Impero dei Nebuloni. Ma la nostra curiosit\u00E0 era forte.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Capitano Carta",
+      "Text": "Il messaggio che ricevemmo fu molto inquietante e pericoloso. Sapevamo di non poter ignorarlo, ma non sapevamo cosa avrebbe significato affrontare queste nuove sfide.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Capitano Carta",
+      "Text": "Capitano Carta stava preparando la Cavour per l\u0027arrivo su Arkeia.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "L\u0027aiutante del capitano",
+      "Text": "Capitano Carta, sei stato scelto per partecipare alla sfida della vita eterna. Il nostro imperatore vi invita a raggiungere il pianeta di Arkeia, dove scoprirai la verit\u00E0 sulla tua esistenza.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Capitano Carta",
+      "Text": "Okay, prepariamoci per la navigazione verso Arkeia. Vorrei sapere cosa aspettarsi.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "L\u0027ambasciatore dell\u0027Impero dei Nebuloni",
+      "Text": "Capitano Carta! Abbiamo ricevuto il messaggio dell\u0027Impero dei Nebuloni. Sembra che ci sia qualcosa di importante da scoprire.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Capitano Carta",
+      "Text": "Saremo preparati per affrontare qualsiasi cosa si presenti. Ascolter\u00F2 attentamente l\u0027ambasciatore dell\u0027Impero dei Nebuloni.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Capitano Carta e la sua squadra",
+      "Text": "Mentre si avvicinavamo al centro della citt\u00E0, sentivamo l\u0027energia che emanava da quel grande portale. Era un segnale del nostro imminente scoprire la verit\u00E0 sulla nostra esistenza.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "L\u0027imperatore dei Nebuloni",
+      "Text": "Capitano Carta! Siamo felici di presentarti la verit\u00E0 sulla tua esistenza.",
+      "Emotion": "neutral"
+    }
+  ]
+}

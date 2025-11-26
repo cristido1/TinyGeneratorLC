@@ -1,0 +1,44 @@
+{
+  "Characters": [
+    {
+      "Name": "Narratore",
+      "Voice": "",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    },
+    {
+      "Name": "Luca Carta",
+      "Voice": "",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    },
+    {
+      "Name": "Comandante Luca Carta",
+      "Voice": "",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    }
+  ],
+  "Timeline": [
+    {
+      "Character": "Narratore",
+      "Text": "L\u0027atmosfera nella Confederazione Galattica era un misto di ansia e eccitazione. I navigatori della Federazione Terranova si preparavano per la missione pi\u00F9 importante della loro storia.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Luca Carta",
+      "Text": "Il mio capitano ha sempre mostrato una determinazione senza pari, ma questa volta avrebbe affrontato un nemico potente e pericoloso. \u00C8 tempo di dimostrare la mia valorosa capacit\u00E0.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Comandante Luca Carta",
+      "Text": "Il Consiglio ha deciso che l\u0027USS Cavour fosse il vostro veliero per questa missione. \u00C8 un onore essere affidato a voi.",
+      "Emotion": "happy"
+    },
+    {
+      "Character": "Luca Carta",
+      "Text": "Abbiamo molto da imparare, ma con la forza del nostro equipaggio, non ci sono ostacoli che possano fermarci. L\u0027USS Cavour \u00E8 pronta per una battaglia decisiva.",
+      "Emotion": "neutral"
+    }
+  ]
+}

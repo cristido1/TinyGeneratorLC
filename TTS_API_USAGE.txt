@@ -10,8 +10,8 @@ Endpoint principali
   - Response: {"status": "ok"}
 
 2) GET /voices
-  - Scopo: elenca i modelli e le voci disponibili, metadati inclusi.
-  - Note: il servizio arricchisce le voci template ("voice_templates") con i campioni e i percorsi relativi trovati in `voice_templates/` e `voices/samples/`.
+  - Scopo: elenca tutte le voci disponibili con i relativi metadati, prese direttamente dal file `voice_metadata.json`.
+  - Note: include voci standard e template personalizzati, arricchiti con percorsi ai file di riferimento e campioni.
 
 3) POST /patch_transformers
   - Scopo: tentativo best-effort per applicare una patch runtime a `transformers` (risolve import incompatibilities per alcune versioni di TTS).
@@ -31,15 +31,6 @@ Endpoint principali
     - emotion (string, optional): emozione supportata dal modello (es. "neutral", "happy", "sad", "angry").
     - speed (float, optional): fattore di velocità (es. 0.8 = più lento, 1.2 = più veloce).
     - format (string, optional): "wav" (default) o "base64" per ricevere l'audio inline.
-
-emozioni ammesse:
-- neutral (neutrale)
-- happy (felice)
-- sad (triste)
-- angry (arrabbiato)
-- fearful (spaventato)
-- disgusted (disgustato)
-- surprised (sorpreso)
 
   - Esempio JSON body:
     {
@@ -110,3 +101,17 @@ Contatti tecnici per integrazione
   - `scripts/` : utilità (es. `generate_template_samples.py`, `rebuild_vocoder_template.py`)
 
 Se hai bisogno, posso produrre esempi ready-to-run (script curl o un client Python) adattati al programma che l'altra AI sta sviluppando.
+
+Emozioni supportate
+
+Le emozioni supportate per le voci del TTS sono:
+
+- neutral (neutrale)
+- happy (felice)
+- sad (triste)
+- angry (arrabbiato)
+- fearful (spaventato)
+- disgusted (disgustato)
+- surprised (sorpreso)
+
+Queste emozioni possono essere specificate nel campo `emotion` durante una richiesta al server.

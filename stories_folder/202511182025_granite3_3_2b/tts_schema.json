@@ -1,0 +1,48 @@
+{
+  "Characters": [
+    {
+      "Name": "Narratore",
+      "Voice": "",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    },
+    {
+      "Name": "man1",
+      "Voice": "",
+      "Gender": "neutral",
+      "EmotionDefault": ""
+    }
+  ],
+  "Timeline": [
+    {
+      "Character": "Narratore",
+      "Text": "\nTitolo: \u0022Carta della Stella Cadente\u0022\n\nAttorno al 23\u00B0 secolo, la Terra aveva gi\u00E0 sfiorato i confini del suo sistema solare, espandendosi verso l\u0027ignoto. I nostri steli esploravano universi nuovi, cercando vita oltre il nostro Sole. Una di queste missioni era guidata dalla nave spaziale Cavour, sotto le ordini del capitano Alberto Carta, un uomo di intelligenza penetrante e volont\u00E0 di ferro.\n\nLa Terra-Nave Cavour era un affascinante meccanismo, una concrezione di scienza e ingegneria avanzate. La sua struttura era una mosaico di metallo lucido, circuiti luminosi e pannelli trasparenti che offrivano vista sul cosmo vagante. Il suo cuore pulsava il potente motore a reazione antigravitazionale, permettendole di navigare con facilit\u00E0 nei vasti spazi dell\u0027universo.\n\nLa missione della Cavour era quella di studiare la stella Nova Solaris, situata in una galassia distante, nota come Zeta-22 Orionis. La scoperta di questa nana blu aveva suscitato grande interesse per la sua potenziale abitabilit\u00E0 e per i misteriosi flussi energetici che emanavano dal suo polo nascosto.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Narratore",
+      "Text": "\\nAttorno al 23\\u00B0 secolo, la Terra aveva gi\\u00E0 sfiorato i confini del suo sistema solare, espandendosi verso l\\u00EDgnoto. I nostri steli esploravano universi nuovi, cercando vita oltre il nostro Sole. Una di queste missioni era guidata dalla nave spaziale Cavour, sotto le ordini del capitano Alberto Carta, un uomo di intelligenza penetrante e volont\\u00E0 di ferro.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "man1",
+      "Text": "\\nLa Terra-Nave Cavour era un affascinante meccanismo, una concrezione di scienza e ingegneria avanzate. La sua struttura era una mosaico di metallo lucido, circuiti luminosi e pannelli trasparenti che offrivano vista sul cosmo vagante.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "man1",
+      "Text": "\\nIl suo cuore pulsava il potente motore a reazione antigravitazionale, permettendole di navigare con facilit\\u00E0 nei vasti spazi dell\\u00EDuniverso.",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "Narratore",
+      "Text": "\u0022La missione della Cavour era quella di studiare la stella Nova Solaris, situata in una galassia distante, nota come Zeta-22 Orionis. La scoperta di questa nana blu aveva suscitato grande interesse per la sua potenziale abitabilit\u00E0 e per i misteriosi flussi energetici che emanavano dal suo polo nascosto.\u0022",
+      "Emotion": "neutral"
+    },
+    {
+      "Character": "man1",
+      "Text": "\u0022La missione della Cavour era quella di studiare la stella Nova Solaris, situata in una galassia distante, nota come Zeta-22 Orionis. La scoperta di questa nana blu aveva suscitato grande interesse per la sua potenziale abitabilit\u00E0 e per i misteriosi flussi energetici che emanavano dal suo polo nascosto.\u0022",
+      "Emotion": "neutral"
+    }
+  ]
+}

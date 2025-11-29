@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -42,61 +43,50 @@ namespace TinyGenerator.Skills
         public string? LastFunctionCalled { get; set; }
         public string? LastFunctionResult { get; set; }
 
-        public override IEnumerable<string> FunctionNames
-        {
-            get
-            {
-                yield return Name;
-                yield return "read_json";
-                yield return "read_voices";
-                yield return "set_voice";
-            }
-        }
+        public override IEnumerable<string> FunctionNames => new[] { "read_characters", "read_voices", "set_voice" };
 
-        public override Dictionary<string, object> GetSchema() => CreateReadJsonSchema();
+        public override Dictionary<string, object> GetSchema() => CreateReadCharactersSchema();
 
         public override IEnumerable<Dictionary<string, object>> GetFunctionSchemas()
         {
-            yield return CreateReadJsonSchema();
+            yield return CreateReadCharactersSchema();
             yield return CreateReadVoicesSchema();
             yield return CreateSetVoiceSchema();
         }
 
         public override Task<string> ExecuteAsync(string input)
-        {
-            var request = ParseInput<VoiceChoserRequest>(input);
-            if (request?.Operation == null)
-            {
-                return Task.FromResult(SerializeResult(new { error = "Operation is required" }));
-            }
-
-            return ExecuteFunctionAsync(request.Operation, input);
-        }
+            => Task.FromResult(SerializeResult(new { error = "Call read_characters, read_voices or set_voice directly." }));
 
         public override async Task<string> ExecuteFunctionAsync(string functionName, string input)
         {
             LastFunctionCalled = functionName;
             string result = functionName.ToLowerInvariant() switch
             {
-                "read_json" => await HandleReadJsonAsync(),
+                "read_characters" => await HandleReadCharactersAsync(),
                 "read_voices" => await HandleReadVoicesAsync(),
                 "set_voice" => await HandleSetVoiceAsync(input),
-                "voicechoser" => SerializeResult(new { result = "Available operations: read_json(), read_voices(), set_voice(character, gender, voice_id)" }),
                 _ => SerializeResult(new { error = $"Unknown function: {functionName}" })
             };
             LastFunctionResult = result;
             return result;
         }
 
-        private async Task<string> HandleReadJsonAsync()
+        private async Task<string> HandleReadCharactersAsync()
         {
             try
             {
                 var schema = await LoadSchemaAsync(forceReload: true);
                 if (schema == null)
-                    return SerializeResult(new { error = $"Impossibile caricare lo schema {_schemaPath}" });
+                    return SerializeResult(new { error = $"Unable to load {_schemaPath}" });
 
-                return SerializeResult(new { schema });
+                var characters = schema.Characters.Select(c => new
+                {
+                    name = c.Name,
+                    gender = c.Gender,
+                    voice_name = c.Voice
+                });
+
+                return SerializeResult(new { characters });
             }
             catch (Exception ex)
             {
@@ -112,10 +102,10 @@ namespace TinyGenerator.Skills
                 var voices = await EnsureVoicesAsync();
                 var simplified = voices.Select(v => new
                 {
-                    id = v.Id,
-                    name = v.Name,
+                    voice_id = v.Id,
                     gender = v.Gender,
-                    language = v.Language
+                    language = v.Language,
+                    archetype = v.Tags != null && v.Tags.TryGetValue("archetype", out var archetype) ? archetype : null
                 });
                 return SerializeResult(new { voices = simplified });
             }
@@ -137,9 +127,6 @@ namespace TinyGenerator.Skills
                 if (string.IsNullOrWhiteSpace(payload.Character))
                     return SerializeResult(new { error = "character is required" });
 
-                if (string.IsNullOrWhiteSpace(payload.VoiceId))
-                    return SerializeResult(new { error = "voice_id is required" });
-
                 if (string.IsNullOrWhiteSpace(payload.Gender))
                     return SerializeResult(new { error = "gender is required" });
 
@@ -147,8 +134,9 @@ namespace TinyGenerator.Skills
                 if (schema?.Characters == null || schema.Characters.Count == 0)
                     return SerializeResult(new { error = "Unable to parse tts_schema.json" });
 
+                var targetName = NormalizeCharacterName(payload.Character);
                 var character = schema.Characters
-                    .FirstOrDefault(c => c.Name != null && c.Name.Equals(payload.Character, StringComparison.OrdinalIgnoreCase));
+                    .FirstOrDefault(c => c.Name != null && c.Name.Equals(targetName, StringComparison.OrdinalIgnoreCase));
 
                 if (character == null)
                 {
@@ -156,28 +144,52 @@ namespace TinyGenerator.Skills
                 }
 
                 var voices = await EnsureVoicesAsync();
-                var voice = voices.FirstOrDefault(v =>
-                    !string.IsNullOrWhiteSpace(v.Id) &&
-                    v.Id.Equals(payload.VoiceId, StringComparison.OrdinalIgnoreCase));
+                var usedVoiceIds = schema.Characters
+                    .Where(c => !string.IsNullOrWhiteSpace(c.VoiceId)
+                        && !c.Name.Equals(character.Name, StringComparison.OrdinalIgnoreCase))
+                    .Select(c => c.VoiceId!)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                if (voice == null)
+                VoiceInfo? voice = null;
+                if (!string.IsNullOrWhiteSpace(payload.VoiceId))
                 {
-                    return SerializeResult(new { error = $"Voice '{payload.VoiceId}' not found. Usa read_voices per la lista completa." });
-                }
+                    voice = voices.FirstOrDefault(v =>
+                        !string.IsNullOrWhiteSpace(v.Id) &&
+                        v.Id.Equals(payload.VoiceId, StringComparison.OrdinalIgnoreCase));
 
-                if (!string.IsNullOrWhiteSpace(voice.Gender))
-                {
-                    var compareVoiceGender = voice.Gender.Trim();
-                    if (!string.IsNullOrWhiteSpace(compareVoiceGender) &&
-                        !string.Equals(compareVoiceGender, payload.Gender, StringComparison.OrdinalIgnoreCase))
+                    if (voice == null)
                     {
-                        return SerializeResult(new { error = $"Voice gender '{voice.Gender}' does not match requested gender '{payload.Gender}'" });
+                        return SerializeResult(new { error = $"Voice '{payload.VoiceId}' not found. Use read_voices for the full list." });
+                    }
+
+                    if (usedVoiceIds.Contains(voice.Id!))
+                    {
+                        return SerializeResult(new { error = $"Voice '{payload.VoiceId}' is already assigned to another character." });
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(voice.Gender))
+                    {
+                        var compareVoiceGender = voice.Gender.Trim();
+                        if (!string.IsNullOrWhiteSpace(compareVoiceGender) &&
+                            !string.Equals(compareVoiceGender, payload.Gender, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return SerializeResult(new { error = $"Voice gender '{voice.Gender}' does not match requested gender '{payload.Gender}'" });
+                        }
+                    }
+                }
+                else
+                {
+                    var desiredArchetype = NormalizeArchetype(character.Voice);
+                    voice = ChooseBestVoice(voices, payload.Gender, desiredArchetype, usedVoiceIds);
+                    if (voice == null)
+                    {
+                        return SerializeResult(new { error = $"Unable to auto-select a voice for '{character.Name}'. Assign voice_id explicitly." });
                     }
                 }
 
                 character.Gender = payload.Gender;
-                character.VoiceId = voice.Id;
-                character.Voice = voice.Name ?? voice.Id;
+                character.VoiceId = voice!.Id ?? string.Empty;
+                character.Voice = voice.Name ?? voice.Id ?? string.Empty;
 
                 await SaveSchemaAsync(schema);
 
@@ -234,7 +246,8 @@ namespace TinyGenerator.Skills
                             Gender = v.Gender,
                             Language = v.Language,
                             Age = v.Age,
-                            Confidence = v.Confidence
+                            Confidence = v.Confidence,
+                            Tags = ParseTags(v.Tags)
                         }).ToList();
                     }
                     else
@@ -260,7 +273,8 @@ namespace TinyGenerator.Skills
                         Gender = v.Gender,
                         Language = v.Language,
                         Age = v.Age,
-                        Confidence = v.Confidence
+                        Confidence = v.Confidence,
+                        Tags = ParseTags(v.Tags)
                     }).ToList();
                 }
                 catch (Exception ex)
@@ -302,11 +316,28 @@ namespace TinyGenerator.Skills
             _schema = schema;
         }
 
-        private Dictionary<string, object> CreateReadJsonSchema()
+        private static Dictionary<string, string>? ParseTags(string? tagsJson)
+        {
+            if (string.IsNullOrWhiteSpace(tagsJson))
+                return null;
+            try
+            {
+                return JsonSerializer.Deserialize<Dictionary<string, string>>(tagsJson, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private Dictionary<string, object> CreateReadCharactersSchema()
         {
             return CreateFunctionSchema(
-                "read_json",
-                "Legge e restituisce il contenuto del file tts_schema.json della storia corrente.",
+                "read_characters",
+                "Returns the character list from tts_schema.json",
                 new Dictionary<string, object>(),
                 new List<string>());
         }
@@ -315,7 +346,7 @@ namespace TinyGenerator.Skills
         {
             return CreateFunctionSchema(
                 "read_voices",
-                "Restituisce l'elenco delle voci disponibili dal servizio TTS (id, nome, genere, lingua).",
+                "Returns available voices list",
                 new Dictionary<string, object>(),
                 new List<string>());
         }
@@ -324,27 +355,106 @@ namespace TinyGenerator.Skills
         {
             return CreateFunctionSchema(
                 "set_voice",
-                "Assegna una voce ad un personaggio impostando genere e VoiceId nel tts_schema.json.",
+                "Assigns a voice to a character",
                 new Dictionary<string, object>
                 {
-                    { "character", new Dictionary<string, object> { { "type", "string" }, { "description", "Nome del personaggio (incluso Narratore)" } } },
-                    { "gender", new Dictionary<string, object> { { "type", "string" }, { "description", "Genere da assegnare (es. male, female, neutral)" } } },
-                    { "voice_id", new Dictionary<string, object> { { "type", "string" }, { "description", "Identificativo della voce da usare" } } }
+                    { "character", new Dictionary<string, object> { { "type", "string" }, { "description", "Character name (Narrator included)" } } },
+                    { "gender", new Dictionary<string, object> { { "type", "string" }, { "description", "Gender to assign (e.g. male, female, neutral)" } } },
+                    { "voice_id", new Dictionary<string, object> { { "type", "string" }, { "description", "Optional voice identifier to use" } } }
                 },
-                new List<string> { "character", "gender", "voice_id" });
-        }
-
-        private class VoiceChoserRequest
-        {
-            public string? Operation { get; set; }
+                new List<string> { "character", "gender" });
         }
 
         private class SetVoiceRequest
         {
-            public string? Operation { get; set; }
             public string? Character { get; set; }
             public string? Gender { get; set; }
             public string? VoiceId { get; set; }
+        }
+
+        private static string NormalizeCharacterName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return name;
+
+            var trimmed = name.Trim();
+            if (trimmed.Equals("narrator", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("narratore", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Narratore";
+            }
+
+            return trimmed;
+        }
+
+        private static string? NormalizeArchetype(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Equals("default", StringComparison.OrdinalIgnoreCase))
+                return null;
+            return value.Trim();
+        }
+
+        private VoiceInfo? ChooseBestVoice(List<VoiceInfo> voices, string targetGender, string? desiredArchetype, HashSet<string> usedVoiceIds)
+        {
+            if (voices == null || voices.Count == 0)
+                return null;
+
+            var normalizedGender = targetGender?.Trim();
+            var normalizedArchetype = NormalizeArchetype(desiredArchetype);
+
+            var ranked = voices
+                .Where(v => !string.IsNullOrWhiteSpace(v.Id) && !usedVoiceIds.Contains(v.Id!))
+                .Select(v => new
+                {
+                    Voice = v,
+                    Score = ComputeVoiceScore(v, normalizedGender, normalizedArchetype)
+                })
+                .OrderByDescending(x => x.Score)
+                .Select(x => x.Voice)
+                .FirstOrDefault();
+
+            return ranked;
+        }
+
+        private static double ComputeVoiceScore(VoiceInfo voice, string? targetGender, string? desiredArchetype)
+        {
+            double score = 0;
+            if (voice.Confidence.HasValue)
+                score += voice.Confidence.Value;
+
+            if (voice.Tags != null &&
+                voice.Tags.TryGetValue("rating", out var ratingRaw) &&
+                double.TryParse(ratingRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out var rating))
+            {
+                score = Math.Max(score, rating);
+            }
+
+            bool genderMatch = !string.IsNullOrWhiteSpace(targetGender) &&
+                !string.IsNullOrWhiteSpace(voice.Gender) &&
+                voice.Gender!.Equals(targetGender, StringComparison.OrdinalIgnoreCase);
+
+            if (genderMatch)
+                score += 1.0;
+
+            if (!string.IsNullOrWhiteSpace(desiredArchetype))
+            {
+                var voiceArchetype = voice.Tags != null && voice.Tags.TryGetValue("archetype", out var archetypeValue)
+                    ? archetypeValue
+                    : null;
+
+                if (!string.IsNullOrWhiteSpace(voiceArchetype) &&
+                    voiceArchetype!.Equals(desiredArchetype, StringComparison.OrdinalIgnoreCase))
+                {
+                    score += 1.0;
+                }
+                else
+                {
+                    // small penalty if archetype specified but doesn't match
+                    score -= 0.25;
+                }
+            }
+
+            return score;
         }
 
     }

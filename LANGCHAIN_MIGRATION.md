@@ -51,7 +51,7 @@ var result = await service.GenerateStoriesAsync(
     apiKey: "ollama-dummy-key",
     progress: msg => Console.WriteLine(msg));
 
-Console.WriteLine($"Best story: {result.ApprovedStory}");
+Console.WriteLine($"Best story: {result.Approved}");
 Console.WriteLine($"Score: {result.ScoreA}");
 ```
 

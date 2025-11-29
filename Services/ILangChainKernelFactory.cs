@@ -58,7 +58,10 @@ namespace TinyGenerator.Services
         /// Create a LangChainChatBridge for direct model communication (for ReAct loops, etc)
         /// </summary>
         /// <param name="model">Model name (e.g., "phi3:mini", "gpt-3.5-turbo")</param>
+        /// <param name="temperature">Optional sampling temperature</param>
+        /// <param name="topP">Optional top_p value</param>
+        /// <param name="useMaxTokens">If true, configure the bridge to use the maximum context/tokens allowed for the model.</param>
         /// <returns>Configured chat bridge for the model</returns>
-        LangChainChatBridge CreateChatBridge(string model);
+        LangChainChatBridge CreateChatBridge(string model, double? temperature = null, double? topP = null, bool useMaxTokens = false);
     }
 }

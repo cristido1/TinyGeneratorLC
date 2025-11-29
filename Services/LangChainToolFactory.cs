@@ -129,12 +129,18 @@ namespace TinyGenerator.Services
                 RegisterStoryEvaluatorTool(orchestrator, modelId, agentId);
 
             var wantsVoiceTool = allowedSet.Contains("voicechoser") || allowedSet.Contains("voicechooser");
-            // Register TtsSchemaTool if working folder provided (TTS test context)
+            var wantsSchemaTool = allowedSet.Contains("ttsschema") || allowedSet.Contains("ttsschematool");
+            // Register TTS-specific tools only if explicitly requested
             if (!string.IsNullOrWhiteSpace(ttsWorkingFolder))
             {
-                RegisterTtsSchemaTool(orchestrator, modelId, agentId, ttsWorkingFolder, ttsStoryText);
+                if (wantsSchemaTool)
+                {
+                    RegisterTtsSchemaTool(orchestrator, modelId, agentId, ttsWorkingFolder, ttsStoryText);
+                }
                 if (wantsVoiceTool)
+                {
                     RegisterVoiceChoserTool(orchestrator, modelId, agentId, ttsWorkingFolder);
+                }
             }
 
             _logger?.Log("Info", "ToolFactory", $"Created orchestrator with {orchestrator.GetToolSchemas().Count} tools");

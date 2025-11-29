@@ -33,7 +33,8 @@ namespace TinyGenerator.Pages.Agents
                 if (a == null) return RedirectToPage("/Agents/Index");
                 Agent = a;
                 Voices = _database.ListTtsVoices();
-                Models = _database.ListModels();
+                // Show enabled models, but keep agent's assigned model visible even if it's currently disabled
+                Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
                 // Resolve selected model name from numeric ModelId
                 try { SelectedModelName = Agent.ModelId.HasValue ? _database.GetModelInfoById(Agent.ModelId.Value)?.Name : null; } catch { SelectedModelName = null; }
                 // Load selected skills from JSON array stored in Agent.Skills
@@ -59,7 +60,7 @@ namespace TinyGenerator.Pages.Agents
         {
             // Ensure lists are available when re-displaying the page after validation errors
             Voices = _database.ListTtsVoices();
-            Models = _database.ListModels();
+            Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
             if (!ModelState.IsValid) return Page();
             // Validate JSON fields
             try
@@ -118,7 +119,7 @@ namespace TinyGenerator.Pages.Agents
             {
                 ModelState.AddModelError(string.Empty, ex.Message);
                 Voices = _database.ListTtsVoices();
-                Models = _database.ListModels();
+                Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
                 return Page();
             }
         }

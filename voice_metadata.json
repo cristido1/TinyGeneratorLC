@@ -1,0 +1,688 @@
+{
+  "voices": [
+    {
+      "model": "tts_models/en/vctk/vits",
+      "speaker": null,
+      "gender": "unknown",
+      "age_range": "",
+      "archetype": "",
+      "rating": null,
+      "notes": "Populate once speaker is selected (multi-speaker)."
+    },
+    {
+      "model": "tts_models/en/ljspeech/tacotron2-DDC",
+      "speaker": "LJSpeech",
+      "gender": "female",
+      "age_range": "",
+      "archetype": "",
+      "rating": null,
+      "notes": ""
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Claribel Dervla",
+      "gender": "female",
+      "age_range": "45",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce corposa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Daisy Studious",
+      "gender": "female",
+      "age_range": "18",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Ragazzina giovane studiosa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Gracie Wise",
+      "gender": "female",
+      "age_range": "25",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Donna giovane personaggio secondario, sveglia"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Tammie Ema",
+      "gender": "female",
+      "age_range": "26",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce fredda e distaccata"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Alison Dietlinde",
+      "gender": "female",
+      "age_range": "16",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce giovane e vivace"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Ana Florence",
+      "gender": "female",
+      "age_range": "35",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce corposa matura"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Annmarie Nele",
+      "gender": "female",
+      "age_range": "35",
+      "archetype": "Personaggio",
+      "rating": 5,
+      "notes": "Voce normale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Asya Anara",
+      "gender": "female",
+      "age_range": "40",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce corposa matura"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Brenda Stern",
+      "gender": "female",
+      "age_range": "20",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovane e vivace"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Gitta Nikolina",
+      "gender": "female",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce fastidiosa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Henriette Usha",
+      "gender": "female",
+      "age_range": "50",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce matura e autoritaria"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Sofia Hellen",
+      "gender": "female",
+      "age_range": "40",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce matura sensuale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Tammy Grit",
+      "gender": "female",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce sensuale giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Tanja Adelina",
+      "gender": "female",
+      "age_range": "55",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce matura e autoritaria"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Vjollca Johnnie",
+      "gender": "female",
+      "age_range": "40",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce matura normale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Andrew Chipper",
+      "gender": "male",
+      "age_range": "8-12",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce giovane e vivace"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Badr Odhiambo",
+      "gender": "male",
+      "age_range": "12-16",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovane e vivace"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Dionisio Schuyler",
+      "gender": "male",
+      "age_range": "50",
+      "archetype": "narratore",
+      "rating": 8,
+      "notes": "Voce corposa matura"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Royston Min",
+      "gender": "male",
+      "age_range": "45",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce matura normale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Viktor Eka",
+      "gender": "male",
+      "age_range": "",
+      "archetype": "",
+      "rating": null,
+      "notes": ""
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Abrahan Mack",
+      "gender": "male",
+      "age_range": "35",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce un po fastidiosa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Adde Michal",
+      "gender": "male",
+      "age_range": "",
+      "archetype": "",
+      "rating": null,
+      "notes": ""
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Baldur Sanjin",
+      "gender": "male",
+      "age_range": "28",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce allegra simpatica"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Craig Gutsy",
+      "gender": "male",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Damien Black",
+      "gender": "male",
+      "age_range": "55",
+      "archetype": "",
+      "rating": 8,
+      "notes": "Voce pienamente corposa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Gilberto Mathias",
+      "gender": "male",
+      "age_range": "45",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": ""
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Ilkin Urbano",
+      "gender": "male",
+      "age_range": "45",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce interessante giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Kazuhiko Atallah",
+      "gender": "male",
+      "age_range": "25",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce allegra normale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Ludvig Milivoj",
+      "gender": "male",
+      "age_range": "45",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce corposa matura"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Suad Qasim",
+      "gender": "male",
+      "age_range": "35",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce matura sensuale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Torcull Diarmuid",
+      "gender": "male",
+      "age_range": "45",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce metallica"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Viktor Menelaos",
+      "gender": "male",
+      "age_range": "40",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce normale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Zacharie Aimilios",
+      "gender": "male",
+      "age_range": "30",
+      "archetype": "narratore",
+      "rating": 7,
+      "notes": "Voce giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Nova Hogarth",
+      "gender": "female",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce sensuale giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Maja Ruoho",
+      "gender": "female",
+      "age_range": "25",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce fastidiosa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Uta Obando",
+      "gender": "female",
+      "age_range": "22",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Lidiya Szekeres",
+      "gender": "female",
+      "age_range": "25",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovane e vivace"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Chandra MacFarland",
+      "gender": "female",
+      "age_range": "25",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce allegra normale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Szofi Granger",
+      "gender": "female",
+      "age_range": "25",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce normale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Camilla Holmström",
+      "gender": "female",
+      "age_range": "35",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce chiara"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Lilya Stainthorpe",
+      "gender": "female",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce forte e decisa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Zofija Kendrick",
+      "gender": "female",
+      "age_range": "",
+      "archetype": "",
+      "rating": null,
+      "notes": ""
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Narelle Moon",
+      "gender": "female",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce dolce"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Barbora MacLean",
+      "gender": "female",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 5,
+      "notes": "Brutta voce"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Alexandra Hisakawa",
+      "gender": "female",
+      "age_range": "50",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": "Voce chiara e professionale" 
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Alma María",
+      "gender": "female",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Rosemary Okafor",
+      "gender": "female",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce interessante"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Ige Behringer",
+      "gender": "male",
+      "age_range": "35",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce ferma e decisa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Filip Traverse",
+      "gender": "male",
+      "age_range": "45",
+      "archetype": "narratore",
+      "rating": 7,
+      "notes": "Voce interessante e corposa"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Damjan Chapman",
+      "gender": "male",
+      "age_range": "50",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": ""
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Wulf Carlevaro",
+      "gender": "male",
+      "age_range": "40",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Aaron Dreschner",
+      "gender": "male",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 5,
+      "notes": "Brutta voce"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Kumar Dahl",
+      "gender": "male",
+      "age_range": "",
+      "archetype": "",
+      "rating": null,
+      "notes": ""
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Eugenio Mataracı",
+      "gender": "male",
+      "age_range": "40",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": ""
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Ferran Simen",
+      "gender": "male",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Xavier Hayasaka",
+      "gender": "male",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovanile"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Luis Moray",
+      "gender": "male",
+      "age_range": "40",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce normale"
+    },
+    {
+      "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+      "speaker": "Marcos Rudaski",
+      "gender": "male",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce giovanile"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_alien",
+      "gender": "male",
+      "age_range": "100",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce da piccolo alieno pacifico",
+      "language": "it",
+      "template_wav": "voice_templates/template_alien.wav",
+      "sample": "voices/samples/template_alien_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_deep_male",
+      "gender": "male",
+      "age_range": "50",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": "Voce profonda da cattivo",
+      "language": "it",
+      "template_wav": "voice_templates/template_deep_male.wav",
+      "sample": "voices/samples/template_deep_male_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_medieval",
+      "gender": "male",
+      "age_range": "55",
+      "archetype": "personaggio",
+      "rating": 6,
+      "notes": "Voce profonda da cattivo",
+      "language": "it",
+      "template_wav": "voice_templates/template_medieval.wav",
+      "sample": "voices/samples/template_medieval_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_narrator",
+      "gender": "male",
+      "age_range": "50",
+      "archetype": "nattatore",
+      "rating": 5,
+      "notes": "Voce normale",
+      "language": "it",
+      "template_wav": "voice_templates/template_narrator.wav",
+      "sample": "voices/samples/template_narrator_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_strange",
+      "gender": "female",
+      "age_range": "300",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": "Vove sussurrata da creatura strana",
+      "language": "it",
+      "template_wav": "voice_templates/template_strange.wav",
+      "sample": "voices/samples/template_strange_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_unknown",
+      "gender": "male",
+      "age_range": "70",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": "Voce da anziano, caratteristica",
+      "language": "it",
+      "template_wav": "voice_templates/template_unknown.wav",
+      "sample": "voices/samples/template_unknown_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_villain2",
+      "gender": "male",
+      "age_range": "70",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": "Voce da cattivo, minacciosa",
+      "language": "it",
+      "template_wav": "voice_templates/template_villain2.wav",
+      "sample": "voices/samples/template_villain2_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_weird",
+      "gender": "female",
+      "age_range": "90",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": "Voce da vecchietta o da stega cattiva",
+      "language": "it",
+      "template_wav": "voice_templates/template_weird.wav",
+      "sample": "voices/samples/template_weird_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_good_boy",
+      "gender": "male",
+      "age_range": "30",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": "Buffone di corte, voce allegra",
+      "language": "it",
+      "template_wav": "voice_templates/template_good_boy.wav",
+      "sample": "voices/samples/template_good_boy_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_montervillain",
+      "gender": "male",
+      "age_range": "40",
+      "archetype": "personaggio",
+      "rating": 7,
+      "notes": "Voce da cattivo, minacciosa",
+      "language": "it",
+      "template_wav": "voice_templates/template_montervillain.wav",
+      "sample": "voices/samples/template_montervillain_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_strange_creature",
+      "gender": "male",
+      "age_range": "85",
+      "archetype": "personaggio",
+      "rating": 8,
+      "notes": "Voce da creatura strana o da vecchietto",
+      "language": "it",
+      "template_wav": "voice_templates/template_strange_creature.wav",
+      "sample": "voices/samples/template_strange_creature_neutral.wav"
+    },
+    {
+      "model": "voice_templates",
+      "speaker": "template_vocoder",
+      "gender": "unknown",
+      "age_range": "",
+      "archetype": "",
+      "rating": null,
+      "notes": "",
+      "language": "it",
+      "template_wav": "voice_templates/template_vocoder.wav",
+      "sample": "voices/samples/template_vocoder_neutral.wav"
+    }
+  ]
+}

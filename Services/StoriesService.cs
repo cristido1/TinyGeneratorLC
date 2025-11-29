@@ -16,6 +16,7 @@ public sealed class StoriesService
 {
     private const int TtsSchemaReadyStatusId = 3;
     private const int DefaultPhraseGapMs = 2000;
+    private const string NarratorFallbackVoiceName = "Dionisio Schuyler";
     private readonly DatabaseService _database;
     private readonly ILogger<StoriesService>? _logger;
     private readonly TtsService _ttsService;
@@ -44,7 +45,7 @@ public sealed class StoriesService
         _logger = logger;
     }
 
-    public long SaveGeneration(string prompt, StoryGeneratorService.GenerationResult r, string? memoryKey = null)
+    public long SaveGeneration(string prompt, StoryGenerationResult r, string? memoryKey = null)
     {
         return _database.SaveGeneration(prompt, r, memoryKey);
     }
@@ -213,12 +214,90 @@ public sealed class StoriesService
         _database.SaveChapter(memoryKey, chapterNumber, content);
     }
 
-    /// <summary>
-    /// DEPRECATED SK - This method uses deprecated AgentService
-    /// </summary>
     public async Task<(bool success, double score, string? error)> EvaluateStoryWithAgentAsync(long storyId, int agentId)
     {
-        return (false, 0, "EvaluateStoryWithAgentAsync is deprecated - use LangChain-based evaluation instead");
+        if (_kernelFactory == null)
+            return (false, 0, "Kernel factory non disponibile");
+
+        var story = GetStoryById(storyId);
+        if (story == null || string.IsNullOrWhiteSpace(story.Story))
+            return (false, 0, "Storia non trovata o priva di contenuto");
+
+        var agent = _database.GetAgentById(agentId);
+        if (agent == null || !agent.IsActive)
+            return (false, 0, "Agente valutatore non trovato");
+
+        if (!agent.ModelId.HasValue)
+            return (false, 0, "Modello non configurato per l'agente valutatore");
+
+        var modelInfo = _database.GetModelInfoById(agent.ModelId.Value);
+        var modelName = modelInfo?.Name;
+        if (string.IsNullOrWhiteSpace(modelName))
+            return (false, 0, "Modello associato all'agente non disponibile");
+
+        var allowedPlugins = ParseAgentSkills(agent)?.ToList() ?? new List<string>();
+        if (!allowedPlugins.Any())
+            return (false, 0, "L'agente valutatore non ha strumenti abilitati");
+
+        var runId = $"storyeval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+        _progress?.Start(runId);
+
+        try
+        {
+            var orchestrator = _kernelFactory.CreateOrchestrator(modelName, allowedPlugins, agent.Id);
+            var chatBridge = _kernelFactory.CreateChatBridge(modelName, agent.Temperature, agent.TopP);
+
+            var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
+                ? agent.Instructions
+                : ComposeSystemMessage(agent);
+
+            var prompt = BuildStoryEvaluationPrompt(story);
+
+            var beforeEvaluations = _database.GetStoryEvaluations(storyId)
+                .Select(e => e.Id)
+                .ToHashSet();
+
+            var reactLoop = new ReActLoopOrchestrator(
+                orchestrator,
+                _customLogger,
+                progress: _progress,
+                runId: runId,
+                modelBridge: chatBridge,
+                systemMessage: systemMessage);
+
+            var reactResult = await reactLoop.ExecuteAsync(prompt);
+            if (!reactResult.Success)
+            {
+                var error = reactResult.Error ?? "Valutazione fallita";
+                _progress?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
+                return (false, 0, error);
+            }
+
+            var afterEvaluations = _database.GetStoryEvaluations(storyId)
+                .Where(e => !beforeEvaluations.Contains(e.Id))
+                .OrderBy(e => e.Id)
+                .ToList();
+
+            if (afterEvaluations.Count == 0)
+            {
+                var msg = "L'agente non ha salvato alcuna valutazione.";
+                _progress?.Append(runId, $"[{storyId}] {msg}", "Warn");
+                return (false, 0, msg);
+            }
+
+            var avgScore = afterEvaluations.Average(e => e.TotalScore);
+            _progress?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
+            return (true, avgScore, null);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Errore durante EvaluateStoryWithAgent per storia {StoryId} agente {AgentId}", storyId, agentId);
+            return (false, 0, ex.Message);
+        }
+        finally
+        {
+            _progress?.MarkCompleted(runId);
+        }
     }
 
     /// <summary>
@@ -379,42 +458,25 @@ public sealed class StoriesService
         return story.Story ?? string.Empty;
     }
 
-    private string BuildVoiceAssignmentPrompt(StoryRecord story, string folderPath, string schemaPath, string? feedback = null)
+    private string BuildStoryEvaluationPrompt(StoryRecord story)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Cartella di lavoro: {folderPath}");
-        builder.AppendLine($"File schema TTS: {schemaPath}");
-        if (!string.IsNullOrWhiteSpace(feedback))
-        {
-            builder.AppendLine("[NOTE_PRECEDENTI]");
-            builder.AppendLine(feedback);
-            builder.AppendLine();
-        }
+        builder.AppendLine("You are evaluating a story and must record your judgement using the available tools.");
+        builder.AppendLine($"Story ID: {story.Id}");
+        builder.AppendLine("When you provide your evaluation you MUST call the storyevaluator tool and include story_id with the value above.");
+        builder.AppendLine("Assess coherence, structure, characters, pacing, style and overall quality. Provide concrete defects and scores.");
+        builder.AppendLine();
+        builder.AppendLine("Story text:");
 
-        if (File.Exists(schemaPath))
-        {
-            try
-            {
-                var schemaContent = File.ReadAllText(schemaPath);
-                builder.AppendLine("[TTS_SCHEMA.JSON]");
-                builder.AppendLine(schemaContent);
-                builder.AppendLine();
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "Impossibile leggere tts_schema.json per la storia {Id}", story.Id);
-            }
-        }
-
-        builder.AppendLine("Testo completo della storia:");
-        var chunks = ChunkText(story.Story, 3500).ToList();
+        var chunks = ChunkText(story.Story ?? string.Empty, 3000).ToList();
         for (int i = 0; i < chunks.Count; i++)
         {
-            builder.AppendLine($"[STORIA {i + 1}/{chunks.Count}]");
+            builder.AppendLine($"[STORY {i + 1}/{chunks.Count}]");
             builder.AppendLine(chunks[i]);
             builder.AppendLine();
         }
-        builder.AppendLine("[FINE_STORIA]");
+
+        builder.AppendLine("[END_OF_STORY]");
         return builder.ToString();
     }
 
@@ -471,7 +533,8 @@ public sealed class StoriesService
                 var functionName = status.FunctionName?.ToLowerInvariant();
                 return functionName switch
                 {
-                    "generate_tts_audio" or "tts_audio" or "build_tts_audio" => new GenerateTtsAudioCommand(this),
+                    "generate_tts_audio" or "tts_audio" or "build_tts_audio" or "generate_voice_tts" or "generate_voices" => new GenerateTtsAudioCommand(this),
+                    "assign_voices" or "voice_assignment" => new AssignVoicesCommand(this),
                     _ => new FunctionCallCommand(this, status)
                 };
             default:
@@ -550,7 +613,7 @@ public sealed class StoriesService
             LangChainChatBridge chatBridge;
             try
             {
-                chatBridge = _service._kernelFactory.CreateChatBridge(modelName);
+                chatBridge = _service._kernelFactory.CreateChatBridge(modelName, ttsAgent.Temperature, ttsAgent.TopP);
             }
             catch (Exception ex)
             {
@@ -646,7 +709,7 @@ public sealed class StoriesService
 
             var systemMessage = !string.IsNullOrWhiteSpace(voiceAgent.Instructions)
                 ? voiceAgent.Instructions
-                : _service.ComposeSystemMessage(voiceAgent);
+                : "You are a specialist that assigns gender and TTS voices using the available tools.";
             var runId = $"ttsvoice_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
             _service._progress?.Start(runId);
 
@@ -680,7 +743,7 @@ public sealed class StoriesService
                     LangChainChatBridge chatBridge;
                     try
                     {
-                        chatBridge = _service._kernelFactory.CreateChatBridge(modelName);
+                        chatBridge = _service._kernelFactory.CreateChatBridge(modelName, voiceAgent.Temperature, voiceAgent.TopP);
                     }
                     catch (Exception ex)
                     {
@@ -688,7 +751,14 @@ public sealed class StoriesService
                         return (false, $"Errore connessione modello: {ex.Message}");
                     }
 
-                    var prompt = _service.BuildVoiceAssignmentPrompt(story, folderPath, schemaPath, feedback);
+                    var basePrompt = !string.IsNullOrWhiteSpace(voiceAgent.Prompt)
+                        ? voiceAgent.Prompt!
+                        : "Assign a unique gender and TTS voice to every character by using read_json, read_voices and set_voice.";
+                    if (!string.IsNullOrWhiteSpace(feedback))
+                    {
+                        basePrompt += $"\n\n[PREVIOUS_ATTEMPT_FEEDBACK]\n{feedback}";
+                    }
+
                     var reactLoop = new ReActLoopOrchestrator(
                         orchestrator,
                         _service._customLogger,
@@ -697,11 +767,17 @@ public sealed class StoriesService
                         modelBridge: chatBridge,
                         systemMessage: systemMessage);
 
-                    var reactResult = await reactLoop.ExecuteAsync(prompt);
+                    var reactResult = await reactLoop.ExecuteAsync(basePrompt);
                     if (!reactResult.Success)
                     {
                         var error = reactResult.Error ?? "Assegnazione voci fallita";
                         return (false, error);
+                    }
+
+                    var fallbackApplied = await _service.ApplyVoiceAssignmentFallbacksAsync(schemaPath);
+                    if (fallbackApplied)
+                    {
+                        _service._progress?.Append(runId, $"[{story.Id}] Applicate voci di fallback dal catalogo tts_voices.");
                     }
 
                     var (valid, validationError) = await ValidateAssignedVoicesAsync(schemaPath, knownVoiceIds);
@@ -795,6 +871,128 @@ public sealed class StoriesService
                 // best effort only
             }
         }
+
+
+    }
+
+    private async Task<bool> ApplyVoiceAssignmentFallbacksAsync(string schemaPath)
+    {
+        try
+        {
+            if (!File.Exists(schemaPath)) return false;
+            var content = await File.ReadAllTextAsync(schemaPath);
+            var schema = JsonSerializer.Deserialize<TtsSchema>(content, SchemaJsonOptions);
+            if (schema?.Characters == null || schema.Characters.Count == 0)
+                return false;
+
+            var catalogVoices = _database.ListTtsVoices();
+            if (catalogVoices == null || catalogVoices.Count == 0)
+                return false;
+
+            var updated = false;
+            var usedVoiceIds = new HashSet<string>(
+                schema.Characters
+                    .Where(c => !string.IsNullOrWhiteSpace(c.VoiceId))
+                    .Select(c => c.VoiceId!),
+                StringComparer.OrdinalIgnoreCase);
+
+            var narrator = schema.Characters.FirstOrDefault(c => string.Equals(c.Name, "narratore", StringComparison.OrdinalIgnoreCase));
+            if (narrator != null && string.IsNullOrWhiteSpace(narrator.VoiceId))
+            {
+                var narratorVoice = FindVoiceByNameOrId(catalogVoices, NarratorFallbackVoiceName);
+                if (narratorVoice != null)
+                {
+                    ApplyVoiceToCharacter(narrator, narratorVoice);
+                    usedVoiceIds.Add(narratorVoice.VoiceId);
+                    updated = true;
+                }
+                else
+                {
+                    _logger?.LogWarning("Voce di fallback {VoiceName} non trovata nella tabella tts_voices", NarratorFallbackVoiceName);
+                }
+            }
+
+            foreach (var character in schema.Characters)
+            {
+                if (!string.IsNullOrWhiteSpace(character.VoiceId))
+                    continue;
+                if (string.IsNullOrWhiteSpace(character.Gender))
+                    continue;
+
+                var fallbackVoice = PickVoiceForGender(character.Gender, catalogVoices, usedVoiceIds);
+                if (fallbackVoice != null)
+                {
+                    ApplyVoiceToCharacter(character, fallbackVoice);
+                    usedVoiceIds.Add(fallbackVoice.VoiceId);
+                    updated = true;
+                }
+            }
+
+            if (updated)
+            {
+                var normalized = JsonSerializer.Serialize(schema, SchemaJsonOptions);
+                await File.WriteAllTextAsync(schemaPath, normalized);
+            }
+
+            return updated;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Errore durante ApplyVoiceAssignmentFallbacksAsync per schema {SchemaPath}", schemaPath);
+            return false;
+        }
+    }
+
+    private static void ApplyVoiceToCharacter(TtsCharacter character, TinyGenerator.Models.TtsVoice voice)
+    {
+        character.Voice = voice.Name;
+        character.VoiceId = voice.VoiceId;
+        if (string.IsNullOrWhiteSpace(character.Gender) && !string.IsNullOrWhiteSpace(voice.Gender))
+        {
+            character.Gender = voice.Gender;
+        }
+    }
+
+    private TinyGenerator.Models.TtsVoice? FindVoiceByNameOrId(List<TinyGenerator.Models.TtsVoice> voices, string preferredName)
+    {
+        if (voices == null || voices.Count == 0) return null;
+        var byName = voices.FirstOrDefault(v => string.Equals(v.Name, preferredName, StringComparison.OrdinalIgnoreCase));
+        if (byName != null) return byName;
+
+        return voices.FirstOrDefault(v =>
+            !string.IsNullOrWhiteSpace(v.VoiceId) &&
+            v.VoiceId.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0);
+    }
+
+    private TinyGenerator.Models.TtsVoice? PickVoiceForGender(string gender, List<TinyGenerator.Models.TtsVoice> voices, HashSet<string> usedVoiceIds)
+    {
+        if (string.IsNullOrWhiteSpace(gender) || voices == null || voices.Count == 0)
+            return null;
+
+        var matches = voices
+            .Where(v => !string.IsNullOrWhiteSpace(v.VoiceId) &&
+                        string.Equals(v.Gender ?? string.Empty, gender, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (matches.Count == 0)
+            return null;
+
+        var unused = matches
+            .Where(v => !usedVoiceIds.Contains(v.VoiceId!))
+            .ToList();
+
+        var pool = unused.Count > 0 ? unused : matches;
+        var maxScore = pool.Max(v => v.Score ?? 0);
+        var bestCandidates = pool
+            .Where(v => Math.Abs((v.Score ?? 0) - maxScore) < 0.0001)
+            .ToList();
+        if (bestCandidates.Count == 0)
+        {
+            bestCandidates = pool;
+        }
+
+        var index = Random.Shared.Next(bestCandidates.Count);
+        return bestCandidates[index];
     }
 
     private sealed class GenerateTtsAudioCommand : IStoryCommand

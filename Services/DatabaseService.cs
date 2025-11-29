@@ -18,6 +18,7 @@ namespace TinyGenerator.Services;
 public sealed class DatabaseService
 {
     private const int EvaluatedStatusId = 2;
+    private const int InitialStoryStatusId = 1;
 
 
     private readonly string _connectionString;
@@ -469,7 +470,7 @@ public sealed class DatabaseService
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id ORDER BY a.name";
+        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id ORDER BY a.name";
         return conn.Query<TinyGenerator.Models.Agent>(sql).ToList();
     }
 
@@ -477,7 +478,7 @@ public sealed class DatabaseService
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id WHERE a.id = @id LIMIT 1";
+        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id WHERE a.id = @id LIMIT 1";
         return conn.QueryFirstOrDefault<TinyGenerator.Models.Agent>(sql, new { id });
     }
 
@@ -495,6 +496,20 @@ public sealed class DatabaseService
         catch { return null; }
     }
 
+    public TinyGenerator.Models.Agent? GetAgentByRole(string role)
+    {
+        if (string.IsNullOrWhiteSpace(role)) return null;
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes
+                    FROM agents a
+                    LEFT JOIN tts_voices t ON a.voice_rowid = t.id
+                    WHERE LOWER(a.role) = LOWER(@role)
+                    ORDER BY a.is_active DESC, a.id ASC
+                    LIMIT 1";
+        return conn.QueryFirstOrDefault<TinyGenerator.Models.Agent>(sql, new { role });
+    }
+
     public int InsertAgent(TinyGenerator.Models.Agent a)
     {
         using var conn = CreateConnection();
@@ -502,7 +517,7 @@ public sealed class DatabaseService
         var now = DateTime.UtcNow.ToString("o");
         a.CreatedAt ??= now;
         a.UpdatedAt = now;
-        var sql = @"INSERT INTO agents(voice_rowid, name, role, model_id, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes) VALUES(@VoiceId,@Name,@Role,@ModelId,@Skills,@Config,@JsonResponseFormat,@Prompt,@Instructions,@ExecutionPlan,@IsActive,@CreatedAt,@UpdatedAt,@Notes); SELECT last_insert_rowid();";
+        var sql = @"INSERT INTO agents(voice_rowid, name, role, model_id, skills, config, json_response_format, prompt, instructions, temperature, top_p, execution_plan, is_active, created_at, updated_at, notes) VALUES(@VoiceId,@Name,@Role,@ModelId,@Skills,@Config,@JsonResponseFormat,@Prompt,@Instructions,@Temperature,@TopP,@ExecutionPlan,@IsActive,@CreatedAt,@UpdatedAt,@Notes); SELECT last_insert_rowid();";
         var id = conn.ExecuteScalar<long>(sql, a);
         return (int)id;
     }
@@ -513,7 +528,7 @@ public sealed class DatabaseService
         using var conn = CreateConnection();
         conn.Open();
         a.UpdatedAt = DateTime.UtcNow.ToString("o");
-        var sql = @"UPDATE agents SET voice_rowid=@VoiceId, name=@Name, role=@Role, model_id=@ModelId, skills=@Skills, config=@Config, json_response_format=@JsonResponseFormat, prompt=@Prompt, instructions=@Instructions, execution_plan=@ExecutionPlan, is_active=@IsActive, updated_at=@UpdatedAt, notes=@Notes WHERE id = @Id";
+        var sql = @"UPDATE agents SET voice_rowid=@VoiceId, name=@Name, role=@Role, model_id=@ModelId, skills=@Skills, config=@Config, json_response_format=@JsonResponseFormat, prompt=@Prompt, instructions=@Instructions, temperature=@Temperature, top_p=@TopP, execution_plan=@ExecutionPlan, is_active=@IsActive, updated_at=@UpdatedAt, notes=@Notes WHERE id = @Id";
         conn.Execute(sql, a);
     }
 
@@ -1189,7 +1204,7 @@ SET TotalScore = (
     }
 
     // Stories CRUD operations
-    public long SaveGeneration(string prompt, TinyGenerator.Services.StoryGeneratorService.GenerationResult r, string? memoryKey = null)
+    public long SaveGeneration(string prompt, TinyGenerator.Models.StoryGenerationResult r, string? memoryKey = null)
     {
         using var conn = CreateConnection();
         conn.Open();
@@ -1199,8 +1214,7 @@ SET TotalScore = (
         var aidA = (int?)null;
         try { aidA = GetAgentIdByName("WriterA"); } catch { }
         var charCountA = (r.StoryA ?? string.Empty).Length;
-        var defaultStatusCode = string.IsNullOrEmpty(r.Approved) ? "rejected" : "approved";
-        var defaultStatusId = ResolveStoryStatusId(conn, defaultStatusCode);
+        var defaultStatusId = InitialStoryStatusId;
         var sqlA = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@mid,@aid);";
         conn.Execute(sqlA, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryA ?? string.Empty, cc = charCountA, e = r.EvalA ?? string.Empty, s = r.ScoreA, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, stid = defaultStatusId, mid = midA, aid = aidA });
 
@@ -1287,7 +1301,7 @@ SET TotalScore = (
         
         var charCount = (story ?? string.Empty).Length;
         var sql = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, folder, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@folder,@mid,@aid); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, new { gid = genId, mk = memoryKey ?? genId, ts = ts, p = prompt ?? string.Empty, c = story ?? string.Empty, cc = charCount, mid = modelId, aid = agentId, e = eval ?? string.Empty, s = score, ap = approved, stid = statusId, folder = folder });
+        var id = conn.ExecuteScalar<long>(sql, new { gid = genId, mk = memoryKey ?? genId, ts = ts, p = prompt ?? string.Empty, c = story ?? string.Empty, cc = charCount, mid = modelId, aid = agentId, e = eval ?? string.Empty, s = score, ap = approved, stid = statusId ?? InitialStoryStatusId, folder = folder });
         return id;
     }
 
@@ -1347,8 +1361,10 @@ SET TotalScore = (
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, tags AS Tags, sample_path AS SamplePath, template_wav AS TemplateWav, metadata AS Metadata, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices ORDER BY name";
-        return conn.Query<TinyGenerator.Models.TtsVoice>(sql).ToList();
+        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, score AS Score, tags AS Tags, template_wav AS TemplateWav, archetype AS Archetype, notes AS Notes, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices ORDER BY name";
+        var voices = conn.Query<TinyGenerator.Models.TtsVoice>(sql).ToList();
+        EnsureVoiceDerivedFields(voices);
+        return voices;
     }
 
     public int GetTtsVoiceCount()
@@ -1371,22 +1387,89 @@ SET TotalScore = (
         if (string.IsNullOrWhiteSpace(voiceId)) return null;
         using var conn = CreateConnection();
         conn.Open();
-        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, tags AS Tags, sample_path AS SamplePath, template_wav AS TemplateWav, metadata AS Metadata, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices WHERE voice_id = @vid LIMIT 1";
-        return conn.QueryFirstOrDefault<TinyGenerator.Models.TtsVoice>(sql, new { vid = voiceId });
+        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, score AS Score, tags AS Tags, template_wav AS TemplateWav, archetype AS Archetype, notes AS Notes, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices WHERE voice_id = @vid LIMIT 1";
+        var voice = conn.QueryFirstOrDefault<TinyGenerator.Models.TtsVoice>(sql, new { vid = voiceId });
+        if (voice != null) EnsureVoiceDerivedFields(new List<TinyGenerator.Models.TtsVoice> { voice });
+        return voice;
+    }
+
+    public TinyGenerator.Models.TtsVoice? GetTtsVoiceById(int id)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, score AS Score, tags AS Tags, template_wav AS TemplateWav, archetype AS Archetype, notes AS Notes, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices WHERE id = @id LIMIT 1";
+        var voice = conn.QueryFirstOrDefault<TinyGenerator.Models.TtsVoice>(sql, new { id });
+        if (voice != null) EnsureVoiceDerivedFields(new List<TinyGenerator.Models.TtsVoice> { voice });
+        return voice;
+    }
+
+    public TinyGenerator.Models.TtsVoice? GetTtsVoiceByName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, score AS Score, tags AS Tags, template_wav AS TemplateWav, archetype AS Archetype, notes AS Notes, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices WHERE LOWER(name) = LOWER(@name) LIMIT 1";
+        var voice = conn.QueryFirstOrDefault<TinyGenerator.Models.TtsVoice>(sql, new { name });
+        if (voice != null) EnsureVoiceDerivedFields(new List<TinyGenerator.Models.TtsVoice> { voice });
+        return voice;
+    }
+
+    public void UpdateTtsVoiceTemplateWavById(int id, string templateWav)
+    {
+        if (string.IsNullOrWhiteSpace(templateWav)) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("UPDATE tts_voices SET template_wav = @p, updated_at = @u WHERE id = @id", new { p = templateWav, u = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"), id });
+    }
+
+    public void UpdateTtsVoiceScoreById(int id, double? score)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("UPDATE tts_voices SET score = @s, updated_at = @u WHERE id = @id", new { s = score, u = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"), id });
+    }
+
+    public void DeleteTtsVoiceById(int id)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("DELETE FROM tts_voices WHERE id = @id", new { id });
+    }
+
+    public void UpdateTtsVoice(TinyGenerator.Models.TtsVoice v)
+    {
+        if (v == null || v.Id <= 0) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"UPDATE tts_voices SET name=@Name, model=@Model, language=@Language, gender=@Gender, age=@Age, confidence=@Confidence, score=@Score, tags=@Tags, template_wav=@TemplateWav, archetype=@Archetype, notes=@Notes, updated_at=@UpdatedAt WHERE id = @Id";
+        v.UpdatedAt = DateTime.UtcNow.ToString("o");
+        conn.Execute(sql, v);
     }
 
     public void UpsertTtsVoice(TinyGenerator.Services.VoiceInfo v, string? model = null)
     {
         if (v == null || string.IsNullOrWhiteSpace(v.Id)) return;
         using var conn = CreateConnection();
-        conn.Open();
+        if (conn is not SqliteConnection sqliteConn)
+        {
+            throw new InvalidOperationException("Database connection is not SqliteConnection");
+        }
+        sqliteConn.Open();
+        UpsertTtsVoice(sqliteConn, null, v, model);
+    }
+
+    private static void UpsertTtsVoice(SqliteConnection conn, SqliteTransaction? tx, TinyGenerator.Services.VoiceInfo v, string? model)
+    {
+        if (conn == null) throw new ArgumentNullException(nameof(conn));
+        if (v == null || string.IsNullOrWhiteSpace(v.Id)) return;
         var now = DateTime.UtcNow.ToString("o");
-        var metadata = JsonSerializer.Serialize(v);
-        string? tagsJson = null;
+        // metadata not stored anymore; template_wav is used for sample filename
+        string? tagsJson;
         try { tagsJson = v.Tags != null ? JsonSerializer.Serialize(v.Tags) : null; } catch { tagsJson = null; }
-        var sql = @"INSERT INTO tts_voices(voice_id, name, model, language, gender, age, confidence, tags, sample_path, template_wav, metadata, created_at, updated_at)
-VALUES(@VoiceId,@Name,@Model,@Language,@Gender,@Age,@Confidence,@Tags,@SamplePath,@TemplateWav,@Metadata,@CreatedAt,@UpdatedAt)
-ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language, gender=@Gender, age=@Age, confidence=@Confidence, tags=@Tags, sample_path=@SamplePath, template_wav=@TemplateWav, metadata=@Metadata, updated_at=@UpdatedAt;";
+        var (archetype, notes) = ExtractArchetypeNotesFromVoiceInfo(v);
+        var sql = @"INSERT INTO tts_voices(voice_id, name, model, language, gender, age, confidence, score, tags, template_wav, archetype, notes, created_at, updated_at)
+    VALUES(@VoiceId,@Name,@Model,@Language,@Gender,@Age,@Confidence,@Score,@Tags,@TemplateWav,@Archetype,@Notes,@CreatedAt,@UpdatedAt)
+    ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language, gender=@Gender, age=@Age, confidence=@Confidence, score=@Score, tags=@Tags, template_wav=@TemplateWav, archetype=@Archetype, notes=@Notes, updated_at=@UpdatedAt;";
 
         conn.Execute(sql, new
         {
@@ -1398,12 +1481,180 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
             Age = v.Age,
             Confidence = v.Confidence,
             Tags = tagsJson,
-            SamplePath = v.Tags != null && v.Tags.ContainsKey("sample") ? v.Tags["sample"] : null,
             TemplateWav = v.Tags != null && v.Tags.ContainsKey("template_wav") ? v.Tags["template_wav"] : null,
-            Metadata = metadata,
+            Score = GetScoreFromTags(v.Tags, v.Confidence),
+            Archetype = archetype,
+            Notes = notes,
             CreatedAt = now,
             UpdatedAt = now
-        });
+        }, transaction: tx);
+    }
+
+    /// <summary>
+    /// Add or update voices and return a list of voice ids that were newly inserted.
+    /// </summary>
+    public sealed class TtsVoiceSyncResult
+    {
+        public List<string> AddedIds { get; } = new();
+        public List<string> UpdatedIds { get; } = new();
+        public List<string> Errors { get; } = new();
+    }
+
+    public async Task<TtsVoiceSyncResult> AddOrUpdateTtsVoicesAsyncDetailed(TinyGenerator.Services.TtsService ttsService)
+    {
+        var result = new TtsVoiceSyncResult();
+        if (ttsService == null) return result;
+        try
+        {
+            var list = await ttsService.GetVoicesAsync();
+            if (list == null || list.Count == 0) return result;
+
+            using var conn = CreateConnection();
+            if (conn is not SqliteConnection sqliteConn)
+            {
+                throw new InvalidOperationException("Database connection is not SqliteConnection");
+            }
+
+            sqliteConn.Open();
+            using var tx = sqliteConn.BeginTransaction();
+            foreach (var v in list)
+            {
+                if (v == null || string.IsNullOrWhiteSpace(v.Id)) continue;
+                try
+                {
+                    var existing = sqliteConn.ExecuteScalar<string?>(
+                        "SELECT voice_id FROM tts_voices WHERE voice_id = @vid LIMIT 1",
+                        new { vid = v.Id },
+                        transaction: tx);
+                    UpsertTtsVoice(sqliteConn, tx, v, null);
+                    if (string.IsNullOrWhiteSpace(existing))
+                    {
+                        result.AddedIds.Add(v.Id);
+                    }
+                    else
+                    {
+                        result.UpdatedIds.Add(v.Id);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    result.Errors.Add($"Voice {v?.Id}: {ex.Message}");
+                }
+            }
+            try
+            {
+                tx.Commit();
+            }
+            catch (Exception ex)
+            {
+                result.Errors.Add($"Commit failed: {ex.Message}");
+                tx.Rollback();
+            }
+            return result;
+        }
+        catch
+        {
+            return result;
+        }
+    }
+
+    private static (string? archetype, string? notes) ExtractArchetypeNotesFromVoiceInfo(TinyGenerator.Services.VoiceInfo voice)
+    {
+        string? archetype = null;
+        string? notes = null;
+        if (voice.Tags != null)
+        {
+            if (voice.Tags.TryGetValue("archetype", out var arch) && !string.IsNullOrWhiteSpace(arch))
+                archetype = arch;
+            if (voice.Tags.TryGetValue("notes", out var n) && !string.IsNullOrWhiteSpace(n))
+                notes = n;
+        }
+        return (archetype, notes);
+    }
+
+    private static double? GetScoreFromTags(Dictionary<string,string>? tags, double? confidenceFallback)
+    {
+        if (tags == null) return confidenceFallback;
+        if (tags.TryGetValue("score", out var sval) && !string.IsNullOrWhiteSpace(sval))
+        {
+            if (double.TryParse(sval, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+                return parsed;
+        }
+        return confidenceFallback;
+    }
+
+    private void EnsureVoiceDerivedFields(List<TinyGenerator.Models.TtsVoice> voices)
+    {
+        if (voices == null || voices.Count == 0) return;
+        var toUpdate = new List<TinyGenerator.Models.TtsVoice>();
+        foreach (var voice in voices)
+        {
+            if (voice == null) continue;
+                // Try to extract archetype/notes from tags JSON if present
+                var (arch, notes) = ExtractArchetypeNotesFromTags(voice.Tags);
+            bool changed = false;
+            if (!string.IsNullOrWhiteSpace(arch) && !string.Equals(voice.Archetype, arch, StringComparison.Ordinal))
+            {
+                voice.Archetype = arch;
+                changed = true;
+            }
+            if (!string.IsNullOrWhiteSpace(notes) && !string.Equals(voice.Notes, notes, StringComparison.Ordinal))
+            {
+                voice.Notes = notes;
+                changed = true;
+            }
+            if (changed) toUpdate.Add(voice);
+        }
+        if (toUpdate.Count == 0) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        foreach (var voice in toUpdate)
+        {
+            conn.Execute(
+                "UPDATE tts_voices SET archetype = @Archetype, notes = @Notes WHERE id = @Id",
+                new { voice.Archetype, voice.Notes, voice.Id });
+        }
+    }
+
+    private static (string? archetype, string? notes) ExtractArchetypeNotesFromTags(string? tagsJson)
+    {
+        if (string.IsNullOrWhiteSpace(tagsJson)) return (null, null);
+        try
+        {
+            using var doc = JsonDocument.Parse(tagsJson);
+            var root = doc.RootElement;
+            var archetype = TryGetPropertyStringCaseInsensitive(root, "archetype");
+            var notes = TryGetPropertyStringCaseInsensitive(root, "notes");
+            return (archetype, notes);
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
+
+    private static bool TryGetPropertyCaseInsensitive(JsonElement element, string propertyName, out JsonElement value)
+    {
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (prop.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = prop.Value;
+                return true;
+            }
+        }
+        value = default;
+        return false;
+    }
+
+    private static string? TryGetPropertyStringCaseInsensitive(JsonElement element, string propertyName)
+    {
+        if (TryGetPropertyCaseInsensitive(element, propertyName, out var value) && value.ValueKind == JsonValueKind.String)
+        {
+            var str = value.GetString();
+            return string.IsNullOrWhiteSpace(str) ? null : str;
+        }
+        return null;
     }
 
     public async Task<int> AddOrUpdateTtsVoicesAsync(TinyGenerator.Services.TtsService ttsService)
@@ -1577,6 +1828,35 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
             conn.Execute("ALTER TABLE test_definitions ADD COLUMN files_to_copy TEXT");
         }
 
+        // Migration: ensure ThreadScope column exists on Log table
+        var hasThreadScope = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name='ThreadScope'");
+        if (hasThreadScope == 0)
+        {
+            Console.WriteLine("[DB] Adding ThreadScope column to Log");
+            conn.Execute("ALTER TABLE Log ADD COLUMN ThreadScope TEXT");
+        }
+
+        // Migration: Add archetype and notes columns to tts_voices if missing
+        try
+        {
+            var hasArchetype = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('tts_voices') WHERE name='archetype'");
+            var hasNotes = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('tts_voices') WHERE name='notes'");
+            if (hasArchetype == 0)
+            {
+                Console.WriteLine("[DB] Adding archetype column to tts_voices");
+                conn.Execute("ALTER TABLE tts_voices ADD COLUMN archetype TEXT");
+            }
+            if (hasNotes == 0)
+            {
+                Console.WriteLine("[DB] Adding notes column to tts_voices");
+                conn.Execute("ALTER TABLE tts_voices ADD COLUMN notes TEXT");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add archetype/notes to tts_voices: {ex.Message}");
+        }
+
         // Migration: Rename group_name to test_group in test_definitions if needed
         var hasGroupName = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('test_definitions') WHERE name='group_name'");
         var hasTestGroupInDefs = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('test_definitions') WHERE name='test_group'");
@@ -1626,6 +1906,28 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
             conn.Execute("ALTER TABLE test_definitions ADD COLUMN top_p REAL DEFAULT NULL");
         }
 
+        // Migration: Add temperature and top_p columns to agents if not exists (persist agent-level model params)
+        try
+        {
+            var hasAgentTemp = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='temperature'");
+            if (hasAgentTemp == 0)
+            {
+                Console.WriteLine("[DB] Adding temperature column to agents");
+                conn.Execute("ALTER TABLE agents ADD COLUMN temperature REAL DEFAULT NULL");
+            }
+
+            var hasAgentTopP = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='top_p'");
+            if (hasAgentTopP == 0)
+            {
+                Console.WriteLine("[DB] Adding top_p column to agents");
+                conn.Execute("ALTER TABLE agents ADD COLUMN top_p REAL DEFAULT NULL");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add temperature/top_p to agents: {ex.Message}");
+        }
+
         // Migration: Add note column to models if not exists
         var hasNote = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='note'");
         if (hasNote == 0)
@@ -1662,7 +1964,7 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
         await ((SqliteConnection)conn).OpenAsync();
 
         // Build a single INSERT ... VALUES (...),(...),... with uniquely named parameters to avoid collisions
-        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "AgentName", "Context" };
+        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized" };
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
 
@@ -1681,8 +1983,10 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
             parameters.Add("@Exception" + i, e.Exception);
             parameters.Add("@State" + i, e.State);
             parameters.Add("@ThreadId" + i, e.ThreadId);
+            parameters.Add("@ThreadScope" + i, e.ThreadScope);
             parameters.Add("@AgentName" + i, e.AgentName);
             parameters.Add("@Context" + i, e.Context);
+            parameters.Add("@analized" + i, e.Analized ? 1 : 0);
         }
 
         sb.Append(";");
@@ -1783,13 +2087,91 @@ ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language
         if (!string.IsNullOrWhiteSpace(level)) { where.Add("Level = @Level"); parameters.Add("Level", level); }
         if (!string.IsNullOrWhiteSpace(category)) { where.Add("Category LIKE @Category"); parameters.Add("Category", "%" + category + "%"); }
 
-        var sql = "SELECT Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context FROM Log";
+        var sql = "SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized FROM Log";
         if (where.Count > 0) sql += " WHERE " + string.Join(" AND ", where);
         sql += " ORDER BY Id DESC LIMIT @Limit OFFSET @Offset";
         parameters.Add("Limit", limit);
         parameters.Add("Offset", offset);
 
         return conn.Query<TinyGenerator.Models.LogEntry>(sql, parameters).ToList();
+    }
+
+    public List<TinyGenerator.Models.LogEntry> GetLogsByThread(string threadId, int limit = 500)
+    {
+        if (string.IsNullOrWhiteSpace(threadId))
+            return new List<TinyGenerator.Models.LogEntry>();
+
+        if (!int.TryParse(threadId, out var threadNumericId))
+            return new List<TinyGenerator.Models.LogEntry>();
+
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized
+                    FROM Log
+                    WHERE ThreadId = @ThreadId
+                    ORDER BY Id ASC
+                    LIMIT @Limit";
+        return conn.Query<TinyGenerator.Models.LogEntry>(sql, new { ThreadId = threadNumericId, Limit = limit }).ToList();
+    }
+
+    public void SetLogAnalyzed(string threadId, bool analyzed)
+    {
+        if (string.IsNullOrWhiteSpace(threadId)) return;
+        if (!int.TryParse(threadId, out var threadNumericId)) return;
+
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("UPDATE Log SET analized = @val WHERE ThreadId = @tid", new { val = analyzed ? 1 : 0, tid = threadNumericId });
+    }
+
+    public void DeleteLogAnalysesByThread(string threadId)
+    {
+        if (string.IsNullOrWhiteSpace(threadId)) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("DELETE FROM Log_analysis WHERE threadId = @tid", new { tid = threadId });
+    }
+
+    public void InsertLogAnalysis(TinyGenerator.Models.LogAnalysis analysis)
+    {
+        if (analysis == null) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute(
+            "INSERT INTO Log_analysis (threadId, model_id, run_scope, description, succeeded) VALUES (@threadId, @modelId, @scope, @description, @succeeded)",
+            new
+            {
+                threadId = analysis.ThreadId ?? string.Empty,
+                modelId = analysis.ModelId ?? string.Empty,
+                scope = analysis.RunScope ?? string.Empty,
+                description = analysis.Description ?? string.Empty,
+                succeeded = analysis.Succeeded ? 1 : 0
+            });
+    }
+
+    public List<TinyGenerator.Models.LogAnalysis> GetLogAnalyses(int limit = 200)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, threadId AS ThreadId, model_id AS ModelId, run_scope AS RunScope, description AS Description, succeeded AS Succeeded
+                    FROM Log_analysis
+                    ORDER BY id DESC
+                    LIMIT @Limit";
+        return conn.Query<TinyGenerator.Models.LogAnalysis>(sql, new { Limit = limit }).ToList();
+    }
+
+    public List<TinyGenerator.Models.LogAnalysis> GetLogAnalysesByThread(string threadId)
+    {
+        if (string.IsNullOrWhiteSpace(threadId))
+            return new List<TinyGenerator.Models.LogAnalysis>();
+
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, threadId AS ThreadId, model_id AS ModelId, run_scope AS RunScope, description AS Description, succeeded AS Succeeded
+                    FROM Log_analysis
+                    WHERE threadId = @tid
+                    ORDER BY id DESC";
+        return conn.Query<TinyGenerator.Models.LogAnalysis>(sql, new { tid = threadId }).ToList();
     }
 
     public int GetLogCount(string? level = null)

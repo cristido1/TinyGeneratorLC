@@ -27,6 +27,7 @@ namespace TinyGenerator.Services
         private readonly ProgressService? _progressService;
         public double Temperature { get; set; } = 0.7;
         public double TopP { get; set; } = 1.0;
+        public int MaxResponseTokens { get; set; } = 8000;
 
         public LangChainChatBridge(
             string modelEndpoint,
@@ -140,7 +141,7 @@ namespace TinyGenerator.Services
                         { "stream", false },
                         { "temperature", Temperature },
                         { "top_p", TopP },
-                        { "num_predict", 8000 }  // Max tokens for Ollama response
+                        { "num_predict", MaxResponseTokens }  // Max tokens for Ollama response
                     };
 
                     // If we have tools, pass them
@@ -210,11 +211,11 @@ namespace TinyGenerator.Services
                     // Add correct token limit parameter based on model
                     if (usesNewTokenParam)
                     {
-                        requestDict["max_completion_tokens"] = 8000;
+                        requestDict["max_completion_tokens"] = MaxResponseTokens;
                     }
                     else
                     {
-                        requestDict["max_tokens"] = 8000;
+                        requestDict["max_tokens"] = MaxResponseTokens;
                     }
                     
                     request = requestDict;
@@ -408,11 +409,16 @@ namespace TinyGenerator.Services
             string apiKey,
             HybridLangChainOrchestrator tools,
             HttpClient? httpClient = null,
-            ICustomLogger? logger = null)
+            ICustomLogger? logger = null,
+            int? maxTokens = null)
         {
             _logger = logger;
             _tools = tools;
             _modelBridge = new LangChainChatBridge(modelEndpoint, modelId, apiKey, httpClient, logger);
+            if (maxTokens.HasValue && maxTokens.Value > 0)
+            {
+                _modelBridge.MaxResponseTokens = Math.Max(_modelBridge.MaxResponseTokens, maxTokens.Value);
+            }
             _reactLoop = new ReActLoopOrchestrator(tools, logger);
         }
 

@@ -1,0 +1,422 @@
+@page
+@model TinyGenerator.Pages.TtsVoices.IndexModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "TTS Voices";
+    ViewData["PageDescription"] = "Elenco delle voci TTS disponibili e operazioni di sincronizzazione";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h2 class="m-0">TTS Voices</h2>
+        <small class="text-muted">Lista delle voci disponibili nel servizio TTS e in DB</small>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <button id="refreshVoicesBtn" class="btn btn-primary">Aggiorna voci dal servizio TTS</button>
+        <a class="btn btn-outline-secondary ms-2" asp-page="/Agents/Create">Create Voice</a>
+        <div class="small text-muted ms-3 align-self-center">Visibilità colonne sempre persistente</div>
+    </div>
+</div>
+<form id="ttsRefreshForm" method="post" class="d-none">
+    @Html.AntiForgeryToken()
+</form>
+
+<!-- Toast for update feedback -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1055;">
+    <div id="ttsToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header">
+            <strong class="me-auto">TTS voices</strong>
+            <small class="text-muted" id="ttsToastTime"></small>
+            <button type="button" class="btn-close ms-2 mb-1" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body" id="ttsToastBody">Aggiornamento completato</div>
+    </div>
+</div>
+
+@if (TempData["TtsVoiceMessage"] != null)
+{
+    <script>
+        document.addEventListener('DOMContentLoaded', function(){
+            try {
+                var msg = '@TempData["TtsVoiceMessage"]'.replace(/\r?\n/g, ' ');
+                var t = new bootstrap.Toast(document.getElementById('ttsToast'));
+                document.getElementById('ttsToastBody').innerText = msg;
+                document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
+                t.show();
+            } catch(e) { /* ignore */ }
+        });
+    </script>
+}
+
+<table id="ttsvTable" class="table table-bordered table-sm table-pastel table-compact">
+    <thead>
+        <tr>
+            <th>Actions</th>
+            <th>Name</th>
+            <th>VoiceId</th>
+            <th>Model</th>
+            <th>Language</th>
+            <th>Gender</th>
+            <th>Age</th>
+            <th>Confidence</th>
+            <th>Score</th>
+            <th>Tags</th>
+            <th>Sample</th>
+            <th>Template</th>
+            <th>Archetype</th>
+            <th>Notes</th>
+            <th>Created</th>
+            <th>Updated</th>
+        </tr>
+    </thead>
+    <tbody>
+        <!-- DataTables will populate rows via server-side ajax -->
+    </tbody>
+</table>
+
+@section Styles {
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.bootstrap5.min.css" />
+}
+
+@section Scripts {
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.bootstrap5.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.colVis.min.js"></script>
+    <script>
+        (function(){
+            function init() {
+                try {
+                    var table = $('#ttsvTable').DataTable({
+                        serverSide: true,
+                        ajax: { url: '?handler=List', type: 'GET' },
+                        order: [[1, 'asc']],
+                        pageLength: 25,
+                        dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
+                             "rt" +
+                             "<'row'<'col-sm-6'i><'col-sm-6'p>>",
+                        buttons: [ { extend: 'colvis', columns: [1,2,3,4,5,6,7,8,9,10,11,12,13] } ], // exclude Created/Updated from colvis (actions is column 0)
+                        stateSave: true,
+                        stateSaveName: 'DataTables_ttsvoices',
+                        stateDuration: -1,
+                        columns: [
+                            { title: 'Actions', orderable: false, searchable: false, width: '90px' },
+                            { title: 'Name' },
+                            { title: 'VoiceId' },
+                            { title: 'Model' },
+                            { title: 'Language' },
+                            { title: 'Gender' },
+                            { title: 'Age' },
+                            { title: 'Confidence' },
+                            { title: 'Score', orderable: false, searchable: false },
+                            { title: 'Tags' },
+                            { title: 'Sample', orderable: false, searchable: false },
+                            { title: 'Template' },
+                            { title: 'Archetype' },
+                            { title: 'Notes' },
+                            { title: 'Created', visible: false },
+                            { title: 'Updated', visible: false }
+                        ],
+                        columnDefs: [
+                            {
+                                targets: 8, // Score column (actions placeholder 0 -> name 1..)
+                                render: function(data, type, row) {
+                                    // row contains values and id at last position
+                                    var raw = data || '';
+                                    var id = row && row.length ? row[row.length - 1] : '';
+                                    var val = raw === '' ? '-' : raw;
+                                    var html = '<div class="d-flex align-items-center gap-2">';
+                                    html += '<button class="btn btn-sm btn-outline-success score-inc" data-id="' + encodeURIComponent(id) + '" title="Increase">+</button>';
+                                    html += '<span class="fw-semibold score-value" data-id="' + encodeURIComponent(id) + '">' + val + '</span>';
+                                    html += '<button class="btn btn-sm btn-outline-danger score-dec" data-id="' + encodeURIComponent(id) + '" title="Decrease">-</button>';
+                                    html += '</div>';
+                                    return html;
+                                }
+                            },
+                            {
+                                targets: 10, // Sample column (shifted by Actions + Score column)
+                                render: function(data, type, row) {
+                                    // Show the template filename (no duplicate play button here) - row[10] originally held TemplateWav
+                                    var filename = data || '';
+                                    if (!filename) return '<span class="text-muted">-</span>';
+                                    return '<span class="text-break small text-monospace">' + filename + '</span>';
+                                }
+                            }
+                            ,
+                            {
+                                targets: 0,
+                                render: function(data, type, row) {
+                                    // row contains all columns and Id at the last position
+                                    var id = row && row.length ? row[row.length - 1] : '';
+                                    var voiceId = row[2] || '';
+                                    // Build a small dropdown with Edit/Delete and a play button
+                                    var editHref = '/TtsVoices/Edit?id=' + encodeURIComponent(id);
+                                    var html = '<div class="d-flex align-items-center">';
+                                    html += '<div class="btn-group me-2">';
+                                    html += '  <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">Actions</button>';
+                                    html += '  <ul class="dropdown-menu">';
+                                    html += '    <li><a class="dropdown-item action-edit" href="' + editHref + '">Edit</a></li>';
+                                    html += '    <li><a class="dropdown-item action-regenerate" href="#" data-id="' + encodeURIComponent(id) + '" data-voiceid="' + encodeURIComponent(voiceId) + '">Rigenera esempio</a></li>';
+                                    html += '    <li><a class="dropdown-item action-delete" href="#" data-id="' + encodeURIComponent(id) + '">Delete</a></li>';
+                                    html += '  </ul>';
+                                    html += '</div>';
+                                                    html += '<button class="btn btn-sm btn-outline-primary play-sample" data-voiceid="' + encodeURIComponent(voiceId) + '">▶️</button>';
+                                    html += '</div>';
+                                    return html;
+                                },
+                                orderable: false,
+                                searchable: false
+                            }
+                        ]
+                    });
+
+                    var toastEl = document.getElementById('ttsToast');
+                    var bsToast = toastEl ? new bootstrap.Toast(toastEl) : null;
+
+                    // Column visibility persistence is ALWAYS enabled for this table
+
+                    const refreshForm = document.getElementById('ttsRefreshForm');
+
+                    document.getElementById('refreshVoicesBtn').addEventListener('click', async function() {
+                        if (!refreshForm) {
+                            console.error('Refresh form not found');
+                            return;
+                        }
+                        var b = this;
+                        b.disabled = true;
+                        var old = b.innerHTML;
+                        b.innerHTML = 'Aggiornamento...';
+                        try {
+                            const body = new FormData(refreshForm);
+                            const r = await fetch('?handler=Refresh', { method: 'POST', body, credentials: 'same-origin' });
+                            if (!r.ok) throw new Error('Server returned ' + r.status);
+                            const json = await r.json();
+                            if (json) {
+                                var addedIds = Array.isArray(json.addedIds) ? json.addedIds : [];
+                                var errors = Array.isArray(json.errors) ? json.errors.filter(e => !!e) : [];
+                                // reload server-side table and then highlight new rows
+                                table.ajax.reload(function() {
+                                    if (Array.isArray(addedIds) && addedIds.length > 0) {
+                                        table.rows().every(function() {
+                                            var rowData = this.data();
+                                            var voiceId = rowData[2] || '';
+                                            if (addedIds.indexOf(voiceId) !== -1) {
+                                                var node = this.node();
+                                                $(node).addClass('table-success newly-added');
+                                            }
+                                        });
+                                        setTimeout(function(){ $('.newly-added').removeClass('table-success newly-added'); }, 6000);
+                                    }
+                                    var addedCount = (json.added || 0);
+                                    var updatedCount = (json.updated || 0);
+                                    var baseMessage = (addedCount > 0)
+                                        ? ('Aggiornate ' + addedCount + ' voci (aggiunte)')
+                                        : 'Aggiornamento completato';
+                                    if (updatedCount > 0) {
+                                        baseMessage += ' (' + updatedCount + ' aggiornate)';
+                                    }
+                                    if (errors.length > 0) {
+                                        baseMessage += '. Errori: ' + errors.slice(0, 3).join("; ");
+                                    }
+                                    if (bsToast) {
+                                        document.getElementById('ttsToastBody').innerText = baseMessage;
+                                        document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
+                                        bsToast.show();
+                                    } else {
+                                        alert(baseMessage);
+                                    }
+                                }, false);
+                            } else {
+                                throw new Error(json && json.error ? json.error : 'Invalid response');
+                            }
+                        } catch (ex) {
+                            console.error(ex);
+                            if (bsToast) {
+                                document.getElementById('ttsToastBody').innerText = 'Aggiornamento fallito: ' + (ex.message || ex);
+                                document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
+                                bsToast.show();
+                            } else {
+                                alert('Aggiornamento fallito: ' + ex.message);
+                            }
+                        } finally {
+                            b.disabled = false;
+                            b.innerHTML = old;
+                        }
+                    });
+
+                    // When column visibility changes, persist state if enabled
+                    table.on('column-visibility.dt', function (e, settings, column, state) {
+                        try {
+                            // Always save table state (includes column visibility)
+                            if (table.state) table.state.save();
+                        } catch (ex) {
+                            console.warn('Failed to persist column visibility', ex);
+                        }
+                    });
+                    // Play-sample handler (delegated)
+                    $('#ttsvTable tbody').on('click', 'button.play-sample', async function(e) {
+                        var voiceId = decodeURIComponent($(this).data('voiceid') || '');
+                        if (!voiceId) return;
+                        try {
+                            var resp = await fetch('?handler=Sample&voiceId=' + encodeURIComponent(voiceId));
+                            if (!resp.ok) throw new Error('Sample not available');
+                            var arr = await resp.arrayBuffer();
+                            var blob = new Blob([arr], { type: resp.headers.get('content-type') || 'audio/*' });
+                            var url = URL.createObjectURL(blob);
+                            var a = new Audio(url);
+                            a.play().catch(e => console.warn('play failed', e));
+                            a.onended = function(){ URL.revokeObjectURL(url); };
+                        } catch (ex) {
+                            console.error('Play failed', ex);
+                            if (bsToast) {
+                                document.getElementById('ttsToastBody').innerText = 'Play sample failed: ' + (ex.message || ex);
+                                document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
+                                bsToast.show();
+                            } else alert('Play failed: ' + ex.message);
+                        }
+                    });
+
+                    // Score increment/decrement handlers (delegated)
+                    $('#ttsvTable tbody').on('click', 'button.score-inc, button.score-dec', async function(e) {
+                        e.preventDefault();
+                        var id = $(this).data('id');
+                        if (!id) return;
+                        var delta = $(this).hasClass('score-inc') ? 1 : -1;
+                        var $btn = $(this);
+                        // operate on both +/- buttons for the same id to avoid races
+                        var selector = 'button.score-inc[data-id="' + id + '"] , button.score-dec[data-id="' + id + '"]';
+                        var $group = $(selector);
+                        // avoid double-click / concurrent updates for the same voice id
+                        if ($group.prop('disabled')) return;
+                        // show a small inline spinner on the clicked button and disable the whole group
+                        var $spinner = $('<span class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>');
+                        $group.prop('disabled', true).addClass('disabled');
+                        $btn.append($spinner);
+
+                        try {
+                            var form = refreshForm;
+                            if (!form) throw new Error('Anti-forgery form not found');
+                            var body = new FormData(form);
+                            body.append('id', id);
+                            body.append('delta', delta);
+                            $(this).addClass('disabled');
+                            var res = await fetch('?handler=AdjustScore', { method: 'POST', body, credentials: 'same-origin' });
+                            if (!res.ok) throw new Error('Server returned ' + res.status);
+                            var json = await res.json();
+                            if (json && json.success) {
+                                // update displayed value
+                                $('.score-value[data-id="'+ encodeURIComponent(id) + '"]').text(json.score);
+                            } else {
+                                throw new Error(json && json.error ? json.error : 'Errore sconosciuto');
+                            }
+                        } catch (ex) {
+                            console.error('Adjust score failed', ex);
+                            if (bsToast) { document.getElementById('ttsToastBody').innerText = 'Score update failed: ' + (ex.message || ex); document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString(); bsToast.show(); }
+                        } finally {
+                            // clean up spinner and re-enable both +/- buttons for this id
+                            $spinner.remove();
+                            $group.prop('disabled', false).removeClass('disabled');
+                        }
+                    });
+
+                    // Delete handler (delegated) - will use the anti-forgery token already present in #ttsRefreshForm
+                    $('#ttsvTable tbody').on('click', 'a.action-delete', async function(e) {
+                        e.preventDefault();
+                        var id = $(this).data('id');
+                        if (!id) return;
+                        if (!confirm('Eliminar voce con id ' + id + '? Questa operazione è irreversibile.')) return;
+                        var anchor = this;
+                        try {
+                            var form = refreshForm;
+                            if (!form) throw new Error('Anti-forgery form not found');
+                            var body = new FormData(form);
+                            body.append('id', id);
+                            // Show a small spinner state on the anchor
+                            var $a = $(anchor);
+                            if ($a.hasClass('disabled')) return; // already in flight
+                            var $spinner = $('<span class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>');
+                            $a.addClass('disabled').append($spinner);
+                            var res = await fetch('?handler=Delete', { method: 'POST', body, credentials: 'same-origin' });
+                            if (!res.ok) throw new Error('Server returned ' + res.status);
+                            var json = await res.json();
+                            if (json && json.success) {
+                                table.ajax.reload();
+                                if (bsToast) {
+                                    document.getElementById('ttsToastBody').innerText = 'Voce eliminata';
+                                    document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
+                                    bsToast.show();
+                                }
+                            } else {
+                                throw new Error(json && json.error ? json.error : 'Errore sconosciuto');
+                            }
+                        } catch (ex) {
+                            console.error('Delete failed', ex);
+                            if (bsToast) {
+                                document.getElementById('ttsToastBody').innerText = 'Eliminazione fallita: ' + (ex.message || ex);
+                                document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
+                                bsToast.show();
+                            } else alert('Delete failed: ' + ex.message);
+                        } finally {
+                            $spinner.remove();
+                            $(anchor).removeClass('disabled');
+                        }
+                    });
+
+                    // Regenerate sample handler (delegated)
+                    $('#ttsvTable tbody').on('click', 'a.action-regenerate', async function(e) {
+                        e.preventDefault();
+                        var id = $(this).data('id');
+                        var voiceId = $(this).data('voiceid');
+                        if (!id) return;
+                        if (!confirm('Rigenerare il sample per questa voce?')) return;
+                        var anchor = this;
+                        // avoid double invocation
+                        var $a = $(anchor);
+                        if ($a.hasClass('disabled')) return;
+                        // show a small spinner state next to the action
+                        var $spinner = $('<span class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>');
+                        $a.addClass('disabled').append($spinner);
+
+                        try {
+                            var form = refreshForm;
+                            if (!form) throw new Error('Anti-forgery form not found');
+                            var body = new FormData(form);
+                            body.append('id', id);
+                            $(anchor).addClass('disabled');
+                            var res = await fetch('?handler=Regenerate', { method: 'POST', body, credentials: 'same-origin' });
+                            if (!res.ok) throw new Error('Server returned ' + res.status);
+                            var json = await res.json();
+                            if (json && json.success) {
+                                // reload table and then play the regenerated sample
+                                table.ajax.reload(async function() {
+                                    try {
+                                        var resp = await fetch('?handler=Sample&voiceId=' + encodeURIComponent(voiceId));
+                                        if (resp.ok) {
+                                            var arr = await resp.arrayBuffer();
+                                            var blob = new Blob([arr], { type: resp.headers.get('content-type') || 'audio/*' });
+                                            var url = URL.createObjectURL(blob);
+                                            var a = new Audio(url);
+                                            a.play().catch(e => console.warn('play failed', e));
+                                            a.onended = function(){ URL.revokeObjectURL(url); };
+                                        }
+                                    } catch (e) { console.warn('play after regen failed', e); }
+                                }, false);
+                                if (bsToast) { document.getElementById('ttsToastBody').innerText = 'Sample rigenerato'; document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString(); bsToast.show(); }
+                            } else {
+                                throw new Error(json && json.error ? json.error : 'Errore sconosciuto');
+                            }
+                        } catch (ex) {
+                            console.error('Regenerate failed', ex);
+                            if (bsToast) { document.getElementById('ttsToastBody').innerText = 'Rigenerazione fallita: ' + (ex.message || ex); document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString(); bsToast.show(); } else alert('Regenerate failed: ' + ex.message);
+                        } finally { $spinner.remove(); $a.removeClass('disabled'); }
+                    });
+                } catch (e) {
+                    console.warn('Failed to initialize TTS voices table', e);
+                }
+            }
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+        })();
+    </script>
+}

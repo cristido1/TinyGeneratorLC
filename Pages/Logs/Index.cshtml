@@ -5,41 +5,94 @@
     ViewData["PageDescription"] = "Visualizza e gestisci i log dell'applicazione";
 }
 
-<h1 class="mb-3">Logs</h1>
-
-<div class="table-responsive">
-    <table id="logsTable" class="table table-sm table-striped table-hover align-middle">
-        <thead>
-            <tr>
-                <th>Timestamp</th>
-                <th>Level</th>
-                <th>Message</th>
-                <th>Source</th>
-            </tr>
-        </thead>
-        <tbody>
-        @foreach (var log in Model.LogEntries)
-        {
-            <tr>
-                <td>@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</td>
-                <td>@log.Level</td>
-                <td>@log.Message</td>
-                <td>@log.Source</td>
-            </tr>
-        }
-        </tbody>
-    </table>
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h1 class="mb-0">Logs</h1>
+    <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Analysis">Analisi log</a>
 </div>
+
+@if (!string.IsNullOrEmpty(Model.StatusMessage))
+{
+    <div class="alert alert-info">@Model.StatusMessage</div>
+}
+
+<table id="logsTable" class="table table-bordered table-sm table-pastel table-compact">
+    <thead>
+        <tr>
+            <!-- details-control column (official DataTables row details style) -->
+            <th style="width:38px;"></th>
+            <th>Timestamp</th>
+            <th>Level</th>
+            <th>Operazione</th>
+            <th>Message</th>
+            <th>Source</th>
+            <th>Azioni</th>
+        </tr>
+    </thead>
+    <tbody>
+    @foreach (var log in Model.LogEntries)
+    {
+        <tr data-id="@log.Id"
+            data-ts="@log.Ts" 
+            data-threadid="@log.ThreadId" 
+            data-threadscope="@log.ThreadScope"
+            data-analized="@log.Analized"
+            data-agentname="@log.AgentName" 
+            data-state="@log.State" 
+            data-context="@log.Context" 
+            data-exception="@log.Exception">
+            <td class="details-control text-center" title="Mostra dettagli"><button class="btn btn-sm btn-outline-secondary" type="button">+</button></td>
+            <td class="timestamp">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</td>
+            <td class="level">@log.Level</td>
+            <td class="operation">@(!string.IsNullOrWhiteSpace(log.ThreadScope) ? log.ThreadScope : "-")</td>
+            <td class="message">@log.Message</td>
+            <td class="source">@log.Source</td>
+            <td class="actions" style="white-space:nowrap;">
+                <button type="button" class="btn btn-sm btn-outline-secondary btn-analyze me-1">Analizza</button>
+                @if (log.Analized)
+                {
+                    <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Analysis" asp-route-threadId="@log.ThreadId">Vedi analisi</a>
+                }
+            </td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+<form id="analyzeForm" method="post" asp-page-handler="Analyze" class="d-none">
+    <input type="hidden" name="threadId" />
+    <input type="hidden" name="threadScope" />
+</form>
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
+}
 
 @section Scripts {
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.5.0/css/responsive.bootstrap5.min.css" />
+    <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.bootstrap5.min.css" />
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
+    <script src="https://cdn.datatables.net/responsive/2.5.0/js/responsive.bootstrap5.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.bootstrap5.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.colVis.min.js"></script>
     <script>
         $(function () {
-            $('#logsTable').DataTable({
-                order: [[0, 'desc']],
+            var table = $('#logsTable').DataTable({
+                order: [[1, 'desc']], // timestamp column is now index 1 (0 = details control)
                 pageLength: 25,
+                responsive: false, // using explicit row().child for details
+                columnDefs: [
+                    { orderable: false, targets: 0 }, // details control column not sortable
+                    { responsivePriority: 1, targets: 1 }, // Timestamp always visible
+                    { responsivePriority: 2, targets: 2 }, // Level always visible
+                    { responsivePriority: 3, targets: 3 }, // Operation
+                    { responsivePriority: 4, targets: 4 }, // Message
+                    { responsivePriority: 5, targets: 5 },  // Source hidden first on small screens
+                    { orderable: false, targets: 6 }
+                ],
                 // show column visibility control
                 dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
                      "rt" +
@@ -48,6 +101,67 @@
                 stateSave: true,
                 stateSaveName: 'DataTables_logs',
                 stateDuration: -1
+            });
+
+            // Build details HTML for a row - ONLY show the message text decoded
+            function decodeEscapes(s) {
+                if (!s) return '';
+                // Convert common escaped sequences \r\n, \n, \r, \t
+                var out = s.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n').replace(/\\t/g, '\t');
+                // Decode unicode sequences like \u00E8
+                out = out.replace(/\\u([0-9a-fA-F]{4})/g, function(match, grp) { return String.fromCharCode(parseInt(grp, 16)); });
+                // Decode hex escapes like \xE8
+                out = out.replace(/\\x([0-9a-fA-F]{2})/g, function(match, grp) { return String.fromCharCode(parseInt(grp, 16)); });
+                return out;
+            }
+
+            // escape for safe HTML insertion (we keep newlines intact inside <pre>)
+            function htmlEscape(str) {
+                if (!str) return '';
+                return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            }
+
+            function formatLogDetails(rowNode) {
+                var rawMessage = $(rowNode).find('td.message').text() || '';
+                var decoded = decodeEscapes(rawMessage);
+                var safe = htmlEscape(decoded);
+
+                // Show only the decoded message inside a scrollable pre
+                var html = '<div style="padding:8px 12px;font-size:0.95rem;color:#222;background:#f8f9fa;border-radius:4px;">';
+                html += '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid #ddd;padding:8px;margin:0;border-radius:3px;max-height:420px;overflow:auto;">' + safe + '</pre>';
+                html += '</div>';
+                return html;
+            }
+
+            // Use the official DataTables row().child API for details collapse/expand
+            $('#logsTable tbody').on('click', 'td.details-control button', function () {
+                var btn = $(this);
+                var tr = btn.closest('tr');
+                var row = table.row(tr);
+
+                if (row.child.isShown()) {
+                    // Close
+                    row.child.hide();
+                    tr.removeClass('shown');
+                    btn.text('+');
+                } else {
+                    // Open
+                    row.child(formatLogDetails(tr)).show();
+                    tr.addClass('shown');
+                    btn.text('−');
+                }
+            });
+
+            $('#logsTable').on('click', '.btn-analyze', function (evt) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                var tr = $(this).closest('tr');
+                var threadId = tr.data('threadid');
+                var scope = tr.data('threadscope');
+                var form = $('#analyzeForm');
+                form.find('input[name="threadId"]').val(threadId);
+                form.find('input[name="threadScope"]').val(scope);
+                form.trigger('submit');
             });
         });
     </script>

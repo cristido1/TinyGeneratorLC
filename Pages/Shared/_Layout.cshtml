@@ -182,11 +182,11 @@
         /* Active agents badges */
         #active-agents-container {
             position: fixed;
-            top: 80px;
+            bottom: 20px;
             left: 20px;
             z-index: 9998;
             display: flex;
-            flex-direction: column;
+            flex-direction: column-reverse;
             gap: 8px;
             max-width: 220px;
         }
@@ -376,21 +376,8 @@
     <script src="~/lib/sweetalert2/sweetalert2.min.js"></script>
     <script src="~/js/sweetalert-config.js" asp-append-version="true"></script>
 
-    <!-- News Ticker -->
-    <div id="news-ticker" class="news-ticker">
-        <div class="news-ticker-header">📰 NOTIZIE ITALIANE</div>
-        <div class="news-ticker-content">
-            <div class="news-ticker-scroll">
-                <!-- News items will be loaded here -->
-            </div>
-        </div>
-    </div>
-
     <!-- Matrix Rain Effect -->
     <script src="~/js/matrix_effect.js" asp-append-version="true"></script>
-
-    <!-- News Ticker Script -->
-    <script src="~/js/news-ticker.js" asp-append-version="true"></script>
 
     <!-- Active Agents Badge Manager -->
     <script src="~/js/active-agents.js" asp-append-version="true"></script>

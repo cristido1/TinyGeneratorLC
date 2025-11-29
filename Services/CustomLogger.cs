@@ -48,6 +48,8 @@ namespace TinyGenerator.Services
             if (!ShouldPersist(category))
                 return;
 
+            var scope = LogScope.Current;
+
             var entry = new LogEntry
             {
                 Ts = DateTime.UtcNow.ToString("o"),
@@ -57,6 +59,7 @@ namespace TinyGenerator.Services
                 Exception = exception,
                 State = state,
                 ThreadId = Environment.CurrentManagedThreadId,
+                ThreadScope = scope,
                 AgentName = null,
                 Context = null
             };
@@ -234,22 +237,20 @@ namespace TinyGenerator.Services
         {
             var cat = category ?? string.Empty;
 
-            // Always persist test results regardless of configuration
-            if (string.Equals(cat, "LangChainTestService", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(cat, "TestResult", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(cat, "Command", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
 
-            if (_otherLogs) return true;
-            if (!_logRequestResponse) return false;
+            if (string.Equals(cat, "ModelPrompt", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cat, "ModelCompletion", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cat, "ModelRequest", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cat, "ModelResponse", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
 
-            return cat == "ModelPrompt"
-                || cat == "ModelCompletion"
-                || cat == "ModelRequest"
-                || cat == "ModelResponse"
-                || cat == "PromptRendering"
-                || cat == "FunctionInvocation";
+            return _otherLogs;
         }
     }
 }

@@ -1,0 +1,72 @@
+@page
+@model TinyGenerator.Pages.Logs.AnalysisModel
+@{
+    ViewData["Title"] = "Analisi Log";
+    ViewData["PageDescription"] = "Dettaglio delle analisi eseguite sui thread di log";
+}
+
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h1 class="mb-0">Analisi log</h1>
+    <a class="btn btn-sm btn-outline-secondary" asp-page="/Logs/Index">Torna ai log</a>
+</div>
+
+<form method="get" class="row g-2 mb-3">
+    <div class="col-sm-4">
+        <label class="form-label">Thread ID</label>
+        <input type="text" class="form-control" name="threadId" value="@Model.ThreadId" placeholder="Thread id" />
+    </div>
+    <div class="col-sm-3 d-flex align-items-end gap-2">
+        <button type="submit" class="btn btn-primary">Filtra</button>
+        <a asp-page="/Logs/Analysis" class="btn btn-outline-secondary">Reset</a>
+    </div>
+</form>
+
+<div class="table-responsive">
+    <table class="table table-striped table-bordered table-sm">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>ThreadId</th>
+                <th>Scope</th>
+                <th>Modello</th>
+                <th>Esito</th>
+                <th>Descrizione</th>
+            </tr>
+        </thead>
+        <tbody>
+        @if (Model.Analyses.Count == 0)
+        {
+            <tr>
+                <td colspan="6" class="text-center text-muted">Nessuna analisi disponibile</td>
+            </tr>
+        }
+        else
+        {
+            var index = 1;
+            foreach (var analysis in Model.Analyses)
+            {
+                <tr>
+                    <td>@index</td>
+                    <td>@analysis.ThreadId</td>
+                    <td>@(!string.IsNullOrWhiteSpace(analysis.RunScope) ? analysis.RunScope : "-")</td>
+                    <td>@analysis.ModelId</td>
+                    <td>
+                        @if (analysis.Succeeded)
+                        {
+                            <span class="badge bg-success">OK</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-danger">KO</span>
+                        }
+                    </td>
+                    <td style="max-width: 480px;">
+                        <pre class="mb-0" style="white-space:pre-wrap;">@analysis.Description</pre>
+                    </td>
+                </tr>
+                index++;
+            }
+        }
+        </tbody>
+    </table>
+</div>

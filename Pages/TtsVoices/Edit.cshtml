@@ -1,0 +1,86 @@
+@page
+@model TinyGenerator.Pages.TtsVoices.EditModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Edit TTS Voice";
+}
+
+<div class="row">
+    <div class="col-md-8">
+        <h2>Edit TTS Voice</h2>
+        <form method="post" enctype="multipart/form-data">
+            <input type="hidden" asp-for="Voice.Id" />
+            @Html.AntiForgeryToken()
+            <div class="mb-3">
+                <label class="form-label">Voice ID</label>
+                <input class="form-control" value="@Model.Voice?.VoiceId" readonly name="Voice.VoiceId" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Model</label>
+                <input class="form-control" value="@Model.Voice?.Model" readonly name="Voice.Model" />
+                <div class="form-text">Il campo model non è modificabile.</div>
+            </div>
+            <div class="mb-3">
+                <label asp-for="Voice.Name" class="form-label"></label>
+                <input asp-for="Voice.Name" class="form-control" />
+                <span asp-validation-for="Voice.Name" class="text-danger"></span>
+            </div>
+            <div class="row">
+                <div class="mb-3 col-md-6">
+                    <label asp-for="Voice.Language" class="form-label"></label>
+                    <input asp-for="Voice.Language" class="form-control" />
+                </div>
+                <div class="mb-3 col-md-3">
+                    <label asp-for="Voice.Gender" class="form-label"></label>
+                    <input asp-for="Voice.Gender" class="form-control" />
+                </div>
+                <div class="mb-3 col-md-3">
+                    <label asp-for="Voice.Age" class="form-label"></label>
+                    <input asp-for="Voice.Age" class="form-control" />
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Voice.Confidence" class="form-label"></label>
+                <input asp-for="Voice.Confidence" class="form-control" type="number" step="0.01" min="0" max="1" />
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Voice.Score" class="form-label">Score</label>
+                <input asp-for="Voice.Score" class="form-control" type="number" step="0.01" />
+                <span asp-validation-for="Voice.Score" class="text-danger"></span>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Voice.Tags" class="form-label">Tags (JSON)</label>
+                <textarea asp-for="Voice.Tags" class="form-control" rows="3"></textarea>
+                <span asp-validation-for="Voice.Tags" class="text-danger"></span>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Voice.TemplateWav" class="form-label">Template WAV (filename)</label>
+                <input asp-for="Voice.TemplateWav" class="form-control" />
+                <div class="form-text">Inserisci il nome del file .wav presente in wwwroot/data_voices_samples oppure lascia vuoto per far generare un sample al primo Play.</div>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Voice.Archetype" class="form-label"></label>
+                <input asp-for="Voice.Archetype" class="form-control" />
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Voice.Notes" class="form-label"></label>
+                <textarea asp-for="Voice.Notes" class="form-control" rows="3"></textarea>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <a asp-page="/TtsVoices/Index" class="btn btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

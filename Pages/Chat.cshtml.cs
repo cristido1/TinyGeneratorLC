@@ -59,11 +59,12 @@ namespace TinyGenerator.Pages
                     Content = message
                 });
 
-                // Call model via LangChain bridge (no tools)
+                // Call model via LangChain bridge. If model supports tools, expose default tools (memory).
                 var chatBridge = _kernelFactory.CreateChatBridge(model);
+                var tools = _kernelFactory.GetDefaultToolSchemasForModel(model) ?? new List<Dictionary<string, object>>();
                 var response = await chatBridge.CallModelWithToolsAsync(
                     history,
-                    new List<Dictionary<string, object>>(), // No tools for simple chat
+                    tools, // Default tools (may include memory if model supports tools)
                     CancellationToken.None);
 
                 // Parse response

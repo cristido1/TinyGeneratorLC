@@ -14,7 +14,7 @@ execution_plan:
   - step: finalize
     instructions: Produce the final version, correcting grammatical and stylistic errors. Return only the final version.
 constraints:
-  target_words: 15000
+  target_words: 30000
   max_steps: 5
   avoid_repetition: true
   tone_consistency: true

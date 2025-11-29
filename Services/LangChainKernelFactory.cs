@@ -240,7 +240,7 @@ namespace TinyGenerator.Services
         /// Create a LangChainChatBridge for direct model communication.
         /// Resolves model endpoint and API key from configuration.
         /// </summary>
-        public LangChainChatBridge CreateChatBridge(string model)
+        public LangChainChatBridge CreateChatBridge(string model, double? temperature = null, double? topP = null, bool useMaxTokens = false)
         {
             try
             {
@@ -282,7 +282,18 @@ namespace TinyGenerator.Services
                 _logger?.Log("Info", "LangChainKernelFactory",
                     $"Creating ChatBridge for model '{model}' with provider '{modelInfo.Provider}' and endpoint '{endpoint}'");
 
-                return new LangChainChatBridge(endpoint, model, apiKey, null, _logger, _progress);
+                var bridge = new LangChainChatBridge(endpoint, model, apiKey, null, _logger, _progress);
+                if (temperature.HasValue) bridge.Temperature = temperature.Value;
+                if (topP.HasValue) bridge.TopP = topP.Value;
+                if (useMaxTokens)
+                {
+                    var maxTokens = DetermineMaxTokensForModel(modelInfo);
+                    if (maxTokens > 0)
+                    {
+                        bridge.MaxResponseTokens = Math.Max(bridge.MaxResponseTokens, maxTokens);
+                    }
+                }
+                return bridge;
             }
             catch (Exception ex)
             {
@@ -290,6 +301,87 @@ namespace TinyGenerator.Services
                     $"Failed to create ChatBridge for model '{model}': {ex.Message}");
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Return default tool schemas to expose to a model for simple chat scenarios.
+        /// Currently exposes the `memory` function when the model supports tools (NoTools == false).
+        /// </summary>
+        public List<Dictionary<string, object>> GetDefaultToolSchemasForModel(string model)
+        {
+            var schemas = new List<Dictionary<string, object>>();
+            try
+            {
+                var modelInfo = _database.GetModelInfo(model);
+                if (modelInfo == null) return schemas;
+
+                // If model explicitly does not support tools, return empty
+                if (modelInfo.NoTools) return schemas;
+
+                // Build memory function schema (matches MemoryTool.GetSchema output)
+                var properties = new Dictionary<string, object>
+                {
+                    { "operation", new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "enum", new List<string> { "remember", "recall", "forget" } },
+                            { "description", "Operation" }
+                        }
+                    },
+                    { "collection", new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "description", "Collection name" }
+                        }
+                    },
+                    { "text", new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "description", "Text" }
+                        }
+                    },
+                    { "query", new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "description", "Search query" }
+                        }
+                    }
+                };
+
+                var functionSchema = new Dictionary<string, object>
+                {
+                    { "type", "function" },
+                    { "function", new Dictionary<string, object>
+                        {
+                            { "name", "memory" },
+                            { "description", "Memory operations" },
+                            { "parameters", new Dictionary<string, object>
+                                {
+                                    { "type", "object" },
+                                    { "properties", properties },
+                                    { "required", new List<string> { "operation", "collection" } }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                schemas.Add(functionSchema);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "LangChainKernelFactory", $"Failed to build default tool schemas for {model}: {ex.Message}");
+            }
+
+            return schemas;
+        }
+
+        private static int DetermineMaxTokensForModel(Models.ModelInfo modelInfo)
+        {
+            if (modelInfo == null) return 0;
+            if (modelInfo.ContextToUse > 0) return modelInfo.ContextToUse;
+            if (modelInfo.MaxContext > 0) return modelInfo.MaxContext;
+            return 32000;
         }
     }
 }

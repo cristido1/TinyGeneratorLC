@@ -65,16 +65,13 @@ builder.Services.AddSingleton<PersistentMemoryService>(sp => new PersistentMemor
 builder.Services.AddSingleton<ProgressService>();
 // Notification service (broadcast to clients via SignalR)
 builder.Services.AddSingleton<NotificationService>();
+// Command dispatcher (background command queue with configurable parallelism)
+builder.Services.Configure<CommandDispatcherOptions>(builder.Configuration.GetSection("CommandDispatcher"));
+builder.Services.AddSingleton<CommandDispatcher>();
+builder.Services.AddSingleton<ICommandDispatcher>(sp => sp.GetRequiredService<CommandDispatcher>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>());
 
-// DEPRECATED SK Kernel factory - commented out as part of migration to LangChain
-// builder.Services.AddSingleton<IKernelFactory, KernelFactory>();
-// builder.Services.AddSingleton<KernelFactory>(sp => (KernelFactory)sp.GetRequiredService<IKernelFactory>());
-
-// DEPRECATED SK Agent service - commented out as part of migration to LangChain
-// builder.Services.AddSingleton<AgentService>(sp => new AgentService(...));
-
-// === Servizio di generazione storie ===
-// Stories persistence service (updated to not require AgentService or deprecated KernelFactory)
+// Stories persistence service (LangChain-first pipeline)
 builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetRequiredService<DatabaseService>(), 
     sp.GetRequiredService<TtsService>(),
@@ -82,10 +79,7 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetService<ICustomLogger>(),
     sp.GetService<ProgressService>(),
     sp.GetService<ILogger<StoriesService>>()));
-
-// DEPRECATED - These services require SK IKernelFactory which is no longer registered
-// builder.Services.AddTransient<StoryGeneratorService>();
-// builder.Services.AddTransient<PlannerExecutor>();
+builder.Services.AddSingleton<LogAnalysisService>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
 builder.Services.AddTransient<LangChainTestService>();
@@ -233,17 +227,6 @@ catch (Exception ex)
 {
     logger?.LogWarning(ex, "[Startup] Log cleanup failed: {msg}", ex.Message);
 }
-
-logger?.LogInformation("[Startup] About to get kernelFactory service...");
-// DEPRECATED SK Kernel factory - commented out as part of migration to LangChain
-// Create a Semantic Kernel instance per active Agent and ensure each has persistent memory
-// Ensure kernels for active agents and their memory collections
-// var kernelFactory = app.Services.GetService<TinyGenerator.Services.IKernelFactory>() as TinyGenerator.Services.KernelFactory;
-logger?.LogInformation("[Startup] Got kernelFactory, about to get memoryService...");
-// var memoryService = app.Services.GetService<TinyGenerator.Services.PersistentMemoryService>();
-logger?.LogInformation("[Startup] Got memoryService, calling EnsureKernelsForActiveAgents...");
-// StartupTasks.EnsureKernelsForActiveAgents(db, kernelFactory, memoryService, logger);
-logger?.LogInformation("[Startup] EnsureKernelsForActiveAgents completed (skipped - deprecated SK).");
 
 // === Middleware ===
 if (!app.Environment.IsDevelopment())

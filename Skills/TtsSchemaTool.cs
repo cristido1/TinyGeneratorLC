@@ -50,16 +50,7 @@ namespace TinyGenerator.Skills
             }
         }
 
-        public override IEnumerable<string> FunctionNames
-        {
-            get
-            {
-                yield return Name;
-                yield return "add_narration";
-                yield return "add_phrase";
-                yield return "confirm";
-            }
-        }
+        public override IEnumerable<string> FunctionNames => new[] { "add_narration", "add_phrase", "confirm" };
 
         public override Dictionary<string, object> GetSchema() => CreateAddNarrationSchema();
 
@@ -118,7 +109,8 @@ namespace TinyGenerator.Skills
                         new Dictionary<string, object>
                         {
                             { "type", "string" },
-                            { "description", "Emotion for the line. Allowed: neutral, happy, sad, angry, fearful, disgusted, surprised" }
+                            { "description", "Emotion for the line. Allowed: neutral, happy, sad, angry, fearful, disgusted, surprised" },
+                            { "enum", SupportedEmotions.ToArray() }
                         }
                     }
                 },
@@ -140,31 +132,10 @@ namespace TinyGenerator.Skills
         {
             try
             {
-                var request = ParseInput<TtsSchemaToolRequest>(input);
-                if (request == null)
+                return SerializeResult(new
                 {
-                    CustomLogger?.Log("Error", "TtsSchemaTool", "Invalid input format");
-                    return SerializeResult(new { error = "Invalid input format" });
-                }
-
-                // Log operation with all parameters
-                var paramDetails = new List<string>();
-                if (!string.IsNullOrEmpty(request.Operation)) paramDetails.Add($"operation={request.Operation}");
-                if (!string.IsNullOrEmpty(request.Character)) paramDetails.Add($"character={request.Character}");
-                if (!string.IsNullOrEmpty(request.Text)) paramDetails.Add($"text={request.Text}");
-                if (!string.IsNullOrEmpty(request.Emotion)) paramDetails.Add($"emotion={request.Emotion}");
-                
-
-                CustomLogger?.Log("Info", "TtsSchemaTool", $"Executing: {string.Join(", ", paramDetails)}");
-
-                return request.Operation?.ToLowerInvariant() switch
-                {
-                    "add_narration" => AddNarration(request.Text),
-                    "add_phrase" => AddPhraseAutoCreate(request.Character, request.Text, request.Emotion),
-                    "confirm" => ConfirmSchemaAllowSave(),
-                    "describe" => SerializeResult(new { result = "Operations: add_narration(text), add_phrase(character, text, emotion), confirm()" }),
-                    _ => SerializeResult(new { error = $"Unknown operation: {request.Operation}" })
-                };
+                    error = "Call add_narration, add_phrase or confirm directly. The generic ttsschema entry is no longer available."
+                });
             }
             catch (Exception ex)
             {
@@ -175,10 +146,6 @@ namespace TinyGenerator.Skills
 
         public override Task<string> ExecuteFunctionAsync(string functionName, string input)
         {
-            if (functionName.Equals(Name, StringComparison.OrdinalIgnoreCase))
-            {
-                return ExecuteAsync(input);
-            }
             return functionName switch
             {
                 "add_narration" => Task.FromResult(ExecuteAddNarration(input)),
@@ -391,14 +358,6 @@ namespace TinyGenerator.Skills
             }
 
             return null;
-        }
-
-        private class TtsSchemaToolRequest
-        {
-            public string? Operation { get; set; }
-            public string? Character { get; set; }
-            public string? Text { get; set; }
-            public string? Emotion { get; set; }
         }
 
         private class NarrationRequest

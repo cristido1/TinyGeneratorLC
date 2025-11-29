@@ -12,10 +12,14 @@ namespace TinyGenerator.Models
         public string? Gender { get; set; }
         public string? Age { get; set; }
         public double? Confidence { get; set; }
+        // Optional numeric score used by evaluations/admin
+        public double? Score { get; set; }
         public string? Tags { get; set; } // JSON string
-        public string? SamplePath { get; set; }
         public string? TemplateWav { get; set; }
-        public string? Metadata { get; set; } // full JSON of voice info
+        public string? Archetype { get; set; }
+        public string? Notes { get; set; }
+        // template_wav stores the sample wav filename (relative to wwwroot/data_voices_samples)
+        // metadata and sample_path were removed from DB schema; template_wav now holds the sample filename
         public string? CreatedAt { get; set; }
         public string? UpdatedAt { get; set; }
     }

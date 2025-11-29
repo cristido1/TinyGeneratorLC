@@ -24,5 +24,7 @@ namespace TinyGenerator.Models
         public string? Notes { get; set; }
         // Non-persistent friendly name for the assigned TTS voice
         public string? VoiceName { get; set; }
+        public double? Temperature { get; set; } // Sampling temperature for model calls (0.0-2.0)
+        public double? TopP { get; set; } // Nucleus sampling probability (0.0-1.0)
     }
 }

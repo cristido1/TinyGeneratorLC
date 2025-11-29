@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
@@ -38,6 +39,27 @@ namespace TinyGenerator.Services
         private readonly ICustomLogger _customLogger;
         private readonly IOllamaManagementService _ollamaService;
         private readonly Dictionary<int, int> _ttsEmotionPenalties = new();
+        public const double TtsCoverageThreshold = 0.85;
+
+        public sealed class TestGroupRunContext
+        {
+            public int RunId { get; init; }
+            public string Group { get; init; } = string.Empty;
+            public string ModelName { get; init; } = string.Empty;
+            public ModelInfo ModelInfo { get; init; } = default!;
+            public List<TestDefinition> Tests { get; init; } = new();
+            public string? TestFolder { get; init; }
+        }
+
+        public sealed class TestGroupRunResult
+        {
+            public int RunId { get; init; }
+            public int Score { get; init; }
+            public int Steps { get; init; }
+            public int PassedSteps { get; init; }
+            public bool PassedAll { get; init; }
+            public long? DurationMs { get; init; }
+        }
 
         public LangChainTestService(
             DatabaseService database,
@@ -62,14 +84,32 @@ namespace TinyGenerator.Services
         /// </summary>
         public async Task<object?> RunGroupAsync(string model, string group)
         {
+            var context = PrepareGroupRun(model, group);
+            if (context == null)
+                return null;
+
+            var result = await ExecuteGroupRunAsync(context);
+            if (result == null)
+                return null;
+
+            return new
+            {
+                runId = result.RunId,
+                score = result.Score,
+                steps = result.Steps,
+                passed = result.PassedSteps,
+                duration = result.DurationMs
+            };
+        }
+
+        public TestGroupRunContext? PrepareGroupRun(string model, string group)
+        {
             var modelInfo = _database.GetModelInfo(model);
             if (modelInfo == null) return null;
 
             var tests = _database.GetPromptsByGroup(group) ?? new List<TestDefinition>();
-            
-            // Setup test folder if needed
-            string? testFolder = SetupTestFolder(model, group, tests);
-            
+            string? testFolder = SetupTestFolder(modelInfo.Name, group, tests);
+
             var runId = _database.CreateTestRun(
                 modelInfo.Name,
                 group,
@@ -80,9 +120,32 @@ namespace TinyGenerator.Services
                 testFolder);
 
             _progress?.Start(runId.ToString());
-            LogTestMessage(runId.ToString(), $"[{model}] Starting test group: {group}");
+            LogTestMessage(runId.ToString(), $"[{modelInfo.Name}] Starting test group: {group}");
 
-            // Warmup for Ollama models - just load the model into memory
+            return new TestGroupRunContext
+            {
+                RunId = runId,
+                Group = group,
+                ModelName = modelInfo.Name,
+                ModelInfo = modelInfo,
+                Tests = tests,
+                TestFolder = testFolder
+            };
+        }
+
+        public async Task<TestGroupRunResult?> ExecuteGroupRunAsync(TestGroupRunContext context)
+        {
+            if (context == null) return null;
+
+            var modelInfo = context.ModelInfo;
+            if (modelInfo == null) return null;
+
+            var model = context.ModelName;
+            var group = context.Group;
+            var runId = context.RunId;
+            var tests = context.Tests ?? new List<TestDefinition>();
+            var testFolder = context.TestFolder;
+
             if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
             {
                 try
@@ -147,7 +210,15 @@ namespace TinyGenerator.Services
                 LogTestMessage(runId.ToString(), $"❌ [{model}] Test fallito: {passedCount}/{steps} passati, score {score}/10", "Error");
             }
 
-            return new { runId, score, steps, passed = passedCount, duration = durationMs };
+            return new TestGroupRunResult
+            {
+                RunId = runId,
+                Score = score,
+                Steps = steps,
+                PassedSteps = passedCount,
+                PassedAll = passedFlag,
+                DurationMs = durationMs
+            };
         }
 
         /// <summary>
@@ -168,9 +239,20 @@ namespace TinyGenerator.Services
             {
                 try
                 {
-                    var result = await RunGroupAsync(modelInfo.Name, selectedGroup);
+                    var context = PrepareGroupRun(modelInfo.Name, selectedGroup);
+                    if (context == null) continue;
+                    var result = await ExecuteGroupRunAsync(context);
                     if (result != null)
-                        runResults.Add(result);
+                    {
+                        runResults.Add(new
+                        {
+                            runId = result.RunId,
+                            score = result.Score,
+                            steps = result.Steps,
+                            passed = result.PassedSteps,
+                            duration = result.DurationMs
+                        });
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -184,19 +266,19 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Execute a single test
         /// </summary>
-        public async Task ExecuteTestAsync(
-            int runId,
-            int idx,
-            TestDefinition test,
-            string model,
-            ModelInfo modelInfo,
-            string agentInstructions,
-            object? defaultAgent = null,
-            string? testFolder = null)
+    public async Task ExecuteTestAsync(
+        int runId,
+        int idx,
+        TestDefinition test,
+        string model,
+        ModelInfo modelInfo,
+        string agentInstructions,
+        object? defaultAgent = null,
+        string? testFolder = null)
+    {
+        var prompt = test.Prompt ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(testFolder) && prompt.Contains("[test_folder]"))
         {
-            var prompt = test.Prompt ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(testFolder) && prompt.Contains("[test_folder]"))
-            {
                 prompt = prompt.Replace("[test_folder]", testFolder);
             }
             
@@ -216,342 +298,390 @@ namespace TinyGenerator.Services
                 LogTestMessage(runId.ToString(), $"[{model}] Execution Plan: {test.ExecutionPlan}", "Information");
             }
 
-            try
-            {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                var testType = (test.TestType ?? string.Empty).ToLowerInvariant();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var context = new TestExecutionContext(
+            test,
+            stepId,
+            sw,
+            runId,
+            idx,
+            model,
+            modelInfo,
+            prompt,
+            testFolder);
 
-                switch (testType)
-                {
-                    case "question":
-                        await ExecuteQuestionTestAsync(test, stepId, sw, runId, idx, model, prompt);
-                        break;
+        var command = CreateCommandForTest(test);
+        if (command == null)
+        {
+            _database.UpdateTestStepResult(
+                stepId,
+                false,
+                null,
+                $"Unknown test type: {test.TestType}",
+                null);
+            return;
+        }
 
-                    case "functioncall":
-                        await ExecuteFunctionCallTestAsync(test, stepId, sw, runId, idx, model, modelInfo, prompt);
-                        break;
-
-                    case "writer":
-                        await ExecuteWriterTestAsync(test, stepId, sw, runId, idx, model, modelInfo, prompt);
-                        break;
-
-                    case "tts":
-                        await ExecuteTtsTestAsync(test, stepId, sw, runId, idx, model, modelInfo, prompt, testFolder);
-                        break;
-
-                    default:
-                        _database.UpdateTestStepResult(
-                            stepId,
-                            false,
-                            null,
-                            $"Unknown test type: {test.TestType}",
-                            null);
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                _database.UpdateTestStepResult(stepId, false, null, ex.Message, null);
-                LogTestMessage(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}", "Error");
+        try
+        {
+            await command.ExecuteAsync(context);
+        }
+        catch (Exception ex)
+        {
+            _database.UpdateTestStepResult(stepId, false, null, ex.Message, null);
+            LogTestMessage(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}", "Error");
             }
         }
 
         // ==================== Test Type Handlers ====================
 
-        private async Task ExecuteQuestionTestAsync(
-            TestDefinition test,
-            int stepId,
-            System.Diagnostics.Stopwatch sw,
-            int runId,
-            int idx,
-            string model,
-            string prompt)
+        private ITestCommand? CreateCommandForTest(TestDefinition test)
         {
-            var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null);
-            var chatBridge = _kernelFactory.CreateChatBridge(model);
-            // Apply per-test sampling parameters if provided
-            if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
-            if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
-            var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 30;
-
-            var instructions = LoadExecutionPlan(test.ExecutionPlan);
-            var fullPrompt = !string.IsNullOrWhiteSpace(instructions)
-                ? $"{instructions}\n\n{prompt}"
-                : prompt;
-            var hasTools = orchestrator.GetToolSchemas().Any();
-            fullPrompt = AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
-
-            try
+            var type = (test.TestType ?? string.Empty).ToLowerInvariant();
+            return type switch
             {
-                var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-                
-                // Create ReAct loop to execute the question test
-                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
-                var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
-                sw.Stop();
-                
-                var response = reactResult.FinalResponse;
-                var responseText = response ?? string.Empty;
-                bool passed = ValidateResponse(responseText, test, out var failReason);
-
-                var resultJson = JsonSerializer.Serialize(new
-                {
-                    response = responseText,
-                    expected = test.ExpectedPromptValue,
-                    range = test.ValidScoreRange
-                });
-
-                _database.UpdateTestStepResult(
-                    stepId,
-                    passed,
-                    resultJson,
-                    passed ? null : failReason,
-                    (long?)sw.ElapsedMilliseconds);
-
-                _progress?.Append(runId.ToString(),
-                    $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: {test.FunctionName ?? $"id_{test.Id}"} ({sw.ElapsedMilliseconds}ms)");
-            }
-            catch (OperationCanceledException)
-            {
-                sw.Stop();
-                _database.UpdateTestStepResult(
-                    stepId,
-                    false,
-                    null,
-                    $"Timeout after {timeout}s",
-                    (long?)sw.ElapsedMilliseconds);
-                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} TIMEOUT");
-            }
-            catch (Exception ex)
-            {
-                sw.Stop();
-                _database.UpdateTestStepResult(
-                    stepId,
-                    false,
-                    null,
-                    $"Error: {ex.Message}",
-                    (long?)sw.ElapsedMilliseconds);
-                _progress?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}");
-            }
+                "question" => new QuestionTestCommand(this),
+                "functioncall" => new FunctionCallTestCommand(this),
+                "writer" => new WriterTestCommand(this),
+                "tts" => new TtsTestCommand(this),
+                _ => null
+            };
         }
 
-        private async Task ExecuteFunctionCallTestAsync(
-            TestDefinition test,
-            int stepId,
-            System.Diagnostics.Stopwatch sw,
-            int runId,
-            int idx,
-            string model,
-            ModelInfo modelInfo,
-            string prompt)
+        private interface ITestCommand
         {
-            var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null);
-            var chatBridge = _kernelFactory.CreateChatBridge(model);
-            if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
-            if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
-            var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 30;
+            Task ExecuteAsync(TestExecutionContext context);
+        }
 
-            var instructions = LoadExecutionPlan(test.ExecutionPlan);
-            var fullPrompt = !string.IsNullOrWhiteSpace(instructions)
-                ? $"{instructions}\n\n{prompt}"
-                : prompt;
-            var hasTools = orchestrator.GetToolSchemas().Any();
-            fullPrompt = AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
+        private sealed record TestExecutionContext(
+            TestDefinition Test,
+            int StepId,
+            System.Diagnostics.Stopwatch Stopwatch,
+            int RunId,
+            int StepIndex,
+            string Model,
+            ModelInfo ModelInfo,
+            string Prompt,
+            string? TestFolder);
 
-            try
+        private sealed class QuestionTestCommand : ITestCommand
+        {
+            private readonly LangChainTestService _service;
+            public QuestionTestCommand(LangChainTestService service) => _service = service;
+
+            public async Task ExecuteAsync(TestExecutionContext context)
             {
-                var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-                
-                // Create ReAct loop to execute function calls
-                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
-                var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
-                sw.Stop();
+                var test = context.Test;
+                var stepId = context.StepId;
+                var sw = context.Stopwatch;
+                var runId = context.RunId;
+                var idx = context.StepIndex;
+                var model = context.Model;
+                var prompt = context.Prompt;
 
-                var responseText = reactResult.FinalResponse ?? string.Empty;
-                bool passed = ValidateFunctionCallResponse(responseText, test, out var failReason);
+                var orchestrator = _service._kernelFactory.CreateOrchestrator(model, _service.ParseAllowedPlugins(test), null);
+                var chatBridge = _service._kernelFactory.CreateChatBridge(model, test.Temperature, test.TopP);
+                var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 30;
 
-                var resultJson = JsonSerializer.Serialize(new
+                var instructions = _service.LoadExecutionPlan(test.ExecutionPlan);
+                var fullPrompt = !string.IsNullOrWhiteSpace(instructions)
+                    ? $"{instructions}\n\n{prompt}"
+                    : prompt;
+                var hasTools = orchestrator.GetToolSchemas().Any();
+                fullPrompt = _service.AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
+
+                try
                 {
-                    response = responseText,
-                    functionCalled = test.ExpectedBehavior,
-                    toolsExecuted = reactResult.ExecutedTools.Select(t => new { t.ToolName, t.Input, t.Output }),
-                    iterations = reactResult.IterationCount,
-                    success = reactResult.Success
-                });
+                    var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _service._customLogger, progress: _service._progress, runId: runId.ToString(), modelBridge: chatBridge);
+                    var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
+                    sw.Stop();
 
-                _database.UpdateTestStepResult(
-                    stepId,
-                    passed,
-                    resultJson,
-                    passed ? null : (failReason ?? reactResult.Error),
-                    (long?)sw.ElapsedMilliseconds);
+                    var responseText = reactResult.FinalResponse ?? string.Empty;
+                    bool passed = _service.ValidateResponse(responseText, test, out var failReason);
 
-                _progress?.Append(runId.ToString(),
-                    $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: {test.FunctionName ?? $"id_{test.Id}"} ({sw.ElapsedMilliseconds}ms) - {reactResult.ExecutedTools.Count} tools called");
-            }
-            catch (OperationCanceledException)
-            {
-                sw.Stop();
-                _database.UpdateTestStepResult(
-                    stepId,
-                    false,
-                    null,
-                    $"Timeout after {timeout}s",
-                    (long?)sw.ElapsedMilliseconds);
-            }
-            catch (ModelNoToolsSupportException ex)
-            {
-                sw.Stop();
-                // Mark model as not supporting tools
-                modelInfo.NoTools = true;
-                _database.UpsertModel(modelInfo);
-                _progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
-                
-                _database.UpdateTestStepResult(
-                    stepId,
-                    false,
-                    null,
-                    $"Model does not support tool calling: {ex.Message}",
-                    (long?)sw.ElapsedMilliseconds);
-            }
-            catch (Exception ex)
-            {
-                sw.Stop();
-                // Fallback: check message content for "does not support tools"
-                if (ex.Message.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
-                {
-                    modelInfo.NoTools = true;
-                    _database.UpsertModel(modelInfo);
-                    _progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                    var resultJson = JsonSerializer.Serialize(new
+                    {
+                        response = responseText,
+                        expected = test.ExpectedPromptValue,
+                        range = test.ValidScoreRange
+                    });
+
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        passed,
+                        resultJson,
+                        passed ? null : failReason,
+                        (long?)sw.ElapsedMilliseconds);
+
+                    _service._progress?.Append(runId.ToString(),
+                        $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: {test.FunctionName ?? $"id_{test.Id}"} ({sw.ElapsedMilliseconds}ms)");
                 }
-
-                _database.UpdateTestStepResult(
-                    stepId,
-                    false,
-                    null,
-                    ex.Message,
-                    (long?)sw.ElapsedMilliseconds);
+                catch (OperationCanceledException)
+                {
+                    sw.Stop();
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        false,
+                        null,
+                        $"Timeout after {timeout}s",
+                        (long?)sw.ElapsedMilliseconds);
+                    _service._progress?.Append(runId.ToString(), $"[{model}] Step {idx} TIMEOUT");
+                }
+                catch (Exception ex)
+                {
+                    sw.Stop();
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        false,
+                        null,
+                        $"Error: {ex.Message}",
+                        (long?)sw.ElapsedMilliseconds);
+                    _service._progress?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}");
+                }
             }
         }
 
-        private async Task ExecuteWriterTestAsync(
-            TestDefinition test,
-            int stepId,
-            System.Diagnostics.Stopwatch sw,
-            int runId,
-            int idx,
-            string model,
-            ModelInfo modelInfo,
-            string prompt)
+        private sealed class FunctionCallTestCommand : ITestCommand
         {
-            var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null);
-            var chatBridge = _kernelFactory.CreateChatBridge(model);
-            if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
-            if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
-            var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 120;
+            private readonly LangChainTestService _service;
+            public FunctionCallTestCommand(LangChainTestService service) => _service = service;
 
-            var instructions = LoadExecutionPlan(test.ExecutionPlan) ?? 
+            public async Task ExecuteAsync(TestExecutionContext context)
+            {
+                var test = context.Test;
+                var stepId = context.StepId;
+                var sw = context.Stopwatch;
+                var runId = context.RunId;
+                var idx = context.StepIndex;
+                var model = context.Model;
+
+                var orchestrator = _service._kernelFactory.CreateOrchestrator(model, _service.ParseAllowedPlugins(test), null);
+                var chatBridge = _service._kernelFactory.CreateChatBridge(model, test.Temperature, test.TopP);
+                var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 30;
+
+                var instructions = _service.LoadExecutionPlan(test.ExecutionPlan);
+                var fullPrompt = !string.IsNullOrWhiteSpace(instructions)
+                    ? $"{instructions}\n\n{context.Prompt}"
+                    : context.Prompt;
+                var hasTools = orchestrator.GetToolSchemas().Any();
+                fullPrompt = _service.AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
+
+                try
+                {
+                    var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _service._customLogger, progress: _service._progress, runId: runId.ToString(), modelBridge: chatBridge);
+                    var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
+                    sw.Stop();
+
+                    var responseText = reactResult.FinalResponse ?? string.Empty;
+                    bool passed = _service.ValidateFunctionCallResponse(responseText, test, out var failReason);
+
+                    var resultJson = JsonSerializer.Serialize(new
+                    {
+                        response = responseText,
+                        functionCalled = test.ExpectedBehavior,
+                        toolsExecuted = reactResult.ExecutedTools.Select(t => new { t.ToolName, t.Input, t.Output }),
+                        iterations = reactResult.IterationCount,
+                        success = reactResult.Success
+                    });
+
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        passed,
+                        resultJson,
+                        passed ? null : (failReason ?? reactResult.Error),
+                        (long?)sw.ElapsedMilliseconds);
+
+                    _service._progress?.Append(runId.ToString(),
+                        $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: {test.FunctionName ?? $"id_{test.Id}"} ({sw.ElapsedMilliseconds}ms) - {reactResult.ExecutedTools.Count} tools called");
+                }
+                catch (OperationCanceledException)
+                {
+                    sw.Stop();
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        false,
+                        null,
+                        $"Timeout after {timeout}s",
+                        (long?)sw.ElapsedMilliseconds);
+                }
+                catch (ModelNoToolsSupportException ex)
+                {
+                    sw.Stop();
+                    context.ModelInfo.NoTools = true;
+                    _service._database.UpsertModel(context.ModelInfo);
+                    _service._progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                    
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        false,
+                        null,
+                        $"Model does not support tool calling: {ex.Message}",
+                        (long?)sw.ElapsedMilliseconds);
+                }
+                catch (Exception ex)
+                {
+                    sw.Stop();
+                    if (ex.Message.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
+                    {
+                        context.ModelInfo.NoTools = true;
+                        _service._database.UpsertModel(context.ModelInfo);
+                        _service._progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                    }
+
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        false,
+                        null,
+                        ex.Message,
+                        (long?)sw.ElapsedMilliseconds);
+                }
+            }
+        }
+
+        private sealed class WriterTestCommand : ITestCommand
+        {
+            private readonly LangChainTestService _service;
+            public WriterTestCommand(LangChainTestService service) => _service = service;
+
+            public async Task ExecuteAsync(TestExecutionContext context)
+            {
+                var test = context.Test;
+                var stepId = context.StepId;
+                var sw = context.Stopwatch;
+                var runId = context.RunId;
+                var idx = context.StepIndex;
+                var model = context.Model;
+                var prompt = context.Prompt;
+
+                var orchestrator = _service._kernelFactory.CreateOrchestrator(model, _service.ParseAllowedPlugins(test), null);
+                var chatBridge = _service._kernelFactory.CreateChatBridge(model, test.Temperature, test.TopP);
+                var writerMaxTokens = Math.Max(context.ModelInfo.ContextToUse, context.ModelInfo.MaxContext);
+                if (writerMaxTokens > 0)
+                {
+                    chatBridge.MaxResponseTokens = Math.Max(chatBridge.MaxResponseTokens, writerMaxTokens);
+                }
+                var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 120;
+
+                var instructions = _service.LoadExecutionPlan(test.ExecutionPlan) ?? 
 @"You are a professional storyteller. Write detailed, engaging stories of at least 2000 words IN ITALIAN. 
 Include rich descriptions, well-developed characters, multiple scenes, and a complete narrative arc. 
 DO NOT rush or summarize. Take your time to develop the story fully.
 IMPORTANT: Write the story in Italian language.";
 
-            var fullPrompt = $"{instructions}\n\n{prompt}";
-            var hasTools = orchestrator.GetToolSchemas().Any();
-            fullPrompt = AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
+                var fullPrompt = $"{instructions}\n\n{prompt}";
+                var hasTools = orchestrator.GetToolSchemas().Any();
+                fullPrompt = _service.AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
 
-            try
-            {
-                var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-                
-                // Create ReAct loop to execute story generation
-                var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge);
-                var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
-                sw.Stop();
-
-                var storyText = reactResult.FinalResponse ?? string.Empty;
-
-                if (string.IsNullOrWhiteSpace(storyText))
+                try
                 {
-                    _database.UpdateTestStepResult(
+                    var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _service._customLogger, progress: _service._progress, runId: runId.ToString(), modelBridge: chatBridge);
+                    var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
+                    sw.Stop();
+
+                    var storyText = reactResult.FinalResponse ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(storyText))
+                    {
+                        _service._database.UpdateTestStepResult(
+                            stepId,
+                            false,
+                            string.Empty,
+                            "No story text returned",
+                            (long?)sw.ElapsedMilliseconds);
+                        return;
+                    }
+
+                    var cleanStoryText = _service.ExtractJsonContent(storyText) ?? storyText;
+                    var generatedStatusId = _service._stories.ResolveStatusId("generated");
+                    var storyId = _service._stories.InsertSingleStory(
+                        test.Prompt ?? string.Empty,
+                        cleanStoryText,
+                        context.ModelInfo.Id,
+                        null,
+                        0.0,
+                        null,
+                        0,
+                        generatedStatusId,
+                        null);
+
+                    _service._database.AddTestAsset(
+                        stepId,
+                        "story",
+                        $"/stories/{storyId}",
+                        "Generated story",
+                        durationSec: sw.Elapsed.TotalSeconds,
+                        sizeBytes: cleanStoryText.Length,
+                        storyId: storyId);
+
+                    var evaluationScore = await _service.EvaluateStoryWithAgentsAsync(storyId, cleanStoryText, runId, model);
+                    var passed = evaluationScore >= 4.0;
+                    
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        passed,
+                        JsonSerializer.Serialize(new { storyId, length = cleanStoryText.Length, evaluationScore }),
+                        passed ? null : $"Evaluation score too low: {evaluationScore:F1}/10",
+                        (long?)sw.ElapsedMilliseconds);
+
+                    _service._progress?.Append(runId.ToString(),
+                        $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: story ID {storyId}, score {evaluationScore:F1}/10");
+                }
+                catch (OperationCanceledException)
+                {
+                    sw.Stop();
+                    _service._database.UpdateTestStepResult(
                         stepId,
                         false,
-                        string.Empty,
-                        "No story text returned",
+                        null,
+                        $"Timeout after {timeout}s",
                         (long?)sw.ElapsedMilliseconds);
-                    return;
                 }
-
-                var cleanStoryText = ExtractJsonContent(storyText) ?? storyText;
-
-                var generatedStatusId = _stories.ResolveStatusId("generated");
-                var storyId = _stories.InsertSingleStory(
-                    test.Prompt ?? string.Empty,
-                    cleanStoryText,
-                    null,
-                    null,
-                    0.0,
-                    null,
-                    0,
-                    generatedStatusId,
-                    null);
-
-                _database.AddTestAsset(
-                    stepId,
-                    "story",
-                    $"/stories/{storyId}",
-                    "Generated story",
-                    durationSec: sw.Elapsed.TotalSeconds,
-                    sizeBytes: cleanStoryText.Length,
-                    storyId: storyId);
-
-                var evaluationScore = await EvaluateStoryWithAgentsAsync(storyId, cleanStoryText, runId, model);
-                var passed = evaluationScore >= 4.0;
-                
-                _database.UpdateTestStepResult(
-                    stepId,
-                    passed,
-                    JsonSerializer.Serialize(new { storyId, length = cleanStoryText.Length, evaluationScore }),
-                    passed ? null : $"Evaluation score too low: {evaluationScore:F1}/10",
-                    (long?)sw.ElapsedMilliseconds);
-
-                _progress?.Append(runId.ToString(),
-                    $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: story ID {storyId}, score {evaluationScore:F1}/10");
+                catch (ModelNoToolsSupportException ex)
+                {
+                    sw.Stop();
+                    context.ModelInfo.NoTools = true;
+                    _service._database.UpsertModel(context.ModelInfo);
+                    _service._progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                    
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        false,
+                        null,
+                        $"Model does not support tool calling: {ex.Message}",
+                        (long?)sw.ElapsedMilliseconds);
+                }
+                catch (Exception ex)
+                {
+                    sw.Stop();
+                    _service._database.UpdateTestStepResult(
+                        stepId,
+                        false,
+                        null,
+                        ex.Message,
+                        (long?)sw.ElapsedMilliseconds);
+                }
             }
-            catch (OperationCanceledException)
+        }
+
+        private sealed class TtsTestCommand : ITestCommand
+        {
+            private readonly LangChainTestService _service;
+            public TtsTestCommand(LangChainTestService service) => _service = service;
+
+            public async Task ExecuteAsync(TestExecutionContext context)
             {
-                sw.Stop();
-                _database.UpdateTestStepResult(
-                    stepId,
-                    false,
-                    null,
-                    $"Timeout after {timeout}s",
-                    (long?)sw.ElapsedMilliseconds);
-            }
-            catch (ModelNoToolsSupportException ex)
-            {
-                sw.Stop();
-                // Mark model as not supporting tools
-                modelInfo.NoTools = true;
-                _database.UpsertModel(modelInfo);
-                _progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
-                
-                _database.UpdateTestStepResult(
-                    stepId,
-                    false,
-                    null,
-                    $"Model does not support tool calling: {ex.Message}",
-                    (long?)sw.ElapsedMilliseconds);
-            }
-            catch (Exception ex)
-            {
-                sw.Stop();
-                _database.UpdateTestStepResult(
-                    stepId,
-                    false,
-                    null,
-                    ex.Message,
-                    (long?)sw.ElapsedMilliseconds);
+                await _service.ExecuteTtsTestAsync(
+                    context.Test,
+                    context.StepId,
+                    context.Stopwatch,
+                    context.RunId,
+                    context.StepIndex,
+                    context.Model,
+                    context.ModelInfo,
+                    context.Prompt,
+                    context.TestFolder);
             }
         }
 
@@ -575,9 +705,7 @@ IMPORTANT: Write the story in Italian language.";
             }
 
             const int maxRetries = 3;
-            var chatBridge = _kernelFactory.CreateChatBridge(model);
-            if (test.Temperature.HasValue) chatBridge.Temperature = test.Temperature.Value;
-            if (test.TopP.HasValue) chatBridge.TopP = test.TopP.Value;
+            var chatBridge = _kernelFactory.CreateChatBridge(model, test.Temperature, test.TopP);
             HybridLangChainOrchestrator? lastOrchestrator = null;
             try
             {
@@ -614,27 +742,35 @@ IMPORTANT: Write the story in Italian language.";
                         var responsePreview = string.IsNullOrEmpty(response) ? "empty" : response;
                         _progress?.Append(runId.ToString(), $"[{model}] Model Response (attempt {attempt}): {responsePreview}");
 
-                        string? generatedFile = null;
-                        if (!string.IsNullOrWhiteSpace(testFolder))
+                        var generatedFile = FindLatestJson(testFolder);
+                        if (!string.IsNullOrWhiteSpace(generatedFile))
                         {
-                            var jsonFiles = Directory.GetFiles(testFolder, "*.json")
-                                .Where(f => !f.EndsWith("_expected_result.json"))
-                                .OrderByDescending(f => File.GetCreationTimeUtc(f))
-                                .ToList();
-                            
-                            generatedFile = jsonFiles.FirstOrDefault();
-                            if (!string.IsNullOrWhiteSpace(generatedFile))
-                            {
-                                _progress?.Append(runId.ToString(), $"[{model}] Found generated file: {Path.GetFileName(generatedFile)}");
-                            }
+                            _progress?.Append(runId.ToString(), $"[{model}] Found generated file: {Path.GetFileName(generatedFile)}");
                         }
 
                         if (!string.IsNullOrWhiteSpace(generatedFile))
                         {
+                            if (!TryComputeTtsCoverage(ttsStoryText, generatedFile, out var coverage))
+                            {
+                                var warn = $"[{model}] Unable to verify TTS coverage for {Path.GetFileName(generatedFile)}. Retrying.";
+                                _progress?.Append(runId.ToString(), warn, "Warning");
+                                LogTestMessage(runId.ToString(), warn, "Warning");
+                                continue;
+                            }
+
+                            if (coverage < TtsCoverageThreshold)
+                            {
+                                var warn = $"[{model}] Coverage {coverage:P1} below required {TtsCoverageThreshold:P0}. Retrying.";
+                                _progress?.Append(runId.ToString(), warn, "Warning");
+                                LogTestMessage(runId.ToString(), warn, "Warning");
+                                continue;
+                            }
+
                             var resultDetails = JsonSerializer.Serialize(new
                             {
                                 response = responsePreview,
-                                file = Path.GetFileName(generatedFile)
+                                file = Path.GetFileName(generatedFile),
+                                coverage
                             });
 
                             _database.UpdateTestStepResult(
@@ -644,7 +780,7 @@ IMPORTANT: Write the story in Italian language.";
                                 null,
                                 (long?)sw.ElapsedMilliseconds);
 
-                            var successMessage = $"[{model}] Step {idx} PASSED: {stepLabel} ({sw.ElapsedMilliseconds}ms) - saved {Path.GetFileName(generatedFile)}";
+                            var successMessage = $"[{model}] Step {idx} PASSED: {stepLabel} ({sw.ElapsedMilliseconds}ms) - saved {Path.GetFileName(generatedFile)} (coverage {coverage:P1})";
                             _progress?.Append(runId.ToString(), successMessage);
                             LogTestMessage(runId.ToString(), successMessage);
 
@@ -718,6 +854,67 @@ IMPORTANT: Write the story in Italian language.";
         }
 
         // ==================== Helper Methods ====================
+
+        private bool TryComputeTtsCoverage(string originalStory, string schemaPath, out double coverage)
+        {
+            coverage = 0;
+            try
+            {
+                var normalizedStory = NormalizeForCoverage(originalStory);
+                if (normalizedStory.Length == 0 || !File.Exists(schemaPath))
+                    return false;
+
+                var json = File.ReadAllText(schemaPath);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("Timeline", out var timeline) || timeline.ValueKind != JsonValueKind.Array)
+                    return false;
+
+                int timelineLength = 0;
+                foreach (var entry in timeline.EnumerateArray())
+                {
+                    if (entry.TryGetProperty("Text", out var textElem) && textElem.ValueKind == JsonValueKind.String)
+                    {
+                        timelineLength += NormalizeForCoverage(textElem.GetString() ?? string.Empty).Length;
+                    }
+                }
+
+                if (timelineLength <= 0)
+                    return false;
+
+                coverage = (double)timelineLength / normalizedStory.Length;
+                return true;
+            }
+            catch
+            {
+                coverage = 0;
+                return false;
+            }
+        }
+
+        private static string NormalizeForCoverage(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return string.Empty;
+
+            var sb = new StringBuilder(text.Length);
+            foreach (var ch in text)
+            {
+                if (!char.IsWhiteSpace(ch))
+                    sb.Append(ch);
+            }
+            return sb.ToString();
+        }
+
+        private string? FindLatestJson(string? folderPath)
+        {
+            if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+                return null;
+
+            return Directory.GetFiles(folderPath, "*.json")
+                .Where(f => !f.EndsWith("_expected_result.json", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(File.GetCreationTimeUtc)
+                .FirstOrDefault();
+        }
 
         private string? SetupTestFolder(string model, string group, List<TestDefinition> tests)
         {

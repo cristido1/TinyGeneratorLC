@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
@@ -25,21 +26,6 @@ namespace TinyGenerator.Services
         private readonly HttpClient _httpClient;
         private readonly LangChainToolFactory _toolFactory;
 
-        public class LangChainStoryResult
-        {
-            public string StoryA { get; set; } = string.Empty;
-            public string StoryB { get; set; } = string.Empty;
-            public string StoryC { get; set; } = string.Empty;
-
-            public double ScoreA { get; set; }
-            public double ScoreB { get; set; }
-            public double ScoreC { get; set; }
-
-            public string? ApprovedStory { get; set; }
-            public string Message { get; set; } = "Story generation with LangChain completed";
-            public bool Success { get; set; }
-        }
-
         public LangChainStoryGenerationService(
             DatabaseService database,
             StoriesService storiesService,
@@ -58,7 +44,7 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Generate stories using multiple writers with LangChain-based orchestration.
         /// </summary>
-        public async Task<LangChainStoryResult> GenerateStoriesAsync(
+        public async Task<StoryGenerationResult> GenerateStoriesAsync(
             string theme,
             string[] writerModels,
             string evaluatorModel,
@@ -67,7 +53,13 @@ namespace TinyGenerator.Services
             Action<string>? progress = null,
             CancellationToken ct = default)
         {
-            var result = new LangChainStoryResult();
+            var result = new StoryGenerationResult
+            {
+                ModelA = writerModels.ElementAtOrDefault(0) ?? string.Empty,
+                ModelB = writerModels.ElementAtOrDefault(1) ?? string.Empty,
+                ModelC = writerModels.ElementAtOrDefault(2) ?? string.Empty,
+                Message = "Story generation with LangChain completed"
+            };
 
             try
             {
@@ -88,13 +80,15 @@ namespace TinyGenerator.Services
 
                     try
                     {
+                        var writerMaxTokens = DetermineMaxTokensForModel(model);
                         var storyOrchestrator = new LangChainStoryOrchestrator(
                             modelEndpoint,
                             model,
                             apiKey,
                             orchestrator,
                             _httpClient,
-                            _logger);
+                            _logger,
+                            writerMaxTokens > 0 ? writerMaxTokens : null);
 
                         var story = await storyOrchestrator.GenerateStoryAsync(
                             theme,
@@ -121,17 +115,29 @@ namespace TinyGenerator.Services
                 result.ScoreA = await EvaluateStoryAsync(result.StoryA, evaluatorModel, modelEndpoint, apiKey, orchestrator, ct);
                 result.ScoreB = await EvaluateStoryAsync(result.StoryB, evaluatorModel, modelEndpoint, apiKey, orchestrator, ct);
                 result.ScoreC = await EvaluateStoryAsync(result.StoryC, evaluatorModel, modelEndpoint, apiKey, orchestrator, ct);
+                result.EvalA = $"score:{result.ScoreA:0.0}";
+                result.EvalB = $"score:{result.ScoreB:0.0}";
+                result.EvalC = $"score:{result.ScoreC:0.0}";
 
                 // Select best story
                 double maxScore = Math.Max(result.ScoreA, Math.Max(result.ScoreB, result.ScoreC));
                 if (maxScore >= 7.0)
                 {
-                    result.ApprovedStory = maxScore == result.ScoreA ? "A" : (maxScore == result.ScoreB ? "B" : "C");
-                    progress?.Invoke($"Best story: {result.ApprovedStory} (score: {maxScore})");
+                    var approvedLabel = maxScore == result.ScoreA ? "A" : (maxScore == result.ScoreB ? "B" : "C");
+                    result.Approved = approvedLabel switch
+                    {
+                        "A" => result.StoryA,
+                        "B" => result.StoryB,
+                        "C" => result.StoryC,
+                        _ => null
+                    };
+                    result.Message = $"Story {approvedLabel} approvata (score: {maxScore:0.0}).";
+                    progress?.Invoke($"Best story: {approvedLabel} (score: {maxScore:0.0})");
                 }
                 else
                 {
-                    progress?.Invoke($"No story met quality threshold (max score: {maxScore})");
+                    result.Message = $"Nessuna storia ha raggiunto il punteggio minimo (max {maxScore:0.0}).";
+                    progress?.Invoke($"No story met quality threshold (max score: {maxScore:0.0})");
                 }
 
                 result.Success = true;
@@ -184,7 +190,7 @@ namespace TinyGenerator.Services
         /// Wrapper for backward compatibility with StoryGeneratorService.GenerateStoryAsync
         /// Accepts: prompt (theme), progress callback, writer selection
         /// </summary>
-        public async Task<dynamic> GenerateStoryAsync(
+        public async Task<StoryGenerationResult> GenerateStoryAsync(
             string prompt,
             Action<string>? progressCallback = null,
             string writer = "All")
@@ -198,7 +204,11 @@ namespace TinyGenerator.Services
                 if (models.Count == 0)
                 {
                     progressCallback?.Invoke("ERROR: No enabled models found in database");
-                    return new { Success = false, Error = "No models available" };
+                    return new StoryGenerationResult
+                    {
+                        Success = false,
+                        Message = "No models available"
+                    };
                 }
 
                 // Select writer models based on writer parameter
@@ -225,26 +235,43 @@ namespace TinyGenerator.Services
                     progressCallback,
                     CancellationToken.None);
 
-                // Convert to object compatible with StoryGeneratorService.GenerationResult
-                return new
+                if (result.Success)
                 {
-                    StoryA = result.StoryA,
-                    StoryB = result.StoryB,
-                    StoryC = result.StoryC,
-                    ScoreA = result.ScoreA,
-                    ScoreB = result.ScoreB,
-                    ScoreC = result.ScoreC,
-                    Approved = result.ApprovedStory,
-                    Message = result.Message,
-                    Success = result.Success
-                };
+                    try
+                    {
+                        _storiesService.SaveGeneration(prompt, result);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Log("Warning", "LangChainStoryGen", $"Unable to persist generation: {ex.Message}");
+                    }
+                }
+
+                return result;
             }
             catch (Exception ex)
             {
                 _logger?.Log("Error", "LangChainStoryGen", $"GenerateStoryAsync failed: {ex.Message}");
                 progressCallback?.Invoke($"ERROR: {ex.Message}");
-                return new { Success = false, Error = ex.Message, StoryA = "", StoryB = "", StoryC = "", Approved = (string?)null };
+                return new StoryGenerationResult
+                {
+                    Success = false,
+                    Message = ex.Message
+                };
             }
+        }
+
+        private int DetermineMaxTokensForModel(string modelName)
+        {
+            try
+            {
+                var info = _database.GetModelInfo(modelName);
+                if (info == null) return 0;
+                if (info.ContextToUse > 0) return info.ContextToUse;
+                if (info.MaxContext > 0) return info.MaxContext;
+            }
+            catch { }
+            return 32000;
         }
     }
 }

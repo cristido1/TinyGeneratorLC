@@ -156,6 +156,9 @@ TinyGenerator permette di creare storie complete attraverso un processo struttur
     "LogRequestResponse": true,
     "OtherLogs": false
   },
+  "CommandDispatcher": {
+    "MaxParallelCommands": 2
+  },
   "Ollama": {
     "endpoint": "http://localhost:11434"
   }
@@ -167,8 +170,10 @@ Il database SQLite (`data/storage.db`) contiene:
 - `agents`: Configurazioni agenti
 - `models`: Metadati modelli
 - `stories`: Storie generate
+- `tts_voices`: Catalogo delle voci TTS importate (usato dagli agenti e dai fallback automatici)
 - `logs`: Record di log
 - `calls`: Tracciamento function calls
+- `Log_analysis`: Risultati delle analisi sui log collegati ai comandi eseguiti
 
 ## Workflow di Sviluppo
 

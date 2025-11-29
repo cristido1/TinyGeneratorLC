@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using TinyGenerator.Services;
+using TinyGenerator.Models;
 
 namespace TinyGenerator.Pages
 {
@@ -27,7 +28,7 @@ namespace TinyGenerator.Pages
         [BindProperty]
         public string EvaluatorModel { get; set; } = "qwen2.5:3b";
 
-        public LangChainStoryGenerationService.LangChainStoryResult? Result { get; set; }
+        public StoryGenerationResult? Result { get; set; }
 
         public LangChainTestModel(LangChainStoryGenerationService langChainService, ICustomLogger? logger = null)
         {
@@ -65,7 +66,7 @@ namespace TinyGenerator.Pages
             catch (Exception ex)
             {
                 _logger?.Log("Error", "LangChainTest", $"Generation failed: {ex.Message}", ex.ToString());
-                Result = new LangChainStoryGenerationService.LangChainStoryResult
+                Result = new StoryGenerationResult
                 {
                     Success = false,
                     Message = $"Error: {ex.Message}"

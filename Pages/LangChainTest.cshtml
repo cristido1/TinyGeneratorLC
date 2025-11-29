@@ -128,10 +128,22 @@
                             </div>
                         </div>
 
-                        @if (!string.IsNullOrEmpty(Model.Result.ApprovedStory))
+                        @{
+                            var approvedStory = Model.Result.Approved;
+                            var bestLabel = string.IsNullOrEmpty(approvedStory)
+                                ? null
+                                : (approvedStory == Model.Result.StoryA
+                                    ? "A"
+                                    : approvedStory == Model.Result.StoryB
+                                        ? "B"
+                                        : approvedStory == Model.Result.StoryC
+                                            ? "C"
+                                            : null);
+                        }
+                        @if (!string.IsNullOrEmpty(approvedStory))
                         {
                             <div class="alert alert-success">
-                                <strong>Best Story:</strong> Writer @Model.Result.ApprovedStory
+                                <strong>Best Story:</strong> Writer @(bestLabel ?? "?")
                             </div>
                         }
                     </div>

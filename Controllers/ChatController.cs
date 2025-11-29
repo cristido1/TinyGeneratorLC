@@ -77,9 +77,10 @@ namespace TinyGenerator.Controllers
                     }
                 }
 
-                // Call model without tools (pass empty tools list)
+                // Call model and expose default tools (memory) if the model supports tools
                 var chatBridge = _kernelFactory.CreateChatBridge(request.Model);
-                var response = await chatBridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), CancellationToken.None);
+                var tools = _kernelFactory.GetDefaultToolSchemasForModel(request.Model) ?? new List<Dictionary<string, object>>();
+                var response = await chatBridge.CallModelWithToolsAsync(messages, tools, CancellationToken.None);
 
                 // Parse response
                 var (textContent, _) = LangChainChatBridge.ParseChatResponse(response);

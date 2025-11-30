@@ -1,0 +1,74 @@
+SPECIFICA TECNICA
+Sistema di Generazione Multi‑Step con Response Checker
+
+1. Obiettivo
+Implementare un sistema che permette di generare storie lunghe tramite una sequenza di step (Sequential Multi‑Step Prompting). Ogni step viene eseguito da un Writer Agent e validato da un Response Checker Agent. Solo gli step validati fanno avanzare la generazione.
+
+2. Campo step_prompt
+Aggiungere al record che gestisce la generazione della storia un campo step_prompt (testo), contenente una lista numerata di istruzioni. Esempio:
+
+1. Scrivi la trama dettagliata (minimo 1500 parole) divisa in capitoli.
+2. Genera la lista dei personaggi con nome, sesso, età e carattere.
+3. Genera la struttura di ogni capitolo.
+4. Scrivi il capitolo 1 (minimo 1500 parole).
+5. Scrivi il capitolo 2.
+6. Scrivi il capitolo 3.
+7. Scrivi il capitolo 4.
+8. Scrivi il capitolo 5.
+9. Scrivi il capitolo 6.
+10. Genera il riepilogo finale.
+
+3. Stato di avanzamento
+Poiché non esiste una tabella specifica per l’esecuzione:
+- current_step, max_step e last_step_output devono essere salvati nella tabella esistente che ospita la storia oppure in una tabella di lavoro generica del progetto.
+- In alternativa, possono essere mantenuti nella memoria dell’applicazione tra un ciclo e l'altro.
+
+4. Flusso operativo
+Per ogni step:
+1. Leggi step_prompt
+2. Estrai la riga corrispondente a current_step
+3. Inviala al Writer Agent
+4. Ricevi l’output
+5. Invoca il Response Checker con:
+   - expected_step
+   - model_output
+6. Se is_valid = true:
+   - salva last_step_output
+   - passa allo step successivo
+7. Se is_valid = false:
+   - esegui un retry (max 2 tentativi)
+   - aggiungi note per correggere la generazione
+
+5. Response Checker Agent
+È un agente dedicato alla validazione. Deve restituire:
+
+{
+  "is_valid": true|false,
+  "reason": "spiegazione sintetica",
+  "needs_retry": true|false
+}
+
+Il Response Checker verifica:
+- aderenza allo step richiesto
+- assenza di domande o richieste di chiarimento
+- nessuna anticipazione degli step successivi
+- contenuto completo, non tronco
+- rispetto della lunghezza obbligatoria (dove prevista)
+
+Modelli consigliati per il Response Checker:
+- Qwen 2.5 7B Instruct (locale)
+- Granite 3.1 3B Dense (locale)
+
+6. Comportamento del Writer Agent
+Il Writer deve:
+- eseguire solo lo step richiesto
+- non fare domande
+- non chiedere conferme
+- non anticipare altri step
+- generare testi lunghi quando richiesto
+
+7. Benefici del sistema
+- gestione deterministica degli step
+- storie lunghe senza tagli
+- recupero automatico in caso di errore
+- affidabilità anche con modelli locali piccoli

@@ -115,7 +115,7 @@ TinyGenerator permette di creare storie complete attraverso un processo struttur
 - **TtsApiTool**: Text-to-Speech via API
 - **AudioCraftTool**: Generazione audio
 - **StoryWriterTool**: Scrittura storie assistita
-- **StoryEvaluatorTool**: Valutazione storie
+- **EvaluatorTool**: Valutazione storie (la legacy StoryEvaluatorTool è stata rimossa — usare EvaluatorTool)
 - **TtsSchemaTool**: Gestione schemi TTS
 
 ### Interfaccia Utente (`Pages/`)

@@ -11,15 +11,18 @@ namespace TinyGenerator.Controllers
         private readonly DatabaseService _database;
         private readonly LangChainKernelFactory _kernelFactory;
         private readonly ICustomLogger _logger;
+        private readonly PersistentMemoryService _memory;
 
         public ChatController(
             DatabaseService database,
             LangChainKernelFactory kernelFactory,
-            ICustomLogger logger)
+            ICustomLogger logger,
+            PersistentMemoryService memory)
         {
             _database = database;
             _kernelFactory = kernelFactory;
             _logger = logger;
+            _memory = memory;
         }
 
         [HttpGet("test")]
@@ -56,6 +59,7 @@ namespace TinyGenerator.Controllers
                     { "content", request.Message }
                 };
                 history.Add(userMsg);
+                await RememberChatAsync(request.Model, "user", request.Message);
 
                 // Create ConversationMessage list for API
                 var messages = new List<Services.ConversationMessage>();
@@ -82,17 +86,97 @@ namespace TinyGenerator.Controllers
                 var tools = _kernelFactory.GetDefaultToolSchemasForModel(request.Model) ?? new List<Dictionary<string, object>>();
                 var response = await chatBridge.CallModelWithToolsAsync(messages, tools, CancellationToken.None);
 
-                // Parse response
-                var (textContent, _) = LangChainChatBridge.ParseChatResponse(response);
+                // ReAct loop: if the model returns tool_calls, execute them and re-call the model
+                var (textContent, toolCalls) = LangChainChatBridge.ParseChatResponse(response);
                 var assistantMessage = textContent ?? "Nessuna risposta dal modello";
 
                 // Add assistant response to history
-                var assistantMsg = new Dictionary<string, object>
+                history.Add(new Dictionary<string, object>
                 {
                     { "role", "assistant" },
                     { "content", assistantMessage }
-                };
-                history.Add(assistantMsg);
+                });
+                await RememberChatAsync(request.Model, "assistant", assistantMessage);
+
+                int maxIterations = 3;
+                int iteration = 0;
+                var currentToolCalls = toolCalls ?? new List<ToolCallFromModel>();
+
+                while (currentToolCalls.Any() && iteration < maxIterations)
+                {
+                    try
+                    {
+                        // Create orchestrator with tools required by current tool calls
+                        var toolNames = currentToolCalls.Select(tc => tc.ToolName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        var orchestrator = _kernelFactory.CreateOrchestrator(request.Model, toolNames);
+
+                        // Execute each tool and append results as tool messages
+                        foreach (var tc in currentToolCalls)
+                        {
+                            var argsJson = tc.Arguments ?? "{}";
+                            var resultJson = await orchestrator.ExecuteToolAsync(tc.ToolName, argsJson);
+
+                            // Add visible summary for the user
+                            history.Add(new Dictionary<string, object>
+                            {
+                                { "role", "assistant" },
+                                { "content", $"[Tool called: {tc.ToolName}] Params: {argsJson} | Result: {resultJson}" }
+                            });
+
+                            // Add a tool role message so the model can consume the tool output on next call
+                            history.Add(new Dictionary<string, object>
+                            {
+                                { "role", "tool" },
+                                { "content", resultJson }
+                            });
+                        }
+
+                        // Rebuild messages for the next model call from history
+                        var nextMessages = new List<Services.ConversationMessage>();
+                        foreach (var m in history)
+                        {
+                            try
+                            {
+                                var role = m.ContainsKey("role") ? m["role"]?.ToString() ?? "user" : "user";
+                                var content = m.ContainsKey("content") ? m["content"]?.ToString() ?? "" : "";
+                                nextMessages.Add(new Services.ConversationMessage { Role = role, Content = content });
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger?.Log("Error", "ChatController", $"Error parsing message for next call: {ex.Message}");
+                            }
+                        }
+
+                        // Get tool schemas from orchestrator to pass to the model
+                        var toolSchemas = orchestrator.GetToolSchemas();
+
+                        // Call model again with updated history
+                        var nextResponse = await chatBridge.CallModelWithToolsAsync(nextMessages, toolSchemas, CancellationToken.None);
+                        var (nextText, nextToolCalls) = LangChainChatBridge.ParseChatResponse(nextResponse);
+
+                        // Append assistant response
+                        history.Add(new Dictionary<string, object>
+                        {
+                            { "role", "assistant" },
+                            { "content", nextText ?? "" }
+                        });
+                        await RememberChatAsync(request.Model, "assistant", nextText ?? "");
+
+                        // Prepare for possible next iteration
+                        currentToolCalls = nextToolCalls ?? new List<ToolCallFromModel>();
+                        iteration++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Log("Error", "ChatController", $"Tool execution loop failed: {ex.Message}", ex.ToString());
+                        history.Add(new Dictionary<string, object>
+                        {
+                            { "role", "assistant" },
+                            { "content", $"[Tool execution error]: {ex.Message}" }
+                        });
+                        break;
+                    }
+                }
 
                 // Save to session
                 SaveConversationHistory(sessionKey, history);
@@ -150,6 +234,23 @@ namespace TinyGenerator.Controllers
         {
             var json = JsonSerializer.Serialize(history);
             HttpContext.Session.SetString(sessionKey, json);
+        }
+
+        private async Task RememberChatAsync(string model, string role, string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            try
+            {
+                await _memory.SaveAsync("chat", text, new { role, model });
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Warn", "ChatController", $"Failed to store chat memory: {ex.Message}");
+            }
         }
 
         public class ChatRequest

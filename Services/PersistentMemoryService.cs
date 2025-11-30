@@ -1,18 +1,39 @@
 using System.Data;
+using System.Linq;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Text;
 using System.Security.Cryptography;
+using System.Globalization;
+using System.Threading;
+using Microsoft.Extensions.Options;
 
 namespace TinyGenerator.Services
 {
     public class PersistentMemoryService
     {
         private readonly string _dbPath;
+        private const int DefaultSearchCandidateLimit = 512;
+        private readonly MemoryEmbeddingOptions? _embeddingOptions;
+        private readonly ICustomLogger? _logger;
+        private readonly string? _vecExtensionPath;
+        private readonly int _embeddingDimensions;
+        private bool _vecExtensionDisabled;
+        private bool _vecTableCreated;
+        private readonly object _vecLock = new();
 
-        public PersistentMemoryService(string dbPath = "data/storage.db")
+        public event EventHandler<MemorySavedEventArgs>? MemorySaved;
+
+        public PersistentMemoryService(
+            string dbPath = "data/storage.db",
+            IOptions<MemoryEmbeddingOptions>? embeddingOptions = null,
+            ICustomLogger? logger = null)
         {
             _dbPath = dbPath;
+            _embeddingOptions = embeddingOptions?.Value;
+            _logger = logger;
+            _vecExtensionPath = _embeddingOptions?.SqliteVecExtensionPath;
+            _embeddingDimensions = Math.Max(1, _embeddingOptions?.EmbeddingDimension ?? 768);
             Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
             Initialize();
         }
@@ -38,6 +59,7 @@ namespace TinyGenerator.Services
                 Metadata TEXT,
                 model_id INTEGER NULL,
                 agent_id INTEGER NULL,
+                Embedding BLOB NULL,
                 CreatedAt TEXT NOT NULL
             );
             ";
@@ -71,6 +93,16 @@ namespace TinyGenerator.Services
                     using var addAgentId = connection.CreateCommand();
                     addAgentId.CommandText = "ALTER TABLE Memory ADD COLUMN agent_id INTEGER NULL;";
                     addAgentId.ExecuteNonQuery();
+                }
+                catch { }
+            }
+            if (!colsLower.Contains("embedding"))
+            {
+                try
+                {
+                    using var addEmbedding = connection.CreateCommand();
+                    addEmbedding.CommandText = "ALTER TABLE Memory ADD COLUMN Embedding BLOB NULL;";
+                    addEmbedding.ExecuteNonQuery();
                 }
                 catch { }
             }
@@ -159,6 +191,8 @@ namespace TinyGenerator.Services
                 }
             }
             catch { }
+
+            TryEnsureVectorReady(connection);
         }
 
         private static string ComputeHash(string text)
@@ -181,8 +215,8 @@ namespace TinyGenerator.Services
 
             var cmd = connection.CreateCommand();
             cmd.CommandText = @"
-                INSERT OR REPLACE INTO Memory (Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt)
-                VALUES ($id, $collection, $text, $metadata, $model_id, $agent_id, datetime('now'))
+                INSERT OR REPLACE INTO Memory (Id, Collection, TextValue, Metadata, model_id, agent_id, Embedding, CreatedAt)
+                VALUES ($id, $collection, $text, $metadata, $model_id, $agent_id, $embedding, datetime('now'))
             ";
             cmd.Parameters.AddWithValue("$id", id);
             cmd.Parameters.AddWithValue("$collection", collection);
@@ -190,8 +224,11 @@ namespace TinyGenerator.Services
             cmd.Parameters.AddWithValue("$metadata", json ?? (object)DBNull.Value);
             cmd.Parameters.AddWithValue("$model_id", modelId.HasValue ? (object)modelId.Value : (object)DBNull.Value);
             cmd.Parameters.AddWithValue("$agent_id", agentId.HasValue ? (object)agentId.Value : (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("$embedding", DBNull.Value);
 
             await cmd.ExecuteNonQueryAsync();
+
+            MemorySaved?.Invoke(this, new MemorySavedEventArgs(id, collection, text, modelId, agentId));
         }
 
         // 🔍 Cerca testo simile (ricerca semplice full-text LIKE)
@@ -202,14 +239,17 @@ namespace TinyGenerator.Services
             try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
 
             var cmd = connection.CreateCommand();
-                cmd.CommandText = @"
+
+            var idFilter = BuildIdFilter(modelId, agentId);
+            cmd.CommandText = $@"
                 SELECT TextValue FROM Memory
                 WHERE Collection = $collection
                 AND TextValue LIKE $query
-                " + (modelId.HasValue ? "AND model_id = $model_id " : "") + (agentId.HasValue ? "AND agent_id = $agent_id " : "") + @"
+                {idFilter}
                 ORDER BY CreatedAt DESC
                 LIMIT $limit;
             ";
+
             cmd.Parameters.AddWithValue("$collection", collection);
             cmd.Parameters.AddWithValue("$query", $"%{query}%");
             cmd.Parameters.AddWithValue("$limit", limit);
@@ -259,5 +299,422 @@ namespace TinyGenerator.Services
 
             return collections;
         }
+
+        public async Task<IReadOnlyList<MemoryRecord>> GetMemoriesMissingEmbeddingAsync(int batchSize = 8)
+        {
+            if (batchSize <= 0) return Array.Empty<MemoryRecord>();
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT Id, Collection, TextValue, Metadata, CreatedAt
+                FROM Memory
+                WHERE Embedding IS NULL
+                ORDER BY CreatedAt ASC
+                LIMIT $limit;
+            ";
+            cmd.Parameters.AddWithValue("$limit", batchSize);
+
+            var items = new List<MemoryRecord>();
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(new MemoryRecord(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    ParseCreatedAt(reader, 4),
+                    null));
+            }
+
+            return items;
+        }
+
+        public async Task UpdateEmbeddingAsync(string id, float[] embedding, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Id required", nameof(id));
+            if (embedding == null || embedding.Length == 0) throw new ArgumentException("Embedding required", nameof(embedding));
+
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync(cancellationToken);
+            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"UPDATE Memory SET Embedding = $embedding WHERE Id = $id;";
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.Parameters.AddWithValue("$embedding", SerializeEmbedding(embedding));
+
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await TryUpsertVectorIndexAsync(connection, id, embedding, cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<MemorySearchResult>> SearchWithEmbeddingsAsync(
+            string collection,
+            string query,
+            float[]? queryEmbedding,
+            int limit = 5,
+            long? modelId = null,
+            int? agentId = null,
+            int? maxCandidates = null)
+        {
+            if (string.IsNullOrWhiteSpace(collection)) throw new ArgumentException("Collection required", nameof(collection));
+            if (limit <= 0) return Array.Empty<MemorySearchResult>();
+
+            var candidateLimit = maxCandidates ?? Math.Max(DefaultSearchCandidateLimit, limit * 16);
+            var normalizedQuery = query?.Trim() ?? string.Empty;
+
+            if (queryEmbedding != null)
+            {
+                var vecResults = await TryVectorSearchAsync(collection, normalizedQuery, queryEmbedding, limit, modelId, agentId);
+                if (vecResults.Count > 0)
+                {
+                    return vecResults;
+                }
+            }
+
+            var candidates = await LoadCandidatesAsync(collection, modelId, agentId, candidateLimit);
+            var results = new List<MemorySearchResult>(Math.Min(limit, candidates.Count));
+
+            foreach (var candidate in candidates)
+            {
+                double embeddingScore = 0;
+                if (queryEmbedding != null && candidate.Embedding != null)
+                {
+                    var cosine = CosineSimilarity(queryEmbedding, candidate.Embedding);
+                    embeddingScore = (cosine + 1d) / 2d; // Normalize 0..1
+                }
+
+                var textScore = ComputeTextScore(candidate.TextValue, normalizedQuery);
+                if (embeddingScore <= 0 && textScore <= 0 && !string.IsNullOrEmpty(normalizedQuery))
+                {
+                    // Candidate has no useful signal for this query, skip it.
+                    continue;
+                }
+
+                var combinedScore = embeddingScore + textScore;
+                results.Add(new MemorySearchResult(
+                    candidate.Id,
+                    candidate.TextValue,
+                    candidate.Metadata,
+                    candidate.Collection,
+                    candidate.CreatedAt,
+                    combinedScore,
+                    embeddingScore,
+                    textScore));
+            }
+
+            return results
+                .OrderByDescending(r => r.Score)
+                .ThenByDescending(r => r.CreatedAt)
+                .Take(limit)
+                .ToList();
+        }
+
+        private async Task<List<MemoryRecord>> LoadCandidatesAsync(string collection, long? modelId, int? agentId, int maxCandidates)
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+
+            var items = new List<MemoryRecord>();
+            var cmd = connection.CreateCommand();
+            var idFilter = BuildIdFilter(modelId, agentId);
+
+            cmd.CommandText = $@"
+                SELECT Id, Collection, TextValue, Metadata, Embedding, CreatedAt
+                FROM Memory
+                WHERE Collection = $collection
+                {idFilter}
+                ORDER BY CreatedAt DESC
+                LIMIT $limit;
+            ";
+            cmd.Parameters.AddWithValue("$collection", collection);
+            cmd.Parameters.AddWithValue("$limit", maxCandidates);
+            if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
+            if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(new MemoryRecord(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    ParseCreatedAt(reader, 5),
+                    TryReadEmbedding(reader, 4)));
+            }
+
+            return items;
+        }
+
+        private async Task TryUpsertVectorIndexAsync(SqliteConnection connection, string id, float[] embedding, CancellationToken cancellationToken)
+        {
+            if (!TryEnsureVectorReady(connection))
+            {
+                return;
+            }
+
+            if (embedding.Length != _embeddingDimensions)
+            {
+                _logger?.Log("Warn", "MemoryEmbedding", $"Embedding dimension mismatch for {id}: expected {_embeddingDimensions}, got {embedding.Length}");
+                return;
+            }
+
+            var cmd = connection.CreateCommand();
+            cmd.CommandText = @"INSERT OR REPLACE INTO MemoryVec(id, embedding) VALUES($id, vec_f32($vector));";
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.Parameters.AddWithValue("$vector", SerializeEmbeddingAsJson(embedding));
+
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        private async Task<IReadOnlyList<MemorySearchResult>> TryVectorSearchAsync(
+            string collection,
+            string normalizedQuery,
+            float[] queryEmbedding,
+            int limit,
+            long? modelId,
+            int? agentId)
+        {
+            using var connection = new SqliteConnection($"Data Source={_dbPath}");
+            await connection.OpenAsync();
+            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+
+            if (!TryEnsureVectorReady(connection))
+            {
+                return Array.Empty<MemorySearchResult>();
+            }
+
+            if (queryEmbedding.Length != _embeddingDimensions)
+            {
+                _logger?.Log("Warn", "MemoryEmbedding", $"Query embedding dimension mismatch: expected {_embeddingDimensions}, got {queryEmbedding.Length}");
+                return Array.Empty<MemorySearchResult>();
+            }
+
+            var results = new List<MemorySearchResult>();
+            var cmd = connection.CreateCommand();
+            var idFilter = BuildIdFilter(modelId, agentId, "m.");
+            cmd.CommandText = $@"
+                SELECT m.Id, m.TextValue, m.Metadata, m.Collection, m.CreatedAt, v.distance
+                FROM MemoryVec v
+                JOIN Memory m ON m.Id = v.id
+                WHERE m.Collection = $collection
+                {idFilter}
+                AND v.embedding MATCH vec_f32($queryVector)
+                ORDER BY v.distance ASC
+                LIMIT $limit;
+            ";
+            cmd.Parameters.AddWithValue("$collection", collection);
+            cmd.Parameters.AddWithValue("$queryVector", SerializeEmbeddingAsJson(queryEmbedding));
+            cmd.Parameters.AddWithValue("$limit", limit);
+            if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
+            if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var id = reader.GetString(0);
+                var text = reader.GetString(1);
+                var metadata = reader.IsDBNull(2) ? null : reader.GetString(2);
+                var collectionName = reader.GetString(3);
+                var createdAt = ParseCreatedAt(reader, 4);
+                var distanceRaw = reader.IsDBNull(5) ? 0d : reader.GetDouble(5);
+                var embeddingScore = 1d - Math.Clamp(distanceRaw, 0d, 2d);
+                var textScore = ComputeTextScore(text, normalizedQuery);
+                var combined = embeddingScore + textScore;
+                results.Add(new MemorySearchResult(
+                    id,
+                    text,
+                    metadata,
+                    collectionName,
+                    createdAt,
+                    combined,
+                    embeddingScore,
+                    textScore));
+            }
+
+            return results
+                .OrderByDescending(r => r.Score)
+                .ThenByDescending(r => r.CreatedAt)
+                .Take(limit)
+                .ToList();
+        }
+
+        private bool TryEnsureVectorReady(SqliteConnection connection)
+        {
+            if (string.IsNullOrWhiteSpace(_vecExtensionPath) || _vecExtensionDisabled)
+            {
+                return false;
+            }
+
+            lock (_vecLock)
+            {
+                if (_vecExtensionDisabled)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    connection.EnableExtensions(true);
+                    connection.LoadExtension(_vecExtensionPath);
+                    if (!_vecTableCreated)
+                    {
+                        using var cmd = connection.CreateCommand();
+                        cmd.CommandText = $@"
+                            CREATE VIRTUAL TABLE IF NOT EXISTS MemoryVec
+                            USING vec0(
+                                id TEXT PRIMARY KEY,
+                                embedding FLOAT[{_embeddingDimensions}]
+                            );
+                        ";
+                        cmd.ExecuteNonQuery();
+                        _vecTableCreated = true;
+                    }
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    _vecExtensionDisabled = true;
+                    _logger?.Log("Warn", "MemoryEmbedding", $"sqlite-vec unavailable: {ex.Message}", ex.ToString());
+                    return false;
+                }
+            }
+        }
+
+        private static string BuildIdFilter(long? modelId, int? agentId, string? tableAlias = null)
+        {
+            var prefix = string.IsNullOrWhiteSpace(tableAlias) ? string.Empty : tableAlias;
+            if (modelId.HasValue && agentId.HasValue)
+            {
+                return $"AND ({prefix}model_id = $model_id OR {prefix}agent_id = $agent_id) ";
+            }
+            if (modelId.HasValue)
+            {
+                return $"AND {prefix}model_id = $model_id ";
+            }
+            if (agentId.HasValue)
+            {
+                return $"AND {prefix}agent_id = $agent_id ";
+            }
+            return string.Empty;
+        }
+
+        private static byte[] SerializeEmbedding(float[] embedding)
+        {
+            var buffer = new byte[embedding.Length * sizeof(float)];
+            Buffer.BlockCopy(embedding, 0, buffer, 0, buffer.Length);
+            return buffer;
+        }
+
+        private static string SerializeEmbeddingAsJson(IReadOnlyList<float> embedding)
+        {
+            var sb = new StringBuilder(embedding.Count * 10);
+            sb.Append('[');
+            for (var i = 0; i < embedding.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append(embedding[i].ToString("G9", CultureInfo.InvariantCulture));
+            }
+            sb.Append(']');
+            return sb.ToString();
+        }
+
+        private static float[]? TryReadEmbedding(SqliteDataReader reader, int ordinal)
+        {
+            if (reader.IsDBNull(ordinal)) return null;
+            var bytes = reader.GetFieldValue<byte[]>(ordinal);
+            return DeserializeEmbedding(bytes);
+        }
+
+        private static float[] DeserializeEmbedding(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0) return Array.Empty<float>();
+            var arr = new float[bytes.Length / sizeof(float)];
+            Buffer.BlockCopy(bytes, 0, arr, 0, bytes.Length);
+            return arr;
+        }
+
+        private static DateTime ParseCreatedAt(SqliteDataReader reader, int ordinal)
+        {
+            if (reader.IsDBNull(ordinal)) return DateTime.MinValue;
+            var raw = reader.GetString(ordinal);
+            if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt))
+            {
+                return dt;
+            }
+            if (DateTime.TryParse(raw, out dt))
+            {
+                return dt;
+            }
+            return DateTime.MinValue;
+        }
+
+        private static double CosineSimilarity(IReadOnlyList<float> a, IReadOnlyList<float> b)
+        {
+            if (a.Count == 0 || b.Count == 0 || a.Count != b.Count) return 0;
+            double dot = 0, magA = 0, magB = 0;
+            for (var i = 0; i < a.Count; i++)
+            {
+                var av = a[i];
+                var bv = b[i];
+                dot += av * bv;
+                magA += av * av;
+                magB += bv * bv;
+            }
+            if (magA <= double.Epsilon || magB <= double.Epsilon) return 0;
+            return dot / Math.Sqrt(magA * magB);
+        }
+
+        private static double ComputeTextScore(string text, string query)
+        {
+            if (string.IsNullOrWhiteSpace(query) || string.IsNullOrEmpty(text)) return 0;
+            var idx = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return 0;
+            // Provide a small boost for results whose surface text matches the query
+            var proximity = 1d - Math.Min(idx, Math.Max(0, text.Length - 1)) / Math.Max(1d, text.Length);
+            return 0.15 + 0.25 * proximity;
+        }
     }
+
+    public sealed class MemorySavedEventArgs : EventArgs
+    {
+        public MemorySavedEventArgs(string id, string collection, string text, long? modelId, int? agentId)
+        {
+            Id = id;
+            Collection = collection;
+            Text = text;
+            ModelId = modelId;
+            AgentId = agentId;
+        }
+
+        public string Id { get; }
+        public string Collection { get; }
+        public string Text { get; }
+        public long? ModelId { get; }
+        public int? AgentId { get; }
+    }
+
+    public sealed record MemoryRecord(
+        string Id,
+        string Collection,
+        string TextValue,
+        string? Metadata,
+        DateTime CreatedAt,
+        float[]? Embedding);
+
+    public sealed record MemorySearchResult(
+        string Id,
+        string Text,
+        string? Metadata,
+        string Collection,
+        DateTime CreatedAt,
+        double Score,
+        double EmbeddingScore,
+        double TextScore);
 }

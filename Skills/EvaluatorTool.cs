@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
@@ -8,8 +9,7 @@ using TinyGenerator.Services;
 namespace TinyGenerator.Skills
 {
     /// <summary>
-    /// LangChain version of StoryEvaluatorSkill.
-    /// Provides story evaluation functions for models using function-calling.
+    /// LangChain version of StoryEvaluatorSkill exposing a single evaluate_full_story function.
     /// </summary>
     public class EvaluatorTool : BaseLangChainTool, ITinyTool
     {
@@ -20,160 +20,120 @@ namespace TinyGenerator.Skills
         public string? LastFunctionCalled { get; set; }
         public string? LastFunctionResult { get; set; }
         public string? LastResult { get; set; }
+        public long? CurrentStoryId { get; set; }
 
         public EvaluatorTool(DatabaseService? database = null, ICustomLogger? logger = null) 
-            : base("evaluator", "Story evaluation functions: evaluate_single_feature, evaluate_full_story", logger)
+            : base("evaluate_full_story", "Complete story evaluation for a single story", logger)
         {
             _database = database;
         }
 
         public override Dictionary<string, object> GetSchema()
         {
-            var properties = new Dictionary<string, object>
-            {
-                { "function", new Dictionary<string, object>
-                    {
-                        { "type", "string" },
-                        { "enum", new List<string> { "evaluate_single_feature", "evaluate_full_story" } },
-                        { "description", "The evaluation function to call" }
-                    }
-                },
-                { "score", new Dictionary<string, object>
-                    {
-                        { "type", "integer" },
-                        { "description", "Score 1-10 for evaluation" }
-                    }
-                },
-                { "defects", new Dictionary<string, object>
-                    {
-                        { "type", "string" },
-                        { "description", "Description of defects or issues found" }
-                    }
-                },
-                { "feature", new Dictionary<string, object>
-                    {
-                        { "type", "string" },
-                        { "description", "The feature being evaluated (optional)" }
-                    }
-                },
-                { "narrative_coherence_score", new Dictionary<string, object>
-                    {
-                        { "type", "integer" },
-                        { "description", "Score for narrative coherence" }
-                    }
-                },
-                { "structure_score", new Dictionary<string, object>
-                    {
-                        { "type", "integer" },
-                        { "description", "Score for story structure" }
-                    }
-                },
-                { "characterization_score", new Dictionary<string, object>
-                    {
-                        { "type", "integer" },
-                        { "description", "Score for character development" }
-                    }
-                },
-                { "dialogues_score", new Dictionary<string, object>
-                    {
-                        { "type", "integer" },
-                        { "description", "Score for dialogue quality" }
-                    }
-                }
-            };
-
-            return CreateFunctionSchema("evaluator", "Story evaluation functions", properties, new List<string> { "function" });
+            return CreateFunctionSchema(
+                "evaluate_full_story",
+                "Provide the complete evaluation for a story. Call this exactly once when you finish your review.",
+                BuildFullStoryProperties(),
+                RequiredProperties);
         }
 
-        public override async Task<string> ExecuteAsync(string jsonInput)
+        public override IEnumerable<Dictionary<string, object>> GetFunctionSchemas()
+        {
+            yield return GetSchema();
+            yield return CreateFunctionSchema(
+                "read_story_part",
+                "Reads a segment of the story for evaluation.",
+                BuildReadStoryPartProperties(),
+                new List<string> { "story_id", "part_index" });
+        }
+
+        public override IEnumerable<string> FunctionNames
+            => new[] { "evaluate_full_story", "read_story_part" };
+
+        public override Task<string> ExecuteAsync(string jsonInput)
+        {
+            return EvaluateFullStoryAsync(jsonInput);
+        }
+
+        public override Task<string> ExecuteFunctionAsync(string functionName, string input)
+        {
+            if (string.Equals(functionName, "evaluate_full_story", StringComparison.OrdinalIgnoreCase))
+            {
+                return EvaluateFullStoryAsync(input);
+            }
+            if (string.Equals(functionName, "read_story_part", StringComparison.OrdinalIgnoreCase))
+            {
+                return ReadStoryPartAsync(input);
+            }
+            return Task.FromResult(JsonSerializer.Serialize(new { error = $"Unknown function: {functionName}" }));
+        }
+
+        private readonly int _storyChunkSize = 4000;
+
+        private async Task<string> EvaluateFullStoryAsync(string jsonInput)
         {
             try
             {
-                var input = JsonSerializer.Deserialize<EvaluatorToolInput>(jsonInput, new JsonSerializerOptions 
-                { 
-                    PropertyNameCaseInsensitive = true 
+                var input = JsonSerializer.Deserialize<EvaluateFullStoryInput>(jsonInput, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
                 });
 
                 if (input == null)
                     return JsonSerializer.Serialize(new { error = "Invalid input format" });
 
-                var function = input.Function?.ToLower() ?? "";
+                var validationError = ValidateInput(input);
+                if (validationError != null)
+                    return JsonSerializer.Serialize(new { error = validationError });
 
-                string result;
+                if (!CurrentStoryId.HasValue || CurrentStoryId <= 0)
+                    return JsonSerializer.Serialize(new { error = "Internal error: story id not provided" });
 
-                if (function == "evaluate_single_feature")
+                var narrative = input.NarrativeCoherenceScore!.Value;
+                var originality = input.OriginalityScore!.Value;
+                var emotional = input.EmotionalImpactScore!.Value;
+                var action = input.ActionScore!.Value;
+
+                var payload = new
                 {
-                    var score = input.Score ?? input.StructureScore ?? 0;
-                    var obj = new
-                    {
-                        score = score,
-                        defects = input.Defects ?? string.Empty,
-                        feature = input.Feature ?? string.Empty
-                    };
+                    story_id = CurrentStoryId,
+                    narrative_coherence_score = narrative,
+                    narrative_coherence_defects = input.NarrativeCoherenceDefects,
+                    originality_score = originality,
+                    originality_defects = input.OriginalityDefects,
+                    emotional_impact_score = emotional,
+                    emotional_impact_defects = input.EmotionalImpactDefects,
+                    action_score = action,
+                    action_defects = input.ActionDefects
+                };
 
-                    LastResult = JsonSerializer.Serialize(obj);
-                    LastFunctionCalled = function;
-                    LastFunctionResult = LastResult;
-
-                    // Persist to database if available
-                    if (_database != null && input.StoryId > 0)
-                    {
-                        try
-                        {
-                            _database.AddStoryEvaluation(input.StoryId, LastResult, score, ModelId, AgentId);
-                        }
-                        catch { }
-                    }
-
-                    result = LastResult;
-                    CustomLogger?.Log("Info", "EvaluatorTool", $"Single feature evaluation: {result}");
-                }
-                else if (function == "evaluate_full_story")
+                var scores = new[]
                 {
-                    var obj = new
+                    narrative,
+                    originality,
+                    emotional,
+                    action
+                };
+                var totalScore = scores.Sum() / (double)scores.Length;
+
+                LastResult = JsonSerializer.Serialize(payload);
+                LastFunctionCalled = "evaluate_full_story";
+                LastFunctionResult = LastResult;
+
+                if (_database != null && CurrentStoryId > 0)
+                {
+                    try
                     {
-                        narrative_coherence_score = input.NarrativeCoherenceScore ?? 0,
-                        narrative_coherence_defects = input.NarrativeCoherenceDefects ?? string.Empty,
-                        structure_score = input.StructureScore ?? 0,
-                        structure_defects = input.StructureDefects ?? string.Empty,
-                        characterization_score = input.CharacterizationScore ?? 0,
-                        characterization_defects = input.CharacterizationDefects ?? string.Empty,
-                        dialogues_score = input.DialoguesScore ?? 0,
-                        dialogues_defects = input.DialoguesDefects ?? string.Empty,
-                        pacing_score = input.PacingScore ?? 0,
-                        pacing_defects = input.PacingDefects ?? string.Empty
-                    };
-
-                    LastResult = JsonSerializer.Serialize(obj);
-                    LastFunctionCalled = function;
-                    LastFunctionResult = LastResult;
-
-                    // Calculate total score
-                    var totalScore = (
-                        (input.NarrativeCoherenceScore ?? 0) +
-                        (input.StructureScore ?? 0) +
-                        (input.CharacterizationScore ?? 0) +
-                        (input.DialoguesScore ?? 0) +
-                        (input.PacingScore ?? 0)
-                    ) / 5.0;
-
-                    // Persist to database if available
-                    if (_database != null && input.StoryId > 0)
-                    {
-                        try
-                        {
-                            _database.AddStoryEvaluation(input.StoryId, LastResult, (int)totalScore, ModelId, AgentId);
-                        }
-                        catch { }
+                        _database.AddStoryEvaluation(CurrentStoryId.Value, LastResult, totalScore, ModelId, AgentId);
                     }
-
-                    result = LastResult;
-                    CustomLogger?.Log("Info", "EvaluatorTool", $"Full story evaluation: total_score={totalScore}");
+                    catch (Exception dbEx)
+                    {
+                        CustomLogger?.Log("Warn", "EvaluatorTool", $"Failed to persist evaluation: {dbEx.Message}");
+                    }
                 }
-                else
-                    return JsonSerializer.Serialize(new { error = $"Unknown function: {function}" });
 
-                return await Task.FromResult(result);
+                CustomLogger?.Log("Info", "EvaluatorTool", $"Full story evaluation stored for story {CurrentStoryId} (score {totalScore:F2})");
+                return await Task.FromResult(LastResult ?? "{}");
             }
             catch (Exception ex)
             {
@@ -181,54 +141,118 @@ namespace TinyGenerator.Skills
                 return JsonSerializer.Serialize(new { error = ex.Message });
             }
         }
+
+        private static string? ValidateInput(EvaluateFullStoryInput input)
+        {
+            var missing = new List<string>();
+            bool InRange(int? value) => value.HasValue && value.Value >= 0 && value.Value <= 10;
+            void RequireScore(int? value, string name)
+            {
+                if (!InRange(value)) missing.Add(name);
+            }
+
+            RequireScore(input.NarrativeCoherenceScore, "narrative_coherence_score");
+            RequireScore(input.OriginalityScore, "originality_score");
+            RequireScore(input.EmotionalImpactScore, "emotional_impact_score");
+            RequireScore(input.ActionScore, "action_score");
+
+            input.NarrativeCoherenceDefects ??= string.Empty;
+            input.OriginalityDefects ??= string.Empty;
+            input.EmotionalImpactDefects ??= string.Empty;
+            input.ActionDefects ??= string.Empty;
+
+            if (missing.Count > 0)
+            {
+                return $"Missing or invalid fields: {string.Join(", ", missing)}";
+            }
+
+            return null;
+        }
+
+        private static Dictionary<string, object> BuildFullStoryProperties()
+        {
+            Dictionary<string, object> CreateScoreProperty(string description) => new Dictionary<string, object>
+            {
+                { "type", "integer" },
+                { "description", description }
+            };
+
+            Dictionary<string, object> CreateDefectProperty(string description) => new Dictionary<string, object>
+            {
+                { "type", "string" },
+                { "description", description }
+            };
+
+            return new Dictionary<string, object>
+            {
+                { "narrative_coherence_score", CreateScoreProperty("Score for narrative coherence (0-10)") },
+                { "narrative_coherence_defects", CreateDefectProperty("Defects found in narrative coherence") },
+                { "originality_score", CreateScoreProperty("Score for originality/inventiveness (0-10)") },
+                { "originality_defects", CreateDefectProperty("Defects found in originality") },
+                { "emotional_impact_score", CreateScoreProperty("Score for emotional impact (0-10)") },
+                { "emotional_impact_defects", CreateDefectProperty("Defects found in emotional impact") },
+                { "action_score", CreateScoreProperty("Score for pacing/action intensity (0-10)") },
+                { "action_defects", CreateDefectProperty("Defects found in action/pacing") }
+            };
+        }
+
+        private static Dictionary<string, object> BuildReadStoryPartProperties()
+        {
+            return new Dictionary<string, object>
+            {
+                { "story_id", new Dictionary<string, object> { { "type", "integer" }, { "description", "ID of the story" } } },
+                { "part_index", new Dictionary<string, object> { { "type", "integer" }, { "description", "0-based segment index" } } }
+            };
+        }
+
+        private static readonly List<string> RequiredProperties = new()
+        {
+            "narrative_coherence_score",
+            "originality_score",
+            "emotional_impact_score",
+            "action_score"
+        };
     }
 
-    public class EvaluatorToolInput
+    public class EvaluateFullStoryInput
     {
-        [JsonPropertyName("function")]
-        public string? Function { get; set; }
-
-        [JsonPropertyName("score")]
-        public int? Score { get; set; }
-
-        [JsonPropertyName("structure_score")]
-        public int? StructureScore { get; set; }
-
-        [JsonPropertyName("defects")]
-        public string? Defects { get; set; }
-
-        [JsonPropertyName("feature")]
-        public string? Feature { get; set; }
-
-        [JsonPropertyName("story_id")]
-        public long StoryId { get; set; }
-
-        // Full story evaluation fields
         [JsonPropertyName("narrative_coherence_score")]
         public int? NarrativeCoherenceScore { get; set; }
 
         [JsonPropertyName("narrative_coherence_defects")]
         public string? NarrativeCoherenceDefects { get; set; }
 
-        [JsonPropertyName("structure_defects")]
-        public string? StructureDefects { get; set; }
+        [JsonPropertyName("originality_score")]
+        public int? OriginalityScore { get; set; }
 
-        [JsonPropertyName("characterization_score")]
-        public int? CharacterizationScore { get; set; }
+        [JsonPropertyName("originality_defects")]
+        public string? OriginalityDefects { get; set; }
 
-        [JsonPropertyName("characterization_defects")]
-        public string? CharacterizationDefects { get; set; }
+        [JsonPropertyName("emotional_impact_score")]
+        public int? EmotionalImpactScore { get; set; }
 
-        [JsonPropertyName("dialogues_score")]
-        public int? DialoguesScore { get; set; }
+        [JsonPropertyName("emotional_impact_defects")]
+        public string? EmotionalImpactDefects { get; set; }
 
-        [JsonPropertyName("dialogues_defects")]
-        public string? DialoguesDefects { get; set; }
+        [JsonPropertyName("action_score")]
+        public int? ActionScore { get; set; }
 
-        [JsonPropertyName("pacing_score")]
-        public int? PacingScore { get; set; }
+        [JsonPropertyName("action_defects")]
+        public string? ActionDefects { get; set; }
 
-        [JsonPropertyName("pacing_defects")]
-        public string? PacingDefects { get; set; }
+        public bool AllScoresProvided()
+        {
+            bool InRange(int? value) => value.HasValue && value.Value >= 0 && value.Value <= 10;
+
+            return InRange(NarrativeCoherenceScore)
+                && InRange(OriginalityScore)
+                && InRange(EmotionalImpactScore)
+                && InRange(ActionScore);
+        }
+
+        public bool AllDefectsProvided()
+        {
+            return true;
+        }
     }
 }

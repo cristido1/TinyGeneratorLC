@@ -11,13 +11,20 @@ namespace TinyGenerator.Services
         public string RunId { get; }
         public string OperationName { get; }
         public IReadOnlyDictionary<string, string>? Metadata { get; }
+        public long OperationNumber { get; }
         public System.Threading.CancellationToken CancellationToken { get; }
 
-        internal CommandContext(string runId, string operationName, IReadOnlyDictionary<string, string>? metadata, System.Threading.CancellationToken cancellationToken)
+        internal CommandContext(
+            string runId,
+            string operationName,
+            IReadOnlyDictionary<string, string>? metadata,
+            long operationNumber,
+            System.Threading.CancellationToken cancellationToken)
         {
             RunId = runId;
             OperationName = operationName;
             Metadata = metadata;
+            OperationNumber = operationNumber;
             CancellationToken = cancellationToken;
         }
     }

@@ -8,6 +8,7 @@ using TinyGenerator;
 using TinyGenerator.Services;
 using TinyGenerator.Hubs;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 // Attempt to restart local Ollama with higher priority before app startup (best-effort).
 // Small helper methods and more complex startup logic are extracted into Services/StartupTasks.cs
@@ -52,6 +53,8 @@ builder.Services.AddControllers();
 
 // SignalR for live progress updates
 builder.Services.AddSignalR();
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("default"));
 
 // Tokenizer (try to use local tokenizer library if installed; fallback inside service)
 builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_base"));
@@ -60,7 +63,16 @@ builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_bas
 // RIMOSSA la registrazione di IKernel: ora si usa solo Kernel reale tramite KernelFactory
 
 // Persistent memory service (sqlite) using consolidated storage DB
-builder.Services.AddSingleton<PersistentMemoryService>(sp => new PersistentMemoryService("data/storage.db"));
+builder.Services.AddSingleton<PersistentMemoryService>(sp =>
+    new PersistentMemoryService(
+        "data/storage.db",
+        sp.GetService<IOptions<MemoryEmbeddingOptions>>(),
+        sp.GetService<ICustomLogger>()));
+builder.Services.Configure<MemoryEmbeddingOptions>(builder.Configuration.GetSection("Memory:Embeddings"));
+builder.Services.AddSingleton<IMemoryEmbeddingGenerator, OllamaEmbeddingGenerator>();
+builder.Services.AddSingleton<MemoryEmbeddingBackfillService>();
+builder.Services.AddSingleton<IMemoryEmbeddingBackfillScheduler>(sp => sp.GetRequiredService<MemoryEmbeddingBackfillService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<MemoryEmbeddingBackfillService>());
 // Progress tracking for live UI updates (will broadcast over SignalR)
 builder.Services.AddSingleton<ProgressService>();
 // Notification service (broadcast to clients via SignalR)
@@ -78,7 +90,8 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetService<ILangChainKernelFactory>(),
     sp.GetService<ICustomLogger>(),
     sp.GetService<ProgressService>(),
-    sp.GetService<ILogger<StoriesService>>()));
+    sp.GetService<ILogger<StoriesService>>(),
+    sp.GetService<ICommandDispatcher>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
@@ -92,7 +105,9 @@ builder.Services.AddSingleton<LangChainToolFactory>(sp => new LangChainToolFacto
     sp.GetService<ICustomLogger>(),
     sp.GetRequiredService<HttpClient>(),
     () => sp.GetRequiredService<StoriesService>(),
-    sp.GetRequiredService<TtsService>()));
+    sp.GetRequiredService<TtsService>(),
+    sp.GetService<IMemoryEmbeddingGenerator>(),
+    sp.GetService<IMemoryEmbeddingBackfillScheduler>()));
 
 // LangChain kernel factory (creates and caches orchestrators)
 builder.Services.AddSingleton<LangChainKernelFactory>(sp => 

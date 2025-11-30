@@ -2191,7 +2191,23 @@ SET TotalScore = (
     {
         using var conn = CreateConnection();
         conn.Open();
+        // Delete related log_analysis entries first (foreign key constraint)
+        conn.Execute("DELETE FROM log_analysis");
+        // Then delete all logs
         conn.Execute("DELETE FROM Log");
+    }
+
+    public List<LogEntry> GetLogsByThreadId(int threadId)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+            SELECT id, ts, level, operation, thread_id AS ThreadId, thread_scope AS ThreadScope, 
+                   agent_name AS AgentName, message, source, state, context, exception, analized
+            FROM log
+            WHERE thread_id = @threadId
+            ORDER BY ts DESC";
+        return conn.Query<LogEntry>(sql, new { threadId }).AsList();
     }
 
     /// <summary>

@@ -7,7 +7,17 @@
 
 <div class="d-flex align-items-center justify-content-between mb-3">
     <h1 class="mb-0">Logs</h1>
-    <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Analysis">Analisi log</a>
+    <div>
+        <button type="button" class="btn btn-sm btn-outline-success me-2" id="btnExportSelected" disabled>Export ThreadId selezionato</button>
+        <a class="btn btn-sm btn-outline-success me-2" asp-page-handler="Export">Export tutti</a>
+        <button type="button" class="btn btn-sm btn-outline-danger me-2" id="btnClearAllLogs">Cancella tutti i log</button>
+        <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Analysis">Analisi log</a>
+    </div>
+</div>
+
+<div id="selectedThreadInfo" class="alert alert-info d-none">
+    Selezionato: <strong>ThreadId <span id="selectedThreadIdDisplay"></span></strong>
+    <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="btnClearSelection">Deseleziona</button>
 </div>
 
 @if (!string.IsNullOrEmpty(Model.StatusMessage))
@@ -23,6 +33,8 @@
             <th>Timestamp</th>
             <th>Level</th>
             <th>Operazione</th>
+            <th>ThreadId</th>
+            <th>AgentName</th>
             <th>Message</th>
             <th>Source</th>
             <th>Azioni</th>
@@ -44,6 +56,8 @@
             <td class="timestamp">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</td>
             <td class="level">@log.Level</td>
             <td class="operation">@(!string.IsNullOrWhiteSpace(log.ThreadScope) ? log.ThreadScope : "-")</td>
+            <td class="threadid">@(log.ThreadId > 0 ? log.ThreadId.ToString() : "-")</td>
+            <td class="agentname">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
             <td class="message">@log.Message</td>
             <td class="source">@log.Source</td>
             <td class="actions" style="white-space:nowrap;">
@@ -63,6 +77,9 @@
     <input type="hidden" name="threadScope" />
 </form>
 
+<form id="clearLogsForm" method="post" asp-page-handler="ClearAllLogs" class="d-none">
+</form>
+
 @section Styles {
     <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
 }
@@ -78,8 +95,18 @@
     <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
     <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.bootstrap5.min.js"></script>
     <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.colVis.min.js"></script>
+    <style>
+        .log-row-selected {
+            background-color: #e7f3ff !important;
+            border-left: 3px solid #0d6efd;
+        }
+        .log-row-selectable {
+            cursor: pointer;
+        }
+    </style>
     <script>
         $(function () {
+            var selectedThreadId = null;
             var table = $('#logsTable').DataTable({
                 order: [[1, 'desc']], // timestamp column is now index 1 (0 = details control)
                 pageLength: 25,
@@ -89,9 +116,11 @@
                     { responsivePriority: 1, targets: 1 }, // Timestamp always visible
                     { responsivePriority: 2, targets: 2 }, // Level always visible
                     { responsivePriority: 3, targets: 3 }, // Operation
-                    { responsivePriority: 4, targets: 4 }, // Message
-                    { responsivePriority: 5, targets: 5 },  // Source hidden first on small screens
-                    { orderable: false, targets: 6 }
+                    { responsivePriority: 4, targets: 4 }, // ThreadId
+                    { responsivePriority: 5, targets: 5 }, // AgentName
+                    { responsivePriority: 6, targets: 6 }, // Message
+                    { responsivePriority: 7, targets: 7 }, // Source hidden first on small screens
+                    { orderable: false, targets: 8 }       // Actions
                 ],
                 // show column visibility control
                 dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
@@ -163,6 +192,55 @@
                 form.find('input[name="threadScope"]').val(scope);
                 form.trigger('submit');
             });
+
+            $('#btnClearAllLogs').on('click', function() {
+                if (confirm('Sei sicuro di voler cancellare TUTTI i log e le relative analisi? Questa operazione è irreversibile.')) {
+                    $('#clearLogsForm').trigger('submit');
+                }
+            });
+
+            // Row selection for ThreadId filtering
+            $('#logsTable tbody').on('click', 'tr', function(evt) {
+                // Ignore clicks on buttons and details control
+                if ($(evt.target).closest('button, .btn').length > 0) return;
+                if ($(evt.target).closest('.details-control').length > 0) return;
+                
+                var tr = $(this);
+                var threadId = tr.data('threadid');
+                
+                if (!threadId || threadId === 0) {
+                    alert('Questa riga non ha un ThreadId valido.');
+                    return;
+                }
+                
+                // Deselect all rows
+                $('#logsTable tbody tr').removeClass('log-row-selected');
+                
+                // Select this row
+                tr.addClass('log-row-selected');
+                selectedThreadId = threadId;
+                
+                // Update UI
+                $('#selectedThreadIdDisplay').text(threadId);
+                $('#selectedThreadInfo').removeClass('d-none');
+                $('#btnExportSelected').prop('disabled', false);
+            });
+
+            $('#btnClearSelection').on('click', function() {
+                $('#logsTable tbody tr').removeClass('log-row-selected');
+                selectedThreadId = null;
+                $('#selectedThreadInfo').addClass('d-none');
+                $('#btnExportSelected').prop('disabled', true);
+            });
+
+            $('#btnExportSelected').on('click', function() {
+                if (selectedThreadId) {
+                    window.location.href = '?handler=Export&threadId=' + selectedThreadId;
+                }
+            });
+
+            // Add selectable class to rows
+            $('#logsTable tbody tr').addClass('log-row-selectable');
         });
     </script>
 }

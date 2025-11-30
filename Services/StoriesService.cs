@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using TinyGenerator.Models;
+using TinyGenerator.Skills;
 
 namespace TinyGenerator.Services;
 
@@ -23,6 +24,7 @@ public sealed class StoriesService
     private readonly ILangChainKernelFactory? _kernelFactory;
     private readonly ICustomLogger? _customLogger;
     private readonly ProgressService? _progress;
+    private readonly ICommandDispatcher? _commandDispatcher;
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -35,7 +37,8 @@ public sealed class StoriesService
         ILangChainKernelFactory? kernelFactory = null,
         ICustomLogger? customLogger = null,
         ProgressService? progress = null,
-        ILogger<StoriesService>? logger = null)
+        ILogger<StoriesService>? logger = null,
+        ICommandDispatcher? commandDispatcher = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _ttsService = ttsService ?? throw new ArgumentNullException(nameof(ttsService));
@@ -43,6 +46,7 @@ public sealed class StoriesService
         _customLogger = customLogger;
         _progress = progress;
         _logger = logger;
+        _commandDispatcher = commandDispatcher;
     }
 
     public long SaveGeneration(string prompt, StoryGenerationResult r, string? memoryKey = null)
@@ -241,10 +245,17 @@ public sealed class StoriesService
 
         var runId = $"storyeval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
         _progress?.Start(runId);
+        var evaluationOpId = LogScope.GenerateOperationId();
+        using var scope = LogScope.Push($"story_evaluation_{story.Id}", evaluationOpId);
 
         try
         {
             var orchestrator = _kernelFactory.CreateOrchestrator(modelName, allowedPlugins, agent.Id);
+            var evaluatorTool = orchestrator.GetTool<EvaluatorTool>("evaluate_full_story");
+            if (evaluatorTool != null)
+            {
+                evaluatorTool.CurrentStoryId = story.Id;
+            }
             var chatBridge = _kernelFactory.CreateChatBridge(modelName, agent.Temperature, agent.TopP);
 
             var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
@@ -527,6 +538,7 @@ public sealed class StoriesService
                 {
                     "tts_json" or "tts" => new GenerateTtsSchemaCommand(this),
                     "tts_voice" or "voice" => new AssignVoicesCommand(this),
+                    "evaluator" or "story_evaluator" or "writer_evaluator" => new EvaluateStoryCommand(this),
                     _ => new NotImplementedCommand($"agent_call:{agentType ?? "unknown"}")
                 };
             case "function_call":
@@ -940,6 +952,101 @@ public sealed class StoriesService
         {
             _logger?.LogError(ex, "Errore durante ApplyVoiceAssignmentFallbacksAsync per schema {SchemaPath}", schemaPath);
             return false;
+        }
+    }
+
+    private sealed class EvaluateStoryCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public EvaluateStoryCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => true;
+        public bool EnsureFolder => false;
+        public bool HandlesStatusTransition => false;
+
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            var story = context.Story;
+            var evaluators = _service._database.ListAgents()
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
+                     a.Role.Equals("evaluator", StringComparison.OrdinalIgnoreCase) ||
+                     a.Role.Equals("writer_evaluator", StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(a => a.Id)
+                .ToList();
+
+            if (evaluators.Count == 0)
+            {
+                return (false, "Nessun agente valutatore configurato");
+            }
+
+            if (_service._commandDispatcher == null)
+            {
+                return await RunSequentialAsync(story, evaluators);
+            }
+
+            var handles = new List<CommandHandle>();
+            foreach (var evaluator in evaluators)
+            {
+                var runId = $"story_eval_{story.Id}_{evaluator.Id}";
+                var scope = $"story/{story.Id}/evaluation";
+                var metadata = new Dictionary<string, string>
+                {
+                    ["storyId"] = story.Id.ToString(),
+                    ["evaluatorId"] = evaluator.Id.ToString(),
+                    ["evaluatorName"] = evaluator.Name ?? $"eval_{evaluator.Id}"
+                };
+                var handle = _service._commandDispatcher.Enqueue(
+                    "story_evaluation",
+                    async ctx =>
+                    {
+                        var (success, score, error) = await _service.EvaluateStoryWithAgentAsync(story.Id, evaluator.Id);
+                        var label = string.IsNullOrWhiteSpace(evaluator.Name) ? $"Evaluator {evaluator.Id}" : evaluator.Name;
+                        var message = success
+                            ? $"{label}: punteggio {score:F2}"
+                            : $"{label}: errore {error ?? "sconosciuto"}";
+                        return new CommandResult(success, message);
+                    },
+                    runId: runId,
+                    threadScope: scope,
+                    metadata: metadata);
+                handles.Add(handle);
+            }
+
+            var results = await Task.WhenAll(handles.Select(h => h.CompletionTask));
+            var allOk = results.All(r => r.Success);
+            var joined = string.Join("; ", results.Select(r => r.Message ?? (r.Success ? "OK" : "Errore")));
+
+            return allOk
+                ? (true, $"Valutazione completata. {joined}")
+                : (false, $"Valutazione parziale. {joined}");
+        }
+
+        private async Task<(bool success, string? message)> RunSequentialAsync(StoryRecord story, List<Agent> evaluators)
+        {
+            var messages = new List<string>();
+            var allOk = true;
+
+            foreach (var evaluator in evaluators)
+            {
+                var (success, score, error) = await _service.EvaluateStoryWithAgentAsync(story.Id, evaluator.Id);
+                var label = string.IsNullOrWhiteSpace(evaluator.Name) ? $"Evaluator {evaluator.Id}" : evaluator.Name;
+                if (success)
+                {
+                    messages.Add($"{label}: punteggio {score:F2}");
+                }
+                else
+                {
+                    allOk = false;
+                    messages.Add($"{label}: errore {error ?? "sconosciuto"}");
+                }
+            }
+
+            var joined = string.Join("; ", messages);
+            return allOk
+                ? (true, $"Valutazione completata. {joined}")
+                : (false, $"Valutazione parziale. {joined}");
         }
     }
 

@@ -9,9 +9,29 @@ namespace TinyGenerator.Services
     /// </summary>
     public static class LogScope
     {
-        private static readonly AsyncLocal<Stack<string>> _scopes = new();
+        private sealed class ScopeInfo
+        {
+            public ScopeInfo(string name, long? operationId)
+            {
+                Name = name;
+                OperationId = operationId;
+            }
 
-        public static IDisposable Push(string scope)
+            public string Name { get; }
+            public long? OperationId { get; }
+        }
+
+        private static long _operationCounter;
+        private static readonly AsyncLocal<Stack<ScopeInfo>> _scopes = new();
+
+        public static long GenerateOperationId()
+        {
+            return Interlocked.Increment(ref _operationCounter);
+        }
+
+        public static IDisposable Push(string scope) => Push(scope, null);
+
+        public static IDisposable Push(string scope, long? operationId)
         {
             if (string.IsNullOrWhiteSpace(scope))
             {
@@ -21,10 +41,11 @@ namespace TinyGenerator.Services
             var stack = _scopes.Value;
             if (stack == null)
             {
-                stack = new Stack<string>();
+                stack = new Stack<ScopeInfo>();
                 _scopes.Value = stack;
             }
-            stack.Push(scope);
+            var inheritedOperation = operationId ?? (stack.Count > 0 ? stack.Peek().OperationId : null);
+            stack.Push(new ScopeInfo(scope, inheritedOperation));
             return new ScopeHandle(stack);
         }
 
@@ -34,16 +55,26 @@ namespace TinyGenerator.Services
             {
                 var stack = _scopes.Value;
                 if (stack == null || stack.Count == 0) return null;
-                return stack.Peek();
+                return stack.Peek().Name;
+            }
+        }
+
+        public static long? CurrentOperationId
+        {
+            get
+            {
+                var stack = _scopes.Value;
+                if (stack == null || stack.Count == 0) return null;
+                return stack.Peek().OperationId;
             }
         }
 
         private sealed class ScopeHandle : IDisposable
         {
-            private readonly Stack<string> _stack;
+            private readonly Stack<ScopeInfo> _stack;
             private bool _disposed;
 
-            public ScopeHandle(Stack<string> stack)
+            public ScopeHandle(Stack<ScopeInfo> stack)
             {
                 _stack = stack;
             }

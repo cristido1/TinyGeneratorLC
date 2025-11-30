@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
@@ -156,29 +157,71 @@ namespace TinyGenerator.Services
                 var list = new List<OllamaModelInfo>();
                 try
                 {
-                    var psi = CreateOllamaProcessStartInfo("list");
-                    using var p = Process.Start(psi);
-                    if (p == null) return list;
-                    p.WaitForExit(3000);
-                    var outp = p.StandardOutput.ReadToEnd();
-                    if (string.IsNullOrWhiteSpace(outp)) return list;
-                    var lines = outp.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    // skip possible header line(s). Heuristic: lines that contain 'NAME' or 'ID' are headers
-                    foreach (var raw in lines)
+                    static List<OllamaModelInfo> ParseJson(string output)
                     {
-                        var line = raw.Trim();
-                        if (string.IsNullOrWhiteSpace(line)) continue;
-                        var lower = line.ToLowerInvariant();
-                        if (lower.Contains("name") || lower.Contains("id") || lower.StartsWith("----")) continue;
-                        // take first token as model name
-                        var parts = System.Text.RegularExpressions.Regex.Split(line, "\\s{2,}");
-                        string name = parts.Length > 0 ? parts[0].Trim() : string.Empty;
-                        if (string.IsNullOrWhiteSpace(name)) continue;
-                        list.Add(new OllamaModelInfo { Name = name });
+                        var jsonList = new List<OllamaModelInfo>();
+                        if (string.IsNullOrWhiteSpace(output)) return jsonList;
+                        foreach (var rawLine in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            var line = rawLine.Trim();
+                            if (string.IsNullOrWhiteSpace(line)) continue;
+                            try
+                            {
+                                var doc = System.Text.Json.JsonDocument.Parse(line);
+                                if (!doc.RootElement.TryGetProperty("name", out var nameProp)) continue;
+                                var name = nameProp.GetString();
+                                if (string.IsNullOrWhiteSpace(name)) continue;
+                                jsonList.Add(new OllamaModelInfo
+                                {
+                                    Name = name,
+                                    Size = doc.RootElement.TryGetProperty("size", out var sizeProp) ? sizeProp.GetString() : null,
+                                    Context = doc.RootElement.TryGetProperty("details", out var details) && details.TryGetProperty("parameter_size", out var ctxProp) ? ctxProp.GetString() : null
+                                });
+                            }
+                            catch
+                            {
+                                // ignore malformed line
+                            }
+                        }
+                        return jsonList;
                     }
+
+                    List<OllamaModelInfo> TryList(string args)
+                    {
+                        var psi = CreateOllamaProcessStartInfo(args);
+                        using var p = Process.Start(psi);
+                        if (p == null) return new List<OllamaModelInfo>();
+                        p.WaitForExit(5000);
+                        var outp = p.StandardOutput.ReadToEnd();
+                        if (args.Contains("--json", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var jsonModels = ParseJson(outp);
+                            if (jsonModels.Count > 0) return jsonModels;
+                        }
+                        var lines = outp.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                        var legacy = new List<OllamaModelInfo>();
+                        foreach (var raw in lines)
+                        {
+                            var line = raw.Trim();
+                            if (string.IsNullOrWhiteSpace(line)) continue;
+                            var lower = line.ToLowerInvariant();
+                            if (lower.Contains("name") || lower.Contains("id") || lower.StartsWith("----")) continue;
+                            var parts = System.Text.RegularExpressions.Regex.Split(line, "\\s{2,}");
+                            string name = parts.Length > 0 ? parts[0].Trim() : string.Empty;
+                            if (string.IsNullOrWhiteSpace(name)) continue;
+                            legacy.Add(new OllamaModelInfo { Name = name });
+                        }
+                        return legacy;
+                    }
+
+                    var jsonList = TryList("list --json");
+                    if (jsonList.Count > 0) return jsonList;
+                    return TryList("list");
                 }
-                catch { }
-                return list;
+                catch
+                {
+                    return list;
+                }
             });
         }
 
@@ -523,5 +566,3 @@ namespace TinyGenerator.Services
         public string Status { get; set; } = string.Empty;
     }
 }
-
-

@@ -9,38 +9,6 @@
       "type": "string",
       "description": "Description of defects in narrative coherence"
     },
-    "structure_score": {
-      "type": "integer",
-      "description": "Score for story structure (1-10)"
-    },
-    "structure_defects": {
-      "type": "string",
-      "description": "Description of defects in structure"
-    },
-    "characterization_score": {
-      "type": "integer",
-      "description": "Score for characterization (1-10)"
-    },
-    "characterization_defects": {
-      "type": "string",
-      "description": "Description of defects in characterization"
-    },
-    "dialogues_score": {
-      "type": "integer",
-      "description": "Score for dialogues (1-10)"
-    },
-    "dialogues_defects": {
-      "type": "string",
-      "description": "Description of defects in dialogues"
-    },
-    "pacing_score": {
-      "type": "integer",
-      "description": "Score for pacing (1-10)"
-    },
-    "pacing_defects": {
-      "type": "string",
-      "description": "Description of defects in pacing"
-    },
     "originality_score": {
       "type": "integer",
       "description": "Score for originality (1-10)"
@@ -48,30 +16,6 @@
     "originality_defects": {
       "type": "string",
       "description": "Description of defects in originality"
-    },
-    "style_score": {
-      "type": "integer",
-      "description": "Score for writing style (1-10)"
-    },
-    "style_defects": {
-      "type": "string",
-      "description": "Description of defects in style"
-    },
-    "worldbuilding_score": {
-      "type": "integer",
-      "description": "Score for worldbuilding (1-10)"
-    },
-    "worldbuilding_defects": {
-      "type": "string",
-      "description": "Description of defects in worldbuilding"
-    },
-    "thematic_coherence_score": {
-      "type": "integer",
-      "description": "Score for thematic coherence (1-10)"
-    },
-    "thematic_coherence_defects": {
-      "type": "string",
-      "description": "Description of defects in thematic coherence"
     },
     "emotional_impact_score": {
       "type": "integer",
@@ -81,38 +25,20 @@
       "type": "string",
       "description": "Description of defects in emotional impact"
     },
-    "total_score": {
-      "type": "number",
-      "description": "Total score (sum of all category scores, 0-100)"
+    "action_score": {
+      "type": "integer",
+      "description": "Score for action/pacing intensity (1-10)"
     },
-    "overall_evaluation": {
+    "action_defects": {
       "type": "string",
-      "description": "Overall evaluation summary"
+      "description": "Description of defects in action/pacing"
     }
   },
   "required": [
     "narrative_coherence_score",
-    "narrative_coherence_defects",
-    "structure_score",
-    "structure_defects",
-    "characterization_score",
-    "characterization_defects",
-    "dialogues_score",
-    "dialogues_defects",
-    "pacing_score",
-    "pacing_defects",
     "originality_score",
-    "originality_defects",
-    "style_score",
-    "style_defects",
-    "worldbuilding_score",
-    "worldbuilding_defects",
-    "thematic_coherence_score",
-    "thematic_coherence_defects",
     "emotional_impact_score",
-    "emotional_impact_defects",
-    "total_score",
-    "overall_evaluation"
+    "action_score"
   ],
   "additionalProperties": false
 }

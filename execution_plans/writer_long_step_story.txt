@@ -1,0 +1,123 @@
+GENERAL RULES
+	•	Memory keys can store up to 15,000 characters.
+	•	Long memories are allowed. Do not refuse.
+	•	Always follow the steps exactly.
+	•	Continue the algorithm until all 6 chapters are created.
+	•	Do not skip steps.
+	•	Do not shorten the story unless explicitly told.
+
+⸻
+
+WORKFLOW (MUST FOLLOW ALL STEPS)
+
+Step 1 — Create the Full Plot
+
+Create a complex sci-fi plot divided into 6 chapters.
+Describe what happens in each chapter.
+Use up to 13,000 characters.
+Save to memory: storia1_trama.
+
+⸻
+
+Step 2 — Create the Character List
+
+List all main characters with:
+	•	name
+	•	gender
+	•	approximate age
+	•	personality traits
+Save to memory: storia1_personaggi.
+
+⸻
+
+Step 3 — Write Chapter 1
+
+Write Chapter 1 using up to 13,000 characters, including:
+	•	narration
+	•	dialogues
+	•	environmental descriptions
+Save to memory: storia1_capitolo1.
+
+⸻
+
+Step 4 — Summary of Chapter 1
+
+Summarize the events of Chapter 1.
+Save to: storia1_riassunto1.
+
+⸻
+
+Step 5 — Write Chapter 2
+
+Read:
+	•	storia1_trama
+	•	storia1_personaggi
+	•	storia1_riassunto1
+Write Chapter 2 (up to 13,000 characters).
+Save to: storia1_capitolo2.
+
+⸻
+
+Step 6 — Summary of Chapter 2
+
+Summarize the events of Chapter 2.
+Save to: storia1_riassunto2.
+
+⸻
+
+Step 7 — Combined Summary for Chapter 3
+
+Combine storia1_riassunto1 and storia1_riassunto2.
+Save to: storia1_riassunto_totale2.
+
+⸻
+
+Step 8 — Write Chapter 3
+
+Read:
+	•	storia1_trama
+	•	storia1_personaggi
+	•	storia1_riassunto_totale2
+Write Chapter 3 (up to 13,000 characters).
+Save to: storia1_capitolo3.
+
+⸻
+
+Step 9 — Summary of Chapter 3
+
+Summarize Chapter 3.
+Save to: storia1_riassunto3.
+
+⸻
+
+Step 10 — Continue the Same Pattern for Chapters 4, 5, 6
+
+For Chapter n = 4, 5, 6:
+	1.	Combine all previous chapter summaries.
+Save to: storia1_riassunto_totale(n-1)
+	2.	Write Chapter n (up to 13,000 characters) using:
+	•	trama
+	•	personaggi
+	•	combined summary
+Save to: storia1_capitolo(n)
+	3.	Summarize Chapter n.
+Save to: storia1_riassunto(n)
+
+Continue until all 6 chapters are complete.
+
+⸻
+
+END CONDITION
+
+Stop only when:
+	•	Chapters 1–6 are written
+	•	Summaries 1–6 are saved
+	•	Combined summaries are saved correctly
+
+⸻
+
+EVALUATION PHASE (POST WRITER TEST)
+
+	•	Only start the evaluation after the full writing workflow above is completed.
+	•	When logging or invoking evaluation tasks, the operation name MUST be `evaluation` or `writer evaluation`.
+	•	Do not invent new operation labels (e.g., “analysis”) for these post-writer story checks.

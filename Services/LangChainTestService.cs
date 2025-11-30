@@ -565,7 +565,7 @@ namespace TinyGenerator.Services
                 var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 120;
 
                 var instructions = _service.LoadExecutionPlan(test.ExecutionPlan) ?? 
-@"You are a professional storyteller. Write detailed, engaging stories of at least 2000 words IN ITALIAN. 
+@"You are a professional storyteller. Write detailed, engaging stories of at least 20000 words IN ITALIAN. 
 Include rich descriptions, well-developed characters, multiple scenes, and a complete narrative arc. 
 DO NOT rush or summarize. Take your time to develop the story fully.
 IMPORTANT: Write the story in Italian language.";

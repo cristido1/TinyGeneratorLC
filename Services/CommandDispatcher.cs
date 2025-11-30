@@ -21,19 +21,22 @@ namespace TinyGenerator.Services
         public IReadOnlyDictionary<string, string>? Metadata { get; }
         public Func<CommandContext, Task<CommandResult>> Handler { get; }
         public TaskCompletionSource<CommandResult> Completion { get; }
+        public long OperationNumber { get; }
 
         public CommandWorkItem(
             string runId,
             string operationName,
             string threadScope,
             IReadOnlyDictionary<string, string>? metadata,
-            Func<CommandContext, Task<CommandResult>> handler)
+            Func<CommandContext, Task<CommandResult>> handler,
+            long operationNumber)
         {
             RunId = runId;
             OperationName = operationName;
             ThreadScope = threadScope;
             Metadata = metadata;
             Handler = handler;
+            OperationNumber = operationNumber;
             Completion = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
     }
@@ -75,7 +78,8 @@ namespace TinyGenerator.Services
                 ? $"{op}_{DateTime.UtcNow:yyyyMMddHHmmssfff}_{Interlocked.Increment(ref _counter)}"
                 : runId.Trim();
 
-            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler);
+            var opNumber = LogScope.GenerateOperationId();
+            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber);
 
             if (!_queue.Writer.TryWrite(workItem))
             {
@@ -135,8 +139,8 @@ namespace TinyGenerator.Services
 
         private async Task ProcessWorkItemAsync(CommandWorkItem workItem, CancellationToken stoppingToken)
         {
-            using var scope = LogScope.Push(workItem.ThreadScope);
-            var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, stoppingToken);
+            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber);
+            var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, stoppingToken);
             var startMessage = $"[{workItem.RunId}] START {workItem.OperationName}";
             _logger?.Log("Information", "Command", startMessage);
 

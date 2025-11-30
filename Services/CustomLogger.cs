@@ -58,7 +58,7 @@ namespace TinyGenerator.Services
                 Message = message ?? string.Empty,
                 Exception = exception,
                 State = state,
-                ThreadId = Environment.CurrentManagedThreadId,
+                ThreadId = (int)(LogScope.CurrentOperationId ?? Environment.CurrentManagedThreadId),
                 ThreadScope = scope,
                 AgentName = null,
                 Context = null

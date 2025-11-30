@@ -19,6 +19,8 @@ namespace TinyGenerator.Services
         private readonly HttpClient? _httpClient;
         private readonly Func<StoriesService?>? _storiesAccessor;
         private readonly TtsService? _ttsService;
+        private readonly IMemoryEmbeddingGenerator? _embeddingGenerator;
+        private readonly IMemoryEmbeddingBackfillScheduler? _embeddingScheduler;
 
         public LangChainToolFactory(
             PersistentMemoryService? memoryService = null,
@@ -26,7 +28,9 @@ namespace TinyGenerator.Services
             ICustomLogger? logger = null,
             HttpClient? httpClient = null,
             Func<StoriesService?>? storiesAccessor = null,
-            TtsService? ttsService = null)
+            TtsService? ttsService = null,
+            IMemoryEmbeddingGenerator? embeddingGenerator = null,
+            IMemoryEmbeddingBackfillScheduler? embeddingScheduler = null)
         {
             _memoryService = memoryService;
             _database = database;
@@ -34,6 +38,8 @@ namespace TinyGenerator.Services
             _httpClient = httpClient;
             _storiesAccessor = storiesAccessor;
             _ttsService = ttsService;
+            _embeddingGenerator = embeddingGenerator;
+            _embeddingScheduler = embeddingScheduler;
         }
 
         /// <summary>
@@ -193,7 +199,7 @@ namespace TinyGenerator.Services
                     return;
                 }
 
-                var tool = new MemoryTool(_memoryService, _logger)
+                var tool = new MemoryTool(_memoryService, _logger, _embeddingGenerator, _embeddingScheduler)
                 {
                     ModelId = modelId,
                     AgentId = agentId

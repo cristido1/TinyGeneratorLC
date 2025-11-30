@@ -76,6 +76,57 @@ namespace TinyGenerator.Pages.Logs
             return RedirectToPage();
         }
 
+        public IActionResult OnPostClearAllLogs()
+        {
+            try
+            {
+                _db.ClearLogs();
+                StatusMessage = "Tutti i log e le analisi sono stati cancellati con successo.";
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Errore durante la cancellazione dei log");
+                StatusMessage = $"Errore durante la cancellazione: {ex.Message}";
+            }
+            return RedirectToPage();
+        }
+
+        public IActionResult OnGetExport(int? threadId)
+        {
+            try
+            {
+                var logs = threadId.HasValue && threadId.Value > 0
+                    ? _db.GetLogsByThreadId(threadId.Value)
+                    : _db.GetRecentLogs(limit: 10000);
+
+                var csv = new System.Text.StringBuilder();
+                csv.AppendLine("Timestamp,Level,Operation,ThreadId,AgentName,Message,Source");
+
+                foreach (var log in logs)
+                {
+                    csv.AppendLine($"\"{log.Timestamp:yyyy-MM-dd HH:mm:ss}\",\"{log.Level}\",\"{log.ThreadScope}\",{log.ThreadId},\"{log.AgentName}\",\"{EscapeCsv(log.Message)}\",\"{log.Source}\"");
+                }
+
+                var fileName = threadId.HasValue && threadId.Value > 0
+                    ? $"logs_thread_{threadId.Value}_{DateTime.UtcNow:yyyyMMddHHmmss}.csv"
+                    : $"logs_all_{DateTime.UtcNow:yyyyMMddHHmmss}.csv";
+
+                return File(System.Text.Encoding.UTF8.GetBytes(csv.ToString()), "text/csv", fileName);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Errore durante l'export dei log");
+                StatusMessage = $"Errore durante l'export: {ex.Message}";
+                return RedirectToPage();
+            }
+        }
+
+        private static string EscapeCsv(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value.Replace("\"", "\"\"").Replace("\n", " ").Replace("\r", "");
+        }
+
         private static string SanitizeIdentifier(string value)
         {
             if (string.IsNullOrWhiteSpace(value)) return "operation";

@@ -51,6 +51,20 @@ namespace TinyGenerator.Pages.Stories
             LoadData();
         }
 
+        public IActionResult OnPostDeleteEvaluation(long id, long storyId)
+        {
+            try
+            {
+                _database.DeleteStoryEvaluationById(id);
+                TempData["StatusMessage"] = "Valutazione eliminata.";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore eliminazione valutazione: " + ex.Message;
+            }
+            return RedirectToPage();
+        }
+
         public IActionResult OnPostEvaluate(long id, int agentId)
         {
             var runId = QueueStoryOperation(id, $"evaluate_{agentId}", async ct =>

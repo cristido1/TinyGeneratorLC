@@ -21,6 +21,9 @@ namespace TinyGenerator.Services
     /// </summary>
     public class ReActLoopOrchestrator
     {
+        // Tracks retry attempts for tools that returned validation errors
+        private readonly Dictionary<string, int> _toolRetryCounts = new(StringComparer.OrdinalIgnoreCase);
+
         private readonly HybridLangChainOrchestrator _tools;
         private readonly ICustomLogger? _logger;
         private readonly ProgressService? _progress;
@@ -181,6 +184,78 @@ namespace TinyGenerator.Services
                             Content = toolResult,
                             ToolCallId = callId // Associate with the tool_call
                         });
+                    }
+
+                    // Inspect tool results for validation errors and request retries when appropriate
+                    try
+                    {
+                        foreach (var (callId, toolResult) in toolResults)
+                        {
+                            // Find the matching tool call to get the tool name
+                            var matchingCall = toolCalls.FirstOrDefault(tc => tc.Id == callId);
+                            if (matchingCall == null)
+                                continue;
+
+                            var toolName = matchingCall.ToolName ?? string.Empty;
+
+                            // Only handle evaluate_full_story validation errors here
+                            if (!string.Equals(toolName, "evaluate_full_story", StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            // Parse result JSON to look for an "error" property indicating missing fields
+                            try
+                            {
+                                using var doc = JsonDocument.Parse(toolResult);
+                                if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("error", out var errElem))
+                                {
+                                    var errMsg = errElem.GetString() ?? string.Empty;
+                                    if (errMsg.Contains("Missing or invalid fields", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        // Extract missing fields list if present after colon
+                                        var parts = errMsg.Split(new[] { ':' }, 2);
+                                        var missing = parts.Length > 1 ? parts[1].Trim() : "(unspecified)";
+
+                                        // Check retry count
+                                        _toolRetryCounts.TryGetValue(toolName, out var attempts);
+                                        if (attempts < 3)
+                                        {
+                                            attempts++;
+                                            _toolRetryCounts[toolName] = attempts;
+
+                                            var assistantPrompt = $"Required fields missing for `{toolName}`: {missing}. Please call the `{toolName}` function again including these fields. Retry attempt {attempts} of 3.";
+
+                                            _messageHistory.Add(new ConversationMessage
+                                            {
+                                                Role = "assistant",
+                                                Content = assistantPrompt
+                                            });
+
+                                            _logger?.Log("Info", "ReActLoop", $"Requested retry {attempts}/3 for {toolName}: {missing}");
+                                        }
+                                        else
+                                        {
+                                            // Exceeded retries: record error and stop loop
+                                            var assistantPrompt = $"Maximum retries reached for `{toolName}`. Required fields were not provided: {missing}. Aborting.";
+                                            _messageHistory.Add(new ConversationMessage
+                                            {
+                                                Role = "assistant",
+                                                Content = assistantPrompt
+                                            });
+
+                                            _logger?.Log("Warn", "ReActLoop", $"Exceeded retry limit for {toolName}");
+                                            result.Error = $"Missing required fields for {toolName} after 3 attempts: {missing}";
+                                            result.IterationCount = iteration + 1;
+                                            return result;
+                                        }
+                                    }
+                                }
+                            }
+                            catch { /* ignore parse errors and continue */ }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Log("Warn", "ReActLoop", $"Error while handling tool validation retries: {ex.Message}");
                     }
                 }
                 catch (Exception ex)

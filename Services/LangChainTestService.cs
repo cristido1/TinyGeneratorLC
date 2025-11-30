@@ -564,11 +564,7 @@ namespace TinyGenerator.Services
                 }
                 var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 120;
 
-                var instructions = _service.LoadExecutionPlan(test.ExecutionPlan) ?? 
-@"You are a professional storyteller. Write detailed, engaging stories of at least 20000 words IN ITALIAN. 
-Include rich descriptions, well-developed characters, multiple scenes, and a complete narrative arc. 
-DO NOT rush or summarize. Take your time to develop the story fully.
-IMPORTANT: Write the story in Italian language.";
+                var instructions = _service.LoadExecutionPlan(test.ExecutionPlan) ?? string.Empty;
 
                 var fullPrompt = $"{instructions}\n\n{prompt}";
                 var hasTools = orchestrator.GetToolSchemas().Any();
@@ -576,57 +572,115 @@ IMPORTANT: Write the story in Italian language.";
 
                 try
                 {
-                    var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _service._customLogger, progress: _service._progress, runId: runId.ToString(), modelBridge: chatBridge);
-                    var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
-                    sw.Stop();
+                    const int MinStoryLength = 6000;
+                    const int MaxAttempts = 3;
 
-                    var storyText = reactResult.FinalResponse ?? string.Empty;
-                    if (string.IsNullOrWhiteSpace(storyText))
+                    string? cleanStoryText = null;
+                    long? storyId = null;
+                    double evaluationScore = 0.0;
+                    bool ok = false;
+
+                    for (int attempt = 1; attempt <= MaxAttempts; attempt++)
                     {
+                        var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+                        // recreate orchestrator for each attempt to ensure a fresh tool state
+                        var attemptOrchestrator = _service._kernelFactory.CreateOrchestrator(model, _service.ParseAllowedPlugins(test), null);
+                        var reactLoop = new ReActLoopOrchestrator(attemptOrchestrator, _service._customLogger, progress: _service._progress, runId: runId.ToString(), modelBridge: chatBridge);
+
+                        var promptAttempt = fullPrompt;
+                        if (attempt > 1)
+                        {
+                            promptAttempt += $"\n\n[RETRY {attempt}/{MaxAttempts}] The previous story was too short (<{MinStoryLength} chars). Rewrite the story from scratch, make it significantly longer and more detailed. Produce at least {MinStoryLength * 2} characters. Do not reuse the previous text. Why are you producing so short stories?";
+                            _service._progress?.Append(runId.ToString(), $"[{model}] Retry {attempt}/{MaxAttempts}: requesting a longer rewrite.");
+                        }
+
+                        var reactResult = await reactLoop.ExecuteAsync(promptAttempt, cts.Token);
+
+                        var storyText = reactResult.FinalResponse ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(storyText))
+                        {
+                            _service._progress?.Append(runId.ToString(), $"[{model}] Attempt {attempt} returned empty story.");
+                            if (attempt == MaxAttempts)
+                            {
+                                sw.Stop();
+                                _service._database.UpdateTestStepResult(
+                                    stepId,
+                                    false,
+                                    string.Empty,
+                                    "No story text returned after multiple attempts");
+                                return;
+                            }
+                            continue;
+                        }
+
+                        cleanStoryText = _service.ExtractJsonContent(storyText) ?? storyText;
+                        if (cleanStoryText.Length < MinStoryLength)
+                        {
+                            _service._progress?.Append(runId.ToString(), $"[{model}] Attempt {attempt} produced too short story ({cleanStoryText.Length} chars).");
+                            if (attempt == MaxAttempts)
+                            {
+                                sw.Stop();
+                                _service._database.UpdateTestStepResult(
+                                    stepId,
+                                    false,
+                                    JsonSerializer.Serialize(new { length = cleanStoryText.Length }),
+                                    $"Story too short ({cleanStoryText.Length} chars) after {MaxAttempts} attempts");
+                                return;
+                            }
+                            // otherwise retry
+                            continue;
+                        }
+
+                        // success: persist story and evaluate
+                        var generatedStatusId = _service._stories.ResolveStatusId("generated");
+                        storyId = _service._stories.InsertSingleStory(
+                            test.Prompt ?? string.Empty,
+                            cleanStoryText,
+                            context.ModelInfo.Id,
+                            null,
+                            0.0,
+                            null,
+                            0,
+                            generatedStatusId,
+                            null);
+
+                        _service._database.AddTestAsset(
+                            stepId,
+                            "story",
+                            $"/stories/{storyId}",
+                            "Generated story",
+                            durationSec: sw.Elapsed.TotalSeconds,
+                            sizeBytes: cleanStoryText.Length,
+                            storyId: storyId);
+
+                        evaluationScore = await _service.EvaluateStoryWithAgentsAsync(storyId.Value, cleanStoryText, runId, model);
+                        var passed = evaluationScore >= 4.0;
+
+                        sw.Stop();
+
+                        _service._database.UpdateTestStepResult(
+                            stepId,
+                            passed,
+                            JsonSerializer.Serialize(new { storyId, length = cleanStoryText.Length, evaluationScore }),
+                            passed ? null : $"Evaluation score too low: {evaluationScore:F1}/10",
+                            (long?)sw.ElapsedMilliseconds);
+
+                        _service._progress?.Append(runId.ToString(), $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: story ID {storyId}, score {evaluationScore:F1}/10");
+
+                        ok = true;
+                        break;
+                    }
+
+                    if (!ok)
+                    {
+                        // already handled above; defensive fallback
+                        sw.Stop();
                         _service._database.UpdateTestStepResult(
                             stepId,
                             false,
-                            string.Empty,
-                            "No story text returned",
-                            (long?)sw.ElapsedMilliseconds);
-                        return;
+                            null,
+                            "Story generation failed after multiple attempts");
                     }
-
-                    var cleanStoryText = _service.ExtractJsonContent(storyText) ?? storyText;
-                    var generatedStatusId = _service._stories.ResolveStatusId("generated");
-                    var storyId = _service._stories.InsertSingleStory(
-                        test.Prompt ?? string.Empty,
-                        cleanStoryText,
-                        context.ModelInfo.Id,
-                        null,
-                        0.0,
-                        null,
-                        0,
-                        generatedStatusId,
-                        null);
-
-                    _service._database.AddTestAsset(
-                        stepId,
-                        "story",
-                        $"/stories/{storyId}",
-                        "Generated story",
-                        durationSec: sw.Elapsed.TotalSeconds,
-                        sizeBytes: cleanStoryText.Length,
-                        storyId: storyId);
-
-                    var evaluationScore = await _service.EvaluateStoryWithAgentsAsync(storyId, cleanStoryText, runId, model);
-                    var passed = evaluationScore >= 4.0;
-                    
-                    _service._database.UpdateTestStepResult(
-                        stepId,
-                        passed,
-                        JsonSerializer.Serialize(new { storyId, length = cleanStoryText.Length, evaluationScore }),
-                        passed ? null : $"Evaluation score too low: {evaluationScore:F1}/10",
-                        (long?)sw.ElapsedMilliseconds);
-
-                    _service._progress?.Append(runId.ToString(),
-                        $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: story ID {storyId}, score {evaluationScore:F1}/10");
                 }
                 catch (OperationCanceledException)
                 {

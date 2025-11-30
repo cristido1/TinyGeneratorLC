@@ -474,36 +474,15 @@ public sealed class StoriesService
         var builder = new StringBuilder();
         builder.AppendLine("You are evaluating a story and must record your judgement using the available tools.");
         builder.AppendLine($"Story ID: {story.Id}");
-        builder.AppendLine("When you provide your evaluation you MUST call the storyevaluator tool and include story_id with the value above.");
-        builder.AppendLine("Assess coherence, structure, characters, pacing, style and overall quality. Provide concrete defects and scores.");
-        builder.AppendLine();
-        builder.AppendLine("Story text:");
-
-        var chunks = ChunkText(story.Story ?? string.Empty, 3000).ToList();
-        for (int i = 0; i < chunks.Count; i++)
-        {
-            builder.AppendLine($"[STORY {i + 1}/{chunks.Count}]");
-            builder.AppendLine(chunks[i]);
-            builder.AppendLine();
-        }
-
-        builder.AppendLine("[END_OF_STORY]");
+        builder.AppendLine("You must NOT copy the full story text into this prompt.");
+        builder.AppendLine("Instead, use the read_story_part function to retrieve segments of the story (start with part_index=0 and continue requesting parts until you receive \"is_last\": true).");
+        builder.AppendLine("Do not invent story content; rely only on the chunks returned by read_story_part.");
+        builder.AppendLine("After you have reviewed the necessary sections, call the evaluate_full_story function exactly once with the provided story_id.");
+        builder.AppendLine("Populate the following scores (0-10): narrative_coherence_score, originality_score, emotional_impact_score, action_score.");
+        builder.AppendLine("Also include the corresponding *_defects values (empty string or \"None\" is acceptable if there are no defects).");
+        builder.AppendLine("Do not return an overall evaluation text – the system will compute the aggregate score automatically.");
+        builder.AppendLine("Ensure every score and defect field is present in the final tool call, even if the defect description is empty.");
         return builder.ToString();
-    }
-
-    private static IEnumerable<string> ChunkText(string text, int chunkSize)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            yield return string.Empty;
-            yield break;
-        }
-
-        for (int i = 0; i < text.Length; i += chunkSize)
-        {
-            var size = Math.Min(chunkSize, text.Length - i);
-            yield return text.Substring(i, size);
-        }
     }
 
     private string? LoadExecutionPlan(string? planName)

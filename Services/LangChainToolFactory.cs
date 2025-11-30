@@ -61,7 +61,7 @@ namespace TinyGenerator.Services
             RegisterAudioCraftTool(orchestrator, modelId, agentId);
             RegisterAudioEvaluatorTool(orchestrator, modelId, agentId);
             RegisterStoryWriterTool(orchestrator, modelId, agentId);
-            RegisterStoryEvaluatorTool(orchestrator, modelId, agentId);
+            // StoryEvaluatorTool removed: evaluations handled by EvaluatorTool only
 
             _logger?.Log("Info", "ToolFactory", "Created full HybridLangChainOrchestrator with all tools");
             return orchestrator;
@@ -131,8 +131,7 @@ namespace TinyGenerator.Services
             if (allowedSet.Contains("storywriter"))
                 RegisterStoryWriterTool(orchestrator, modelId, agentId);
 
-            if (allowedSet.Contains("storyevaluator"))
-                RegisterStoryEvaluatorTool(orchestrator, modelId, agentId);
+            // 'storyevaluator' tool removed in favor of unified EvaluatorTool
 
             var wantsVoiceTool = allowedSet.Contains("voicechoser") || allowedSet.Contains("voicechooser");
             var wantsSchemaTool = allowedSet.Contains("ttsschema") || allowedSet.Contains("ttsschematool");
@@ -388,23 +387,7 @@ namespace TinyGenerator.Services
             }
         }
 
-        private void RegisterStoryEvaluatorTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId)
-        {
-            try
-            {
-                var tool = new StoryEvaluatorTool(_database, _logger)
-                {
-                    ModelId = modelId,
-                    AgentId = agentId
-                };
-                orchestrator.RegisterTool(tool);
-                _logger?.Log("Info", "ToolFactory", "Registered StoryEvaluatorTool");
-            }
-            catch (Exception ex)
-            {
-                _logger?.Log("Error", "ToolFactory", $"Failed to register StoryEvaluatorTool: {ex.Message}");
-            }
-        }
+        // StoryEvaluatorTool has been removed; use EvaluatorTool instead.
 
         private void RegisterTtsSchemaTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId, string workingFolder, string? storyText = null)
         {

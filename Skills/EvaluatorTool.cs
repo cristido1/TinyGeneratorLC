@@ -114,7 +114,7 @@ namespace TinyGenerator.Skills
                     emotional,
                     action
                 };
-                var totalScore = scores.Sum() / (double)scores.Length;
+                var totalScore = (double)scores.Sum();
 
                 LastResult = JsonSerializer.Serialize(payload);
                 LastFunctionCalled = "evaluate_full_story";
@@ -138,6 +138,55 @@ namespace TinyGenerator.Skills
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "EvaluatorTool", $"Execution failed: {ex.Message}", ex.ToString());
+                return JsonSerializer.Serialize(new { error = ex.Message });
+            }
+        }
+
+        private async Task<string> ReadStoryPartAsync(string jsonInput)
+        {
+            try
+            {
+                var input = JsonSerializer.Deserialize<ReadStoryPartInput>(jsonInput, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (input == null)
+                    return JsonSerializer.Serialize(new { error = "Invalid input format" });
+
+                if (input.StoryId <= 0 || input.PartIndex < 0)
+                {
+                    return JsonSerializer.Serialize(new { error = "story_id and part_index must be non-negative" });
+                }
+
+                var story = _database?.GetStoryById(input.StoryId);
+                if (story == null || string.IsNullOrEmpty(story.Story))
+                {
+                    return JsonSerializer.Serialize(new { error = "Story not found or empty" });
+                }
+
+                var text = story.Story;
+                var start = input.PartIndex * _storyChunkSize;
+                if (start >= text.Length)
+                {
+                    return JsonSerializer.Serialize(new { error = "part_index out of range" });
+                }
+
+                var end = Math.Min(text.Length, start + _storyChunkSize);
+                var chunk = text[start..end];
+                var payload = new
+                {
+                    story_id = input.StoryId,
+                    part_index = input.PartIndex,
+                    text = chunk,
+                    is_last = end >= text.Length
+                };
+
+                return JsonSerializer.Serialize(payload);
+            }
+            catch (Exception ex)
+            {
+                CustomLogger?.Log("Error", "EvaluatorTool", $"ReadStoryPart failed: {ex.Message}", ex.ToString());
                 return JsonSerializer.Serialize(new { error = ex.Message });
             }
         }
@@ -212,47 +261,56 @@ namespace TinyGenerator.Skills
             "emotional_impact_score",
             "action_score"
         };
-    }
 
-    public class EvaluateFullStoryInput
-    {
-        [JsonPropertyName("narrative_coherence_score")]
-        public int? NarrativeCoherenceScore { get; set; }
-
-        [JsonPropertyName("narrative_coherence_defects")]
-        public string? NarrativeCoherenceDefects { get; set; }
-
-        [JsonPropertyName("originality_score")]
-        public int? OriginalityScore { get; set; }
-
-        [JsonPropertyName("originality_defects")]
-        public string? OriginalityDefects { get; set; }
-
-        [JsonPropertyName("emotional_impact_score")]
-        public int? EmotionalImpactScore { get; set; }
-
-        [JsonPropertyName("emotional_impact_defects")]
-        public string? EmotionalImpactDefects { get; set; }
-
-        [JsonPropertyName("action_score")]
-        public int? ActionScore { get; set; }
-
-        [JsonPropertyName("action_defects")]
-        public string? ActionDefects { get; set; }
-
-        public bool AllScoresProvided()
+        public class EvaluateFullStoryInput
         {
-            bool InRange(int? value) => value.HasValue && value.Value >= 0 && value.Value <= 10;
+            [JsonPropertyName("narrative_coherence_score")]
+            public int? NarrativeCoherenceScore { get; set; }
 
-            return InRange(NarrativeCoherenceScore)
-                && InRange(OriginalityScore)
-                && InRange(EmotionalImpactScore)
-                && InRange(ActionScore);
+            [JsonPropertyName("narrative_coherence_defects")]
+            public string? NarrativeCoherenceDefects { get; set; }
+
+            [JsonPropertyName("originality_score")]
+            public int? OriginalityScore { get; set; }
+
+            [JsonPropertyName("originality_defects")]
+            public string? OriginalityDefects { get; set; }
+
+            [JsonPropertyName("emotional_impact_score")]
+            public int? EmotionalImpactScore { get; set; }
+
+            [JsonPropertyName("emotional_impact_defects")]
+            public string? EmotionalImpactDefects { get; set; }
+
+            [JsonPropertyName("action_score")]
+            public int? ActionScore { get; set; }
+
+            [JsonPropertyName("action_defects")]
+            public string? ActionDefects { get; set; }
+
+            public bool AllScoresProvided()
+            {
+                bool InRange(int? value) => value.HasValue && value.Value >= 0 && value.Value <= 10;
+
+                return InRange(NarrativeCoherenceScore)
+                    && InRange(OriginalityScore)
+                    && InRange(EmotionalImpactScore)
+                    && InRange(ActionScore);
+            }
+
+            public bool AllDefectsProvided()
+            {
+                return true;
+            }
         }
 
-        public bool AllDefectsProvided()
+        public class ReadStoryPartInput
         {
-            return true;
+            [JsonPropertyName("story_id")]
+            public long StoryId { get; set; }
+
+            [JsonPropertyName("part_index")]
+            public int PartIndex { get; set; }
         }
     }
 }

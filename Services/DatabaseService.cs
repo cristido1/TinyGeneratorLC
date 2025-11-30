@@ -939,17 +939,10 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
     public long AddStoryEvaluation(
         long storyId,
         int narrativeScore, string narrativeDefects,
-        int structureScore, string structureDefects,
-        int characterizationScore, string characterizationDefects,
-        int dialoguesScore, string dialoguesDefects,
-        int pacingScore, string pacingDefects,
         int originalityScore, string originalityDefects,
-        int styleScore, string styleDefects,
-        int worldbuildingScore, string worldbuildingDefects,
-        int thematicScore, string thematicDefects,
         int emotionalScore, string emotionalDefects,
+        int actionScore, string actionDefects,
         double totalScore,
-        string overallEvaluation,
         string rawJson,
         int? modelId = null,
         int? agentId = null)
@@ -957,8 +950,8 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         using var conn = CreateConnection();
         conn.Open();
 
-        var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, structure_score, structure_defects, characterization_score, characterization_defects, dialogues_score, dialogues_defects, pacing_score, pacing_defects, originality_score, originality_defects, style_score, style_defects, worldbuilding_score, worldbuilding_defects, thematic_coherence_score, thematic_coherence_defects, emotional_impact_score, emotional_impact_defects, total_score, overall_evaluation, raw_json, model_id, agent_id, ts) 
-                    VALUES(@story_id, @ncs, @ncd, @ss, @sd, @chs, @chd, @dlg, @dlgdef, @pc, @pcdef, @org, @orgdef, @stl, @stldef, @wb, @wbdef, @th, @thdef, @em, @emdef, @total, @overall, @raw, @model_id, @agent_id, @ts); 
+        var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, raw_json, model_id, agent_id, ts) 
+                    VALUES(@story_id, @ncs, @ncd, @org, @orgdef, @em, @emdef, @action, @actiondef, @total, @raw, @model_id, @agent_id, @ts); 
                     SELECT last_insert_rowid();";
         
         var id = conn.ExecuteScalar<long>(sql, new
@@ -966,26 +959,13 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
             story_id = storyId,
             ncs = narrativeScore,
             ncd = narrativeDefects,
-            ss = structureScore,
-            sd = structureDefects,
-            chs = characterizationScore,
-            chd = characterizationDefects,
-            dlg = dialoguesScore,
-            dlgdef = dialoguesDefects,
-            pc = pacingScore,
-            pcdef = pacingDefects,
             org = originalityScore,
             orgdef = originalityDefects,
-            stl = styleScore,
-            stldef = styleDefects,
-            wb = worldbuildingScore,
-            wbdef = worldbuildingDefects,
-            th = thematicScore,
-            thdef = thematicDefects,
             em = emotionalScore,
             emdef = emotionalDefects,
+            action = actionScore,
+            actiondef = actionDefects,
             total = totalScore,
-            overall = overallEvaluation,
             raw = rawJson,
             model_id = modelId,
             agent_id = agentId,
@@ -1007,6 +987,19 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
     {
         using var conn = CreateConnection();
         conn.Open();
+        // Deduplicate: avoid inserting identical evaluation (same story, same agent, same raw JSON)
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(rawJson) && agentId.HasValue)
+            {
+                var existingId = conn.ExecuteScalar<long?>("SELECT id FROM stories_evaluations WHERE story_id = @sid AND agent_id = @aid AND raw_json = @raw LIMIT 1", new { sid = storyId, aid = agentId.Value, raw = rawJson });
+                if (existingId.HasValue && existingId.Value > 0)
+                {
+                    return existingId.Value;
+                }
+            }
+        }
+        catch { /* best-effort dedupe, ignore on error */ }
         // Try parse JSON to extract category fields - best effort
         // Parsing helper logic inline below
 
@@ -1040,29 +1033,26 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
             }
             var nc = GetScoreFromCategory("narrative_coherence");
             var ncdef = GetDefectsFromCategory("narrative_coherence");
-            var st = GetScoreFromCategory("structure");
-            var stdef = GetDefectsFromCategory("structure");
-            var ch = GetScoreFromCategory("characterization");
-            var chdef = GetDefectsFromCategory("characterization");
-            var dlg = GetScoreFromCategory("dialogues");
-            var dlgdef = GetDefectsFromCategory("dialogues");
-            var pc = GetScoreFromCategory("pacing");
-            var pcdef = GetDefectsFromCategory("pacing");
             var org = GetScoreFromCategory("originality");
             var orgdef = GetDefectsFromCategory("originality");
-            var stl = GetScoreFromCategory("style");
-            var stldef = GetDefectsFromCategory("style");
-            var wb = GetScoreFromCategory("worldbuilding");
-            var wbdef = GetDefectsFromCategory("worldbuilding");
-            var th = GetScoreFromCategory("thematic_coherence");
-            var thdef = GetDefectsFromCategory("thematic_coherence");
             var em = GetScoreFromCategory("emotional_impact");
             var emdef = GetDefectsFromCategory("emotional_impact");
-            string overall = string.Empty;
-            try { if (root.TryGetProperty("overall_evaluation", out var ov) && ov.ValueKind == System.Text.Json.JsonValueKind.String) overall = ov.GetString() ?? string.Empty; } catch { }
 
-            var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, structure_score, structure_defects, characterization_score, characterization_defects, dialogues_score, dialogues_defects, pacing_score, pacing_defects, originality_score, originality_defects, style_score, style_defects, worldbuilding_score, worldbuilding_defects, thematic_coherence_score, thematic_coherence_defects, emotional_impact_score, emotional_impact_defects, total_score, overall_evaluation, raw_json, model_id, agent_id, ts) VALUES(@story_id, @ncs, @ncd, @ss, @sd, @chs, @chd, @dlg, @dlgdef, @pc, @pcdef, @org, @orgdef, @stl, @stldef, @wb, @wbdef, @th, @thdef, @em, @emdef, @total, @overall, @raw, @model_id, @agent_id, @ts); SELECT last_insert_rowid();";
-            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, ncs = nc, ncd = ncdef, ss = st, sd = stdef, chs = ch, chd = chdef, dlg = dlg, dlgdef = dlgdef, pc = pc, pcdef = pcdef, org = org, orgdef = orgdef, stl = stl, stldef = stldef, wb = wb, wbdef = wbdef, th = th, thdef = thdef, em = em, emdef = emdef, total = totalScore, overall = overall, raw = rawJson, model_id = modelId ?? (int?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
+            var action = GetScoreFromCategory("action");
+            if (action == 0)
+            {
+                action = GetScoreFromCategory("pacing");
+            }
+            var actionDef = GetDefectsFromCategory("action");
+            if (string.IsNullOrEmpty(actionDef))
+            {
+                actionDef = GetDefectsFromCategory("pacing");
+            }
+
+            var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, raw_json, model_id, agent_id, ts) 
+                        VALUES(@story_id, @ncs, @ncd, @org, @orgdef, @em, @emdef, @action, @actiondef, @total, @raw, @model_id, @agent_id, @ts); 
+                        SELECT last_insert_rowid();";
+            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, ncs = nc, ncd = ncdef, org = org, orgdef = orgdef, em = em, emdef = emdef, action = action, actiondef = actionDef, total = totalScore, raw = rawJson, model_id = modelId ?? (int?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
             
             // Recalculate writer score for the model
         if (modelId.HasValue)
@@ -1076,7 +1066,9 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
     }
         catch (Exception)
         {
-            var sql = @"INSERT INTO stories_evaluations(story_id, total_score, raw_json, model_id, agent_id, ts) VALUES(@story_id, @total, @raw, @model_id, @agent_id, @ts); SELECT last_insert_rowid();";
+            var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, raw_json, model_id, agent_id, ts) 
+                        VALUES(@story_id, 0, '', 0, '', 0, '', 0, '', @total, @raw, @model_id, @agent_id, @ts); 
+                        SELECT last_insert_rowid();";
             var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, total = totalScore, raw = rawJson, model_id = modelId ?? (int?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
             
             // Recalculate writer score for the model
@@ -1197,10 +1189,47 @@ SET TotalScore = (
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, story_id AS StoryId, narrative_coherence_score AS NarrativeCoherenceScore, narrative_coherence_defects AS NarrativeCoherenceDefects, structure_score AS StructureScore, structure_defects AS StructureDefects, characterization_score AS CharacterizationScore, characterization_defects AS CharacterizationDefects, dialogues_score AS DialoguesScore, dialogues_defects AS DialoguesDefects, pacing_score AS PacingScore, pacing_defects AS PacingDefects, originality_score AS OriginalityScore, originality_defects AS OriginalityDefects, style_score AS StyleScore, style_defects AS StyleDefects, worldbuilding_score AS WorldbuildingScore, worldbuilding_defects AS WorldbuildingDefects, thematic_coherence_score AS ThematicCoherenceScore, thematic_coherence_defects AS ThematicCoherenceDefects, emotional_impact_score AS EmotionalImpactScore, emotional_impact_defects AS EmotionalImpactDefects, total_score AS TotalScore, overall_evaluation AS OverallEvaluation, raw_json AS RawJson, model_id AS ModelId, agent_id AS AgentId, ts AS Ts FROM stories_evaluations WHERE story_id = @sid ORDER BY id";
-        // Also join models and agents for human-friendly names and a 'Score' alias used by UI
-        sql = @"SELECT se.id AS Id, se.story_id AS StoryId, se.narrative_coherence_score AS NarrativeCoherenceScore, se.narrative_coherence_defects AS NarrativeCoherenceDefects, se.structure_score AS StructureScore, se.structure_defects AS StructureDefects, se.characterization_score AS CharacterizationScore, se.characterization_defects AS CharacterizationDefects, se.dialogues_score AS DialoguesScore, se.dialogues_defects AS DialoguesDefects, se.pacing_score AS PacingScore, se.pacing_defects AS PacingDefects, se.originality_score AS OriginalityScore, se.originality_defects AS OriginalityDefects, se.style_score AS StyleScore, se.style_defects AS StyleDefects, se.worldbuilding_score AS WorldbuildingScore, se.worldbuilding_defects AS WorldbuildingDefects, se.thematic_coherence_score AS ThematicCoherenceScore, se.thematic_coherence_defects AS ThematicCoherenceDefects, se.emotional_impact_score AS EmotionalImpactScore, se.emotional_impact_defects AS EmotionalImpactDefects, se.total_score AS TotalScore, se.overall_evaluation AS OverallEvaluation, se.raw_json AS RawJson, se.model_id AS ModelId, se.agent_id AS AgentId, se.ts AS Ts, COALESCE(m.Name, '') AS Model, se.total_score AS Score FROM stories_evaluations se LEFT JOIN models m ON se.model_id = m.Id WHERE se.story_id = @sid ORDER BY se.id";
+         var sql = @"SELECT se.id AS Id,
+                      se.story_id AS StoryId,
+                      se.narrative_coherence_score AS NarrativeCoherenceScore,
+                      se.narrative_coherence_defects AS NarrativeCoherenceDefects,
+                      se.originality_score AS OriginalityScore,
+                      se.originality_defects AS OriginalityDefects,
+                      se.emotional_impact_score AS EmotionalImpactScore,
+                      se.emotional_impact_defects AS EmotionalImpactDefects,
+                      se.action_score AS ActionScore,
+                      se.action_defects AS ActionDefects,
+                      se.total_score AS TotalScore,
+                      se.raw_json AS RawJson,
+                      se.model_id AS ModelId,
+                      se.agent_id AS AgentId,
+                      se.ts AS Ts,
+                      COALESCE(m.Name, '') AS Model,
+                      COALESCE(a.name, '') AS AgentName,
+                      COALESCE(ma.Name, '') AS AgentModel,
+                      se.total_score AS Score
+                  FROM stories_evaluations se
+                  LEFT JOIN models m ON se.model_id = m.Id
+                  LEFT JOIN agents a ON se.agent_id = a.id
+                  LEFT JOIN models ma ON a.model_id = ma.Id
+                  WHERE se.story_id = @sid
+                  ORDER BY se.id";
         return conn.Query<TinyGenerator.Models.StoryEvaluation>(sql, new { sid = storyId }).ToList();
+    }
+
+    public void DeleteStoryEvaluationById(long evaluationId)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        try
+        {
+            conn.Execute("DELETE FROM stories_evaluations WHERE id = @id", new { id = evaluationId });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Failed to delete story evaluation {evaluationId}: {ex.Message}");
+            throw;
+        }
     }
 
     // Stories CRUD operations
@@ -1951,6 +1980,61 @@ SET TotalScore = (
         {
             Console.WriteLine("[DB] Migrating model_test_runs: renaming test_code to test_group");
             conn.Execute("ALTER TABLE model_test_runs RENAME COLUMN test_code TO test_group");
+        }
+
+        try
+        {
+            var legacyEvalColumns = conn.ExecuteScalar<long>(@"SELECT COUNT(*) FROM pragma_table_info('stories_evaluations')
+                                                               WHERE name IN ('structure_score','characterization_score','dialogues_score','pacing_score','style_score','worldbuilding_score','thematic_coherence_score','overall_evaluation')");
+            var hasActionColumn = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories_evaluations') WHERE name='action_score'");
+            if (legacyEvalColumns > 0 || hasActionColumn == 0)
+            {
+                Console.WriteLine("[DB] Migrating stories_evaluations table to compact schema");
+                var oldHasActionScore = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories_evaluations') WHERE name='action_score'") > 0;
+                var oldHasActionDefects = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories_evaluations') WHERE name='action_defects'") > 0;
+                var oldHasPacingScore = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories_evaluations') WHERE name='pacing_score'") > 0;
+                var oldHasPacingDefects = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories_evaluations') WHERE name='pacing_defects'") > 0;
+
+                conn.Execute("ALTER TABLE stories_evaluations RENAME TO stories_evaluations_old");
+
+                conn.Execute(@"
+CREATE TABLE stories_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    story_id INTEGER NOT NULL,
+    narrative_coherence_score INTEGER DEFAULT 0,
+    narrative_coherence_defects TEXT,
+    originality_score INTEGER DEFAULT 0,
+    originality_defects TEXT,
+    emotional_impact_score INTEGER DEFAULT 0,
+    emotional_impact_defects TEXT,
+    action_score INTEGER DEFAULT 0,
+    action_defects TEXT,
+    total_score REAL DEFAULT 0,
+    raw_json TEXT,
+    model_id INTEGER NULL,
+    agent_id INTEGER NULL,
+    ts TEXT,
+    FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE,
+    FOREIGN KEY (model_id) REFERENCES models(Id) ON DELETE SET NULL,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL
+);");
+
+                var actionScoreExpr = oldHasActionScore ? "action_score" : (oldHasPacingScore ? "pacing_score" : "0");
+                var actionDefectsExpr = oldHasActionDefects ? "action_defects" : (oldHasPacingDefects ? "pacing_defects" : "''");
+
+                var copySql = $@"
+INSERT INTO stories_evaluations (id, story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, raw_json, model_id, agent_id, ts)
+SELECT id, story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, {actionScoreExpr}, {actionDefectsExpr}, total_score, raw_json, model_id, agent_id, ts
+FROM stories_evaluations_old;";
+                conn.Execute(copySql);
+
+                conn.Execute("DROP TABLE IF EXISTS stories_evaluations_old");
+                Console.WriteLine("[DB] stories_evaluations migration completed");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to migrate stories_evaluations schema: {ex.Message}");
         }
     }
 

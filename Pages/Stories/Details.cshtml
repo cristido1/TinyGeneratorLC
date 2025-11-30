@@ -28,8 +28,13 @@
                     {
                         <div class="card my-2">
                             <div class="card-body">
-                                <div><strong>@e.Model</strong> — @e.Ts — Score: @e.Score</div>
-                                <pre style="white-space:pre-wrap">@e.RawJson</pre>
+                                <div>
+                                    <strong>@(string.IsNullOrWhiteSpace(e.AgentName) ? e.Model : e.AgentName)</strong>
+                                    @if(!string.IsNullOrWhiteSpace(e.AgentModel)) { <span class="text-muted">(model: @e.AgentModel)</span> }
+                                    <span class="mx-2">— @e.Ts</span>
+                                    <span class="float-end">Score: @e.Score</span>
+                                </div>
+                                <pre style="white-space:pre-wrap; margin-top:8px;">@e.RawJson</pre>
                             </div>
                         </div>
                     }

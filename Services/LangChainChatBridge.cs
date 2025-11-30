@@ -147,23 +147,6 @@ namespace TinyGenerator.Services
                     if (tools.Any())
                     {
                         requestBody["tools"] = tools;
-                        var hasEvaluator = tools.Any(t =>
-                        {
-                            if (!t.TryGetValue("function", out var fnObj) || fnObj is not Dictionary<string, object> fnDict) return false;
-                            return string.Equals(fnDict.TryGetValue("name", out var nameObj) ? nameObj?.ToString() : null, "evaluate_full_story", StringComparison.OrdinalIgnoreCase);
-                        });
-                        if (hasEvaluator)
-                        {
-                            requestBody["tool_choice"] = new Dictionary<string, object>
-                            {
-                                { "type", "function" },
-                                { "function", new Dictionary<string, object>
-                                    {
-                                        { "name", "evaluate_full_story" }
-                                    }
-                                }
-                            };
-                        }
                     }
                     // Note: No longer forcing JSON format when no tools are present
                     // This allows natural text responses in chat mode
@@ -225,22 +208,7 @@ namespace TinyGenerator.Services
 
                     if (tools.Any())
                     {
-                        var hasEvaluator = tools.Any(t =>
-                        {
-                            if (!t.TryGetValue("function", out var fnObj) || fnObj is not Dictionary<string, object> fnDict) return false;
-                            return string.Equals(fnDict.TryGetValue("name", out var nameObj) ? nameObj?.ToString() : null, "evaluate_full_story", StringComparison.OrdinalIgnoreCase);
-                        });
-                        requestDict["tool_choice"] = hasEvaluator
-                            ? new Dictionary<string, object>
-                                {
-                                    { "type", "function" },
-                                    { "function", new Dictionary<string, object> { { "name", "evaluate_full_story" } } }
-                                }
-                            : "auto";
-                    }
-                    else
-                    {
-                        requestDict["tool_choice"] = "auto";
+                        requestDict["tools"] = tools;
                     }
                     
                     // Add correct token limit parameter based on model

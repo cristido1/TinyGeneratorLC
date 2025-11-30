@@ -212,6 +212,49 @@ namespace TinyGenerator.Services
                         }
                     }
                 }
+                else
+                {
+                    // Fallback: some models return a function call encoded as JSON inside the "content" string.
+                    // Try to parse content as JSON and extract a single function call { "name": "...", "arguments": { ... } }
+                    if (root.TryGetProperty("content", out var contentElem) && contentElem.ValueKind == JsonValueKind.String)
+                    {
+                        var contentStr = contentElem.GetString();
+                        if (!string.IsNullOrWhiteSpace(contentStr))
+                        {
+                            try
+                            {
+                                using var innerDoc = JsonDocument.Parse(contentStr);
+                                var innerRoot = innerDoc.RootElement;
+                                if (innerRoot.ValueKind == JsonValueKind.Object)
+                                {
+                                    if (innerRoot.TryGetProperty("name", out var nameElem))
+                                    {
+                                        string name = nameElem.GetString() ?? "unknown";
+                                        string argsJson = "{}";
+                                        if (innerRoot.TryGetProperty("arguments", out var argsElem))
+                                        {
+                                            if (argsElem.ValueKind == JsonValueKind.Object)
+                                                argsJson = argsElem.GetRawText();
+                                            else if (argsElem.ValueKind == JsonValueKind.String)
+                                                argsJson = argsElem.GetString() ?? "{}";
+                                        }
+
+                                        calls.Add(new ToolCall
+                                        {
+                                            ToolName = name,
+                                            Arguments = argsJson,
+                                            Id = Guid.NewGuid().ToString()
+                                        });
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                // ignore parse errors - not a JSON function payload
+                            }
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {

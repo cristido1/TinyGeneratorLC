@@ -74,7 +74,7 @@
                 }
             </td>
             <td>@s.Score</td>
-            <td>@(s.Evaluations.Any() ? $"{s.Evaluations.Average(e => e.TotalScore):F1}/100" : "-")</td>
+            <td>@(s.Evaluations.Any() ? $"{(s.Evaluations.Average(e => e.TotalScore) * 100.0 / 40.0):F1}/100" : "-")</td>
             <td>@(s.Approved ? "✅" : "❌")</td>
             <td>
                 <div class="btn-group" role="group">
@@ -241,7 +241,7 @@
             }
 
             // Format function for child rows (evaluations)
-            function formatEvaluations(evaluations) {
+            function formatEvaluations(evaluations, storyId) {
                 if (!evaluations || evaluations.length === 0) {
                     return '<div class="p-3"><em>Nessuna valutazione disponibile</em></div>';
                 }
@@ -250,9 +250,18 @@
                 
                 evaluations.forEach(function(eval) {
                     html += '<div class="card mb-3">';
-                    html += '<div class="card-header">';
-                    html += '<strong>' + (eval.Model || 'N/A') + '</strong> - Totale: <span class="badge bg-primary">' + eval.TotalScore + '/100</span>';
-                    html += '<small class="text-muted"> (' + (eval.Ts || '') + ')</small>';
+                    html += '<div class="card-header d-flex justify-content-between align-items-start">';
+                    html += '<div>';
+                    html += '<strong>' + (eval.Model || 'N/A') + '</strong>';
+                    if (eval.AgentName) {
+                        html += ' <small class="text-muted">by ' + eval.AgentName + '</small>';
+                    }
+                    if (eval.AgentModel) {
+                        html += ' <small class="text-muted">(' + eval.AgentModel + ')</small>';
+                    }
+                    html += '<div><small class="text-muted">' + (eval.Ts || '') + '</small></div>';
+                    html += '</div>';
+                    html += '<div class="text-end">Totale: <span class="badge bg-primary">' + eval.TotalScore + '/40</span></div>';
                     html += '</div>';
                     html += '<div class="card-body"><div class="row">';
                     
@@ -260,42 +269,59 @@
                     html += '<div class="col-md-6"><ul class="list-group list-group-flush">';
                     html += '<li class="list-group-item d-flex justify-content-between"><span>Coerenza narrativa:</span> <span class="badge ' + getScoreBadgeClass(eval.NarrativeCoherenceScore) + '">' + eval.NarrativeCoherenceScore + '/10</span></li>';
                     if (eval.NarrativeCoherenceDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.NarrativeCoherenceDefects + '</small></li>';
-                    html += '<li class="list-group-item d-flex justify-content-between"><span>Struttura:</span> <span class="badge ' + getScoreBadgeClass(eval.StructureScore) + '">' + eval.StructureScore + '/10</span></li>';
-                    if (eval.StructureDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.StructureDefects + '</small></li>';
-                    html += '<li class="list-group-item d-flex justify-content-between"><span>Caratterizzazione:</span> <span class="badge ' + getScoreBadgeClass(eval.CharacterizationScore) + '">' + eval.CharacterizationScore + '/10</span></li>';
-                    if (eval.CharacterizationDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.CharacterizationDefects + '</small></li>';
-                    html += '<li class="list-group-item d-flex justify-content-between"><span>Dialoghi:</span> <span class="badge ' + getScoreBadgeClass(eval.DialoguesScore) + '">' + eval.DialoguesScore + '/10</span></li>';
-                    if (eval.DialoguesDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.DialoguesDefects + '</small></li>';
-                    html += '<li class="list-group-item d-flex justify-content-between"><span>Ritmo:</span> <span class="badge ' + getScoreBadgeClass(eval.PacingScore) + '">' + eval.PacingScore + '/10</span></li>';
-                    if (eval.PacingDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.PacingDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Originalità:</span> <span class="badge ' + getScoreBadgeClass(eval.OriginalityScore) + '">' + eval.OriginalityScore + '/10</span></li>';
+                    if (eval.OriginalityDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.OriginalityDefects + '</small></li>';
                     html += '</ul></div>';
                     
                     // Right column
                     html += '<div class="col-md-6"><ul class="list-group list-group-flush">';
-                    html += '<li class="list-group-item d-flex justify-content-between"><span>Originalità:</span> <span class="badge ' + getScoreBadgeClass(eval.OriginalityScore) + '">' + eval.OriginalityScore + '/10</span></li>';
-                    if (eval.OriginalityDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.OriginalityDefects + '</small></li>';
-                    html += '<li class="list-group-item d-flex justify-content-between"><span>Stile:</span> <span class="badge ' + getScoreBadgeClass(eval.StyleScore) + '">' + eval.StyleScore + '/10</span></li>';
-                    if (eval.StyleDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.StyleDefects + '</small></li>';
-                    html += '<li class="list-group-item d-flex justify-content-between"><span>Worldbuilding:</span> <span class="badge ' + getScoreBadgeClass(eval.WorldbuildingScore) + '">' + eval.WorldbuildingScore + '/10</span></li>';
-                    if (eval.WorldbuildingDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.WorldbuildingDefects + '</small></li>';
-                    html += '<li class="list-group-item d-flex justify-content-between"><span>Coerenza tematica:</span> <span class="badge ' + getScoreBadgeClass(eval.ThematicCoherenceScore) + '">' + eval.ThematicCoherenceScore + '/10</span></li>';
-                    if (eval.ThematicCoherenceDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.ThematicCoherenceDefects + '</small></li>';
                     html += '<li class="list-group-item d-flex justify-content-between"><span>Impatto emotivo:</span> <span class="badge ' + getScoreBadgeClass(eval.EmotionalImpactScore) + '">' + eval.EmotionalImpactScore + '/10</span></li>';
                     if (eval.EmotionalImpactDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.EmotionalImpactDefects + '</small></li>';
+                    html += '<li class="list-group-item d-flex justify-content-between"><span>Azione/Ritmo:</span> <span class="badge ' + getScoreBadgeClass(eval.ActionScore) + '">' + eval.ActionScore + '/10</span></li>';
+                    if (eval.ActionDefects) html += '<li class="list-group-item"><small class="text-muted">' + eval.ActionDefects + '</small></li>';
                     html += '</ul></div>';
                     
                     html += '</div>'; // close row
                     
-                    if (eval.OverallEvaluation) {
-                        html += '<div class="mt-3"><strong>Valutazione complessiva:</strong><p class="mb-0">' + eval.OverallEvaluation + '</p></div>';
-                    }
-                    
                     html += '</div></div>'; // close card-body and card
+                    // Add delete button
+                    html += '<div class="text-end mb-3">';
+                    html += '<button class="btn btn-sm btn-outline-danger delete-eval-btn" data-eval-id="' + eval.Id + '" data-story-id="' + storyId + '">Elimina valutazione</button>';
+                    html += '</div>';
                 });
                 
                 html += '</div>';
                 return html;
             }
+
+            // Handle delete evaluation button clicks (delegated)
+            $(document).on('click', '.delete-eval-btn', function (e) {
+                e.preventDefault();
+                var btn = $(this);
+                var evalId = btn.data('eval-id');
+                var storyId = btn.data('story-id');
+                if (!evalId) return;
+
+                Swal.fire({
+                    title: 'Eliminare la valutazione?',
+                    text: 'Questa azione rimuoverà la valutazione dal database.',
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonText: 'Elimina',
+                    cancelButtonText: 'Annulla',
+                    customClass: { popup: 'swal2-small', confirmButton: 'btn btn-danger', cancelButton: 'btn btn-secondary' },
+                    buttonsStyling: false,
+                    width: 420
+                }).then(function(result) {
+                    if (!result.isConfirmed) return;
+                    var fd = new FormData();
+                    fd.append('id', evalId);
+                    fd.append('storyId', storyId || '0');
+                    fetch('?handler=DeleteEvaluation', { method: 'POST', body: fd })
+                        .then(r => { if (r.redirected) window.location = r.url; else window.location.reload(); })
+                        .catch(err => { Swal.fire('Errore', 'Impossibile eliminare la valutazione: ' + err, 'error'); });
+                });
+            });
 
             const columnVisibilityKey = 'storiesTable_visibleColumns';
             let storedVisibility = {};
@@ -357,7 +383,8 @@
                     // Open this row
                     var evaluationsJson = tr.attr('data-evaluations');
                     var evaluations = evaluationsJson ? JSON.parse(evaluationsJson) : [];
-                    row.child(formatEvaluations(evaluations)).show();
+                    var storyId = tr.data('story-id');
+                    row.child(formatEvaluations(evaluations, storyId)).show();
                     tr.addClass('shown');
                     $(this).addClass('open');
                 }

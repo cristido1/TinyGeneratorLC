@@ -1,0 +1,221 @@
+
+ALGORITMO COMPLETO DI VALUTAZIONE DELLA COERENZA DI UNA STORIA
+==============================================================
+
+VERSIONE COMPATIBILE CON PIPELINE CHUNK-BY-CHUNK E MODELLI 7B–8B
+
+Contenuto del file:
+1. Obiettivi del sistema
+2. Formato JSON dei fatti estratti da ogni chunk
+3. Prompt per l’estrazione oggettiva dei fatti
+4. Algoritmo completo per il calcolo della coerenza locale
+5. Algoritmo globale per la valutazione 1–10
+6. Funzioni di esempio in stile C#
+7. Mini test di verifica
+8. Note finali di utilizzo
+
+--------------------------------------------------------------
+1. OBIETTIVI DEL SISTEMA
+--------------------------------------------------------------
+L’obiettivo è valutare la coerenza di una storia lunga (20.000–60.000 caratteri) 
+senza caricare l’intero testo nel modello, evitando overflow del contesto.
+
+Il modello legge la storia in chunk (1500–2000 caratteri).
+Da ogni chunk estrae solo FATTI oggettivi, NON riassunti.
+La coerenza globale viene ricostruita confrontando i chunk tra loro.
+
+Questo sistema è:
+✓ affidabile
+✓ scalabile
+✓ stabile anche con context 8000
+✓ utilizzabile da Qwen3:8B, Llama3, ecc.
+
+--------------------------------------------------------------
+2. FORMATO JSON DEI “CHUNK FACTS”
+--------------------------------------------------------------
+Ogni chunk produce una scheda JSON:
+
+{
+  "chunk_index": 0,
+  "eventi": ["..."],
+  "personaggi": ["..."],
+  "luoghi": ["..."],
+  "oggetti_ricorrenti": ["..."],
+  "relazioni_esplicite": ["..."],
+  "cambiamenti_stato": ["..."],
+  "continuita_esplicita": "frasi che collegano al chunk precedente",
+  "punti_ambigui": ["..."]
+}
+
+Questo NON è un riassunto.
+È un insieme di metadati oggettivi utili alla valutazione.
+
+--------------------------------------------------------------
+3. PROMPT PER ESTRARRE I FATTI DAL CHUNK
+--------------------------------------------------------------
+Da usare con temperature 0.0–0.2.
+
+=== PROMPT ===
+
+STEP — Extract Chunk Facts  
+Leggi attentamente il CHUNK fornito.  
+NON riassumere.  
+NON valutare.  
+NON aggiungere nulla che non sia nel testo.
+
+Estrai solo:
+- eventi accaduti
+- personaggi citati
+- luoghi
+- oggetti o concetti ricorrenti
+- relazioni esplicite tra personaggi
+- cambiamenti di stato
+- continuità esplicita con il chunk precedente (se presente)
+- punti ambigui reali del chunk
+
+Restituisci i dati usando la funzione:
+
+add_chunk_facts({
+  "chunk_index": {{CHUNK_INDEX}},
+  "eventi": [...],
+  "personaggi": [...],
+  "luoghi": [...],
+  "oggetti_ricorrenti": [...],
+  "relazioni_esplicite": [...],
+  "cambiamenti_stato": [...],
+  "continuita_esplicita": "...",
+  "punti_ambigui": [...]
+})
+
+=== FINE PROMPT ===
+
+--------------------------------------------------------------
+4. ALGORITMO DI COERENZA LOCALE (0–100)
+--------------------------------------------------------------
+Compariamo:
+facts[i-1] e facts[i]
+
+Il punteggio locale è composto da 5 componenti.
+
+(1) COERENZA EVENTI (0–30)
+  +30 eventi perfettamente compatibili
+  +15 eventi neutrali
+  0 incompatibili con chunk precedente
+
+(2) COERENZA PERSONAGGI (0–30)
+  -20 personaggio introdotto senza spiegazione
+  -15 personaggio scomparso senza motivo
+  -10 comportamento illogico
+  +30 tutto coerente
+
+(3) CAMBI DI LUOGO (0–20)
+  -20 cambio luogo improvviso non spiegato
+  +20 cambio luogo corretto e motivato
+  0 neutro
+
+(4) CONTINUITÀ ESPLICITA (0–10)
+  +10 se nel chunk ci sono frasi che collegano al precedente
+  0 se non menzionata
+  -10 se contraddice
+
+(5) AMBIGUITÀ (0–10)
+  -10 ambiguità importanti
+  +10 zero ambiguità
+
+Formula:
+
+coerenza_locale =
+  eventi +
+  personaggi +
+  luoghi +
+  continuita +
+  ambiguita
+
+Clamp finale: 0–100
+
+--------------------------------------------------------------
+5. ALGORITMO GLOBALE (VOTO 1–10)
+--------------------------------------------------------------
+
+Ogni chunk ha un peso:
+
+- i primi 2 chunk (setup) → peso 0.8  
+- chunk centrali → peso 1.0  
+- ultimi 2 chunk (climax/finale) → peso 1.4  
+
+Formula:
+
+punteggio_0_100 =
+  somma( coerenza_locale[i] * peso[i] )
+  / somma( peso[i] )
+
+Conversione a 1–10:
+
+punteggio_1_10 = round( (punteggio_0_100 / 100) * 9 + 1 , 1 )
+
+--------------------------------------------------------------
+6. FUNZIONI DI ESEMPIO PER C#
+--------------------------------------------------------------
+
+Funzione coerenza locale:
+
+int CalcolaCoerenzaLocale(ChunkFacts prev, ChunkFacts curr)
+{
+    int score = 0;
+
+    score += ValutaEventi(prev, curr);       // 0–30
+    score += ValutaPersonaggi(prev, curr);   // 0–30
+    score += ValutaLuoghi(prev, curr);       // 0–20
+    score += ValutaContinuita(curr);         // 0–10
+    score += ValutaAmbiguita(curr);          // 0–10
+
+    return Math.Clamp(score, 0, 100);
+}
+
+Funzione punteggio globale:
+
+double CalcolaPunteggioGlobale(List<int> locali)
+{
+    var pesi = new List<double>();
+
+    for (int i = 0; i < locali.Count; i++)
+    {
+        if (i < 2) pesi.Add(0.8);
+        else if (i > locali.Count - 3) pesi.Add(1.4);
+        else pesi.Add(1.0);
+    }
+
+    double weighted =
+         locali.Zip(pesi, (s, p) => s * p).Sum()
+       / pesi.Sum();
+
+    return Math.Round((weighted / 100) * 9 + 1, 1);
+}
+
+--------------------------------------------------------------
+7. MINI TEST DI VERIFICA
+--------------------------------------------------------------
+Chunk:    0, 1, 2, 3, 4
+Locali:  90,85,78,82,88
+
+Calcolo:
+0: 90 * 0.8 = 72
+1: 85 * 0.8 = 68
+2: 78 * 1.0 = 78
+3: 82 * 1.0 = 82
+4: 88 * 1.4 = 123.2
+
+Media pesata = 84.6%
+
+Voto = (84.6 / 100)*9 + 1 = 8.6
+
+--------------------------------------------------------------
+8. NOTE FINALI
+--------------------------------------------------------------
+• Questo algoritmo funziona con context 8000.
+• Nessun chunk completo viene mai tenuto in memoria.
+• La valutazione è basata SOLO su dati oggettivi, non su summary.
+• Qwen3:8B è perfetto come estrattore di facts.
+• Il sistema è scalare anche per storie da 100.000 caratteri.
+
+FINE FILE

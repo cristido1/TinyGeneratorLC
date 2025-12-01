@@ -5,6 +5,10 @@
     ViewData["PageDescription"] = "Visualizza e gestisci le storie salvate";
 }
 
+<form method="post" style="display:none;">
+    @Html.AntiForgeryToken()
+</form>
+
 <div class="d-flex justify-content-between mb-3">
     <h3>Storie salvate</h3>
     <div>
@@ -102,6 +106,9 @@
                                 <form method="post" asp-page-handler="GenerateTtsJson" asp-route-id="@s.Id" style="display:inline">
                                     <button type="submit" class="dropdown-item">🧱 Genera JSON TTS</button>
                                 </form>
+                            </li>
+                            <li>
+                                <a class="dropdown-item" asp-page="/Stories/TtsSchema" asp-route-id="@s.Id">📋 Visualizza/Modifica Schema</a>
                             </li>
                             <li>
                                 <form method="post" asp-page-handler="GenerateTts" asp-route-id="@s.Id" asp-route-folderName="@s.Folder" style="display:inline">
@@ -317,6 +324,11 @@
                     var fd = new FormData();
                     fd.append('id', evalId);
                     fd.append('storyId', storyId || '0');
+                    // Add anti-forgery token
+                    var token = $('input[name="__RequestVerificationToken"]').val();
+                    if (token) {
+                        fd.append('__RequestVerificationToken', token);
+                    }
                     fetch('?handler=DeleteEvaluation', { method: 'POST', body: fd })
                         .then(r => { if (r.redirected) window.location = r.url; else window.location.reload(); })
                         .catch(err => { Swal.fire('Errore', 'Impossibile eliminare la valutazione: ' + err, 'error'); });
@@ -444,6 +456,11 @@
                             data.append('id', storyId);
                             data.append('score', result.value.score);
                             data.append('overall', result.value.overall);
+                            // Add anti-forgery token
+                            var token = $('input[name="__RequestVerificationToken"]').val();
+                            if (token) {
+                                data.append('__RequestVerificationToken', token);
+                            }
                             fetch('?handler=ManualEvaluate', { method: 'POST', body: data })
                                 .then(r => { if (r.redirected) window.location = r.url; else window.location.reload(); })
                                 .catch(e => { Swal.fire('Errore', 'Impossibile salvare la valutazione: ' + e, 'error'); });

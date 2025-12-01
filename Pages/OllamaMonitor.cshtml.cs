@@ -9,7 +9,13 @@ namespace TinyGenerator.Pages
     [Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryToken]
     public class OllamaMonitorModel : PageModel
     {
+    private readonly IOllamaMonitorService _monitor;
     public List<TinyGenerator.Services.OllamaModelInfo> Models { get; set; } = new();
+
+        public OllamaMonitorModel(IOllamaMonitorService monitor)
+        {
+            _monitor = monitor ?? throw new ArgumentNullException(nameof(monitor));
+        }
 
         public void OnGet()
         {
@@ -18,17 +24,17 @@ namespace TinyGenerator.Pages
 
         public async Task OnGetRefreshAsync()
         {
-            Models = await OllamaMonitorService.GetRunningModelsAsync();
+            Models = await _monitor.GetRunningModelsAsync();
         }
 
         // JSON endpoint for fetching models + last prompt
         public async Task<IActionResult> OnGetModelsAsync()
         {
-            var models = await OllamaMonitorService.GetRunningModelsAsync();
+            var models = await _monitor.GetRunningModelsAsync();
             var list = new List<object>();
             foreach (var m in models)
             {
-                var lp = OllamaMonitorService.GetLastPrompt(m.Name);
+                var lp = _monitor.GetLastPrompt(m.Name);
                 list.Add(new {
                     name = m.Name,
                     id = m.Id,

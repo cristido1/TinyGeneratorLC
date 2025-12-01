@@ -1,0 +1,320 @@
+@page
+@model TinyGenerator.Pages.ChatLog.ChatLogModel
+@{
+    ViewData["Title"] = "Chat Log";
+    ViewData["PageDescription"] = "Visualizzazione conversazioni tra sistema e agenti AI";
+}
+
+<div class="d-flex justify-content-end mb-3">
+    <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Index"><i class="bi bi-list-check"></i> Log completi</a>
+</div>
+
+<style>
+    .chat-container {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    
+    .chat-message {
+        margin-bottom: 24px;
+        animation: fadeIn 0.3s ease-in;
+    }
+    
+    @@keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .chat-message.system {
+        display: flex;
+        justify-content: flex-start;
+    }
+    
+    .chat-message.agent {
+        display: flex;
+        justify-content: flex-end;
+    }
+    
+    .chat-bubble {
+        max-width: 75%;
+        padding: 16px 20px;
+        border-radius: 16px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        position: relative;
+    }
+    
+    .chat-message.system .chat-bubble {
+        background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+        border-bottom-left-radius: 4px;
+    }
+    
+    .chat-message.agent .chat-bubble {
+        background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%);
+        border-bottom-right-radius: 4px;
+    }
+    
+    .chat-message.agent.success .chat-bubble {
+        background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+        border-left: 4px solid #4caf50;
+    }
+    
+    .chat-message.agent.error .chat-bubble {
+        background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+        border-left: 4px solid #f44336;
+    }
+    
+    .chat-header {
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 8px;
+        color: #546e7a;
+        font-family: 'Rajdhani', sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .chat-message.system .chat-header {
+        color: #1565c0;
+    }
+    
+    .chat-message.agent .chat-header {
+        color: #7b1fa2;
+        text-align: right;
+    }
+    
+    .chat-message.agent.success .chat-header {
+        color: #2e7d32;
+    }
+    
+    .chat-message.agent.error .chat-header {
+        color: #c62828;
+    }
+    
+    .chat-content {
+        word-wrap: break-word;
+        font-size: 14px;
+        line-height: 1.6;
+        color: #263238;
+    }
+    
+    .chat-timestamp {
+        font-size: 11px;
+        color: #78909c;
+        margin-top: 8px;
+        font-style: italic;
+    }
+    
+    .chat-message.agent .chat-timestamp {
+        text-align: right;
+    }
+    
+    .validation-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-top: 8px;
+    }
+    
+    .validation-badge.success {
+        background: #4caf50;
+        color: white;
+    }
+    
+    .validation-badge.error {
+        background: #f44336;
+        color: white;
+    }
+    
+    .thread-separator {
+        text-align: center;
+        margin: 40px 0;
+        position: relative;
+    }
+    
+    .thread-separator::before {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: linear-gradient(to right, transparent, #cfd8dc, transparent);
+    }
+    
+    .thread-separator span {
+        background: #fff;
+        padding: 8px 20px;
+        position: relative;
+        z-index: 1;
+        font-size: 13px;
+        color: #78909c;
+        font-weight: 600;
+        border-radius: 20px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    
+    .filter-bar {
+        background: #f5f5f5;
+        padding: 16px;
+        border-radius: 12px;
+        margin-bottom: 24px;
+    }
+    
+    .filter-bar label {
+        font-weight: 600;
+        font-size: 13px;
+        color: #546e7a;
+    }
+</style>
+
+<div class="chat-container">
+    <div class="filter-bar">
+        <div class="row align-items-end">
+            <div class="col-md-2">
+                <label for="filterThreadId">Thread ID</label>
+                <input type="number" class="form-control form-control-sm" id="filterThreadId" placeholder="Tutti">
+            </div>
+            <div class="col-md-2">
+                <label for="filterTaskId">Task ID</label>
+                <input type="number" class="form-control form-control-sm" id="filterTaskId" placeholder="Tutti">
+            </div>
+            <div class="col-md-2">
+                <label for="filterCategory">Categoria</label>
+                <select class="form-control form-control-sm" id="filterCategory">
+                    <option value="">Tutte</option>
+                    <option value="ModelRequest">Request</option>
+                    <option value="ModelResponse">Response</option>
+                    <option value="ModelPrompt">Prompt</option>
+                    <option value="ModelCompletion">Completion</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="filterDate">Data</label>
+                <input type="date" class="form-control form-control-sm" id="filterDate">
+            </div>
+            <div class="col-md-3">
+                <button type="button" class="btn btn-primary btn-sm w-100" id="btnApplyFilter">Applica filtri</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="chatMessagesContainer">
+        @if (Model.ChatMessages.Any())
+        {
+            int? lastThreadId = null;
+            foreach (var msg in Model.ChatMessages)
+            {
+                if (lastThreadId.HasValue && lastThreadId.Value != msg.ThreadId)
+                {
+                    <div class="thread-separator">
+                        <span>Thread @msg.ThreadId</span>
+                    </div>
+                }
+                else if (!lastThreadId.HasValue)
+                {
+                    <div class="thread-separator">
+                        <span>Thread @msg.ThreadId</span>
+                    </div>
+                }
+                lastThreadId = msg.ThreadId;
+
+                var isSystem = msg.Category == "ModelRequest" || msg.Category == "ModelPrompt";
+                var isValidation = msg.Category == "ModelResponse" && msg.Message.Contains("RESPONSE_JSON");
+                var validationSuccess = isValidation && (msg.Message.Contains("\"valid\":true") || msg.Message.Contains("\"isValid\":true"));
+                var validationError = isValidation && (msg.Message.Contains("\"valid\":false") || msg.Message.Contains("\"isValid\":false"));
+
+                var cssClass = isSystem ? "system" : "agent";
+                if (validationSuccess) cssClass += " success";
+                if (validationError) cssClass += " error";
+
+                <div class="chat-message @cssClass" data-threadid="@msg.ThreadId" data-taskid="@msg.ThreadId" data-category="@msg.Category" data-date="@msg.Timestamp.ToString("yyyy-MM-dd")">
+                    <div class="chat-bubble">
+                        <div class="chat-header">
+                            @if (isSystem)
+                            {
+                                <text>System to [@msg.AgentName]</text>
+                            }
+                            else
+                            {
+                                <text>[@msg.AgentName]</text>
+                            }
+                        </div>
+                        <div class="chat-content">@Html.Raw((msg.ChatText ?? msg.Message)?.Replace("\\n", "<br>").Replace("\\t", "&nbsp;&nbsp;&nbsp;&nbsp;").Replace("\n", "<br>").Replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;"))</div>
+                        <div class="chat-timestamp">@msg.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</div>
+                        @if (isValidation)
+                        {
+                            if (validationSuccess)
+                            {
+                                <div class="validation-badge success">✓ Validazione OK</div>
+                            }
+                            else if (validationError)
+                            {
+                                <div class="validation-badge error">✗ Validazione Fallita</div>
+                            }
+                        }
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="alert alert-info text-center">
+                <i class="bi bi-chat-dots" style="font-size: 48px;"></i>
+                <p class="mt-3 mb-0">Nessun messaggio di chat disponibile</p>
+            </div>
+        }
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        $(document).ready(function() {
+            $('#btnApplyFilter').click(function() {
+                var threadId = $('#filterThreadId').val();
+                var taskId = $('#filterTaskId').val();
+                var category = $('#filterCategory').val();
+                var date = $('#filterDate').val();
+                
+                $('.chat-message').each(function() {
+                    var $msg = $(this);
+                    var show = true;
+                    
+                    if (threadId && $msg.data('threadid') != threadId) {
+                        show = false;
+                    }
+                    
+                    if (taskId && $msg.data('taskid') != taskId) {
+                        show = false;
+                    }
+                    
+                    if (category && $msg.data('category') != category) {
+                        show = false;
+                    }
+                    
+                    if (date && $msg.data('date') != date) {
+                        show = false;
+                    }
+                    
+                    if (show) {
+                        $msg.show();
+                    } else {
+                        $msg.hide();
+                    }
+                });
+                
+                // Update thread separators visibility
+                $('.thread-separator').each(function() {
+                    var $sep = $(this);
+                    var $nextMsg = $sep.nextAll('.chat-message:visible').first();
+                    if ($nextMsg.length > 0) {
+                        $sep.show();
+                    } else {
+                        $sep.hide();
+                    }
+                });
+            });
+        });
+    </script>
+}

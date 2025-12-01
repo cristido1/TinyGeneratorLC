@@ -70,6 +70,19 @@
             </select>
         </div>
         <div class="col-md-6">
+            <label class="form-label">Multi-Step Template (optional)</label>
+            <select asp-for="Agent.MultiStepTemplateId" class="form-select">
+                <option value="">-- none --</option>
+                @foreach (var t in Model.StepTemplates)
+                {
+                    <option value="@t.Id" selected="@(t.Id == Model.Agent.MultiStepTemplateId ? "selected" : null)">@t.Name (@t.TaskType)</option>
+                }
+            </select>
+            <small class="form-text text-muted">Abilita generazione multi-step con questo template.</small>
+        </div>
+    </div>
+    <div class="row mb-3">
+        <div class="col-md-12">
             <label class="form-label">Skills</label>
             <select asp-for="SelectedSkills" multiple class="form-control chosen-select" id="agent_skills" name="SelectedSkills">
                 @foreach (var s in Model.AvailableSkills)

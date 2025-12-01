@@ -54,6 +54,12 @@
                 <td>@(string.IsNullOrWhiteSpace(a.JsonResponseFormat) ? "-" : a.JsonResponseFormat)</td>
                 <td>
                     <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@a.Id">Edit</a>
+                    @if (a.Role?.Equals("writer", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-success me-1 generate-story-btn" data-agent-id="@a.Id" data-agent-name="@a.Name">
+                            <i class="bi bi-pencil-square"></i> Generate
+                        </button>
+                    }
                     <form method="post" asp-page-handler="Delete" asp-route-id="@a.Id" class="d-inline agent-delete-form">
                         <button type="button" class="btn btn-sm btn-outline-danger agent-delete-btn">Delete</button>
                     </form>
@@ -141,6 +147,65 @@
                         });
                     });
 
+                    // Handle Generate Story buttons
+                    const storyModalEl = document.getElementById('storyModal');
+                    // Move modal to document.body to avoid stacking-context issues
+                    try {
+                        if (storyModalEl && storyModalEl.parentElement !== document.body) {
+                            document.body.appendChild(storyModalEl);
+                        }
+                    } catch (e) {
+                        console.warn('Failed to append modal to body', e);
+                    }
+
+                    const storyModal = new bootstrap.Modal(storyModalEl, {
+                        backdrop: true,
+                        keyboard: true
+                    });
+                    const storyThemeInput = document.getElementById('storyThemeInput');
+                    const modalAgentId = document.getElementById('modalAgentId');
+                    const STORAGE_KEY = 'lastStoryTheme';
+
+                    // Ensure backdrop and modal z-index are above app overlay once shown
+                    storyModalEl.addEventListener('shown.bs.modal', function() {
+                        const backdrop = document.querySelector('.modal-backdrop');
+                        if (backdrop) {
+                            backdrop.style.zIndex = '10550';
+                        }
+                        storyModalEl.style.zIndex = '10600';
+                        // focus textarea
+                        if (storyThemeInput) storyThemeInput.focus();
+                    });
+
+                    // Load last theme from localStorage
+                    const lastTheme = localStorage.getItem(STORAGE_KEY);
+                    if (lastTheme && storyThemeInput) {
+                        storyThemeInput.value = lastTheme;
+                    }
+
+                    document.querySelectorAll('.generate-story-btn').forEach(btn => {
+                        btn.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            const agentId = btn.dataset.agentId;
+                            const agentName = btn.dataset.agentName;
+                            if (modalAgentId) modalAgentId.value = agentId;
+                            const titleEl = document.querySelector('#storyModal .modal-title');
+                            if (titleEl) titleEl.textContent = `Generate Story - ${agentName}`;
+                            storyModal.show();
+                        });
+                    });
+
+                    // Save theme to localStorage on form submit
+                    const storyForm = document.getElementById('storyForm');
+                    if (storyForm) {
+                        storyForm.addEventListener('submit', () => {
+                            const theme = storyThemeInput ? storyThemeInput.value.trim() : '';
+                            if (theme) {
+                                localStorage.setItem(STORAGE_KEY, theme);
+                            }
+                        });
+                    }
+
                     const modelSelect = document.getElementById('modelFilterSelect');
                     if (modelSelect && modelSelect.form) {
                         modelSelect.addEventListener('change', () => {
@@ -157,3 +222,29 @@
         })();
     </script>
 }
+
+<!-- Story Generation Modal -->
+<div class="modal fade" id="storyModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Generate Story</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" asp-page-handler="GenerateStory" id="storyForm">
+                <div class="modal-body">
+                    <input type="hidden" name="AgentId" id="modalAgentId" />
+                    <div class="mb-3">
+                        <label for="storyThemeInput" class="form-label">Story Theme</label>
+                        <textarea class="form-control" id="storyThemeInput" name="StoryTheme" rows="3" placeholder="Describe the story theme..." required></textarea>
+                        <div class="form-text">What should the story be about?</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Generate Story</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

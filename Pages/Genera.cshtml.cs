@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using TinyGenerator.Models;
 using TinyGenerator.Services;
+using TinyGenerator.Services.Commands;
 using System.Text;
 
 namespace TinyGenerator.Pages;
@@ -8,13 +10,29 @@ namespace TinyGenerator.Pages;
 public class GeneraModel : PageModel
 {
     private readonly LangChainStoryGenerationService _generator;
+    private readonly DatabaseService _database;
+    private readonly MultiStepOrchestrationService? _orchestrator;
+    private readonly CommandDispatcher _dispatcher;
+    private readonly ICustomLogger _customLogger;
     private readonly ILogger<GeneraModel> _logger;
     private readonly ProgressService _progress;
     private readonly NotificationService _notifications;
 
-    public GeneraModel(LangChainStoryGenerationService generator, ILogger<GeneraModel> logger, ProgressService progress, NotificationService notifications)
+    public GeneraModel(
+        LangChainStoryGenerationService generator,
+        DatabaseService database,
+        CommandDispatcher dispatcher,
+        ICustomLogger customLogger,
+        ILogger<GeneraModel> logger,
+        ProgressService progress,
+        NotificationService notifications,
+        MultiStepOrchestrationService? orchestrator = null)
     {
         _generator = generator;
+        _database = database;
+        _orchestrator = orchestrator;
+        _dispatcher = dispatcher;
+        _customLogger = customLogger;
         _logger = logger;
         _progress = progress;
         _notifications = notifications;
@@ -26,11 +44,35 @@ public class GeneraModel : PageModel
     [BindProperty]
     public string Writer { get; set; } = "All";
 
+    [BindProperty]
+    public int WriterAgentId { get; set; } = 0;
+
+    public List<Agent> Agents { get; set; } = new();
+
     public object? Story { get; set; }
     public string Status => _status.ToString();
     public bool IsProcessing { get; set; }
 
     private StringBuilder _status = new();
+
+    public void OnGet()
+    {
+        // Load writer agents for dropdown
+        Agents = _database.ListAgents()
+            .Where(a => a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(a => a.Name)
+            .ToList();
+
+        // Populate MultiStepTemplateName for display
+        foreach (var agent in Agents)
+        {
+            if (agent.MultiStepTemplateId.HasValue)
+            {
+                var template = _database.GetStepTemplateById(agent.MultiStepTemplateId.Value);
+                agent.MultiStepTemplateName = template?.Name;
+            }
+        }
+    }
 
     // Start generation in background. Returns a JSON with generation id.
     public async Task<IActionResult> OnPostStartAsync()
@@ -40,31 +82,58 @@ public class GeneraModel : PageModel
             return BadRequest(new { error = "Il prompt è obbligatorio." });
         }
 
-        var genId = Guid.NewGuid().ToString();
-        _progress.Start(genId);
+        var genId = Guid.NewGuid();
+        _progress.Start(genId.ToString());
 
-        // run generation in background, append progress messages to ProgressService
-        _ = Task.Run(async () =>
+        // Check if agent-based (multi-step) or legacy (single-step)
+        if (WriterAgentId > 0 && _orchestrator != null)
         {
-            try
-            {
-                var result = await _generator.GenerateStoryAsync(Prompt, msg => _progress.Append(genId, msg), Writer);
-                // mark completed and store an indicative final result (approved or candidate)
-                var finalText = result?.Approved ?? result?.StoryA ?? result?.StoryB;
-                _progress.MarkCompleted(genId, finalText);
-                try { await _notifications.NotifyGroupAsync(genId, "Completed", "Generation completed", "success"); } catch { }
-            }
-            catch (Exception ex)
-            {
-                _progress.Append(genId, "ERROR: " + ex.Message);
-                _progress.MarkCompleted(genId, null);
-                _logger.LogError(ex, "Errore background generazione");
-            }
-        });
+            // Use multi-step via command
+            var cmd = new StartMultiStepStoryCommand(
+                Prompt,
+                WriterAgentId,
+                genId,
+                _database,
+                _orchestrator,
+                _dispatcher,
+                _customLogger
+            );
 
-        try { await _notifications.NotifyGroupAsync(genId, "Started", "Generation started", "info"); } catch { }
+            _dispatcher.Enqueue(
+                "StartMultiStepStory",
+                async ctx => {
+                    await cmd.ExecuteAsync(ctx.CancellationToken);
+                    return new CommandResult(true, "Multi-step generation started");
+                },
+                runId: genId.ToString()
+            );
 
-        return new JsonResult(new { id = genId });
+            _progress.Append(genId.ToString(), "🟢 Multi-step generation enqueued");
+        }
+        else
+        {
+            // Fallback to legacy single-step generation
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var result = await _generator.GenerateStoryAsync(Prompt, msg => _progress.Append(genId.ToString(), msg), Writer);
+                    var finalText = result?.Approved ?? result?.StoryA ?? result?.StoryB;
+                    _progress.MarkCompleted(genId.ToString(), finalText);
+                    try { await _notifications.NotifyGroupAsync(genId.ToString(), "Completed", "Generation completed", "success"); } catch { }
+                }
+                catch (Exception ex)
+                {
+                    _progress.Append(genId.ToString(), "ERROR: " + ex.Message);
+                    _progress.MarkCompleted(genId.ToString(), null);
+                    _logger.LogError(ex, "Errore background generazione");
+                }
+            });
+        }
+
+        try { await _notifications.NotifyGroupAsync(genId.ToString(), "Started", "Generation started", "info"); } catch { }
+
+        return new JsonResult(new { id = genId.ToString() });
     }
 
     // Poll progress for a given generation id

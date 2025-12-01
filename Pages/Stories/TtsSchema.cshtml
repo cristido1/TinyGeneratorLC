@@ -1,0 +1,148 @@
+@page "{id:long}"
+@model TinyGenerator.Pages.Stories.TtsSchemaModel
+@{
+    ViewData["Title"] = "Editor TTS Schema";
+    ViewData["PageDescription"] = "Visualizza e modifica il file tts_schema.json";
+}
+
+<div class="d-flex justify-content-between mb-3">
+    <h3>TTS Schema - Story #@Model.StoryId</h3>
+    <div>
+        <a class="btn btn-secondary" asp-page="/Stories/Index">← Indietro</a>
+    </div>
+</div>
+
+@if (TempData["ErrorMessage"] != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        @TempData["ErrorMessage"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+}
+@if (TempData["StatusMessage"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        @TempData["StatusMessage"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+}
+
+<div class="card">
+    <div class="card-header">
+        <div class="d-flex justify-content-between align-items-center">
+            <strong>File: tts_schema.json</strong>
+            <div>
+                <button type="button" class="btn btn-sm btn-success" id="btnSave">💾 Salva modifiche</button>
+                <button type="button" class="btn btn-sm btn-danger" id="btnDelete" data-bs-toggle="modal" data-bs-target="#deleteModal">🗑️ Elimina</button>
+                <button type="button" class="btn btn-sm btn-info" id="btnFormat">🎯 Formatta JSON</button>
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        <form id="schemaForm" method="post">
+            @Html.AntiForgeryToken()
+            <div class="mb-3">
+                <label for="schemaContent" class="form-label">Contenuto JSON:</label>
+                <textarea id="schemaContent" name="schemaContent" class="form-control" rows="20" style="font-family: monospace;">@Model.SchemaContent</textarea>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h1 class="modal-title fs-5" id="deleteModalLabel">Eliminare il file?</h1>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                Sei sicuro di voler eliminare il file <strong>tts_schema.json</strong>?<br />
+                Questa azione non è reversibile.
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
+                <button type="button" class="btn btn-danger" id="btnConfirmDelete">Elimina</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const schemaContent = document.getElementById('schemaContent');
+            const btnSave = document.getElementById('btnSave');
+            const btnDelete = document.getElementById('btnDelete');
+            const btnFormat = document.getElementById('btnFormat');
+            const btnConfirmDelete = document.getElementById('btnConfirmDelete');
+            const schemaForm = document.getElementById('schemaForm');
+            const storyId = @Model.StoryId;
+
+            // Format JSON button
+            btnFormat.addEventListener('click', function() {
+                try {
+                    const json = JSON.parse(schemaContent.value);
+                    schemaContent.value = JSON.stringify(json, null, 2);
+                } catch (e) {
+                    alert('JSON non valido: ' + e.message);
+                }
+            });
+
+            // Save button
+            btnSave.addEventListener('click', function() {
+                try {
+                    // Validate JSON
+                    JSON.parse(schemaContent.value);
+                    
+                    // Send to server
+                    fetch('?handler=Save', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            storyId: storyId,
+                            content: schemaContent.value
+                        })
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('Salvataggio completato!');
+                            location.reload();
+                        } else {
+                            alert('Errore: ' + data.message);
+                        }
+                    })
+                    .catch(err => alert('Errore di rete: ' + err));
+                } catch (e) {
+                    alert('JSON non valido: ' + e.message);
+                }
+            });
+
+            // Confirm delete button
+            btnConfirmDelete.addEventListener('click', function() {
+                fetch('?handler=Delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        storyId: storyId
+                    })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        window.location.href = '/Stories/Index';
+                    } else {
+                        alert('Errore: ' + data.message);
+                    }
+                })
+                .catch(err => alert('Errore di rete: ' + err));
+            });
+        });
+    </script>
+}

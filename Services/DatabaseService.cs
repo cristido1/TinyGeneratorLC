@@ -17,13 +17,15 @@ namespace TinyGenerator.Services;
 
 public sealed class DatabaseService
 {
+    private readonly IOllamaMonitorService? _ollamaMonitor;
+    private readonly System.Threading.SemaphoreSlim _dbSemaphore = new System.Threading.SemaphoreSlim(1,1);
     private const int EvaluatedStatusId = 2;
     private const int InitialStoryStatusId = 1;
 
 
     private readonly string _connectionString;
 
-    public DatabaseService(string dbPath = "data/storage.db")
+    public DatabaseService(string dbPath = "data/storage.db", IOllamaMonitorService? ollamaMonitor = null)
     {
         Console.WriteLine($"[DB] DatabaseService ctor start (dbPath={dbPath})");
         var ctorSw = Stopwatch.StartNew();
@@ -39,6 +41,7 @@ public sealed class DatabaseService
         _connectionString = $"Data Source={dbPath};Foreign Keys=True";
         // Defer heavy initialization to the explicit Initialize() method so the
         // service can be registered without blocking `builder.Build()`.
+        _ollamaMonitor = ollamaMonitor;
         ctorSw.Stop();
         Console.WriteLine($"[DB] DatabaseService ctor completed in {ctorSw.ElapsedMilliseconds}ms");
     }
@@ -147,6 +150,40 @@ public sealed class DatabaseService
     }
 
     private IDbConnection CreateConnection() => new SqliteConnection(_connectionString);
+
+    // Run a synchronous action with an exclusive sqlite connection protected by semaphore.
+    public T WithSqliteConnection<T>(Func<Microsoft.Data.Sqlite.SqliteConnection, T> work)
+    {
+        _dbSemaphore.Wait();
+        try
+        {
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connectionString);
+            conn.Open();
+            try { using var fkCmd = conn.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            return work(conn);
+        }
+        finally
+        {
+            _dbSemaphore.Release();
+        }
+    }
+
+    // Run an async function with an exclusive sqlite connection protected by semaphore.
+    public async System.Threading.Tasks.Task<T> WithSqliteConnectionAsync<T>(Func<Microsoft.Data.Sqlite.SqliteConnection, System.Threading.Tasks.Task<T>> work)
+    {
+        await _dbSemaphore.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connectionString);
+            await conn.OpenAsync().ConfigureAwait(false);
+            try { using var fkCmd = conn.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            return await work(conn).ConfigureAwait(false);
+        }
+        finally
+        {
+            _dbSemaphore.Release();
+        }
+    }
 
     public List<ModelInfo> ListModels()
     {
@@ -448,21 +485,39 @@ public sealed class DatabaseService
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id, ts, model, provider, input_tokens, output_tokens, tokens, cost, request, response FROM calls ORDER BY id DESC LIMIT @Limit";
-        var results = conn.Query<dynamic>(sql, new { Limit = limit });
-        return results.Select(r => new CallRecord
+        var sql = @"SELECT id AS Id, ts AS Timestamp, model AS Model, provider AS Provider, input_tokens AS InputTokens, input_tokens AS InputTokens, output_tokens AS OutputTokens, tokens AS Tokens, cost AS Cost, request AS Request, response AS Response FROM calls ORDER BY id DESC LIMIT @Limit";
+        try
         {
-            Id = (long)r.id,
-            Timestamp = r.ts ?? string.Empty,
-            Model = r.model ?? string.Empty,
-            Provider = r.provider ?? string.Empty,
-            InputTokens = (int)(r.input_tokens ?? 0),
-            OutputTokens = (int)(r.output_tokens ?? 0),
-            Tokens = (int)(r.tokens ?? 0),
-            Cost = (double)(r.cost ?? 0.0),
-            Request = r.request ?? string.Empty,
-            Response = r.response ?? string.Empty
-        }).ToList();
+            var results = conn.Query<CallRecord>(sql, new { Limit = limit });
+            return results.ToList();
+        }
+        catch (Exception ex)
+        {
+            // Fallback: attempt dynamic mapping if typed mapping fails
+            try
+            {
+                var dynSql = @"SELECT id, ts, model, provider, input_tokens, output_tokens, tokens, cost, request, response FROM calls ORDER BY id DESC LIMIT @Limit";
+                var dyn = conn.Query<dynamic>(dynSql, new { Limit = limit });
+                return dyn.Select(r => new CallRecord
+                {
+                    Id = Convert.ToInt64((object?)r.id ?? 0L),
+                    Timestamp = (string?)(r.ts ?? string.Empty) ?? string.Empty,
+                    Model = (string?)(r.model ?? string.Empty) ?? string.Empty,
+                    Provider = (string?)(r.provider ?? string.Empty) ?? string.Empty,
+                    InputTokens = Convert.ToInt32((object?)r.input_tokens ?? 0),
+                    OutputTokens = Convert.ToInt32((object?)r.output_tokens ?? 0),
+                    Tokens = Convert.ToInt32((object?)r.tokens ?? 0),
+                    Cost = Convert.ToDouble((object?)r.cost ?? 0.0),
+                    Request = (string?)(r.request ?? string.Empty) ?? string.Empty,
+                    Response = (string?)(r.response ?? string.Empty) ?? string.Empty
+                }).ToList();
+            }
+            catch (Exception inner)
+            {
+                Console.WriteLine($"[DB] GetRecentCalls failed: {ex.Message}; fallback also failed: {inner.Message}");
+                return new List<CallRecord>();
+            }
+        }
     }
 
     // Agents CRUD
@@ -470,7 +525,7 @@ public sealed class DatabaseService
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id ORDER BY a.name";
+        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.multi_step_template_id AS MultiStepTemplateId, st.name AS MultiStepTemplateName, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id LEFT JOIN step_templates st ON a.multi_step_template_id = st.id ORDER BY a.name";
         return conn.Query<TinyGenerator.Models.Agent>(sql).ToList();
     }
 
@@ -478,7 +533,7 @@ public sealed class DatabaseService
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id WHERE a.id = @id LIMIT 1";
+        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.multi_step_template_id AS MultiStepTemplateId, st.name AS MultiStepTemplateName, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id LEFT JOIN step_templates st ON a.multi_step_template_id = st.id WHERE a.id = @id LIMIT 1";
         return conn.QueryFirstOrDefault<TinyGenerator.Models.Agent>(sql, new { id });
     }
 
@@ -501,12 +556,13 @@ public sealed class DatabaseService
         if (string.IsNullOrWhiteSpace(role)) return null;
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes
-                    FROM agents a
-                    LEFT JOIN tts_voices t ON a.voice_rowid = t.id
-                    WHERE LOWER(a.role) = LOWER(@role)
-                    ORDER BY a.is_active DESC, a.id ASC
-                    LIMIT 1";
+        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.multi_step_template_id AS MultiStepTemplateId, st.name AS MultiStepTemplateName, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes
+                FROM agents a
+                LEFT JOIN tts_voices t ON a.voice_rowid = t.id
+                LEFT JOIN step_templates st ON a.multi_step_template_id = st.id
+                WHERE LOWER(a.role) = LOWER(@role)
+                ORDER BY a.is_active DESC, a.id ASC
+                LIMIT 1";
         return conn.QueryFirstOrDefault<TinyGenerator.Models.Agent>(sql, new { role });
     }
 
@@ -517,7 +573,7 @@ public sealed class DatabaseService
         var now = DateTime.UtcNow.ToString("o");
         a.CreatedAt ??= now;
         a.UpdatedAt = now;
-        var sql = @"INSERT INTO agents(voice_rowid, name, role, model_id, skills, config, json_response_format, prompt, instructions, temperature, top_p, execution_plan, is_active, created_at, updated_at, notes) VALUES(@VoiceId,@Name,@Role,@ModelId,@Skills,@Config,@JsonResponseFormat,@Prompt,@Instructions,@Temperature,@TopP,@ExecutionPlan,@IsActive,@CreatedAt,@UpdatedAt,@Notes); SELECT last_insert_rowid();";
+        var sql = @"INSERT INTO agents(voice_rowid, name, role, model_id, skills, config, json_response_format, prompt, instructions, temperature, top_p, execution_plan, is_active, multi_step_template_id, created_at, updated_at, notes) VALUES(@VoiceId,@Name,@Role,@ModelId,@Skills,@Config,@JsonResponseFormat,@Prompt,@Instructions,@Temperature,@TopP,@ExecutionPlan,@IsActive,@MultiStepTemplateId,@CreatedAt,@UpdatedAt,@Notes); SELECT last_insert_rowid();";
         var id = conn.ExecuteScalar<long>(sql, a);
         return (int)id;
     }
@@ -528,7 +584,7 @@ public sealed class DatabaseService
         using var conn = CreateConnection();
         conn.Open();
         a.UpdatedAt = DateTime.UtcNow.ToString("o");
-        var sql = @"UPDATE agents SET voice_rowid=@VoiceId, name=@Name, role=@Role, model_id=@ModelId, skills=@Skills, config=@Config, json_response_format=@JsonResponseFormat, prompt=@Prompt, instructions=@Instructions, temperature=@Temperature, top_p=@TopP, execution_plan=@ExecutionPlan, is_active=@IsActive, updated_at=@UpdatedAt, notes=@Notes WHERE id = @Id";
+        var sql = @"UPDATE agents SET voice_rowid=@VoiceId, name=@Name, role=@Role, model_id=@ModelId, skills=@Skills, config=@Config, json_response_format=@JsonResponseFormat, prompt=@Prompt, instructions=@Instructions, temperature=@Temperature, top_p=@TopP, execution_plan=@ExecutionPlan, is_active=@IsActive, multi_step_template_id=@MultiStepTemplateId, updated_at=@UpdatedAt, notes=@Notes WHERE id = @Id";
         conn.Execute(sql, a);
     }
 
@@ -872,10 +928,10 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
     /// </summary>
     public async Task<int> AddLocalOllamaModelsAsync()
     {
-        try
-        {
-            var list = await OllamaMonitorService.GetInstalledModelsAsync();
-            if (list == null) return 0;
+            try
+            {
+                var list = _ollamaMonitor == null ? null : await _ollamaMonitor.GetInstalledModelsAsync();
+                if (list == null) return 0;
             var added = 0;
             foreach (var m in list)
             {
@@ -2036,6 +2092,119 @@ FROM stories_evaluations_old;";
         {
             Console.WriteLine($"[DB] Warning: failed to migrate stories_evaluations schema: {ex.Message}");
         }
+
+        // Migration: Add multi_step_template_id column to agents table
+        var hasMultiStepTemplateId = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='multi_step_template_id'");
+        if (hasMultiStepTemplateId == 0)
+        {
+            Console.WriteLine("[DB] Adding multi_step_template_id column to agents");
+            conn.Execute("ALTER TABLE agents ADD COLUMN multi_step_template_id INTEGER NULL");
+        }
+
+        // Migration: Create task_types table if not exists
+        var hasTaskTypes = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_types'");
+        if (hasTaskTypes == 0)
+        {
+            Console.WriteLine("[DB] Creating task_types table");
+            conn.Execute(@"
+CREATE TABLE task_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    description TEXT,
+    default_executor_role TEXT NOT NULL,
+    default_checker_role TEXT NOT NULL,
+    output_merge_strategy TEXT NOT NULL,
+    validation_criteria TEXT
+)");
+            
+            // Seed default task type: story
+            conn.Execute(@"
+INSERT INTO task_types (code, description, default_executor_role, default_checker_role, output_merge_strategy, validation_criteria)
+VALUES ('story', 'Story Generation', 'writer', 'response_checker', 'accumulate_chapters', '{""min_length_check"":true,""no_questions"":true,""semantic_threshold"":0.6}')");
+            Console.WriteLine("[DB] Seeded default task_types");
+        }
+
+        // Migration: Create task_executions table if not exists
+        var hasTaskExecutions = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_executions'");
+        if (hasTaskExecutions == 0)
+        {
+            Console.WriteLine("[DB] Creating task_executions table");
+            conn.Execute(@"
+CREATE TABLE task_executions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_type TEXT NOT NULL,
+    entity_id INTEGER NULL,
+    step_prompt TEXT NOT NULL,
+    current_step INTEGER DEFAULT 1,
+    max_step INTEGER NOT NULL,
+    retry_count INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','failed','paused')),
+    executor_agent_id INTEGER NULL,
+    checker_agent_id INTEGER NULL,
+    config TEXT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)");
+            
+            // Create unique constraint for active executions
+            conn.Execute("CREATE UNIQUE INDEX idx_task_executions_active ON task_executions(entity_id, task_type) WHERE status IN ('pending','in_progress')");
+            Console.WriteLine("[DB] Created task_executions table");
+        }
+
+        // Migration: Create task_execution_steps table if not exists
+        var hasTaskExecutionSteps = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_execution_steps'");
+        if (hasTaskExecutionSteps == 0)
+        {
+            Console.WriteLine("[DB] Creating task_execution_steps table");
+            conn.Execute(@"
+CREATE TABLE task_execution_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    execution_id INTEGER NOT NULL,
+    step_number INTEGER NOT NULL,
+    step_instruction TEXT NOT NULL,
+    step_output TEXT NULL,
+    validation_result TEXT NULL,
+    attempt_count INTEGER DEFAULT 1,
+    started_at TEXT,
+    completed_at TEXT,
+    FOREIGN KEY(execution_id) REFERENCES task_executions(id) ON DELETE CASCADE
+)");
+            Console.WriteLine("[DB] Created task_execution_steps table");
+        }
+
+        // Migration: Create step_templates table if not exists
+        var hasStepTemplates = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='step_templates'");
+        if (hasStepTemplates == 0)
+        {
+            Console.WriteLine("[DB] Creating step_templates table");
+            conn.Execute(@"
+CREATE TABLE step_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    task_type TEXT NOT NULL,
+    step_prompt TEXT NOT NULL,
+    description TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)");
+            
+            // Seed default template: 9-step story generation
+            var defaultStepPrompt = @"1. Scrivi la trama dettagliata (minimo 1500 parole) divisa in 6 capitoli.
+2. Genera la lista completa dei PERSONAGGI con nome, sesso, età approssimativa, ruolo e carattere.
+3. Genera la STRUTTURA dettagliata di ogni capitolo (scene, eventi, dialoghi previsti).
+4. Scrivi il CAPITOLO 1 (minimo 1500 parole). Contesto: {{STEP_1}}, {{STEP_2}}, {{STEP_3_EXTRACT:Capitolo 1}}
+5. Scrivi il CAPITOLO 2 (minimo 1500 parole). Contesto: {{STEP_1}}, {{STEP_2}}, {{STEP_3_EXTRACT:Capitolo 2}}, {{STEP_4_SUMMARY}}
+6. Scrivi il CAPITOLO 3 (minimo 1500 parole). Contesto: {{STEP_1}}, {{STEP_2}}, {{STEP_3_EXTRACT:Capitolo 3}}, {{STEPS_4-5_SUMMARY}}
+7. Scrivi il CAPITOLO 4 (minimo 1500 parole). Contesto: {{STEP_1}}, {{STEP_2}}, {{STEP_3_EXTRACT:Capitolo 4}}, {{STEPS_4-6_SUMMARY}}
+8. Scrivi il CAPITOLO 5 (minimo 1500 parole). Contesto: {{STEP_1}}, {{STEP_2}}, {{STEP_3_EXTRACT:Capitolo 5}}, {{STEPS_4-7_SUMMARY}}
+9. Scrivi il CAPITOLO 6 (minimo 1500 parole). Contesto: {{STEP_1}}, {{STEP_2}}, {{STEP_3_EXTRACT:Capitolo 6}}, {{STEPS_4-8_SUMMARY}}";
+            
+            conn.Execute(@"
+INSERT INTO step_templates (name, task_type, step_prompt, description, created_at, updated_at)
+VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generation with 6 chapters', datetime('now'), datetime('now'))",
+                new { stepPrompt = defaultStepPrompt });
+            Console.WriteLine("[DB] Seeded default step_templates");
+        }
     }
 
     // Async batch insert for log entries. Will insert all provided entries in a single INSERT statement when possible.
@@ -2048,7 +2217,7 @@ FROM stories_evaluations_old;";
         await ((SqliteConnection)conn).OpenAsync();
 
         // Build a single INSERT ... VALUES (...),(...),... with uniquely named parameters to avoid collisions
-        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized" };
+        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized", "chat_text" };
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
 
@@ -2071,6 +2240,7 @@ FROM stories_evaluations_old;";
             parameters.Add("@AgentName" + i, e.AgentName);
             parameters.Add("@Context" + i, e.Context);
             parameters.Add("@analized" + i, e.Analized ? 1 : 0);
+            parameters.Add("@chat_text" + i, e.ChatText);
         }
 
         sb.Append(";");
@@ -2171,13 +2341,19 @@ FROM stories_evaluations_old;";
         if (!string.IsNullOrWhiteSpace(level)) { where.Add("Level = @Level"); parameters.Add("Level", level); }
         if (!string.IsNullOrWhiteSpace(category)) { where.Add("Category LIKE @Category"); parameters.Add("Category", "%" + category + "%"); }
 
-        var sql = "SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized FROM Log";
+        var sql = "SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized, chat_text AS ChatText FROM Log";
         if (where.Count > 0) sql += " WHERE " + string.Join(" AND ", where);
         sql += " ORDER BY Id DESC LIMIT @Limit OFFSET @Offset";
         parameters.Add("Limit", limit);
         parameters.Add("Offset", offset);
 
         return conn.Query<TinyGenerator.Models.LogEntry>(sql, parameters).ToList();
+    }
+
+    // Alias for compatibility
+    public List<TinyGenerator.Models.LogEntry> ListLogs(int limit = 200, int offset = 0, string? level = null, string? category = null)
+    {
+        return GetRecentLogs(limit, offset, level, category);
     }
 
     public List<TinyGenerator.Models.LogEntry> GetLogsByThread(string threadId, int limit = 500)
@@ -2701,5 +2877,149 @@ WHERE Id = @modelId;";
         using var conn = CreateConnection();
         conn.Open();
         conn.Execute("DELETE FROM stories_status WHERE id = @id", new { id });
+    }
+
+    // ========== Multi-Step Task Execution Methods ==========
+
+    public long CreateTaskExecution(TinyGenerator.Models.TaskExecution execution)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+INSERT INTO task_executions (task_type, entity_id, step_prompt, initial_context, current_step, max_step, retry_count, status, executor_agent_id, checker_agent_id, config, created_at, updated_at)
+VALUES (@TaskType, @EntityId, @StepPrompt, @InitialContext, @CurrentStep, @MaxStep, @RetryCount, @Status, @ExecutorAgentId, @CheckerAgentId, @Config, @CreatedAt, @UpdatedAt);
+SELECT last_insert_rowid();";
+        return conn.ExecuteScalar<long>(sql, execution);
+    }
+
+    public TinyGenerator.Models.TaskExecution? GetTaskExecutionById(long id)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, task_type AS TaskType, entity_id AS EntityId, step_prompt AS StepPrompt, initial_context AS InitialContext, current_step AS CurrentStep, max_step AS MaxStep, retry_count AS RetryCount, status AS Status, executor_agent_id AS ExecutorAgentId, checker_agent_id AS CheckerAgentId, config AS Config, created_at AS CreatedAt, updated_at AS UpdatedAt FROM task_executions WHERE id = @id LIMIT 1";
+        return conn.QueryFirstOrDefault<TinyGenerator.Models.TaskExecution>(sql, new { id });
+    }
+
+    public void UpdateTaskExecution(TinyGenerator.Models.TaskExecution execution)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+UPDATE task_executions 
+SET task_type=@TaskType, entity_id=@EntityId, step_prompt=@StepPrompt, initial_context=@InitialContext, current_step=@CurrentStep, max_step=@MaxStep, 
+    retry_count=@RetryCount, status=@Status, executor_agent_id=@ExecutorAgentId, checker_agent_id=@CheckerAgentId, 
+    config=@Config, updated_at=@UpdatedAt
+WHERE id=@Id";
+        conn.Execute(sql, execution);
+    }
+
+    public TinyGenerator.Models.TaskExecution? GetActiveExecutionForEntity(long? entityId, string taskType)
+    {
+        if (!entityId.HasValue) return null;
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, task_type AS TaskType, entity_id AS EntityId, step_prompt AS StepPrompt, initial_context AS InitialContext, current_step AS CurrentStep, max_step AS MaxStep, retry_count AS RetryCount, status AS Status, executor_agent_id AS ExecutorAgentId, checker_agent_id AS CheckerAgentId, config AS Config, created_at AS CreatedAt, updated_at AS UpdatedAt FROM task_executions WHERE entity_id = @eid AND task_type = @tt AND status IN ('pending','in_progress') LIMIT 1";
+        return conn.QueryFirstOrDefault<TinyGenerator.Models.TaskExecution>(sql, new { eid = entityId.Value, tt = taskType });
+    }
+
+    public long CreateTaskExecutionStep(TinyGenerator.Models.TaskExecutionStep step)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+INSERT INTO task_execution_steps (execution_id, step_number, step_instruction, step_output, validation_result, attempt_count, started_at, completed_at)
+VALUES (@ExecutionId, @StepNumber, @StepInstruction, @StepOutput, @ValidationResultJson, @AttemptCount, @StartedAt, @CompletedAt);
+SELECT last_insert_rowid();";
+        return conn.ExecuteScalar<long>(sql, step);
+    }
+
+    public List<TinyGenerator.Models.TaskExecutionStep> GetTaskExecutionSteps(long executionId)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, execution_id AS ExecutionId, step_number AS StepNumber, step_instruction AS StepInstruction, step_output AS StepOutput, validation_result AS ValidationResultJson, attempt_count AS AttemptCount, started_at AS StartedAt, completed_at AS CompletedAt FROM task_execution_steps WHERE execution_id = @eid ORDER BY step_number";
+        return conn.Query<TinyGenerator.Models.TaskExecutionStep>(sql, new { eid = executionId }).ToList();
+    }
+
+    public TinyGenerator.Models.TaskTypeInfo? GetTaskTypeByCode(string code)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, code AS Code, description AS Description, default_executor_role AS DefaultExecutorRole, default_checker_role AS DefaultCheckerRole, output_merge_strategy AS OutputMergeStrategy, validation_criteria AS ValidationCriteria FROM task_types WHERE code = @code LIMIT 1";
+        return conn.QueryFirstOrDefault<TinyGenerator.Models.TaskTypeInfo>(sql, new { code });
+    }
+
+    public TinyGenerator.Models.StepTemplate? GetStepTemplateById(long id)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates WHERE id = @id LIMIT 1";
+        return conn.QueryFirstOrDefault<TinyGenerator.Models.StepTemplate>(sql, new { id });
+    }
+
+    public TinyGenerator.Models.StepTemplate? GetStepTemplateByName(string name)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates WHERE name = @name LIMIT 1";
+        return conn.QueryFirstOrDefault<TinyGenerator.Models.StepTemplate>(sql, new { name });
+    }
+
+    public List<TinyGenerator.Models.StepTemplate> ListStepTemplates(string? taskType = null)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var baseSql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates";
+        var sql = taskType == null
+            ? baseSql + " ORDER BY name"
+            : baseSql + " WHERE task_type = @tt ORDER BY name";
+        return conn.Query<TinyGenerator.Models.StepTemplate>(sql, new { tt = taskType }).ToList();
+    }
+
+    public void UpsertStepTemplate(TinyGenerator.Models.StepTemplate template)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var existing = conn.ExecuteScalar<long?>("SELECT id FROM step_templates WHERE name = @name", new { template.Name });
+        
+        if (existing.HasValue)
+        {
+            // Update
+            var sql = @"UPDATE step_templates SET task_type=@TaskType, step_prompt=@StepPrompt, description=@Description, updated_at=@UpdatedAt WHERE id=@Id";
+            conn.Execute(sql, new { template.TaskType, template.StepPrompt, template.Description, UpdatedAt = DateTime.UtcNow.ToString("o"), Id = existing.Value });
+        }
+        else
+        {
+            // Insert
+            var sql = @"INSERT INTO step_templates (name, task_type, step_prompt, description, created_at, updated_at) VALUES (@Name, @TaskType, @StepPrompt, @Description, @CreatedAt, @UpdatedAt)";
+            conn.Execute(sql, template);
+        }
+    }
+
+    public void UpdateStepTemplate(TinyGenerator.Models.StepTemplate template)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"UPDATE step_templates SET name=@Name, task_type=@TaskType, step_prompt=@StepPrompt, description=@Description, updated_at=@UpdatedAt WHERE id=@Id";
+        conn.Execute(sql, template);
+    }
+
+    public void DeleteStepTemplate(long id)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("DELETE FROM step_templates WHERE id = @id", new { id });
+    }
+
+    public void CleanupOldTaskExecutions()
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = "DELETE FROM task_executions WHERE status IN ('completed','failed') AND datetime(updated_at) < datetime('now','-7 days')";
+        var deleted = conn.Execute(sql);
+        if (deleted > 0)
+        {
+            Console.WriteLine($"[DB] Cleaned up {deleted} old task executions");
+        }
     }
 }

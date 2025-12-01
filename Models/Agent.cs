@@ -26,5 +26,9 @@ namespace TinyGenerator.Models
         public string? VoiceName { get; set; }
         public double? Temperature { get; set; } // Sampling temperature for model calls (0.0-2.0)
         public double? TopP { get; set; } // Nucleus sampling probability (0.0-1.0)
+        // Multi-step template association
+        public int? MultiStepTemplateId { get; set; }
+        // Non-persistent helper
+        public string? MultiStepTemplateName { get; set; }
     }
 }

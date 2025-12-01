@@ -19,6 +19,12 @@ namespace TinyGenerator.Pages.Agents
             _database = database;
         }
 
+        [BindProperty]
+        public string? StoryTheme { get; set; }
+
+        [BindProperty]
+        public int AgentId { get; set; }
+
         [BindProperty(SupportsGet = true)]
         public string? Search { get; set; }
 
@@ -94,6 +100,18 @@ namespace TinyGenerator.Pages.Agents
                 TempData["Error"] = ex.Message;
                 return RedirectToPage("/Agents/Index");
             }
+        }
+
+        public IActionResult OnPostGenerateStory()
+        {
+            if (string.IsNullOrWhiteSpace(StoryTheme))
+            {
+                TempData["Error"] = "Story theme is required";
+                return RedirectToPage("/Agents/Index");
+            }
+
+            // Redirect to Genera page with agent and theme
+            return RedirectToPage("/Genera", new { writerAgentId = AgentId, prompt = StoryTheme });
         }
     }
 }

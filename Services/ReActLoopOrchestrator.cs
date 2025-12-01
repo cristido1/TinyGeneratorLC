@@ -23,6 +23,52 @@ namespace TinyGenerator.Services
     {
         // Tracks retry attempts for tools that returned validation errors
         private readonly Dictionary<string, int> _toolRetryCounts = new(StringComparer.OrdinalIgnoreCase);
+        // Track how many times we've asked the model to call an expected final function
+        private int _missingFinalCallAttempts = 0;
+        // Warnings when evaluator calls evaluate_full_story before all parts have been requested
+        private int _evaluatorMissingPartsWarnings = 0;
+        private const int MaxEvaluatorMissingPartsWarnings = 3;
+        // Limit overall function calls to prevent infinite loops
+        private const int MaxFunctionCalls = 200;
+        private int _functionCallCount = 0;
+        // Track repeated requests for the same part index
+        private const int MaxRepeatedPartRequests = 3;
+        private readonly Dictionary<int, int> _partRequestCounts = new();
+
+        private void OnFunctionCalled(string functionName, string? argumentsJson)
+        {
+            _functionCallCount++;
+            if (_functionCallCount > MaxFunctionCalls)
+            {
+                throw new InvalidOperationException($"Exceeded maximum function call limit ({MaxFunctionCalls}). Aborting to prevent infinite loop.");
+            }
+
+            if (string.Equals(functionName, "read_story_part", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(argumentsJson))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(argumentsJson);
+                    var root = doc.RootElement;
+                    int partIndex = -1;
+                    if (root.TryGetProperty("part_index", out var idx) && idx.ValueKind == JsonValueKind.Number && idx.TryGetInt32(out var v))
+                        partIndex = v;
+                    else if (root.TryGetProperty("partIndex", out var idx2) && idx2.ValueKind == JsonValueKind.Number && idx2.TryGetInt32(out var v2))
+                        partIndex = v2;
+
+                    if (partIndex >= 0)
+                    {
+                        _partRequestCounts.TryGetValue(partIndex, out var attempts);
+                        attempts++;
+                        _partRequestCounts[partIndex] = attempts;
+                        if (attempts > MaxRepeatedPartRequests)
+                        {
+                            throw new InvalidOperationException($"Part {partIndex} requested too many times ({attempts}). Aborting to prevent infinite loop.");
+                        }
+                    }
+                }
+                catch (JsonException) { /* ignore parse errors */ }
+            }
+        }
 
         private readonly HybridLangChainOrchestrator _tools;
         private readonly ICustomLogger? _logger;
@@ -76,6 +122,8 @@ namespace TinyGenerator.Services
         /// </summary>
         public async Task<ReActResult> ExecuteAsync(string userPrompt, CancellationToken ct = default)
         {
+            Console.WriteLine($"[DEBUG ReActLoop] ExecuteAsync called - modelBridge is null: {_modelBridge == null}");
+            
             var result = new ReActResult();
             _messageHistory.Clear();
             
@@ -84,11 +132,13 @@ namespace TinyGenerator.Services
             {
                 _messageHistory.Add(new ConversationMessage { Role = "system", Content = _systemMessage });
                 _logger?.Log("Info", "ReActLoop", $"Added system message (length={_systemMessage.Length})");
+                Console.WriteLine($"[DEBUG ReActLoop] Added system message (length={_systemMessage.Length})");
             }
             
             _messageHistory.Add(new ConversationMessage { Role = "user", Content = userPrompt });
 
             _logger?.Log("Info", "ReActLoop", $"Starting ReAct loop with prompt length={userPrompt.Length}");
+            Console.WriteLine($"[DEBUG ReActLoop] Starting ReAct loop with prompt length={userPrompt.Length}");
 
             // Main loop: reasoning → tool call → execution → feedback
             var unlimited = _maxIterations <= 0;
@@ -97,6 +147,7 @@ namespace TinyGenerator.Services
             {
                 if (ct.IsCancellationRequested)
                 {
+                    result.Success = false;
                     result.Error = "Cancelled by user";
                     return result;
                 }
@@ -106,10 +157,13 @@ namespace TinyGenerator.Services
                 try
                 {
                     // Step 1: Call model with tool definitions
+                    Console.WriteLine($"[DEBUG ReActLoop] Iteration {iteration + 1}: About to call CallModelAsync");
                     var modelResponse = await CallModelAsync(userPrompt, iteration);
+                    Console.WriteLine($"[DEBUG ReActLoop] Iteration {iteration + 1}: CallModelAsync returned, response length: {modelResponse?.Length ?? 0}");
                     
                     if (string.IsNullOrEmpty(modelResponse))
                     {
+                        Console.WriteLine($"[DEBUG ReActLoop] modelResponse is null or empty!");
                         result.FinalResponse = "No response from model";
                         result.Success = true;
                         result.IterationCount = iteration + 1;
@@ -117,12 +171,60 @@ namespace TinyGenerator.Services
                     }
 
                     // Step 2: Parse tool calls from response
+                    Console.WriteLine($"[DEBUG ReActLoop] About to parse tool calls from response");
                     var toolCalls = _tools.ParseToolCalls(modelResponse);
+                    Console.WriteLine($"[DEBUG ReActLoop] ParseToolCalls returned {toolCalls.Count} tool calls");
 
                     if (toolCalls.Count == 0)
                     {
-                        // No tool calls = model is done
+                        // No tool calls = model might be done — but sometimes the model skipped calling an
+                        // expected final evaluation function (e.g. evaluate_full_story). In that case we
+                        // should prompt it up to 3 times to call the function instead of silently accepting
+                        // completion.
+
+                        // Determine whether the tools exposed an "evaluate_full_story" function
+                        bool expectsFinalEvaluate = _tools.GetToolSchemas()
+                            .Any(s => s.TryGetValue("function", out var funcObj)
+                                && funcObj is Dictionary<string, object> fd
+                                && fd.TryGetValue("name", out var fname)
+                                && string.Equals(fname?.ToString(), "evaluate_full_story", StringComparison.OrdinalIgnoreCase));
+
+                        // Check if evaluate_full_story was ever executed during this loop
+                        var hadEvaluateCall = result.ExecutedTools.Any(r => string.Equals(r.ToolName, "evaluate_full_story", StringComparison.OrdinalIgnoreCase));
+
+                        if (expectsFinalEvaluate && !hadEvaluateCall)
+                        {
+                            // Ask model to call the function up to 3 times
+                            if (_missingFinalCallAttempts < 3)
+                            {
+                                _missingFinalCallAttempts++;
+                                var assistantPrompt = $"You have not called the required function `evaluate_full_story`. Please call `evaluate_full_story` exactly once now, including all required score fields and corresponding *_defects. Retry attempt {_missingFinalCallAttempts} of 3.";
+
+                                _messageHistory.Add(new ConversationMessage
+                                {
+                                    Role = "assistant",
+                                    Content = assistantPrompt
+                                });
+
+                                _logger?.Log("Info", "ReActLoop", $"Requested missing final function evaluate_full_story retry {_missingFinalCallAttempts}/3");
+
+                                // Continue to next iteration so the model is asked again
+                                iteration++;
+                                continue;
+                            }
+
+                            // Exceeded retries
+                            result.Success = false;
+                            result.Error = "Model failed to call evaluate_full_story after 3 attempts";
+                            result.IterationCount = iteration + 1;
+                            _logger?.Log("Warn", "ReActLoop", "Exceeded retry attempts for missing evaluate_full_story");
+                            return result;
+                        }
+
+                        // No expected final function or we already got it — accept plain response
+                        Console.WriteLine($"[DEBUG ReActLoop] No tool calls, extracting plain text response");
                         result.FinalResponse = ExtractPlainTextResponse(modelResponse);
+                        Console.WriteLine($"[DEBUG ReActLoop] Extracted FinalResponse length: {result.FinalResponse.Length}");
                         result.Success = true;
                         result.IterationCount = iteration + 1;
                         _logger?.Log("Info", "ReActLoop", "Model finished (no tool calls)");
@@ -135,16 +237,29 @@ namespace TinyGenerator.Services
                     {
                         try
                         {
-                            _logger?.Log("Info", "ReActLoop", $"  Executing tool: {call.ToolName}");
-                            _progress?.Append(_runId, $"  📞 Tool: {call.ToolName}");
+                                // Track function call counts and detect potential loops
+                                OnFunctionCalled(call.ToolName, call.Arguments);
+
+                                _logger?.Log("Info", "ReActLoop", $"  Executing tool: {call.ToolName}");
+                                _progress?.Append(_runId, $"  📞 Tool: {call.ToolName}");
                             
-                            var output = await _tools.ExecuteToolAsync(call.ToolName, call.Arguments);
+                                var output = await _tools.ExecuteToolAsync(call.ToolName, call.Arguments);
                             toolResults.Add((call.Id, output));
                             
                             // Log full output for better visibility. Be careful: outputs can be large.
                             // If you prefer truncation, change to substring only for specific tools.
-                            _logger?.Log("Info", "ReActLoop", $"  Tool {call.ToolName} result: {output}");
-                            _progress?.Append(_runId, $"  ✓ {call.ToolName} output: {output}");
+                            // Log only length/preview to avoid huge log entries
+                            try
+                            {
+                                var outLen = output?.Length ?? 0;
+                                var preview = outLen > 200 ? (output?.Substring(0, 200) + "...") : output;
+                                _logger?.Log("Info", "ReActLoop", $"  Tool {call.ToolName} result length={outLen}");
+                                _progress?.Append(_runId, $"  ✓ {call.ToolName} output length: {outLen}");
+                                // Also log small preview for quick debugging
+                                if (outLen > 0 && outLen <= 500)
+                                    _logger?.Log("Debug", "ReActLoop", $"  Tool {call.ToolName} preview: {preview}");
+                            }
+                            catch { }
                             
                             result.ExecutedTools.Add(new ToolExecutionRecord
                             {
@@ -163,10 +278,60 @@ namespace TinyGenerator.Services
                         }
                     }
 
+                    // After executing tools, check whether we've requested all parts for read_story_part
+                    try
+                    {
+                        foreach (var (callId, toolResult) in toolResults)
+                        {
+                            var matchingCall = toolCalls.FirstOrDefault(tc => tc.Id == callId);
+                            if (matchingCall == null)
+                                continue;
+
+                            // If the model called read_story_part repeatedly, check if the underlying tool
+                            // believes it has served all parts. If so, nudge the model to call final function.
+                            if (string.Equals(matchingCall.ToolName, "read_story_part", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var toolInstance = _tools.GetToolByFunctionName("read_story_part");
+                                if (toolInstance != null)
+                                {
+                                    // If the tool supports HasRequestedAllParts, call it dynamically
+                                    try
+                                    {
+                                        // Use reflection to call HasRequestedAllParts if available
+                                        try
+                                        {
+                                            var mi = toolInstance.GetType().GetMethod("HasRequestedAllParts");
+                                            if (mi != null)
+                                            {
+                                                var hasAllObj = mi.Invoke(toolInstance, null);
+                                                var hasAll = false;
+                                                if (hasAllObj is bool b) hasAll = b;
+                                                if (hasAll)
+                                                {
+                                                    // Determine appropriate final function to call
+                                                    string finalFunc = "confirm";
+                                                    if (toolInstance.GetType().Name.IndexOf("EvaluatorTool", StringComparison.OrdinalIgnoreCase) >= 0)
+                                                        finalFunc = "evaluate_full_story";
+
+                                                    var assistantPrompt = $"All parts of the story have been provided. Please call `{finalFunc}` now to finish the operation.";
+                                                    _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = assistantPrompt });
+                                                    _logger?.Log("Info", "ReActLoop", "Requested final function call after all parts were read");
+                                                }
+                                            }
+                                        }
+                                        catch { }
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+
                     // Step 4: Add assistant message with tool_calls and tool result messages
-                    _messageHistory.Add(new ConversationMessage 
-                    { 
-                        Role = "assistant", 
+                    _messageHistory.Add(new ConversationMessage
+                    {
+                        Role = "assistant",
                         Content = modelResponse,
                         ToolCalls = toolCalls.Select(tc => new ToolCallFromModel
                         {
@@ -175,12 +340,21 @@ namespace TinyGenerator.Services
                             Arguments = tc.Arguments
                         }).ToList() // Store tool_calls for OpenAI format
                     });
-                    
+
+                    // Diagnostic: log whether assistant content is empty and toolCalls count
+                    try
+                    {
+                        var plain = ExtractPlainTextResponse(modelResponse);
+                        _logger?.Log("Info", "ReActLoop", $"Assistant message added: plainContentLen={plain?.Length ?? 0}, toolCalls={toolCalls.Count}, rawResponseLen={modelResponse?.Length ?? 0}");
+                        _progress?.Append(_runId, $"Assistant content length: {plain?.Length ?? 0}, toolCalls: {toolCalls.Count}");
+                    }
+                    catch { }
+
                     foreach (var (callId, toolResult) in toolResults)
                     {
-                        _messageHistory.Add(new ConversationMessage 
-                        { 
-                            Role = "tool", 
+                        _messageHistory.Add(new ConversationMessage
+                        {
+                            Role = "tool",
                             Content = toolResult,
                             ToolCallId = callId // Associate with the tool_call
                         });
@@ -198,9 +372,105 @@ namespace TinyGenerator.Services
 
                             var toolName = matchingCall.ToolName ?? string.Empty;
 
-                            // Only handle evaluate_full_story validation errors here
+                            // Handle text coverage validation errors in confirm (TtsSchemaTool)
+                            if (string.Equals(toolName, "confirm", StringComparison.OrdinalIgnoreCase))
+                            {
+                                try
+                                {
+                                    using var doc = JsonDocument.Parse(toolResult);
+                                    if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("error", out var errElem))
+                                    {
+                                        var errMsg = errElem.GetString() ?? string.Empty;
+                                        
+                                        // Check if this is a text coverage error
+                                        if (errMsg.Contains("Text coverage", StringComparison.OrdinalIgnoreCase) && errMsg.Contains("attempts remaining", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            // Extract remaining attempts from error message
+                                            var attemptsMatch = System.Text.RegularExpressions.Regex.Match(errMsg, @"Attempts remaining:\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                            int remainingAttempts = attemptsMatch.Success ? int.Parse(attemptsMatch.Groups[1].Value) : 0;
+
+                                            if (remainingAttempts > 0)
+                                            {
+                                                // Still have attempts left, request retry
+                                                var assistantPrompt = $"Coverage validation failed for TTS schema. {errMsg} Please add more narration or character dialogue to cover the remaining text and call `confirm` again.";
+
+                                                _messageHistory.Add(new ConversationMessage
+                                                {
+                                                    Role = "assistant",
+                                                    Content = assistantPrompt
+                                                });
+
+                                                _logger?.Log("Info", "ReActLoop", $"Requested TTS schema retry: {errMsg}");
+                                                // Continue to next iteration to let model retry
+                                                iteration++;
+                                                continue;
+                                            }
+                                            else if (doc.RootElement.TryGetProperty("attempts_exhausted", out var exhausted) && exhausted.GetBoolean())
+                                            {
+                                                // Exceeded retries for text coverage
+                                                var assistantPrompt = $"Maximum retry attempts exceeded for text coverage in TTS schema. {errMsg}";
+                                                _messageHistory.Add(new ConversationMessage
+                                                {
+                                                    Role = "assistant",
+                                                    Content = assistantPrompt
+                                                });
+
+                                                _logger?.Log("Warn", "ReActLoop", $"Exceeded retry limit for TTS schema text coverage");
+                                                result.Success = false;
+                                                result.Error = errMsg;
+                                                result.IterationCount = iteration + 1;
+                                                return result;
+                                            }
+                                        }
+                                    }
+                                }
+                                catch { /* ignore parse errors and continue */ }
+                            }
+
+                            // Only handle evaluate_full_story validation errors here (original logic)
                             if (!string.Equals(toolName, "evaluate_full_story", StringComparison.OrdinalIgnoreCase))
                                 continue;
+
+                            // If evaluator attempts to call evaluate_full_story before all parts have been requested,
+                            // ask it to read the remaining parts. After MaxEvaluatorMissingPartsWarnings we abort.
+                            try
+                            {
+                                var evalTool = _tools.GetToolByFunctionName("evaluate_full_story");
+                                if (evalTool != null)
+                                {
+                                    var mi = evalTool.GetType().GetMethod("HasRequestedAllParts");
+                                    if (mi != null)
+                                    {
+                                        var hasAllObj = mi.Invoke(evalTool, null);
+                                        var hasAll = false;
+                                        if (hasAllObj is bool b) hasAll = b;
+                                        if (!hasAll)
+                                        {
+                                            _evaluatorMissingPartsWarnings++;
+                                            if (_evaluatorMissingPartsWarnings < MaxEvaluatorMissingPartsWarnings)
+                                            {
+                                                var assistantPrompt = $"You attempted to evaluate the story before reading all parts. Please read the remaining parts using `read_story_part(part_index)` until the entire story has been provided, then call `evaluate_full_story` again. Warning {_evaluatorMissingPartsWarnings} of {MaxEvaluatorMissingPartsWarnings}.";
+                                                _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = assistantPrompt });
+                                                _logger?.Log("Info", "ReActLoop", "Requested evaluator to read remaining parts before evaluation");
+                                                // ask model to retry by continuing loop
+                                                iteration++;
+                                                continue;
+                                            }
+                                            else
+                                            {
+                                                var assistantPrompt = $"Maximum warnings reached: evaluator attempted to complete evaluation without reading all parts. Aborting.";
+                                                _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = assistantPrompt });
+                                                _logger?.Log("Warn", "ReActLoop", "Evaluator attempted evaluation without reading all parts - aborting");
+                                                result.Success = false;
+                                                result.Error = "Evaluator attempted evaluation without reading all parts after multiple warnings";
+                                                result.IterationCount = iteration + 1;
+                                                return result;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            catch { /* ignore reflection errors and proceed to field validation */ }
 
                             // Parse result JSON to look for an "error" property indicating missing fields
                             try
@@ -243,6 +513,7 @@ namespace TinyGenerator.Services
                                             });
 
                                             _logger?.Log("Warn", "ReActLoop", $"Exceeded retry limit for {toolName}");
+                                            result.Success = false;
                                             result.Error = $"Missing required fields for {toolName} after 3 attempts: {missing}";
                                             result.IterationCount = iteration + 1;
                                             return result;
@@ -261,6 +532,7 @@ namespace TinyGenerator.Services
                 catch (Exception ex)
                 {
                     _logger?.Log("Error", "ReActLoop", $"Iteration {iteration + 1} failed: {ex.Message}", ex.ToString());
+                    result.Success = false;
                     result.Error = ex.Message;
                     result.IterationCount = iteration + 1;
                     return result;
@@ -270,6 +542,7 @@ namespace TinyGenerator.Services
             }
 
             // Reached max iterations
+            result.Success = false;
             result.Error = $"Exceeded maximum iterations ({_maxIterations})";
             result.IterationCount = _maxIterations;
             return result;
@@ -281,9 +554,12 @@ namespace TinyGenerator.Services
         /// </summary>
         private async Task<string> CallModelAsync(string userPrompt, int iteration)
         {
+            Console.WriteLine($"[DEBUG CallModelAsync] Entry - _modelBridge is null: {_modelBridge == null}");
+            
             // If no model bridge provided, return mock response
             if (_modelBridge == null)
             {
+                Console.WriteLine($"[DEBUG CallModelAsync] No modelBridge, returning mock response");
                 return await Task.FromResult(JsonSerializer.Serialize(new
                 {
                     content = "Model would be called here with tool definitions and conversation history",
@@ -293,11 +569,14 @@ namespace TinyGenerator.Services
                 }));
             }
 
+            Console.WriteLine($"[DEBUG CallModelAsync] modelBridge available, proceeding with actual call");
+            
             try
             {
                 // Get tool schemas for the model
                 var toolSchemas = _tools.GetToolSchemas();
                 
+                Console.WriteLine($"[DEBUG CallModelAsync] Got {toolSchemas.Count} tool schemas");
                 _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}: Calling model with {toolSchemas.Count} tools available");
                 
                 // Log each tool schema for debugging
@@ -321,19 +600,24 @@ namespace TinyGenerator.Services
                     messages = _messageHistory.Select(m => new { role = m.Role, contentLength = m.Content.Length })
                 };
                 _logger?.Log("Info", "ReActLoop", $"Request data: {JsonSerializer.Serialize(requestData)}");
+                Console.WriteLine($"[DEBUG CallModelAsync] Request data: {JsonSerializer.Serialize(requestData)}");
 
                 // Call actual model via LangChainChatBridge
+                Console.WriteLine($"[DEBUG CallModelAsync] About to call modelBridge.CallModelWithToolsAsync");
                 var response = await _modelBridge.CallModelWithToolsAsync(
                     _messageHistory,
                     toolSchemas);
+                Console.WriteLine($"[DEBUG CallModelAsync] modelBridge call completed, response length: {response?.Length ?? 0}");
 
                 _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}: Model call succeeded");
 
                 // Log full response for debugging
                 _logger?.Log("Info", "ReActLoop", $"Response payload: {response}");
+                Console.WriteLine($"[DEBUG CallModelAsync] Response payload (first 500 chars): {(response?.Length > 500 ? response.Substring(0, 500) : response)}");
 
                 // Parse the response to extract tool calls
                 var (textContent, toolCalls) = LangChainChatBridge.ParseChatResponse(response);
+                Console.WriteLine($"[DEBUG CallModelAsync] Parsed response - textContent length: {textContent?.Length ?? 0}, toolCalls count: {toolCalls.Count}");
 
                 _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}: Parsed {toolCalls.Count} tool calls from response");
 
@@ -355,10 +639,13 @@ namespace TinyGenerator.Services
                     }).ToList();
                 }
 
-                return JsonSerializer.Serialize(responseObj);
+                var finalResponse = JsonSerializer.Serialize(responseObj);
+                Console.WriteLine($"[DEBUG CallModelAsync] Returning final response length: {finalResponse.Length}");
+                return finalResponse;
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"[DEBUG CallModelAsync] Exception caught: {ex.GetType().Name} - {ex.Message}");
                 _logger?.Log("Error", "ReActLoop", $"Model call failed: {ex.Message}", ex.ToString());
                 throw;
             }

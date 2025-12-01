@@ -62,12 +62,16 @@ builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_bas
 // === Semantic Kernel + memoria SQLite ===
 // RIMOSSA la registrazione di IKernel: ora si usa solo Kernel reale tramite KernelFactory
 
+// Database access service + cost controller (sqlite) - register early so other services can depend on it
+builder.Services.AddSingleton(sp => new TinyGenerator.Services.DatabaseService("data/storage.db"));
+
 // Persistent memory service (sqlite) using consolidated storage DB
 builder.Services.AddSingleton<PersistentMemoryService>(sp =>
     new PersistentMemoryService(
         "data/storage.db",
         sp.GetService<IOptions<MemoryEmbeddingOptions>>(),
-        sp.GetService<ICustomLogger>()));
+        sp.GetService<ICustomLogger>(),
+        sp.GetRequiredService<TinyGenerator.Services.DatabaseService>()));
 builder.Services.Configure<MemoryEmbeddingOptions>(builder.Configuration.GetSection("Memory:Embeddings"));
 builder.Services.AddSingleton<IMemoryEmbeddingGenerator, OllamaEmbeddingGenerator>();
 builder.Services.AddSingleton<MemoryEmbeddingBackfillService>();
@@ -135,8 +139,11 @@ builder.Services.AddTransient<LangChainStoryGenerationService>();
 // LangChain test service (new testing framework using HybridLangChainOrchestrator)
 builder.Services.AddTransient<LangChainTestService>();
 
-// Database access service + cost controller (sqlite) - register as factory to avoid heavy constructor work during registration
-builder.Services.AddSingleton(sp => new DatabaseService("data/storage.db"));
+// Multi-step task orchestration services (Sequential Multi-Step Prompting with Response Checker)
+builder.Services.AddScoped<ResponseCheckerService>();
+builder.Services.AddScoped<MultiStepOrchestrationService>();
+
+// (DatabaseService already registered earlier)
 // Configure custom logger options from configuration (section: AppLog)
 builder.Services.Configure<CustomLoggerOptions>(builder.Configuration.GetSection("AppLog"));
 // Register the async database-backed logger (ensure DatabaseService is available)
@@ -169,9 +176,16 @@ builder.Services.AddSingleton<CostController>(sp =>
 // Ollama management service
 builder.Services.AddSingleton<IOllamaManagementService, OllamaManagementService>();
 
+// Ollama monitor service (used for discovering/running local Ollama models)
+builder.Services.AddSingleton<IOllamaMonitorService, OllamaMonitorService>();
+
 Console.WriteLine($"[Startup] About to call builder.Build() at {DateTime.UtcNow:o}");
 var app = builder.Build();
 Console.WriteLine($"[Startup] builder.Build() completed at {DateTime.UtcNow:o}");
+
+// Ensure the global ServiceLocator points to the DI DatabaseService so legacy/static code
+// can route database access through the centralized semaphore-protected helpers.
+// ServiceLocator removed: DatabaseService is now available via DI (IOllamaMonitorService, DatabaseService, etc.)
 
 // Run expensive initialization (database schema migrations, seeding) after the DI container
 // is built to avoid blocking the `builder.Build()` call (which can resolve registered
@@ -199,7 +213,8 @@ try
     if (modelCount == 0)
     {
         logger?.LogInformation("[Startup] Models table empty — attempting to populate local Ollama models...");
-        StartupTasks.PopulateLocalOllamaModelsIfNeededAsync(cost, builder.Configuration, logger).GetAwaiter().GetResult();
+        var ollamaMonitor = app.Services.GetService<TinyGenerator.Services.IOllamaMonitorService>();
+        StartupTasks.PopulateLocalOllamaModelsIfNeededAsync(cost, builder.Configuration, logger, ollamaMonitor).GetAwaiter().GetResult();
     }
     else
     {

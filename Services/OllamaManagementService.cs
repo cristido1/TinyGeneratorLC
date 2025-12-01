@@ -11,10 +11,12 @@ namespace TinyGenerator.Services
     public class OllamaManagementService : IOllamaManagementService
     {
         private readonly DatabaseService _database;
+        private readonly IOllamaMonitorService _monitor;
 
-        public OllamaManagementService(DatabaseService database)
+        public OllamaManagementService(DatabaseService database, IOllamaMonitorService monitor)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
+            _monitor = monitor ?? throw new ArgumentNullException(nameof(monitor));
         }
 
         public async Task<List<object>> PurgeDisabledModelsAsync()
@@ -26,7 +28,7 @@ namespace TinyGenerator.Services
             var results = new List<object>();
 
             // Query installed models first (uses `ollama list`) and only attempt deletion for models that are present locally
-            var installed = await OllamaMonitorService.GetInstalledModelsAsync();
+            var installed = await _monitor.GetInstalledModelsAsync();
             var installedSet = new HashSet<string>(
                 (installed ?? new List<OllamaModelInfo>()).Select(x => x.Name ?? string.Empty),
                 StringComparer.OrdinalIgnoreCase
@@ -42,7 +44,7 @@ namespace TinyGenerator.Services
                         continue;
                     }
 
-                    var res = await OllamaMonitorService.DeleteInstalledModelAsync(m.Name);
+                    var res = await _monitor.DeleteInstalledModelAsync(m.Name);
                     if (res.Success)
                     {
                         // remove from DB as well
@@ -65,7 +67,7 @@ namespace TinyGenerator.Services
 
         public async Task<int> RefreshRunningContextsAsync()
         {
-            var running = await OllamaMonitorService.GetRunningModelsAsync();
+            var running = await _monitor.GetRunningModelsAsync();
             if (running == null || running.Count == 0)
             {
                 return 0;

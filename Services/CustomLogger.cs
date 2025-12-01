@@ -40,6 +40,11 @@ namespace TinyGenerator.Services
 
         public void Log(string level, string category, string message, string? exception = null, string? state = null)
         {
+            LogWithChatText(level, category, message, null, exception, state);
+        }
+
+        private void LogWithChatText(string level, string category, string message, string? chatText = null, string? exception = null, string? state = null)
+        {
             if (_disposed) return;
 
             // Broadcast to live monitor regardless of database logging setting
@@ -61,7 +66,8 @@ namespace TinyGenerator.Services
                 ThreadId = (int)(LogScope.CurrentOperationId ?? Environment.CurrentManagedThreadId),
                 ThreadScope = scope,
                 AgentName = null,
-                Context = null
+                Context = null,
+                ChatText = chatText
             };
 
             bool shouldFlush = false;
@@ -90,7 +96,8 @@ namespace TinyGenerator.Services
                 : prompt;
             
             var message = $"[{modelName}] PROMPT: {displayPrompt}";
-            Log("Information", "ModelPrompt", message);
+            var chatText = displayPrompt;
+            LogWithChatText("Information", "ModelPrompt", message, chatText);
         }
 
         /// <summary>
@@ -105,7 +112,8 @@ namespace TinyGenerator.Services
                 : response;
             
             var message = $"[{modelName}] RESPONSE: {displayResponse}";
-            Log("Information", "ModelCompletion", message);
+            var chatText = displayResponse;
+            LogWithChatText("Information", "ModelCompletion", message, chatText);
         }
 
         /// <summary>
@@ -115,7 +123,26 @@ namespace TinyGenerator.Services
         {
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] REQUEST_JSON: {requestJson}";
-            Log("Information", "ModelRequest", message);
+            
+            // Extract user content from JSON for cleaner chat display
+            string chatText;
+            try
+            {
+                var json = System.Text.Json.JsonDocument.Parse(requestJson);
+                var messages = json.RootElement.GetProperty("messages");
+                var userContent = messages.EnumerateArray()
+                    .FirstOrDefault(m => m.GetProperty("role").GetString() == "user")
+                    .GetProperty("content").GetString();
+                
+                chatText = userContent ?? requestJson;
+            }
+            catch
+            {
+                // Fallback to full JSON if parsing fails
+                chatText = requestJson;
+            }
+            
+            LogWithChatText("Information", "ModelRequest", message, chatText);
         }
 
         /// <summary>
@@ -125,7 +152,29 @@ namespace TinyGenerator.Services
         {
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] RESPONSE_JSON: {responseJson}";
-            Log("Information", "ModelResponse", message);
+            
+            // Extract assistant content from Ollama response JSON for cleaner chat display
+            string chatText;
+            try
+            {
+                var json = System.Text.Json.JsonDocument.Parse(responseJson);
+                if (json.RootElement.TryGetProperty("message", out var messageObj) &&
+                    messageObj.TryGetProperty("content", out var contentProp))
+                {
+                    chatText = contentProp.GetString() ?? responseJson;
+                }
+                else
+                {
+                    chatText = responseJson;
+                }
+            }
+            catch
+            {
+                // Fallback to full JSON if parsing fails
+                chatText = responseJson;
+            }
+            
+            LogWithChatText("Information", "ModelResponse", message, chatText);
         }
 
         private async Task OnTimerAsync()

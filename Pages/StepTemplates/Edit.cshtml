@@ -1,0 +1,151 @@
+@page
+@model TinyGenerator.Pages.StepTemplates.EditModel
+@{
+    ViewData["Title"] = "Edit Step Template";
+    ViewData["PageDescription"] = Model.Template?.Name ?? "Edit template";
+}
+
+<form method="post">
+    <input type="hidden" asp-for="Template.Id" />
+    <input type="hidden" asp-for="Template.CreatedAt" />
+
+    <div class="row">
+        <div class="col-md-8">
+            <div class="mb-3">
+                <label asp-for="Template.Name" class="form-label">Name <span class="text-danger">*</span></label>
+                <input asp-for="Template.Name" class="form-control" required maxlength="200" />
+                <span asp-validation-for="Template.Name" class="text-danger"></span>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Template.TaskType" class="form-label">Task Type <span class="text-danger">*</span></label>
+                <select asp-for="Template.TaskType" class="form-select" required>
+                    <option value="story">story</option>
+                    <option value="document">document</option>
+                    <option value="analysis">analysis</option>
+                </select>
+                <span asp-validation-for="Template.TaskType" class="text-danger"></span>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Template.Description" class="form-label">Description</label>
+                <textarea asp-for="Template.Description" class="form-control" rows="3" maxlength="500"></textarea>
+                <span asp-validation-for="Template.Description" class="text-danger"></span>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Template.StepPrompt" class="form-label">Step Prompt <span class="text-danger">*</span></label>
+                <textarea asp-for="Template.StepPrompt" class="form-control font-monospace" rows="20" required style="font-size: 0.9rem;"></textarea>
+                <span asp-validation-for="Template.StepPrompt" class="text-danger"></span>
+                <div class="form-text">
+                    <strong>Format:</strong> Numbered steps (e.g., "1. Crea trama", "2. Personaggi").<br/>
+                    <strong>Placeholders:</strong> 
+                    <code>{{STEP_N}}</code> - output of step N, 
+                    <code>{{STEP_N_SUMMARY}}</code> - summarized output of step N,
+                    <code>{{STEP_N_EXTRACT:filter}}</code> - extract section from step N,
+                    <code>{{STEPS_N-M_SUMMARY}}</code> - summarized output of steps N through M
+                </div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <a asp-page="./Index" class="btn btn-secondary">Cancel</a>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header bg-light">
+                    <h6 class="mb-0">Preview Steps</h6>
+                </div>
+                <div class="card-body" id="stepsPreview">
+                    <div class="text-muted">Type in the Step Prompt field to see preview...</div>
+                </div>
+            </div>
+
+            <div class="card mt-3">
+                <div class="card-header bg-light">
+                    <h6 class="mb-0">Template Info</h6>
+                </div>
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-4">ID:</dt>
+                        <dd class="col-sm-8">@Model.Template?.Id</dd>
+                        
+                        <dt class="col-sm-4">Created:</dt>
+                        <dd class="col-sm-8">
+                            @if (DateTime.TryParse(Model.Template?.CreatedAt, out var created))
+                            {
+                                @created.ToString("yyyy-MM-dd HH:mm")
+                            }
+                            else
+                            {
+                                @Model.Template?.CreatedAt
+                            }
+                        </dd>
+                        
+                        <dt class="col-sm-4">Updated:</dt>
+                        <dd class="col-sm-8">
+                            @if (DateTime.TryParse(Model.Template?.UpdatedAt, out var updated))
+                            {
+                                @updated.ToString("yyyy-MM-dd HH:mm")
+                            }
+                            else
+                            {
+                                @Model.Template?.UpdatedAt
+                            }
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+
+@section Scripts {
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Live preview of parsed steps
+            const stepPromptTextarea = document.querySelector('[name="Template.StepPrompt"]');
+            const previewDiv = document.getElementById('stepsPreview');
+
+            if (!stepPromptTextarea || !previewDiv) {
+                console.error('Preview elements not found');
+                return;
+            }
+
+            function updatePreview() {
+                const text = stepPromptTextarea.value;
+                const lines = text.split('\n');
+                const steps = lines.filter(line => /^\d+\./.test(line.trim()));
+
+                if (steps.length === 0) {
+                    previewDiv.innerHTML = '<div class="text-muted small">No numbered steps found. Format: "1. Step one", "2. Step two"</div>';
+                    return;
+                }
+
+                let html = '<ol class="list-group list-group-numbered" style="font-size: 0.85rem;">';
+                steps.forEach(step => {
+                    const stepText = step.replace(/^\d+\.\s*/, '').trim();
+                    html += `<li class="list-group-item py-2 px-3">${escapeHtml(stepText)}</li>`;
+                });
+                html += '</ol>';
+                html += `<div class="mt-2 text-muted small">Total: ${steps.length} steps</div>`;
+                
+                previewDiv.innerHTML = html;
+            }
+
+            function escapeHtml(text) {
+                const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+                return text.replace(/[&<>"']/g, m => map[m]);
+            }
+
+            // Update preview on input
+            stepPromptTextarea.addEventListener('input', updatePreview);
+            stepPromptTextarea.addEventListener('keyup', updatePreview);
+            
+            // Initial preview
+            updatePreview();
+        });
+    </script>
+}

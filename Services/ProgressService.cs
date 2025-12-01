@@ -198,5 +198,58 @@ namespace TinyGenerator.Services
             var snapshot = GetBusyModelsSnapshot();
             return _hubContext.Clients.All.SendAsync("BusyModelsUpdated", snapshot);
         }
+
+        // Multi-step progress methods
+        public async Task BroadcastStepProgress(Guid generationId, int current, int max, string stepDescription)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("StepProgress", generationId.ToString(), current, max, stepDescription);
+            }
+            catch (Exception ex)
+            {
+                try { _logger?.LogWarning(ex, "Failed broadcasting StepProgress for {GenId}", generationId); } catch { }
+            }
+        }
+
+        public async Task BroadcastStepRetry(Guid generationId, int retryCount, string reason)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("StepRetry", generationId.ToString(), retryCount, reason);
+            }
+            catch (Exception ex)
+            {
+                try { _logger?.LogWarning(ex, "Failed broadcasting StepRetry for {GenId}", generationId); } catch { }
+            }
+        }
+
+        public async Task BroadcastStepComplete(Guid generationId, int stepNumber)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("StepComplete", generationId.ToString(), stepNumber);
+            }
+            catch (Exception ex)
+            {
+                try { _logger?.LogWarning(ex, "Failed broadcasting StepComplete for {GenId}", generationId); } catch { }
+            }
+        }
+
+        public async Task BroadcastTaskComplete(Guid generationId, string status)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("TaskComplete", generationId.ToString(), status);
+            }
+            catch (Exception ex)
+            {
+                try { _logger?.LogWarning(ex, "Failed broadcasting TaskComplete for {GenId}", generationId); } catch { }
+            }
+        }
     }
 }

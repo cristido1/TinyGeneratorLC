@@ -26,6 +26,7 @@
     <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
     <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/space-background.css" asp-append-version="true" />
     
     <style>
         body {
@@ -316,6 +317,8 @@
 </head>
 <body>
     <canvas id="matrix-canvas"></canvas>
+    <!-- Space background canvas (stars + spaceship) -->
+    <canvas id="space-canvas"></canvas>
     
     <!-- Active agents badges container -->
     <div id="active-agents-container"></div>
@@ -376,8 +379,10 @@
     <script src="~/lib/sweetalert2/sweetalert2.min.js"></script>
     <script src="~/js/sweetalert-config.js" asp-append-version="true"></script>
 
-    <!-- Matrix Rain Effect -->
-    <script src="~/js/matrix_effect.js" asp-append-version="true"></script>
+    <!-- Matrix Rain Effect (temporaneamente disabilitato) -->
+    <!-- <script src="~/js/matrix_effect.js" asp-append-version="true"></script> -->
+    <!-- Space background effect (stars + occasional spaceship) -->
+    <script src="~/js/space-background.js" asp-append-version="true"></script>
 
     <!-- Active Agents Badge Manager -->
     <script src="~/js/active-agents.js" asp-append-version="true"></script>

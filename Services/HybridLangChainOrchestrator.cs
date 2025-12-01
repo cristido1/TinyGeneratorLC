@@ -115,6 +115,21 @@ namespace TinyGenerator.Services
             return null;
         }
 
+        /// <summary>
+        /// Get the registered tool instance responsible for a given function name.
+        /// This looks up the internal function->tool map populated during registration.
+        /// </summary>
+        public BaseLangChainTool? GetToolByFunctionName(string functionName)
+        {
+            if (string.IsNullOrWhiteSpace(functionName))
+                return null;
+
+            if (_functionToolMap.TryGetValue(functionName, out var tool))
+                return tool;
+
+            return null;
+        }
+
         private void RemoveFunctionMappings(BaseLangChainTool tool)
         {
             var removeKeys = _functionToolMap

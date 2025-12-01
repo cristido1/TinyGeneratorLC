@@ -16,18 +16,35 @@
 
         <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px">
             <div style="display:flex; align-items:center; gap:8px;">
-                <label for="Writer" class="note-title" style="margin:0">Scegli writer</label>
-                <select id="Writer" name="Writer" class="keep-input" style="width:220px; padding:8px">
-                    <option value="All">Tutti (A, B, C)</option>
-                    <option value="A">Writer A (Planner)</option>
-                    <option value="B">Writer B (FreePlanner)</option>
-                    <option value="C">Writer C (Single-shot)</option>
+                <label for="WriterAgentId" class="note-title" style="margin:0">Scegli writer agent</label>
+                <select id="WriterAgentId" name="WriterAgentId" class="keep-input" style="width:280px; padding:8px">
+                    <option value="0">Legacy (A/B/C)</option>
+                    @foreach (var agent in Model.Agents)
+                    {
+                        <option value="@agent.Id">
+                            @agent.Name
+                            @if (!string.IsNullOrEmpty(agent.MultiStepTemplateName))
+                            {
+                                <text> [Multi-step: @agent.MultiStepTemplateName]</text>
+                            }
+                        </option>
+                    }
                 </select>
             </div>
 
             <div style="margin-left:auto">
                 <button type="button" id="startBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia generazione</button>
             </div>
+        </div>
+
+        <!-- Progress bar for multi-step -->
+        <div id="multiStepProgress" style="display:none; margin-top:12px;">
+            <div class="progress" style="height:24px;">
+                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width:0%">
+                    Step 0/0
+                </div>
+            </div>
+            <div id="stepStatus" style="margin-top:6px; font-size:0.9em; color:#666;"></div>
         </div>
     </form>
 </div>
@@ -74,6 +91,30 @@
                     appendMessage('✅ Completato.');
                     if (finalResult) appendMessage('Risultato finale (estratto):\n' + (finalResult.substring ? finalResult.substring(0,1000) : finalResult), 'result');
                 });
+                // Multi-step events
+                connection.on('StepProgress', (id, current, max, stepDesc) => {
+                    if (id !== genId) return;
+                    updateProgressBar(current, max, stepDesc);
+                });
+                connection.on('StepRetry', (id, retryCount, reason) => {
+                    if (id !== genId) return;
+                    appendMessage(`🔄 Retry ${retryCount}: ${reason}`, 'warning');
+                });
+                connection.on('StepComplete', (id, stepNum) => {
+                    if (id !== genId) return;
+                    appendMessage(`✅ Step ${stepNum} completed`, 'success');
+                });
+                connection.on('TaskComplete', (id, status) => {
+                    if (id !== genId) return;
+                    hideProgressBar();
+                    if (status === 'completed') {
+                        appendMessage('✅ Task completed successfully', 'success');
+                    } else if (status === 'failed') {
+                        appendMessage('❌ Task failed', 'error');
+                    } else if (status === 'cancelled') {
+                        appendMessage('⚠️ Task cancelled', 'warning');
+                    }
+                });
                 await window.appSignalR.joinGroup(genId);
                 return;
             }
@@ -85,13 +126,36 @@
 
             connection.on('ProgressAppended', (id, message, extraClass) => {
                 if (id !== genId) return;
-                // append message
                 appendMessage(message, extraClass);
             });
             connection.on('ProgressCompleted', (id, finalResult) => {
                 if (id !== genId) return;
                 appendMessage('✅ Completato.');
                 if (finalResult) appendMessage('Risultato finale (estratto):\n' + (finalResult.substring ? finalResult.substring(0,1000) : finalResult), 'result');
+            });
+            // Multi-step events
+            connection.on('StepProgress', (id, current, max, stepDesc) => {
+                if (id !== genId) return;
+                updateProgressBar(current, max, stepDesc);
+            });
+            connection.on('StepRetry', (id, retryCount, reason) => {
+                if (id !== genId) return;
+                appendMessage(`🔄 Retry ${retryCount}: ${reason}`, 'warning');
+            });
+            connection.on('StepComplete', (id, stepNum) => {
+                if (id !== genId) return;
+                appendMessage(`✅ Step ${stepNum} completed`, 'success');
+            });
+            connection.on('TaskComplete', (id, status) => {
+                if (id !== genId) return;
+                hideProgressBar();
+                if (status === 'completed') {
+                    appendMessage('✅ Task completed successfully', 'success');
+                } else if (status === 'failed') {
+                    appendMessage('❌ Task failed', 'error');
+                } else if (status === 'cancelled') {
+                    appendMessage('⚠️ Task cancelled', 'warning');
+                }
             });
 
             await connection.start();
@@ -166,12 +230,40 @@
             el.style.padding = '8px';
             el.style.borderRadius = '4px';
             el.style.marginBottom = '4px';
+        } else if (extraClass === 'warning') {
+            el.style.backgroundColor = '#fff3cd';
+            el.style.color = '#856404';
+            el.style.padding = '8px';
+            el.style.borderRadius = '4px';
+            el.style.marginBottom = '4px';
         }
         
         el.textContent = msg;
         statusPre.appendChild(el);
     }
     function renderMessages(messages) { clearMessages(); if (!messages) return; messages.forEach(m => appendMessage(m)); }
+
+    // Progress bar helpers
+    function updateProgressBar(current, max, stepDesc) {
+        const progressDiv = document.getElementById('multiStepProgress');
+        const progressBar = document.getElementById('progressBar');
+        const stepStatus = document.getElementById('stepStatus');
+        
+        if (progressDiv && progressBar && stepStatus) {
+            progressDiv.style.display = 'block';
+            const pct = Math.round((current / max) * 100);
+            progressBar.style.width = pct + '%';
+            progressBar.textContent = `Step ${current}/${max}`;
+            stepStatus.textContent = stepDesc;
+        }
+    }
+
+    function hideProgressBar() {
+        const progressDiv = document.getElementById('multiStepProgress');
+        if (progressDiv) {
+            progressDiv.style.display = 'none';
+        }
+    }
 
     // hide error when user edits prompt
     const promptInput = document.getElementById('Prompt');

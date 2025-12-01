@@ -464,20 +464,28 @@ public sealed class StoriesService
 
     private string BuildTtsJsonPrompt(StoryRecord story)
     {
-        // For the TTS JSON generator we now pass only the plain story text as user input.
-        // Any instructions or workflow details must come from the agent's system message/config.
-        return story.Story ?? string.Empty;
+        // For the TTS JSON generator we now do NOT pass the story text inline.
+        // Instead, the model must use the read_story_part function to retrieve segments.
+        // This allows the model to process large stories in chunks and reduces token overhead.
+        var builder = new StringBuilder();
+        builder.AppendLine("You are generating a TTS schema (timeline of narration and character dialogue) for a story.");
+        builder.AppendLine("You must NOT copy the full story text into this prompt.");
+        builder.AppendLine("Instead, use the read_story_part function to retrieve segments of the story (start with part_index=0 and continue requesting parts until you receive \"is_last\": true).");
+        builder.AppendLine("Do not invent story content; rely only on the chunks returned by read_story_part.");
+        builder.AppendLine("Use the available tools (add_narration, add_phrase, confirm) to build the TTS schema step by step as you read through the story.");
+        builder.AppendLine("Call confirm exactly once when you have finished building the complete schema.");
+        return builder.ToString();
     }
 
     private string BuildStoryEvaluationPrompt(StoryRecord story)
     {
         var builder = new StringBuilder();
         builder.AppendLine("You are evaluating a story and must record your judgement using the available tools.");
-        builder.AppendLine($"Story ID: {story.Id}");
         builder.AppendLine("You must NOT copy the full story text into this prompt.");
         builder.AppendLine("Instead, use the read_story_part function to retrieve segments of the story (start with part_index=0 and continue requesting parts until you receive \"is_last\": true).");
         builder.AppendLine("Do not invent story content; rely only on the chunks returned by read_story_part.");
         builder.AppendLine("After you have reviewed the necessary sections, call the evaluate_full_story function exactly once with the provided story_id.");
+        builder.AppendLine("If you finish your review but fail to call evaluate_full_story, the orchestrator will remind you and ask again up to 3 times — you MUST call the function before the evaluation completes.");
         builder.AppendLine("Populate the following scores (0-10): narrative_coherence_score, originality_score, emotional_impact_score, action_score.");
         builder.AppendLine("Also include the corresponding *_defects values (empty string or \"None\" is acceptable if there are no defects).");
         builder.AppendLine("Do not return an overall evaluation text – the system will compute the aggregate score automatically.");
@@ -580,10 +588,20 @@ public sealed class StoriesService
             }
 
             var folderPath = context.FolderPath;
-            var userPrompt = _service.BuildTtsJsonPrompt(story);
-            string? systemMessage = !string.IsNullOrWhiteSpace(ttsAgent.Instructions)
-                ? ttsAgent.Instructions
-                : _service.ComposeSystemMessage(ttsAgent);
+            
+            // Build system message: use agent's prompt + instructions if available
+            string? systemMessage = null;
+            if (!string.IsNullOrWhiteSpace(ttsAgent.Instructions))
+                systemMessage = ttsAgent.Instructions;
+            else
+                systemMessage = _service.ComposeSystemMessage(ttsAgent);
+            
+            // Build user prompt: use agent's Prompt if available, otherwise use the default
+            string userPrompt;
+            if (!string.IsNullOrWhiteSpace(ttsAgent.Prompt))
+                userPrompt = ttsAgent.Prompt;
+            else
+                userPrompt = _service.BuildTtsJsonPrompt(story);
 
             HybridLangChainOrchestrator orchestrator;
             try
@@ -599,6 +617,13 @@ public sealed class StoriesService
             {
                 _service._logger?.LogError(ex, "Impossibile creare l'orchestrator per JSON TTS");
                 return (false, $"Errore creazione orchestrator: {ex.Message}");
+            }
+
+            // Set CurrentStoryId on TtsSchemaTool so read_story_part can fetch the story
+            var ttsSchemaaTool = orchestrator.GetTool<TtsSchemaTool>("ttsschema");
+            if (ttsSchemaaTool != null)
+            {
+                ttsSchemaaTool.CurrentStoryId = story.Id;
             }
 
             LangChainChatBridge chatBridge;

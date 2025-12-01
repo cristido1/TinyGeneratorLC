@@ -14,6 +14,8 @@ namespace TinyGenerator.Skills
     public class EvaluatorTool : BaseLangChainTool, ITinyTool
     {
         private readonly DatabaseService? _database;
+        // Track which part indexes have been requested during evaluation
+        private readonly HashSet<int> _requestedParts = new();
         public int? ModelId { get; set; }
         public string? ModelName { get; set; }
         public int? AgentId { get; set; }
@@ -21,6 +23,8 @@ namespace TinyGenerator.Skills
         public string? LastFunctionResult { get; set; }
         public string? LastResult { get; set; }
         public long? CurrentStoryId { get; set; }
+
+        public IReadOnlyCollection<int> RequestedParts => _requestedParts;
 
         public EvaluatorTool(DatabaseService? database = null, ICustomLogger? logger = null) 
             : base("evaluate_full_story", "Complete story evaluation for a single story", logger)
@@ -43,8 +47,11 @@ namespace TinyGenerator.Skills
             yield return CreateFunctionSchema(
                 "read_story_part",
                 "Reads a segment of the story for evaluation.",
-                BuildReadStoryPartProperties(),
-                new List<string> { "story_id", "part_index" });
+                new Dictionary<string, object>
+                {
+                    { "part_index", new Dictionary<string, object> { { "type", "integer" }, { "description", "0-based segment index" } } }
+                },
+                new List<string> { "part_index" });
         }
 
         public override IEnumerable<string> FunctionNames
@@ -68,7 +75,7 @@ namespace TinyGenerator.Skills
             return Task.FromResult(JsonSerializer.Serialize(new { error = $"Unknown function: {functionName}" }));
         }
 
-        private readonly int _storyChunkSize = 4000;
+        private readonly int _storyChunkSize = 1500;
 
         private async Task<string> EvaluateFullStoryAsync(string jsonInput)
         {
@@ -154,12 +161,19 @@ namespace TinyGenerator.Skills
                 if (input == null)
                     return JsonSerializer.Serialize(new { error = "Invalid input format" });
 
-                if (input.StoryId <= 0 || input.PartIndex < 0)
+                if (input.PartIndex < 0)
                 {
-                    return JsonSerializer.Serialize(new { error = "story_id and part_index must be non-negative" });
+                    return JsonSerializer.Serialize(new { error = "part_index must be non-negative" });
                 }
 
-                var story = _database?.GetStoryById(input.StoryId);
+                if (!CurrentStoryId.HasValue || CurrentStoryId.Value <= 0)
+                    return JsonSerializer.Serialize(new { error = "CurrentStoryId not set" });
+
+                // register requested part for loop detection
+                try { _requestedParts.Add(input.PartIndex); } catch { }
+
+                var story = _database?.GetStoryById(CurrentStoryId.Value);
+                
                 if (story == null || string.IsNullOrEmpty(story.Story))
                 {
                     return JsonSerializer.Serialize(new { error = "Story not found or empty" });
@@ -176,11 +190,18 @@ namespace TinyGenerator.Skills
                 var chunk = text[start..end];
                 var payload = new
                 {
-                    story_id = input.StoryId,
                     part_index = input.PartIndex,
                     text = chunk,
                     is_last = end >= text.Length
                 };
+
+                // Diagnostic logging: report that a story part was read and its length
+                try
+                {
+                    var isLast = end >= text.Length;
+                    CustomLogger?.Log("Info", "EvaluatorTool", $"ReadStoryPart part={input.PartIndex} len={chunk.Length} is_last={isLast}");
+                }
+                catch { }
 
                 return JsonSerializer.Serialize(payload);
             }
@@ -189,6 +210,25 @@ namespace TinyGenerator.Skills
                 CustomLogger?.Log("Error", "EvaluatorTool", $"ReadStoryPart failed: {ex.Message}", ex.ToString());
                 return JsonSerializer.Serialize(new { error = ex.Message });
             }
+        }
+
+        public void ResetRequestedParts()
+        {
+            _requestedParts.Clear();
+        }
+
+        public bool HasRequestedAllParts()
+        {
+            string storyText = string.Empty;
+            if (CurrentStoryId.HasValue && _database != null)
+            {
+                var s = _database.GetStoryById(CurrentStoryId.Value);
+                storyText = s?.Story ?? string.Empty;
+            }
+            if (string.IsNullOrEmpty(storyText))
+                return false;
+            var totalParts = Math.Max(1, (int)Math.Ceiling((double)storyText.Length / _storyChunkSize));
+            return _requestedParts.Count >= totalParts;
         }
 
         private static string? ValidateInput(EvaluateFullStoryInput input)
@@ -242,15 +282,6 @@ namespace TinyGenerator.Skills
                 { "emotional_impact_defects", CreateDefectProperty("Defects found in emotional impact") },
                 { "action_score", CreateScoreProperty("Score for pacing/action intensity (0-10)") },
                 { "action_defects", CreateDefectProperty("Defects found in action/pacing") }
-            };
-        }
-
-        private static Dictionary<string, object> BuildReadStoryPartProperties()
-        {
-            return new Dictionary<string, object>
-            {
-                { "story_id", new Dictionary<string, object> { { "type", "integer" }, { "description", "ID of the story" } } },
-                { "part_index", new Dictionary<string, object> { { "type", "integer" }, { "description", "0-based segment index" } } }
             };
         }
 

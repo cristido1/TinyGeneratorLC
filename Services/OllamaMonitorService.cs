@@ -25,17 +25,23 @@ namespace TinyGenerator.Services
     // `OllamaModelInfo` for Ollama-specific monitoring data.
 
     // Simple monitor: stores last prompt per model and can run `ollama ps` to list running models.
-    public static class OllamaMonitorService
+    public class OllamaMonitorService : IOllamaMonitorService
     {
-        private static readonly ConcurrentDictionary<string, (string Prompt, DateTime Ts)> _lastPrompt = new();
-        private static string? _ollamaEndpoint = null;
+        private readonly ConcurrentDictionary<string, (string Prompt, DateTime Ts)> _lastPrompt = new();
+        private string? _ollamaEndpoint = null;
+        private readonly ICustomLogger? _logger;
 
-        public static void SetOllamaEndpoint(string? endpoint)
+        public OllamaMonitorService(ICustomLogger? logger = null)
+        {
+            _logger = logger;
+        }
+
+        public void SetOllamaEndpoint(string? endpoint)
         {
             _ollamaEndpoint = endpoint;
         }
 
-        private static ProcessStartInfo CreateOllamaProcessStartInfo(string arguments)
+        private ProcessStartInfo CreateOllamaProcessStartInfo(string arguments)
         {
             var psi = new ProcessStartInfo("ollama", arguments)
             {
@@ -53,49 +59,29 @@ namespace TinyGenerator.Services
             return psi;
         }
 
-        public static void RecordPrompt(string model, string prompt)
+        public void RecordPrompt(string model, string prompt)
         {
             try
             {
                 _lastPrompt[model ?? string.Empty] = (prompt ?? string.Empty, DateTime.UtcNow);
-
-                // Persist recent prompts so they survive restarts and can be inspected later.
+                // Persist prompt via the central logger which writes to DatabaseService (semaphore-protected)
                 try
                 {
-                    var dbPath = "data/storage.db";
-                    var dir = Path.GetDirectoryName(dbPath) ?? ".";
-                    Directory.CreateDirectory(dir);
-                    using var conn = new SqliteConnection($"Data Source={dbPath}");
-                    conn.Open();
-                    using var cmd = conn.CreateCommand();
-                    cmd.CommandText = @"CREATE TABLE IF NOT EXISTS prompts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  model TEXT,
-  prompt TEXT,
-  ts TEXT
-);";
-                    cmd.ExecuteNonQuery();
-
-                    using var ins = conn.CreateCommand();
-                    ins.CommandText = "INSERT INTO prompts(model, prompt, ts) VALUES($m,$p,$ts);";
-                    ins.Parameters.AddWithValue("$m", model ?? string.Empty);
-                    ins.Parameters.AddWithValue("$p", prompt ?? string.Empty);
-                    ins.Parameters.AddWithValue("$ts", DateTime.UtcNow.ToString("o"));
-                    ins.ExecuteNonQuery();
+                    _logger?.LogPrompt(model ?? string.Empty, prompt ?? string.Empty);
                 }
-                catch { /* non-fatal: best-effort persistence */ }
+                catch { }
             }
             catch { }
         }
 
-        public static (string Prompt, DateTime Ts)? GetLastPrompt(string model)
+        public (string Prompt, DateTime Ts)? GetLastPrompt(string model)
         {
             if (model == null) return null;
             if (_lastPrompt.TryGetValue(model, out var v)) return v;
             return null;
         }
 
-        public static async Task<List<OllamaModelInfo>> GetRunningModelsAsync()
+        public async Task<List<OllamaModelInfo>> GetRunningModelsAsync()
         {
             return await Task.Run(() =>
             {
@@ -150,7 +136,7 @@ namespace TinyGenerator.Services
         }
 
         // List installed Ollama models (best-effort) by calling `ollama list` and parsing output.
-        public static async Task<List<OllamaModelInfo>> GetInstalledModelsAsync()
+        public async Task<List<OllamaModelInfo>> GetInstalledModelsAsync()
         {
             return await Task.Run(() =>
             {
@@ -304,7 +290,7 @@ namespace TinyGenerator.Services
 
         // Attempt to delete/uninstall an installed Ollama model by trying several common CLI verbs.
         // Returns (success, output).
-        public static async Task<(bool Success, string Output)> DeleteInstalledModelAsync(string modelName)
+        public async Task<(bool Success, string Output)> DeleteInstalledModelAsync(string modelName)
         {
             return await Task.Run(() =>
             {
@@ -366,7 +352,7 @@ namespace TinyGenerator.Services
         }
 
         // Stop a running Ollama model instance (best-effort). Returns (success, output).
-        public static async Task<(bool Success, string Output)> StopModelAsync(string modelName)
+        public async Task<(bool Success, string Output)> StopModelAsync(string modelName)
         {
             return await Task.Run(() =>
             {
@@ -393,7 +379,7 @@ namespace TinyGenerator.Services
         /// Interroga l'endpoint HTTP /api/ps di Ollama per ottenere informazioni in tempo reale sui modelli in esecuzione.
         /// Ritorna informazioni più dettagliate rispetto a `ollama ps`.
         /// </summary>
-        public static async Task<List<OllamaModelInfo>> GetRunningModelsFromHttpAsync()
+        public async Task<List<OllamaModelInfo>> GetRunningModelsFromHttpAsync()
         {
             var list = new List<OllamaModelInfo>();
             try
@@ -440,7 +426,7 @@ namespace TinyGenerator.Services
         /// Legge i log di Ollama e cerca informazioni su richieste completate.
         /// Ritorna una lista di entry dai log con timestamp, modello, e nota (se presente).
         /// </summary>
-        public static async Task<List<OllamaLogEntry>> GetRecentLogsAsync(string? noteFilter = null)
+        public async Task<List<OllamaLogEntry>> GetRecentLogsAsync(string? noteFilter = null)
         {
             var entries = new List<OllamaLogEntry>();
             try
@@ -477,7 +463,7 @@ namespace TinyGenerator.Services
         /// Registra una nota associata a un modello Ollama per il tracciamento.
         /// La nota verrà aggiunta ai log tramite commenti o metadati per il recupero successivo.
         /// </summary>
-        public static void RecordModelNote(string model, string note)
+        public void RecordModelNote(string model, string note)
         {
             try
             {
@@ -493,7 +479,7 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Recupera le note associate a un modello Ollama dal tracking interno.
         /// </summary>
-        public static string? GetModelNote(string model)
+        public string? GetModelNote(string model)
         {
             if (_lastPrompt.TryGetValue(model, out var data))
             {

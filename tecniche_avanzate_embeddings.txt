@@ -1,0 +1,100 @@
+Tecniche avanzate oltre agli embeddings
+=======================================
+
+1) Embeddings – Similarità semantica
+------------------------------------
+Permettono di misurare quanto due testi siano simili nel significato. Utili per:
+- rilevare ripetizioni
+- verificare coerenza tra trama e capitoli
+- confrontare personaggi, scene ed eventi
+- controllare che il modello non deragli semanticamente
+
+2) Logits – Indicatori di instabilità
+-------------------------------------
+I logits mostrano quanto il modello è “sicuro” delle parole che sta generando.
+Permettono di:
+- rilevare degenerazioni prima che appaiano
+- capire quando un modello sta generando parole improbabili
+- bloccare la generazione e chiedere un retry
+
+3) Clustering vettoriale
+------------------------
+Usa gli embeddings per raggruppare frasi simili. Utile per:
+- identificare pattern ripetitivi
+- scoprire paragraﬁ incoerenti
+- individuare parti troppo simili tra loro
+
+4) Cross-encoders – Similarità profonda
+----------------------------------------
+Rispetto agli embeddings, considerano contemporaneamente due testi.
+Perfetti per:
+- confrontare un capitolo con la trama
+- confrontare la struttura con il capitolo scritto
+- dare un punteggio di coerenza molto più preciso
+
+5) Rerankers – Scelta del miglior risultato
+-------------------------------------------
+Permettono di:
+- generare due versioni dello stesso testo
+- far scegliere a un modello specializzato quella più coerente
+- ottenere risultati sempre migliori senza cambiare modello writer
+
+6) Contrastive Checks – Coerenza frase per frase
+------------------------------------------------
+Per ogni frase di un capitolo si chiede:
+- “Questa frase contraddice la trama?”
+- “È coerente con l’evoluzione del personaggio?”
+- “Rispetta la struttura?”
+Permette di rilevare:
+- incoerenze
+- contraddizioni
+- salti logici
+
+7) Style Embeddings – Controllo dello stile
+-------------------------------------------
+Sono embeddings addestrati per catturare lo stile specifico di un’opera.
+Utili per:
+- garantire che ogni capitolo rispetti lo stile MADA
+- evitare stili incoerenti o troppo moderni/fantasy
+- mantenere un’identità narrativa stabile
+
+8) Hallucination Filters – Rilevazione di errori strutturali
+------------------------------------------------------------
+Un modello controlla se ciò che viene scritto:
+- esiste nella trama
+- è coerente con il contesto
+- non contiene elementi inventati (Ordine 66, personaggi casuali…)
+Blocca:
+- allucinazioni
+- aggiunte non richieste
+- errori concettuali
+
+9) Coherence Graphs – Mappa della coerenza narrativa
+-----------------------------------------------------
+Costruisci un grafo che collega:
+- personaggi
+- relazioni
+- eventi
+- cause/effetti
+- evoluzioni narrative
+
+Ogni nuovo capitolo viene confrontato con il grafo, per trovare:
+- azioni impossibili
+- relazioni inventate
+- eventi che non rispettano causa/effetto
+
+Suggerimenti di integrazione nel tuo sistema
+--------------------------------------------
+1. Usa embeddings + clustering per rilevare ripetizioni.
+2. Usa un cross-encoder per verificare coerenza capitolo–trama.
+3. Usa un reranker per scegliere la versione migliore di uno step.
+4. Usa contrastive checks per rilevare contraddizioni interne.
+5. Aggiungi uno Style Embedding “Operazione MADA” per garantire tono e stile.
+6. Usa hallucination filters per bloccare riferimenti impropri.
+7. Integra un Coherence Graph per il controllo globale.
+
+Conclusione
+-----------
+Gli embeddings sono solo l’inizio. Combinando queste tecniche puoi costruire
+un sistema di scrittura multi-step estremamente solido, coerente, stabile e
+di qualità professionale, anche usando modelli locali come Qwen 7B.

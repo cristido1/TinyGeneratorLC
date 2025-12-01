@@ -40,5 +40,6 @@ namespace TinyGenerator.Models
         public string? AgentName { get; set; }
         public string? Context { get; set; }
         public bool Analized { get; set; }
+        public string? ChatText { get; set; } // Chat-style formatted text for UI
     }
 }

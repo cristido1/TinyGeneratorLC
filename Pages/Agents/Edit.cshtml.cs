@@ -14,6 +14,7 @@ namespace TinyGenerator.Pages.Agents
         public Agent Agent { get; set; } = new();
         public List<TinyGenerator.Models.TtsVoice> Voices { get; set; } = new();
         public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
+        public List<TinyGenerator.Models.StepTemplate> StepTemplates { get; set; } = new();
         [BindProperty]
         public string? SelectedModelName { get; set; }
         [BindProperty]
@@ -33,6 +34,7 @@ namespace TinyGenerator.Pages.Agents
                 if (a == null) return RedirectToPage("/Agents/Index");
                 Agent = a;
                 Voices = _database.ListTtsVoices();
+                StepTemplates = _database.ListStepTemplates();
                 // Show enabled models, but keep agent's assigned model visible even if it's currently disabled
                 Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
                 // Resolve selected model name from numeric ModelId
@@ -61,6 +63,14 @@ namespace TinyGenerator.Pages.Agents
             // Ensure lists are available when re-displaying the page after validation errors
             Voices = _database.ListTtsVoices();
             Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
+            StepTemplates = _database.ListStepTemplates();
+            
+            // Handle empty string for MultiStepTemplateId (convert to null)
+            if (Agent.MultiStepTemplateId.HasValue && Agent.MultiStepTemplateId.Value == 0)
+            {
+                Agent.MultiStepTemplateId = null;
+            }
+            
             if (!ModelState.IsValid) return Page();
             // Validate JSON fields
             try
@@ -120,6 +130,7 @@ namespace TinyGenerator.Pages.Agents
                 ModelState.AddModelError(string.Empty, ex.Message);
                 Voices = _database.ListTtsVoices();
                 Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
+                StepTemplates = _database.ListStepTemplates();
                 return Page();
             }
         }

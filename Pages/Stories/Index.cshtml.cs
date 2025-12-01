@@ -67,6 +67,7 @@ namespace TinyGenerator.Pages.Stories
 
         public IActionResult OnPostEvaluate(long id, int agentId)
         {
+            // Use agentId in threadScope to allow parallel evaluation by different agents
             var runId = QueueStoryOperation(id, $"evaluate_{agentId}", async ct =>
             {
                 var (success, score, error) = await _stories.EvaluateStoryWithAgentAsync(id, agentId);
@@ -74,7 +75,7 @@ namespace TinyGenerator.Pages.Stories
                     ? $"Valutazione completata. Score medio: {score:F1}"
                     : error;
                 return (success, message);
-            }, "Valutazione avviata in background.");
+            }, "Valutazione avviata in background.", threadScopeOverride: $"story/evaluate/agent_{agentId}");
 
             TempData["StatusMessage"] = $"Valutazione avviata in background (run {runId}).";
             return RedirectToPage();
@@ -157,7 +158,7 @@ namespace TinyGenerator.Pages.Stories
                 .ToList();
         }
 
-        private string QueueStoryOperation(long storyId, string operationCode, Func<CancellationToken, Task<(bool success, string? message)>> operation, string? startMessage = null)
+        private string QueueStoryOperation(long storyId, string operationCode, Func<CancellationToken, Task<(bool success, string? message)>> operation, string? startMessage = null, string? threadScopeOverride = null)
         {
             var safeCode = string.IsNullOrWhiteSpace(operationCode)
                 ? "operation"
@@ -174,6 +175,8 @@ namespace TinyGenerator.Pages.Stories
             {
                 _logger?.LogWarning(ex, "Impossibile inizializzare il progresso per run {RunId}", runId);
             }
+
+            var threadScope = threadScopeOverride ?? $"story/{safeCode}";
 
             _commandDispatcher.Enqueue(
                 $"story_{safeCode}",
@@ -219,7 +222,7 @@ namespace TinyGenerator.Pages.Stories
                     }
                 },
                 runId: runId,
-                threadScope: $"story/{safeCode}",
+                threadScope: threadScope,
                 metadata: new Dictionary<string, string>
                 {
                     ["storyId"] = storyId.ToString(),

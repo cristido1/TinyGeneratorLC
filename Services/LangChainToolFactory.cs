@@ -131,6 +131,9 @@ namespace TinyGenerator.Services
             if (allowedSet.Contains("storywriter"))
                 RegisterStoryWriterTool(orchestrator, modelId, agentId);
 
+            if (allowedSet.Contains("responsechecker"))
+                RegisterResponseCheckerTool(orchestrator, modelId, agentId);
+
             // 'storyevaluator' tool removed in favor of unified EvaluatorTool
 
             var wantsVoiceTool = allowedSet.Contains("voicechoser") || allowedSet.Contains("voicechooser");
@@ -393,7 +396,7 @@ namespace TinyGenerator.Services
         {
             try
             {
-                var tool = new TtsSchemaTool(workingFolder, storyText, _logger)
+                var tool = new TtsSchemaTool(workingFolder, storyText, _logger, _database)
                 {
                     ModelId = modelId,
                     AgentId = agentId
@@ -431,6 +434,43 @@ namespace TinyGenerator.Services
             }
         }
 
+        private void RegisterResponseCheckerTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId)
+        {
+            try
+            {
+                // ResponseCheckerService requires HttpClient - skip if not available
+                if (_httpClient == null)
+                {
+                    _logger?.Log("Warn", "ToolFactory", "HttpClient not available, skipping ResponseCheckerTool");
+                    return;
+                }
+
+                // TODO: Create ResponseCheckerService properly with IHttpClientFactory
+                // For now, ResponseCheckerService is registered globally in DI
+                // and used directly by MultiStepOrchestrationService
+                _logger?.Log("Info", "ToolFactory", "ResponseCheckerTool registration skipped (use DI service)");
+
+                /*
+                // Create ResponseCheckerService
+                var checkerService = new ResponseCheckerService(
+                    null, // ILangChainKernelFactory - not needed for tool invocation
+                    _database,
+                    _logger,
+                    httpClientFactory // Need IHttpClientFactory
+                );
+
+                var tool = new ResponseCheckerTool(checkerService);
+                // Note: ResponseCheckerTool uses SK attributes, not BaseLangChainTool
+                // Register via SK plugin method if orchestrator supports it
+                _logger?.Log("Info", "ToolFactory", "Registered ResponseCheckerTool");
+                */
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "ToolFactory", $"Failed to register ResponseCheckerTool: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// Manually register a custom LangChain tool.
         /// </summary>
@@ -448,3 +488,4 @@ namespace TinyGenerator.Services
         }
     }
 }
+

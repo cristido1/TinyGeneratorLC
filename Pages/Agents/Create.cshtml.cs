@@ -12,6 +12,7 @@ namespace TinyGenerator.Pages.Agents
         [BindProperty]
         public Agent Agent { get; set; } = new();
         public List<TinyGenerator.Models.TtsVoice> Voices { get; set; } = new();
+        public List<TinyGenerator.Models.StepTemplate> StepTemplates { get; set; } = new();
 
         public CreateModel(DatabaseService database)
         {
@@ -24,10 +25,17 @@ namespace TinyGenerator.Pages.Agents
             Agent.IsActive = true;
             Agent.CreatedAt = DateTime.UtcNow.ToString("o");
             Voices = _database.ListTtsVoices();
+            StepTemplates = _database.ListStepTemplates();
         }
 
         public IActionResult OnPost()
         {
+            // Handle empty string for MultiStepTemplateId (convert to null)
+            if (Agent.MultiStepTemplateId.HasValue && Agent.MultiStepTemplateId.Value == 0)
+            {
+                Agent.MultiStepTemplateId = null;
+            }
+            
             if (!ModelState.IsValid) return Page();
             // Validate JSON fields
             try
@@ -67,6 +75,7 @@ namespace TinyGenerator.Pages.Agents
             {
                 ModelState.AddModelError(string.Empty, ex.Message);
                 Voices = _database.ListTtsVoices();
+                StepTemplates = _database.ListStepTemplates();
                 return Page();
             }
         }

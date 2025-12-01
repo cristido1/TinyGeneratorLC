@@ -12,6 +12,7 @@ namespace TinyGenerator.Services
 {
     public class PersistentMemoryService
     {
+        private readonly DatabaseService? _dbService;
         private readonly string _dbPath;
         private const int DefaultSearchCandidateLimit = 512;
         private readonly MemoryEmbeddingOptions? _embeddingOptions;
@@ -27,11 +28,13 @@ namespace TinyGenerator.Services
         public PersistentMemoryService(
             string dbPath = "data/storage.db",
             IOptions<MemoryEmbeddingOptions>? embeddingOptions = null,
-            ICustomLogger? logger = null)
+            ICustomLogger? logger = null,
+            DatabaseService? database = null)
         {
             _dbPath = dbPath;
             _embeddingOptions = embeddingOptions?.Value;
             _logger = logger;
+            _dbService = database;
             _vecExtensionPath = _embeddingOptions?.SqliteVecExtensionPath;
             _embeddingDimensions = Math.Max(1, _embeddingOptions?.EmbeddingDimension ?? 768);
             Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
@@ -40,18 +43,20 @@ namespace TinyGenerator.Services
 
         private void Initialize()
         {
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            connection.Open();
-            try
-            {
-                using var fkCmd = connection.CreateCommand();
-                fkCmd.CommandText = "PRAGMA foreign_keys = ON;";
-                fkCmd.ExecuteNonQuery();
-            }
-            catch { }
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService initialization");
 
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
+            _dbService.WithSqliteConnection(conn =>
+            {
+                try
+                {
+                    using var fkCmd = conn.CreateCommand();
+                    fkCmd.CommandText = "PRAGMA foreign_keys = ON;";
+                    fkCmd.ExecuteNonQuery();
+                }
+                catch { }
+
+                var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
             CREATE TABLE IF NOT EXISTS Memory (
                 Id TEXT PRIMARY KEY,
                 Collection TEXT NOT NULL,
@@ -63,58 +68,58 @@ namespace TinyGenerator.Services
                 CreatedAt TEXT NOT NULL
             );
             ";
-            cmd.ExecuteNonQuery();
+                cmd.ExecuteNonQuery();
 
-            // Ensure required columns exist and perform best-effort migration if legacy 'agent' column exists.
-            var cols = new List<string>();
-            using (var colCmd = connection.CreateCommand())
-            {
-                colCmd.CommandText = "PRAGMA table_info(Memory);";
-                using var rdr = colCmd.ExecuteReader();
-                while (rdr.Read()) cols.Add(rdr.GetString(1));
-            }
+                // Ensure required columns exist and perform best-effort migration if legacy 'agent' column exists.
+                var cols = new List<string>();
+                using (var colCmd = conn.CreateCommand())
+                {
+                    colCmd.CommandText = "PRAGMA table_info(Memory);";
+                    using var rdr = colCmd.ExecuteReader();
+                    while (rdr.Read()) cols.Add(rdr.GetString(1));
+                }
 
-            // If model_id or agent_id missing, add them
-            var colsLower = cols.Select(c => c.ToLowerInvariant()).ToList();
-            if (!colsLower.Contains("model_id"))
-            {
-                try
+                // If model_id or agent_id missing, add them
+                var colsLower = cols.Select(c => c.ToLowerInvariant()).ToList();
+                if (!colsLower.Contains("model_id"))
                 {
-                    using var addModel = connection.CreateCommand();
-                    addModel.CommandText = "ALTER TABLE Memory ADD COLUMN model_id INTEGER NULL;";
-                    addModel.ExecuteNonQuery();
+                    try
+                    {
+                        using var addModel = conn.CreateCommand();
+                        addModel.CommandText = "ALTER TABLE Memory ADD COLUMN model_id INTEGER NULL;";
+                        addModel.ExecuteNonQuery();
+                    }
+                    catch { }
                 }
-                catch { }
-            }
-            if (!colsLower.Contains("agent_id"))
-            {
-                try
+                if (!colsLower.Contains("agent_id"))
                 {
-                    using var addAgentId = connection.CreateCommand();
-                    addAgentId.CommandText = "ALTER TABLE Memory ADD COLUMN agent_id INTEGER NULL;";
-                    addAgentId.ExecuteNonQuery();
+                    try
+                    {
+                        using var addAgentId = conn.CreateCommand();
+                        addAgentId.CommandText = "ALTER TABLE Memory ADD COLUMN agent_id INTEGER NULL;";
+                        addAgentId.ExecuteNonQuery();
+                    }
+                    catch { }
                 }
-                catch { }
-            }
-            if (!colsLower.Contains("embedding"))
-            {
-                try
+                if (!colsLower.Contains("embedding"))
                 {
-                    using var addEmbedding = connection.CreateCommand();
-                    addEmbedding.CommandText = "ALTER TABLE Memory ADD COLUMN Embedding BLOB NULL;";
-                    addEmbedding.ExecuteNonQuery();
+                    try
+                    {
+                        using var addEmbedding = conn.CreateCommand();
+                        addEmbedding.CommandText = "ALTER TABLE Memory ADD COLUMN Embedding BLOB NULL;";
+                        addEmbedding.ExecuteNonQuery();
+                    }
+                    catch { }
                 }
-                catch { }
-            }
 
-            // If legacy 'agent' column exists, migrate rows into a new table without 'agent' column.
-            // Detect legacy 'agent' column case-insensitively and migrate it out
-            if (colsLower.Contains("agent"))
-            {
-                try
+                // If legacy 'agent' column exists, migrate rows into a new table without 'agent' column.
+                // Detect legacy 'agent' column case-insensitively and migrate it out
+                if (colsLower.Contains("agent"))
                 {
-                    using var create = connection.CreateCommand();
-                    create.CommandText = @"
+                    try
+                    {
+                        using var create = conn.CreateCommand();
+                        create.CommandText = @"
                     CREATE TABLE IF NOT EXISTS Memory_new (
                         Id TEXT PRIMARY KEY,
                         Collection TEXT NOT NULL,
@@ -126,47 +131,47 @@ namespace TinyGenerator.Services
                         FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL ON UPDATE CASCADE
                     );
                     ";
-                    create.ExecuteNonQuery();
+                        create.ExecuteNonQuery();
 
-                    // Copy data; attempt to convert agent to integer if possible, otherwise set NULL. (agent is legacy column)
-                    using var copy = connection.CreateCommand();
-                    copy.CommandText = @"
+                        // Copy data; attempt to convert agent to integer if possible, otherwise set NULL. (agent is legacy column)
+                        using var copy = conn.CreateCommand();
+                        copy.CommandText = @"
                     INSERT OR REPLACE INTO Memory_new (Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt)
                     SELECT Id, Collection, TextValue, Metadata, model_id, CASE WHEN CAST(agent AS INTEGER) > 0 THEN CAST(agent AS INTEGER) ELSE NULL END, CreatedAt FROM Memory;
                     ";
-                    copy.ExecuteNonQuery();
+                        copy.ExecuteNonQuery();
 
-                    using var drop = connection.CreateCommand();
-                    drop.CommandText = "DROP TABLE IF EXISTS Memory;";
-                    drop.ExecuteNonQuery();
+                        using var drop = conn.CreateCommand();
+                        drop.CommandText = "DROP TABLE IF EXISTS Memory;";
+                        drop.ExecuteNonQuery();
 
-                    using var rename = connection.CreateCommand();
-                    rename.CommandText = "ALTER TABLE Memory_new RENAME TO Memory;";
-                    rename.ExecuteNonQuery();
-                }
-                catch { }
-            }
-
-            // Ensure the Memory table's foreign keys reference the current `agents` table
-            try
-            {
-                using var fkCheck = connection.CreateCommand();
-                fkCheck.CommandText = "PRAGMA foreign_key_list('Memory');";
-                using var fkR = fkCheck.ExecuteReader();
-                var needsFix = false;
-                while (fkR.Read())
-                {
-                    var refTable = fkR.IsDBNull(2) ? string.Empty : fkR.GetString(2);
-                    if (!string.Equals(refTable, "agents", StringComparison.OrdinalIgnoreCase)) { needsFix = true; break; }
+                        using var rename = conn.CreateCommand();
+                        rename.CommandText = "ALTER TABLE Memory_new RENAME TO Memory;";
+                        rename.ExecuteNonQuery();
+                    }
+                    catch { }
                 }
 
-                if (needsFix)
+                // Ensure the Memory table's foreign keys reference the current `agents` table
+                try
                 {
-                    try
+                    using var fkCheck = conn.CreateCommand();
+                    fkCheck.CommandText = "PRAGMA foreign_key_list('Memory');";
+                    using var fkR = fkCheck.ExecuteReader();
+                    var needsFix = false;
+                    while (fkR.Read())
                     {
-                        using var off = connection.CreateCommand(); off.CommandText = "PRAGMA foreign_keys = OFF;"; off.ExecuteNonQuery();
-                        using var createFix = connection.CreateCommand();
-                        createFix.CommandText = @"CREATE TABLE IF NOT EXISTS Memory_new_fix (
+                        var refTable = fkR.IsDBNull(2) ? string.Empty : fkR.GetString(2);
+                        if (!string.Equals(refTable, "agents", StringComparison.OrdinalIgnoreCase)) { needsFix = true; break; }
+                    }
+
+                    if (needsFix)
+                    {
+                        try
+                        {
+                            using var off = conn.CreateCommand(); off.CommandText = "PRAGMA foreign_keys = OFF;"; off.ExecuteNonQuery();
+                            using var createFix = conn.CreateCommand();
+                            createFix.CommandText = @"CREATE TABLE IF NOT EXISTS Memory_new_fix (
                             Id TEXT PRIMARY KEY,
                             Collection TEXT NOT NULL,
                             TextValue TEXT NOT NULL,
@@ -176,23 +181,26 @@ namespace TinyGenerator.Services
                             CreatedAt TEXT NOT NULL,
                             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL ON UPDATE CASCADE
                         );";
-                        createFix.ExecuteNonQuery();
+                            createFix.ExecuteNonQuery();
 
-                        using var copyFix = connection.CreateCommand();
-                        copyFix.CommandText = @"INSERT OR REPLACE INTO Memory_new_fix (Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt)
+                            using var copyFix = conn.CreateCommand();
+                            copyFix.CommandText = @"INSERT OR REPLACE INTO Memory_new_fix (Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt)
                             SELECT Id, Collection, TextValue, Metadata, model_id, agent_id, CreatedAt FROM Memory;";
-                        copyFix.ExecuteNonQuery();
+                            copyFix.ExecuteNonQuery();
 
-                        using var dropOld = connection.CreateCommand(); dropOld.CommandText = "DROP TABLE IF EXISTS Memory;"; dropOld.ExecuteNonQuery();
-                        using var renameFix = connection.CreateCommand(); renameFix.CommandText = "ALTER TABLE Memory_new_fix RENAME TO Memory;"; renameFix.ExecuteNonQuery();
-                        using var on = connection.CreateCommand(); on.CommandText = "PRAGMA foreign_keys = ON;"; on.ExecuteNonQuery();
+                            using var dropOld = conn.CreateCommand(); dropOld.CommandText = "DROP TABLE IF EXISTS Memory;"; dropOld.ExecuteNonQuery();
+                            using var renameFix = conn.CreateCommand(); renameFix.CommandText = "ALTER TABLE Memory_new_fix RENAME TO Memory;"; renameFix.ExecuteNonQuery();
+                            using var on = conn.CreateCommand(); on.CommandText = "PRAGMA foreign_keys = ON;"; on.ExecuteNonQuery();
+                        }
+                        catch { /* best-effort: ignore failures here */ }
                     }
-                    catch { /* best-effort: ignore failures here */ }
                 }
-            }
-            catch { }
+                catch { }
 
-            TryEnsureVectorReady(connection);
+                TryEnsureVectorReady(conn);
+
+                return true;
+            });
         }
 
         private static string ComputeHash(string text)
@@ -209,39 +217,41 @@ namespace TinyGenerator.Services
             var id = ComputeHash(collection + text);
             var json = metadata != null ? JsonSerializer.Serialize(metadata) : null;
 
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
-            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService");
 
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
+            await _dbService.WithSqliteConnectionAsync<bool>(async connection =>
+            {
+                var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
                 INSERT OR REPLACE INTO Memory (Id, Collection, TextValue, Metadata, model_id, agent_id, Embedding, CreatedAt)
                 VALUES ($id, $collection, $text, $metadata, $model_id, $agent_id, $embedding, datetime('now'))
             ";
-            cmd.Parameters.AddWithValue("$id", id);
-            cmd.Parameters.AddWithValue("$collection", collection);
-            cmd.Parameters.AddWithValue("$text", text);
-            cmd.Parameters.AddWithValue("$metadata", json ?? (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("$model_id", modelId.HasValue ? (object)modelId.Value : (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("$agent_id", agentId.HasValue ? (object)agentId.Value : (object)DBNull.Value);
-            cmd.Parameters.AddWithValue("$embedding", DBNull.Value);
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue("$collection", collection);
+                cmd.Parameters.AddWithValue("$text", text);
+                cmd.Parameters.AddWithValue("$metadata", json ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("$model_id", modelId.HasValue ? (object)modelId.Value : (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("$agent_id", agentId.HasValue ? (object)agentId.Value : (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("$embedding", DBNull.Value);
 
-            await cmd.ExecuteNonQueryAsync();
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-            MemorySaved?.Invoke(this, new MemorySavedEventArgs(id, collection, text, modelId, agentId));
+                MemorySaved?.Invoke(this, new MemorySavedEventArgs(id, collection, text, modelId, agentId));
+                return true;
+            }).ConfigureAwait(false);
         }
 
         // 🔍 Cerca testo simile (ricerca semplice full-text LIKE)
         public async Task<List<string>> SearchAsync(string collection, string query, int limit = 5, long? modelId = null, int? agentId = null)
         {
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
-            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService");
 
-            var cmd = connection.CreateCommand();
+            return await _dbService.WithSqliteConnectionAsync<List<string>>(async connection =>
+            {
+                var cmd = connection.CreateCommand();
 
-            var idFilter = BuildIdFilter(modelId, agentId);
-            cmd.CommandText = $@"
+                var idFilter = BuildIdFilter(modelId, agentId);
+                cmd.CommandText = $@"
                 SELECT TextValue FROM Memory
                 WHERE Collection = $collection
                 AND TextValue LIKE $query
@@ -250,106 +260,111 @@ namespace TinyGenerator.Services
                 LIMIT $limit;
             ";
 
-            cmd.Parameters.AddWithValue("$collection", collection);
-            cmd.Parameters.AddWithValue("$query", $"%{query}%");
-            cmd.Parameters.AddWithValue("$limit", limit);
-            if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
-            if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
+                cmd.Parameters.AddWithValue("$collection", collection);
+                cmd.Parameters.AddWithValue("$query", $"%{query}%");
+                cmd.Parameters.AddWithValue("$limit", limit);
+                if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
+                if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
 
-            var results = new List<string>();
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                results.Add(reader.GetString(0));
-            }
+                var results = new List<string>();
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    results.Add(reader.GetString(0));
+                }
 
-            return results;
+                return results;
+            }).ConfigureAwait(false);
         }
 
         // 🧹 Cancella una voce
         public async Task DeleteAsync(string collection, string text, long? modelId = null, int? agentId = null)
         {
             var id = ComputeHash(collection + text);
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
-            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService");
 
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"DELETE FROM Memory WHERE Id = $id";
-            cmd.Parameters.AddWithValue("$id", id);
+            await _dbService.WithSqliteConnectionAsync<bool>(async connection =>
+            {
+                var cmd = connection.CreateCommand();
+                cmd.CommandText = @"DELETE FROM Memory WHERE Id = $id";
+                cmd.Parameters.AddWithValue("$id", id);
 
-            await cmd.ExecuteNonQueryAsync();
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                return true;
+            }).ConfigureAwait(false);
         }
 
         // 🧾 Elenca tutte le collezioni
         public async Task<List<string>> GetCollectionsAsync()
         {
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
-            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService");
 
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"SELECT DISTINCT Collection FROM Memory ORDER BY Collection;";
-            var collections = new List<string>();
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+            return await _dbService.WithSqliteConnectionAsync<List<string>>(async connection =>
             {
-                collections.Add(reader.GetString(0));
-            }
+                var cmd = connection.CreateCommand();
+                cmd.CommandText = @"SELECT DISTINCT Collection FROM Memory ORDER BY Collection;";
+                var collections = new List<string>();
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    collections.Add(reader.GetString(0));
+                }
 
-            return collections;
+                return collections;
+            }).ConfigureAwait(false);
         }
 
         public async Task<IReadOnlyList<MemoryRecord>> GetMemoriesMissingEmbeddingAsync(int batchSize = 8)
         {
             if (batchSize <= 0) return Array.Empty<MemoryRecord>();
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService");
 
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
-            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
-
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"
+            return await _dbService.WithSqliteConnectionAsync<IReadOnlyList<MemoryRecord>>(async connection =>
+            {
+                var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
                 SELECT Id, Collection, TextValue, Metadata, CreatedAt
                 FROM Memory
                 WHERE Embedding IS NULL
                 ORDER BY CreatedAt ASC
                 LIMIT $limit;
             ";
-            cmd.Parameters.AddWithValue("$limit", batchSize);
+                cmd.Parameters.AddWithValue("$limit", batchSize);
 
-            var items = new List<MemoryRecord>();
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                items.Add(new MemoryRecord(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
-                    ParseCreatedAt(reader, 4),
-                    null));
-            }
+                var items = new List<MemoryRecord>();
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    items.Add(new MemoryRecord(
+                        reader.GetString(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3),
+                        ParseCreatedAt(reader, 4),
+                        null));
+                }
 
-            return items;
+                return (IReadOnlyList<MemoryRecord>)items;
+            }).ConfigureAwait(false);
         }
 
         public async Task UpdateEmbeddingAsync(string id, float[] embedding, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Id required", nameof(id));
             if (embedding == null || embedding.Length == 0) throw new ArgumentException("Embedding required", nameof(embedding));
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService");
 
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync(cancellationToken);
-            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            await _dbService.WithSqliteConnectionAsync<bool>(async connection =>
+            {
+                var cmd = connection.CreateCommand();
+                cmd.CommandText = @"UPDATE Memory SET Embedding = $embedding WHERE Id = $id;";
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue("$embedding", SerializeEmbedding(embedding));
 
-            var cmd = connection.CreateCommand();
-            cmd.CommandText = @"UPDATE Memory SET Embedding = $embedding WHERE Id = $id;";
-            cmd.Parameters.AddWithValue("$id", id);
-            cmd.Parameters.AddWithValue("$embedding", SerializeEmbedding(embedding));
-
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
-            await TryUpsertVectorIndexAsync(connection, id, embedding, cancellationToken);
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await TryUpsertVectorIndexAsync(connection, id, embedding, cancellationToken).ConfigureAwait(false);
+                return true;
+            }).ConfigureAwait(false);
         }
 
         public async Task<IReadOnlyList<MemorySearchResult>> SearchWithEmbeddingsAsync(
@@ -416,15 +431,15 @@ namespace TinyGenerator.Services
 
         private async Task<List<MemoryRecord>> LoadCandidatesAsync(string collection, long? modelId, int? agentId, int maxCandidates)
         {
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
-            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService");
 
-            var items = new List<MemoryRecord>();
-            var cmd = connection.CreateCommand();
-            var idFilter = BuildIdFilter(modelId, agentId);
+            return await _dbService.WithSqliteConnectionAsync<List<MemoryRecord>>(async connection =>
+            {
+                var items = new List<MemoryRecord>();
+                var cmd = connection.CreateCommand();
+                var idFilter = BuildIdFilter(modelId, agentId);
 
-            cmd.CommandText = $@"
+                cmd.CommandText = $@"
                 SELECT Id, Collection, TextValue, Metadata, Embedding, CreatedAt
                 FROM Memory
                 WHERE Collection = $collection
@@ -432,24 +447,25 @@ namespace TinyGenerator.Services
                 ORDER BY CreatedAt DESC
                 LIMIT $limit;
             ";
-            cmd.Parameters.AddWithValue("$collection", collection);
-            cmd.Parameters.AddWithValue("$limit", maxCandidates);
-            if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
-            if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
+                cmd.Parameters.AddWithValue("$collection", collection);
+                cmd.Parameters.AddWithValue("$limit", maxCandidates);
+                if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
+                if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
 
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                items.Add(new MemoryRecord(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
-                    ParseCreatedAt(reader, 5),
-                    TryReadEmbedding(reader, 4)));
-            }
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    items.Add(new MemoryRecord(
+                        reader.GetString(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3),
+                        ParseCreatedAt(reader, 5),
+                        TryReadEmbedding(reader, 4)));
+                }
 
-            return items;
+                return items;
+            }).ConfigureAwait(false);
         }
 
         private async Task TryUpsertVectorIndexAsync(SqliteConnection connection, string id, float[] embedding, CancellationToken cancellationToken)
@@ -481,25 +497,25 @@ namespace TinyGenerator.Services
             long? modelId,
             int? agentId)
         {
-            using var connection = new SqliteConnection($"Data Source={_dbPath}");
-            await connection.OpenAsync();
-            try { using var fkCmd = connection.CreateCommand(); fkCmd.CommandText = "PRAGMA foreign_keys = ON;"; fkCmd.ExecuteNonQuery(); } catch { }
+            if (_dbService == null) throw new InvalidOperationException("DatabaseService is required for PersistentMemoryService");
 
-            if (!TryEnsureVectorReady(connection))
+            return await _dbService.WithSqliteConnectionAsync<IReadOnlyList<MemorySearchResult>>(async connection =>
             {
-                return Array.Empty<MemorySearchResult>();
-            }
+                if (!TryEnsureVectorReady(connection))
+                {
+                    return Array.Empty<MemorySearchResult>();
+                }
 
-            if (queryEmbedding.Length != _embeddingDimensions)
-            {
-                _logger?.Log("Warn", "MemoryEmbedding", $"Query embedding dimension mismatch: expected {_embeddingDimensions}, got {queryEmbedding.Length}");
-                return Array.Empty<MemorySearchResult>();
-            }
+                if (queryEmbedding.Length != _embeddingDimensions)
+                {
+                    _logger?.Log("Warn", "MemoryEmbedding", $"Query embedding dimension mismatch: expected {_embeddingDimensions}, got {queryEmbedding.Length}");
+                    return Array.Empty<MemorySearchResult>();
+                }
 
-            var results = new List<MemorySearchResult>();
-            var cmd = connection.CreateCommand();
-            var idFilter = BuildIdFilter(modelId, agentId, "m.");
-            cmd.CommandText = $@"
+                var results = new List<MemorySearchResult>();
+                var cmd = connection.CreateCommand();
+                var idFilter = BuildIdFilter(modelId, agentId, "m.");
+                cmd.CommandText = $@"
                 SELECT m.Id, m.TextValue, m.Metadata, m.Collection, m.CreatedAt, v.distance
                 FROM MemoryVec v
                 JOIN Memory m ON m.Id = v.id
@@ -509,40 +525,41 @@ namespace TinyGenerator.Services
                 ORDER BY v.distance ASC
                 LIMIT $limit;
             ";
-            cmd.Parameters.AddWithValue("$collection", collection);
-            cmd.Parameters.AddWithValue("$queryVector", SerializeEmbeddingAsJson(queryEmbedding));
-            cmd.Parameters.AddWithValue("$limit", limit);
-            if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
-            if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
+                cmd.Parameters.AddWithValue("$collection", collection);
+                cmd.Parameters.AddWithValue("$queryVector", SerializeEmbeddingAsJson(queryEmbedding));
+                cmd.Parameters.AddWithValue("$limit", limit);
+                if (modelId.HasValue) cmd.Parameters.AddWithValue("$model_id", modelId.Value);
+                if (agentId.HasValue) cmd.Parameters.AddWithValue("$agent_id", agentId.Value);
 
-            using var reader = await cmd.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                var id = reader.GetString(0);
-                var text = reader.GetString(1);
-                var metadata = reader.IsDBNull(2) ? null : reader.GetString(2);
-                var collectionName = reader.GetString(3);
-                var createdAt = ParseCreatedAt(reader, 4);
-                var distanceRaw = reader.IsDBNull(5) ? 0d : reader.GetDouble(5);
-                var embeddingScore = 1d - Math.Clamp(distanceRaw, 0d, 2d);
-                var textScore = ComputeTextScore(text, normalizedQuery);
-                var combined = embeddingScore + textScore;
-                results.Add(new MemorySearchResult(
-                    id,
-                    text,
-                    metadata,
-                    collectionName,
-                    createdAt,
-                    combined,
-                    embeddingScore,
-                    textScore));
-            }
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    var id = reader.GetString(0);
+                    var text = reader.GetString(1);
+                    var metadata = reader.IsDBNull(2) ? null : reader.GetString(2);
+                    var collectionName = reader.GetString(3);
+                    var createdAt = ParseCreatedAt(reader, 4);
+                    var distanceRaw = reader.IsDBNull(5) ? 0d : reader.GetDouble(5);
+                    var embeddingScore = 1d - Math.Clamp(distanceRaw, 0d, 2d);
+                    var textScore = ComputeTextScore(text, normalizedQuery);
+                    var combined = embeddingScore + textScore;
+                    results.Add(new MemorySearchResult(
+                        id,
+                        text,
+                        metadata,
+                        collectionName,
+                        createdAt,
+                        combined,
+                        embeddingScore,
+                        textScore));
+                }
 
-            return results
-                .OrderByDescending(r => r.Score)
-                .ThenByDescending(r => r.CreatedAt)
-                .Take(limit)
-                .ToList();
+                return results
+                    .OrderByDescending(r => r.Score)
+                    .ThenByDescending(r => r.CreatedAt)
+                    .Take(limit)
+                    .ToList();
+            }).ConfigureAwait(false);
         }
 
         private bool TryEnsureVectorReady(SqliteConnection connection)

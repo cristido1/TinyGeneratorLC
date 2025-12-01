@@ -19,17 +19,16 @@
             wrapper.style.borderColor = '#c3e6cb';
             wrapper.style.borderWidth = '1px';
             wrapper.style.borderStyle = 'solid';
-        } else if(msgLower.includes('failed')){
+        } else if(msgLower.includes('failed') || level === 'error'){
             wrapper.style.backgroundColor = '#f8d7da'; // pastel red
             wrapper.style.borderColor = '#f5c6cb';
             wrapper.style.borderWidth = '1px';
             wrapper.style.borderStyle = 'solid';
         }
 
-        // color by level (fallback for non-passed/failed messages)
+        // color by level (fallback for non-passed/failed/error messages)
         if(level === 'success') wrapper.classList.add('border-success');
         if(level === 'warning') wrapper.classList.add('border-warning');
-        if(level === 'error') wrapper.classList.add('border-danger');
 
         const body = document.createElement('div');
         body.className = 'd-flex';

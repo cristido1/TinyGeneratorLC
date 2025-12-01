@@ -87,7 +87,7 @@ namespace TinyGenerator
             }
         }
 
-        public static async Task PopulateLocalOllamaModelsIfNeededAsync(CostController? cost, IConfiguration? config = null, ILogger? logger = null)
+        public static async Task PopulateLocalOllamaModelsIfNeededAsync(CostController? cost, IConfiguration? config = null, ILogger? logger = null, IOllamaMonitorService? monitor = null)
         {
             if (cost == null) return;
             try
@@ -99,7 +99,7 @@ namespace TinyGenerator
                     if (!string.IsNullOrWhiteSpace(ollamaEndpoint))
                     {
                         logger?.LogInformation("[Startup] Setting Ollama endpoint to: {endpoint}", ollamaEndpoint);
-                        OllamaMonitorService.SetOllamaEndpoint(ollamaEndpoint);
+                        monitor?.SetOllamaEndpoint(ollamaEndpoint);
                     }
                 }
                 

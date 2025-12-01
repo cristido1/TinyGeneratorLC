@@ -1,0 +1,200 @@
+@page
+@model TinyGenerator.Pages.StepTemplates.IndexModel
+@{
+    ViewData["Title"] = "Step Templates";
+    ViewData["PageDescription"] = "Gestisci i template multi-step per la generazione delle storie";
+}
+
+<div class="mb-3 d-flex justify-content-between align-items-center">
+    <div>
+        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#modalEditTemplate" onclick="openCreateModal()">
+            Create Template
+        </button>
+    </div>
+</div>
+
+<table id="tabTemplates" class="table table-bordered table-sm table-pastel table-compact">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Task Type</th>
+            <th>Description</th>
+            <th>Steps</th>
+            <th>Created</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    @if (Model.Templates != null && Model.Templates.Any())
+    {
+        foreach (var t in Model.Templates)
+        {
+            var stepCount = System.Text.RegularExpressions.Regex.Matches(t.StepPrompt ?? "", @"^\d+\.", System.Text.RegularExpressions.RegexOptions.Multiline).Count;
+            var templateJson = System.Text.Json.JsonSerializer.Serialize(t);
+            <tr data-template='@Html.Raw(templateJson.Replace("'", "&#39;"))'>
+                <td class="name">@t.Name</td>
+                <td class="tasktype">@t.TaskType</td>
+                <td class="description">@(string.IsNullOrWhiteSpace(t.Description) ? "" : t.Description)</td>
+                <td class="stepcount">@stepCount</td>
+                <td class="created">@(DateTime.TryParse(t.CreatedAt, out var dt) ? dt.ToString("yyyy-MM-dd HH:mm") : t.CreatedAt)</td>
+                <td class="actions">
+                    <button type="button" class="btn btn-sm btn-outline-secondary dt-expand me-1" title="Show details">+</button>
+                    <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@t.Id">Edit</a>
+                    <form method="post" asp-page-handler="Delete" asp-route-id="@t.Id" style="display:inline;" onsubmit="return confirm('Delete template @t.Name?');">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+        }
+    }
+    else
+    {
+        <tr>
+            <td colspan="6">No templates found.</td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+<!-- Edit/Create Modal -->
+<div class="modal fade" id="modalEditTemplate" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <form method="post" asp-page-handler="Save">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalTitle">Create Template</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="templateId" name="id" value="0" />
+
+                    <div class="mb-3">
+                        <label for="templateName" class="form-label">Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="templateName" name="name" required maxlength="200" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="templateTaskType" class="form-label">Task Type <span class="text-danger">*</span></label>
+                        <select class="form-select" id="templateTaskType" name="taskType" required>
+                            <option value="story">story</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="templateDescription" class="form-label">Description</label>
+                        <textarea class="form-control" id="templateDescription" name="description" rows="2" maxlength="500"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="templateStepPrompt" class="form-label">Step Prompt <span class="text-danger">*</span></label>
+                        <textarea class="form-control font-monospace" id="templateStepPrompt" name="stepPrompt" rows="15" required></textarea>
+                        <div class="form-text">
+                            Format: numbered steps (e.g., "1. Crea trama", "2. Personaggi"). Use placeholders: {{STEP_N}}, {{STEP_N_SUMMARY}}, {{STEP_N_EXTRACT:filter}}, {{STEPS_N-M_SUMMARY}}
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
+}
+
+@section Scripts {
+    <script>
+        $(document).ready(function() {
+            var table = $('#tabTemplates').DataTable({
+                paging: true,
+                searching: true,
+                ordering: true,
+                order: [[4, 'desc']], // Sort by created date
+                pageLength: 25,
+                responsive: true,
+                autoWidth: false,
+                columns: [
+                    { data: 'name', width: '20%' },
+                    { data: 'tasktype', width: '10%' },
+                    { data: 'description', width: '30%' },
+                    { data: 'stepcount', width: '8%' },
+                    { data: 'created', width: '15%' },
+                    { data: 'actions', orderable: false, width: '17%' }
+                ]
+            });
+
+            // Row expansion for detailed step view
+            $('#tabTemplates tbody').on('click', '.dt-expand', function() {
+                var tr = $(this).closest('tr');
+                var row = table.row(tr);
+
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $(this).text('+');
+                } else {
+                    var templateJson = tr.attr('data-template');
+                    if (templateJson) {
+                        try {
+                            var template = JSON.parse(templateJson);
+                            var stepPrompt = template.StepPrompt || '';
+                            
+                            // Parse steps (lines starting with digit followed by dot)
+                            var steps = stepPrompt.split('\n').filter(line => /^\d+\./.test(line.trim()));
+                            var stepsHtml = '<div class="p-3"><h6>Template Steps:</h6><ol class="list-group list-group-numbered mt-2">';
+                            
+                            if (steps.length > 0) {
+                                steps.forEach(function(step) {
+                                    var stepText = step.replace(/^\d+\.\s*/, '').trim();
+                                    stepsHtml += '<li class="list-group-item">' + escapeHtml(stepText) + '</li>';
+                                });
+                            } else {
+                                stepsHtml += '<li class="list-group-item">No numbered steps found</li>';
+                            }
+                            
+                            stepsHtml += '</ol><hr><strong>Full Step Prompt:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(stepPrompt) + '</pre></div>';
+                            row.child(stepsHtml).show();
+                            $(this).text('-');
+                        } catch (e) {
+                            console.error('Failed to parse template JSON', e);
+                        }
+                    }
+                }
+            });
+        });
+
+        function openCreateModal() {
+            $('#modalTitle').text('Create Template');
+            $('#templateId').val('0');
+            $('#templateName').val('');
+            $('#templateTaskType').val('story');
+            $('#templateDescription').val('');
+            $('#templateStepPrompt').val('');
+        }
+
+        function openEditModal(id, templateJson) {
+            try {
+                var template = JSON.parse(templateJson);
+                $('#modalTitle').text('Edit Template: ' + template.Name);
+                $('#templateId').val(template.Id);
+                $('#templateName').val(template.Name);
+                $('#templateTaskType').val(template.TaskType);
+                $('#templateDescription').val(template.Description || '');
+                $('#templateStepPrompt').val(template.StepPrompt || '');
+
+                var modal = new bootstrap.Modal(document.getElementById('modalEditTemplate'));
+                modal.show();
+            } catch (e) {
+                alert('Failed to load template data: ' + e.message);
+            }
+        }
+
+        function escapeHtml(text) {
+            var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+            return text.replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+    </script>
+}

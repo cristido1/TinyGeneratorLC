@@ -11,7 +11,29 @@
 
 <div class="d-flex justify-content-between mb-3">
     <h3>Storie salvate</h3>
-    <div>
+    <div class="d-flex gap-2">
+        <div class="btn-group">
+            <button type="button" class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                Valuta tutti
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                @if (Model.Evaluators != null && Model.Evaluators.Any())
+                {
+                    foreach (var ev in Model.Evaluators)
+                    {
+                        <li>
+                            <button class="dropdown-item" type="submit" form="bulkEvaluateForm" name="agentId" value="@ev.Id">
+                                @ev.Name (@ev.Role)
+                            </button>
+                        </li>
+                    }
+                }
+                else
+                {
+                    <li><span class="dropdown-item text-muted">Nessun evaluator attivo</span></li>
+                }
+            </ul>
+        </div>
         <a class="btn btn-primary" asp-page="/Stories/Create">Nuova storia</a>
     </div>
 </div>
@@ -137,6 +159,22 @@
                                 </li>
                             }
                         }
+                        @if (Model.ActionEvaluators.Any())
+                        {
+                            <li><hr class="dropdown-divider"></li>
+                            <li><h6 class="dropdown-header">Valuta azione/ritmo</h6></li>
+                            @foreach (var evaluator in Model.ActionEvaluators)
+                            {
+                                <li>
+                                    <form method="post" asp-page-handler="EvaluateAction" asp-route-id="@s.Id" asp-route-agentId="@evaluator.Id" style="display:inline">
+                                        <button type="submit" class="dropdown-item">🏃 @evaluator.Name</button>
+                                    </form>
+                                </li>
+                            }
+                        }
+                        <li>
+                            <a href="#" class="dropdown-item coherence-details-btn" data-story-id="@s.Id">🔍 Dettagli coerenza</a>
+                        </li>
                         <li><hr class="dropdown-divider"></li>
                         <li>
                             <form method="post" asp-page-handler="Delete" asp-route-id="@s.Id" class="delete-story-form" style="display:inline">
@@ -153,6 +191,69 @@
     }
     </tbody>
 </table>
+
+<form id="bulkEvaluateForm" method="post" asp-page-handler="EvaluateAll"></form>
+
+<!-- Coherence details modal -->
+<div class="modal fade" id="coherenceModal" tabindex="-1" aria-labelledby="coherenceModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="coherenceModalLabel">Dettagli valutazione coerenza</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="coherenceModalBody">
+                <div class="text-center text-muted">Caricamento...</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Chiudi</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="queuePanel" class="position-fixed bottom-0 end-0 p-3" style="z-index:1040; width: 380px; max-width: 95vw;">
+    <div class="card shadow-sm">
+        <div class="card-header d-flex justify-content-between align-items-center queue-drag-handle" style="cursor: move;">
+            <span>Operazioni in coda / in esecuzione</span>
+            <span class="badge bg-primary">@Model.ActiveCommands.Count</span>
+        </div>
+        <div class="list-group list-group-flush small" style="max-height: 55vh; overflow-y: auto;">
+            @if (Model.ActiveCommands == null || !Model.ActiveCommands.Any())
+            {
+                <div class="list-group-item text-muted">Nessuna operazione in corso</div>
+            }
+            else
+            {
+                foreach (var cmd in Model.ActiveCommands)
+                {
+                    var agentName = (cmd.Metadata != null && cmd.Metadata.TryGetValue("agentName", out var an)) ? an : "-";
+                    var agentRole = (cmd.Metadata != null && cmd.Metadata.TryGetValue("agentRole", out var ar)) ? ar : string.Empty;
+                    var op = (cmd.Metadata != null && cmd.Metadata.TryGetValue("operation", out var opVal)) ? opVal : cmd.OperationName;
+                    var storyId = (cmd.Metadata != null && cmd.Metadata.TryGetValue("storyId", out var sid)) ? sid : "-";
+                    var statusClass = cmd.Status.Equals("running", System.StringComparison.OrdinalIgnoreCase) ? "bg-success" : "bg-warning text-dark";
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <div class="fw-semibold">@op</div>
+                                <div class="text-muted">Story: @storyId</div>
+                                <div class="text-muted">Agente: @agentName @(string.IsNullOrWhiteSpace(agentRole) ? "" : $"({agentRole})")</div>
+                            </div>
+                            <span class="badge @statusClass text-uppercase">@cmd.Status</span>
+                        </div>
+                        <div class="text-muted mt-1">
+                            <small>Enqueued: @cmd.EnqueuedAt.ToLocalTime().ToString("HH:mm:ss")</small>
+                            @if (cmd.StartedAt.HasValue)
+                            {
+                                <small class="ms-2">Start: @cmd.StartedAt.Value.ToLocalTime().ToString("HH:mm:ss")</small>
+                            }
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    </div>
+</div>
 
 @section Scripts {
     <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
@@ -226,6 +327,10 @@
             background-color: #ffd700 !important;
             color: #000 !important;
         }
+        /* Draggable queue card */
+        #queuePanel {
+            touch-action: none;
+        }
     </style>
 
     <script src="~/lib/jquery/jquery.min.js"></script>
@@ -237,6 +342,48 @@
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script>
         $(document).ready(function() {
+            // Make queue panel draggable via header handle
+            (function() {
+                var panel = document.getElementById('queuePanel');
+                if (!panel) return;
+                var handle = panel.querySelector('.queue-drag-handle');
+                if (!handle) return;
+
+                var offsetX = 0, offsetY = 0, startX = 0, startY = 0;
+
+                handle.addEventListener('pointerdown', function(e) {
+                    // Prevent text selection
+                    e.preventDefault();
+
+                    // Lock current position as left/top to allow free drag
+                    var rect = panel.getBoundingClientRect();
+                    panel.style.left = rect.left + 'px';
+                    panel.style.top = rect.top + 'px';
+                    panel.style.right = 'auto';
+                    panel.style.bottom = 'auto';
+
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    offsetX = rect.left;
+                    offsetY = rect.top;
+
+                    var move = function(ev) {
+                        var dx = ev.clientX - startX;
+                        var dy = ev.clientY - startY;
+                        panel.style.left = (offsetX + dx) + 'px';
+                        panel.style.top = (offsetY + dy) + 'px';
+                    };
+
+                    var up = function() {
+                        document.removeEventListener('pointermove', move);
+                        document.removeEventListener('pointerup', up);
+                    };
+
+                    document.addEventListener('pointermove', move);
+                    document.addEventListener('pointerup', up);
+                });
+            })();
+
             // Function to get badge color based on score
             function getScoreBadgeClass(score) {
                 if (score >= 0 && score <= 1) return 'bg-danger'; // rosso
@@ -370,6 +517,57 @@
                 if (Object.prototype.hasOwnProperty.call(storedVisibility, idx)) {
                     this.visible(storedVisibility[idx]);
                 }
+            });
+
+            // Coherence details: fetch from API and show in modal
+            $(document).on('click', '.coherence-details-btn', function(e) {
+                e.preventDefault();
+                var storyId = $(this).data('story-id');
+                if (!storyId) return;
+                var modal = new bootstrap.Modal(document.getElementById('coherenceModal'));
+                $('#coherenceModalBody').html('<div class="text-center text-muted">Caricamento...</div>');
+                modal.show();
+
+                fetch('/api/TestAutomation/coherence/' + storyId)
+                    .then(function(res) { return res.json(); })
+                    .then(function(data) {
+                        if (!data || !data.success) {
+                            $('#coherenceModalBody').html('<div class="alert alert-danger">Impossibile ottenere i dati di coerenza.</div>');
+                            return;
+                        }
+
+                        var html = '';
+                        html += '<div class="mb-3">';
+                        html += '<strong>Story ID:</strong> ' + data.storyId + '<br/>';
+                        html += '<strong>Chunk facts:</strong> ' + (data.chunkFactsCount || 0) + ' &middot; <strong>Coherence scores:</strong> ' + (data.coherenceScoresCount || 0) + '<br/>';
+                        if (data.globalCoherence) {
+                            html += '<div class="mt-2"><strong>Global coherence:</strong> ' + (data.globalCoherence.value != null ? data.globalCoherence.value.toFixed(3) : '-') + ' (' + (data.globalCoherence.chunkCount || 0) + ' chunk)</div>';
+                            if (data.globalCoherence.notes) html += '<div class="text-muted small">' + data.globalCoherence.notes + '</div>';
+                        }
+                        html += '</div>';
+
+                        // Chunk facts table
+                        html += '<h6>Chunk Facts</h6>';
+                        html += '<div class="table-responsive"><table class="table table-sm table-bordered"><thead><tr><th>Chunk</th><th>Has facts</th><th>Facts</th></tr></thead><tbody>';
+                        (data.chunkFacts || []).forEach(function(cf) {
+                            var pretty = cf.factsJson ? '<pre style="white-space:pre-wrap;">' + JSON.stringify(JSON.parse(cf.factsJson), null, 2) + '</pre>' : '<em>--</em>';
+                            html += '<tr><td>' + cf.chunkNumber + '</td><td>' + (cf.hasFacts ? '✅' : '❌') + '</td><td>' + pretty + '</td></tr>';
+                        });
+                        html += '</tbody></table></div>';
+
+                        // Coherence scores table
+                        html += '<h6 class="mt-3">Coherence Scores</h6>';
+                        html += '<div class="table-responsive"><table class="table table-sm table-bordered"><thead><tr><th>Chunk</th><th>Local</th><th>Global</th><th>Has Errors</th></tr></thead><tbody>';
+                        (data.coherenceScores || []).forEach(function(cs) {
+                            html += '<tr><td>' + cs.chunkNumber + '</td><td>' + (cs.localCoherence != null ? cs.localCoherence.toFixed(3) : '-') + '</td><td>' + (cs.globalCoherence != null ? cs.globalCoherence.toFixed(3) : '-') + '</td><td>' + (cs.hasErrors ? '⚠️' : '') + '</td></tr>';
+                        });
+                        html += '</tbody></table></div>';
+
+                        $('#coherenceModalBody').html(html);
+                    })
+                    .catch(function(err) {
+                        $('#coherenceModalBody').html('<div class="alert alert-danger">Errore durante la richiesta: ' + err + '</div>');
+                    });
             });
 
             table.on('column-visibility.dt', function (e, settings, column, state) {

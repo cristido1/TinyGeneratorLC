@@ -77,7 +77,9 @@ namespace TinyGenerator.Services
         private readonly int _maxIterations;
         private readonly LangChainChatBridge? _modelBridge;
         private readonly string? _systemMessage;
+        private readonly ResponseCheckerService? _responseChecker;
         private List<ConversationMessage> _messageHistory;
+        private int _toolReminderAttempts = 0;
 
         public ReActLoopOrchestrator(
             HybridLangChainOrchestrator tools,
@@ -86,7 +88,8 @@ namespace TinyGenerator.Services
             ProgressService? progress = null,
             string? runId = null,
             LangChainChatBridge? modelBridge = null,
-            string? systemMessage = null)
+            string? systemMessage = null,
+            ResponseCheckerService? responseChecker = null)
         {
             _tools = tools;
             _logger = logger;
@@ -95,6 +98,7 @@ namespace TinyGenerator.Services
             _maxIterations = maxIterations;
             _modelBridge = modelBridge;
             _systemMessage = systemMessage;
+            _responseChecker = responseChecker;
             _messageHistory = new List<ConversationMessage>();
         }
 
@@ -178,27 +182,35 @@ namespace TinyGenerator.Services
                     if (toolCalls.Count == 0)
                     {
                         // No tool calls = model might be done — but sometimes the model skipped calling an
-                        // expected final evaluation function (e.g. evaluate_full_story). In that case we
-                        // should prompt it up to 3 times to call the function instead of silently accepting
-                        // completion.
+                        // expected final function (e.g. evaluate_full_story or finalize_global_coherence). In
+                        // that case we should prompt it up to 3 times to call the function instead of silently
+                        // accepting completion.
 
-                        // Determine whether the tools exposed an "evaluate_full_story" function
-                        bool expectsFinalEvaluate = _tools.GetToolSchemas()
+                        var finalFunctionCandidates = new[] { "evaluate_full_story", "finalize_global_coherence" };
+
+                        bool expectsFinalFunction = _tools.GetToolSchemas()
                             .Any(s => s.TryGetValue("function", out var funcObj)
                                 && funcObj is Dictionary<string, object> fd
                                 && fd.TryGetValue("name", out var fname)
-                                && string.Equals(fname?.ToString(), "evaluate_full_story", StringComparison.OrdinalIgnoreCase));
+                                && finalFunctionCandidates.Any(c => string.Equals(fname?.ToString(), c, StringComparison.OrdinalIgnoreCase)));
 
-                        // Check if evaluate_full_story was ever executed during this loop
-                        var hadEvaluateCall = result.ExecutedTools.Any(r => string.Equals(r.ToolName, "evaluate_full_story", StringComparison.OrdinalIgnoreCase));
+                        var missingFinal = finalFunctionCandidates
+                            .FirstOrDefault(fn => _tools.GetToolSchemas()
+                                .Any(s => s.TryGetValue("function", out var funcObj)
+                                    && funcObj is Dictionary<string, object> fd
+                                    && fd.TryGetValue("name", out var fname)
+                                    && string.Equals(fname?.ToString(), fn, StringComparison.OrdinalIgnoreCase))
+                                && !result.ExecutedTools.Any(r => string.Equals(r.ToolName, fn, StringComparison.OrdinalIgnoreCase)));
 
-                        if (expectsFinalEvaluate && !hadEvaluateCall)
+                        if (expectsFinalFunction && !string.IsNullOrEmpty(missingFinal))
                         {
                             // Ask model to call the function up to 3 times
                             if (_missingFinalCallAttempts < 3)
                             {
                                 _missingFinalCallAttempts++;
-                                var assistantPrompt = $"You have not called the required function `evaluate_full_story`. Please call `evaluate_full_story` exactly once now, including all required score fields and corresponding *_defects. Retry attempt {_missingFinalCallAttempts} of 3.";
+                                var assistantPrompt = missingFinal.Equals("evaluate_full_story", StringComparison.OrdinalIgnoreCase)
+                                    ? $"You have not called the required function `evaluate_full_story`. Please call `evaluate_full_story` exactly once now, including all required score fields and corresponding *_defects. Retry attempt {_missingFinalCallAttempts} of 3."
+                                    : $"You have not called the required function `finalize_global_coherence`. Please call `finalize_global_coherence` exactly once now with the final global coherence score. Retry attempt {_missingFinalCallAttempts} of 3.";
 
                                 _messageHistory.Add(new ConversationMessage
                                 {
@@ -206,7 +218,7 @@ namespace TinyGenerator.Services
                                     Content = assistantPrompt
                                 });
 
-                                _logger?.Log("Info", "ReActLoop", $"Requested missing final function evaluate_full_story retry {_missingFinalCallAttempts}/3");
+                                _logger?.Log("Info", "ReActLoop", $"Requested missing final function {missingFinal} retry {_missingFinalCallAttempts}/3");
 
                                 // Continue to next iteration so the model is asked again
                                 iteration++;
@@ -215,10 +227,43 @@ namespace TinyGenerator.Services
 
                             // Exceeded retries
                             result.Success = false;
-                            result.Error = "Model failed to call evaluate_full_story after 3 attempts";
+                            result.Error = $"Model failed to call {missingFinal} after 3 attempts (required final function never returned)";
                             result.IterationCount = iteration + 1;
-                            _logger?.Log("Warn", "ReActLoop", "Exceeded retry attempts for missing evaluate_full_story");
+                            _logger?.Log("Warn", "ReActLoop", $"Exceeded retry attempts for missing {missingFinal}: final function not returned");
                             return result;
+                        }
+
+                        // Guardrail: if we have tools and a response_checker, ask it to craft a reminder (max 2 attempts)
+                        var toolSchemas = _tools.GetToolSchemas();
+                        if (toolSchemas.Any() && _responseChecker != null && _toolReminderAttempts < 2)
+                        {
+                            try
+                            {
+                                var reminder = await _responseChecker.BuildToolUseReminderAsync(
+                                    _systemMessage,
+                                    userPrompt,
+                                    modelResponse,
+                                    toolSchemas,
+                                    _toolReminderAttempts);
+
+                                if (!string.IsNullOrWhiteSpace(reminder))
+                                {
+                                    _toolReminderAttempts++;
+                                    _messageHistory.Add(new ConversationMessage
+                                    {
+                                        Role = "assistant",
+                                        Content = reminder
+                                    });
+
+                                    _logger?.Log("Info", "ReActLoop", $"response_checker injected reminder attempt {_toolReminderAttempts}/2");
+                                    iteration++;
+                                    continue;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger?.Log("Warn", "ReActLoop", $"response_checker reminder failed: {ex.Message}");
+                            }
                         }
 
                         // No expected final function or we already got it — accept plain response
@@ -237,7 +282,7 @@ namespace TinyGenerator.Services
                     {
                         try
                         {
-                                // Track function call counts and detect potential loops
+                            // Track function call counts and detect potential loops
                                 OnFunctionCalled(call.ToolName, call.Arguments);
 
                                 _logger?.Log("Info", "ReActLoop", $"  Executing tool: {call.ToolName}");
@@ -245,6 +290,20 @@ namespace TinyGenerator.Services
                             
                                 var output = await _tools.ExecuteToolAsync(call.ToolName, call.Arguments);
                             toolResults.Add((call.Id, output));
+                            // Log tool output as a pseudo-model response so chat_text shows the function result
+                            try
+                            {
+                                var toolResponseJson = JsonSerializer.Serialize(new
+                                {
+                                    message = new
+                                    {
+                                        role = "tool",
+                                        content = output ?? string.Empty
+                                    }
+                                });
+                                _logger?.LogResponseJson(call.ToolName ?? "tool", toolResponseJson);
+                            }
+                            catch { }
                             
                             // Log full output for better visibility. Be careful: outputs can be large.
                             // If you prefer truncation, change to substring only for specific tools.
@@ -329,6 +388,24 @@ namespace TinyGenerator.Services
                     catch { }
 
                     // Step 4: Add assistant message with tool_calls and tool result messages
+                    // Guardrail: ensure TTS schema tool covers current chunk before proceeding
+                    try
+                    {
+                        var ttsTool = _tools.GetToolByFunctionName("ttsschema") as TinyGenerator.Skills.TtsSchemaTool;
+                        if (ttsTool != null && ttsTool.LastChunkIndex.HasValue)
+                        {
+                            if (!ttsTool.HasCoveredCurrentChunk(out var coverage, 0.9))
+                            {
+                                var assistantPrompt = $"Non hai ancora coperto il chunk corrente (copertura {coverage * 100:0.0}%). Completa le chiamate add_narration/add_phrase per questo chunk prima di leggere il successivo, poi riprova.";
+                                _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = assistantPrompt });
+                                _logger?.Log("Info", "ReActLoop", $"TTS chunk incomplete coverage: {coverage * 100:0.0}%");
+                                iteration++;
+                                continue;
+                            }
+                        }
+                    }
+                    catch { }
+
                     _messageHistory.Add(new ConversationMessage
                     {
                         Role = "assistant",
@@ -425,6 +502,34 @@ namespace TinyGenerator.Services
                                     }
                                 }
                                 catch { /* ignore parse errors and continue */ }
+                            }
+
+                            // Short-circuit when evaluation completed: if evaluate_full_story returned without error,
+                            // stop the loop and avoid nudging the model to read more parts.
+                            if (string.Equals(toolName, "evaluate_full_story", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var evalHasError = false;
+                                try
+                                {
+                                    using var doc = JsonDocument.Parse(toolResult);
+                                    if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("error", out _))
+                                    {
+                                        evalHasError = true;
+                                    }
+                                }
+                                catch
+                                {
+                                    // If parsing fails, assume it's a valid payload and proceed to short-circuit
+                                }
+
+                                if (!evalHasError)
+                                {
+                                    result.FinalResponse = toolResult;
+                                    result.Success = true;
+                                    result.IterationCount = iteration + 1;
+                                    _logger?.Log("Info", "ReActLoop", "evaluate_full_story completed; stopping loop without further read_story_part checks");
+                                    return result;
+                                }
                             }
 
                             // Only handle evaluate_full_story validation errors here (original logic)

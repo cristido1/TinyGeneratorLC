@@ -41,5 +41,6 @@ namespace TinyGenerator.Models
         public string? Context { get; set; }
         public bool Analized { get; set; }
         public string? ChatText { get; set; } // Chat-style formatted text for UI
+        public string? Result { get; set; } // Optional outcome: SUCCESS / FAILED / null
     }
 }

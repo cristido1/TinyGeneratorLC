@@ -149,6 +149,85 @@ Return ONLY a JSON object with this structure:
             }
         }
 
+        /// <summary>
+        /// Ask a response_checker agent to craft a corrective message when the primary model
+        /// replies con testo libero invece di usare i tool. Restituisce la risposta da
+        /// inviare al modello principale (plain text) oppure null se non disponibile.
+        /// </summary>
+        public async Task<string?> BuildToolUseReminderAsync(
+            string? systemMessage,
+            string userPrompt,
+            string modelResponse,
+            List<Dictionary<string, object>> toolSchemas,
+            int attempt)
+        {
+            var checkerAgent = _database.ListAgents()
+                .FirstOrDefault(a => a.Role == "response_checker" && a.IsActive);
+
+            if (checkerAgent == null)
+            {
+                _logger.Log("Warning", "ResponseChecker", "No active response_checker agent available for tool reminder");
+                return null;
+            }
+
+            var toolNames = toolSchemas
+                .Select(s => s.TryGetValue("function", out var funcObj) && funcObj is Dictionary<string, object> f
+                    ? f.TryGetValue("name", out var nameObj) ? nameObj?.ToString() ?? string.Empty : string.Empty
+                    : string.Empty)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var prompt = new StringBuilder();
+            prompt.AppendLine("You are a response_checker helping another agent that MUST call functions instead of replying with free text.");
+            prompt.AppendLine($"Attempt: {attempt + 1}/2.");
+            prompt.AppendLine("Provide a SHORT assistant reply to the primary model that reminds it to use the tools, and if possible suggest the first tool to call.");
+            prompt.AppendLine("Return ONLY the assistant reply text, no JSON, no extra explanations.");
+            prompt.AppendLine();
+            if (!string.IsNullOrWhiteSpace(systemMessage))
+            {
+                prompt.AppendLine("=== System message ===");
+                prompt.AppendLine(systemMessage);
+                prompt.AppendLine();
+            }
+            prompt.AppendLine("=== User prompt ===");
+            prompt.AppendLine(userPrompt);
+            prompt.AppendLine();
+            prompt.AppendLine("=== Model response (incorrect - no tool calls) ===");
+            prompt.AppendLine(modelResponse);
+            prompt.AppendLine();
+            prompt.AppendLine("=== Available tools ===");
+            foreach (var t in toolNames)
+            {
+                prompt.AppendLine($"- {t}");
+            }
+
+            try
+            {
+                var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
+                var checkerModelName = modelInfo?.Name ?? "phi3:mini";
+
+                var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
+                var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
+                var loop = new ReActLoopOrchestrator(orchestrator, _logger, maxIterations: 3, modelBridge: bridge);
+
+                var result = await loop.ExecuteAsync(prompt.ToString());
+                var reply = result.FinalResponse;
+                if (string.IsNullOrWhiteSpace(reply))
+                {
+                    _logger.Log("Warning", "ResponseChecker", "Tool reminder produced empty reply");
+                    return null;
+                }
+
+                return reply;
+            }
+            catch (Exception ex)
+            {
+                _logger.Log("Error", "ResponseChecker", $"Tool reminder failed: {ex.Message}", ex.ToString());
+                return null;
+            }
+        }
+
         private ValidationResult ParseValidationResponse(string response, double? semanticScore)
         {
             try

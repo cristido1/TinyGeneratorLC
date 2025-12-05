@@ -1270,7 +1270,51 @@ SET TotalScore = (
                   LEFT JOIN models ma ON a.model_id = ma.Id
                   WHERE se.story_id = @sid
                   ORDER BY se.id";
-        return conn.Query<TinyGenerator.Models.StoryEvaluation>(sql, new { sid = storyId }).ToList();
+        var list = conn.Query<TinyGenerator.Models.StoryEvaluation>(sql, new { sid = storyId }).ToList();
+
+        try
+        {
+            // If a global coherence row exists for this story, expose it as a synthetic StoryEvaluation
+            // so the UI can display the coherence result alongside other evaluations.
+            var global = GetGlobalCoherence((int)storyId);
+            if (global != null)
+            {
+                // Create a synthetic evaluation entry for coherence if not already present
+                var already = list.Any(e => e.RawJson != null && e.RawJson.Contains("global_coherence", StringComparison.OrdinalIgnoreCase));
+                if (!already)
+                {
+                    var coherenceScore = (double)Math.Round(global.GlobalCoherenceValue * 10.0, 2);
+                    var synthetic = new TinyGenerator.Models.StoryEvaluation
+                    {
+                        Id = global.Id > 0 ? -global.Id : 0, // negative id to avoid collision
+                        StoryId = storyId,
+                        NarrativeCoherenceScore = (int)Math.Round(global.GlobalCoherenceValue * 10.0),
+                        NarrativeCoherenceDefects = string.Empty,
+                        OriginalityScore = 0,
+                        OriginalityDefects = string.Empty,
+                        EmotionalImpactScore = 0,
+                        EmotionalImpactDefects = string.Empty,
+                        ActionScore = 0,
+                        ActionDefects = string.Empty,
+                        TotalScore = coherenceScore,
+                        RawJson = System.Text.Json.JsonSerializer.Serialize(new { global.GlobalCoherenceValue, global.ChunkCount, global.Notes, global.Ts }),
+                        Model = string.Empty,
+                        ModelId = null,
+                        AgentId = null,
+                        AgentName = "coherence",
+                        AgentModel = string.Empty,
+                        Ts = global.Ts ?? string.Empty
+                    };
+                    list.Add(synthetic);
+                }
+            }
+        }
+        catch
+        {
+            // best-effort: do not fail evaluation retrieval if global coherence cannot be read
+        }
+
+        return list;
     }
 
     public void DeleteStoryEvaluationById(long evaluationId)
@@ -1866,6 +1910,21 @@ SET TotalScore = (
     /// </summary>
     private void RunMigrations(IDbConnection conn)
     {
+        // Migration: add Result column to Log if missing
+        try
+        {
+            var hasResult = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name = 'Result'") > 0;
+            if (!hasResult)
+            {
+                conn.Execute("ALTER TABLE Log ADD COLUMN Result TEXT");
+                Console.WriteLine("[DB] Migration: added Result column to Log");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add Result column to Log: {ex.Message}");
+        }
+
         // Migration: Consolidate legacy lowercase 'logs' table into canonical 'Log'
         try
         {
@@ -1876,8 +1935,8 @@ SET TotalScore = (
                 try
                 {
                     conn.Execute(@"
-                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context)
-                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL
+                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context, Result)
+                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL, NULL
                         FROM logs l
                         WHERE NOT EXISTS (
                             SELECT 1 FROM Log existing 
@@ -2120,9 +2179,25 @@ CREATE TABLE task_types (
             // Seed default task type: story
             conn.Execute(@"
 INSERT INTO task_types (code, description, default_executor_role, default_checker_role, output_merge_strategy, validation_criteria)
-VALUES ('story', 'Story Generation', 'writer', 'response_checker', 'accumulate_chapters', '{""min_length_check"":true,""no_questions"":true,""semantic_threshold"":0.6}')");
+VALUES ('story', 'Story Generation', 'writer', 'response_checker', 'accumulate_chapters', '{""min_length_check"":true,""no_questions"":true,""semantic_threshold"":0.6}');
+INSERT INTO task_types (code, description, default_executor_role, default_checker_role, output_merge_strategy, validation_criteria)
+VALUES ('tts_schema', 'TTS Schema Generation', 'tts_json', 'response_checker', 'last_only', '{""require_confirm"":true}');
+");
             Console.WriteLine("[DB] Seeded default task_types");
         }
+        else
+        {
+            var hasTtsSchema = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM task_types WHERE code = 'tts_schema'");
+            if (hasTtsSchema == 0)
+            {
+                conn.Execute(@"
+INSERT INTO task_types (code, description, default_executor_role, default_checker_role, output_merge_strategy, validation_criteria)
+VALUES ('tts_schema', 'TTS Schema Generation', 'tts_json', 'response_checker', 'last_only', '{""require_confirm"":true}')");
+                Console.WriteLine("[DB] Added tts_schema task_type");
+            }
+        }
+
+        conn.Execute("UPDATE step_templates SET task_type='tts_schema' WHERE name LIKE 'tts_schema%' AND task_type <> 'tts_schema'");
 
         // Migration: Create task_executions table if not exists
         var hasTaskExecutions = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_executions'");
@@ -2217,7 +2292,7 @@ VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generat
         await ((SqliteConnection)conn).OpenAsync();
 
         // Build a single INSERT ... VALUES (...),(...),... with uniquely named parameters to avoid collisions
-        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized", "chat_text" };
+        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result" };
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
 
@@ -2241,6 +2316,7 @@ VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generat
             parameters.Add("@Context" + i, e.Context);
             parameters.Add("@analized" + i, e.Analized ? 1 : 0);
             parameters.Add("@chat_text" + i, e.ChatText);
+            parameters.Add("@Result" + i, e.Result);
         }
 
         sb.Append(";");
@@ -2341,7 +2417,7 @@ VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generat
         if (!string.IsNullOrWhiteSpace(level)) { where.Add("Level = @Level"); parameters.Add("Level", level); }
         if (!string.IsNullOrWhiteSpace(category)) { where.Add("Category LIKE @Category"); parameters.Add("Category", "%" + category + "%"); }
 
-        var sql = "SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized, chat_text AS ChatText FROM Log";
+        var sql = "SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized, chat_text AS ChatText, Result FROM Log";
         if (where.Count > 0) sql += " WHERE " + string.Join(" AND ", where);
         sql += " ORDER BY Id DESC LIMIT @Limit OFFSET @Offset";
         parameters.Add("Limit", limit);
@@ -2366,7 +2442,7 @@ VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generat
 
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized
+        var sql = @"SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized, Result
                     FROM Log
                     WHERE ThreadId = @ThreadId
                     ORDER BY Id ASC
@@ -3022,4 +3098,105 @@ SELECT last_insert_rowid();";
             Console.WriteLine($"[DB] Cleaned up {deleted} old task executions");
         }
     }
+
+    #region Coherence Evaluation Methods
+
+    /// <summary>
+    /// Salva i fatti estratti da un chunk di storia
+    /// </summary>
+    public void SaveChunkFacts(ChunkFacts facts)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"INSERT INTO story_chunk_facts (story_id, chunk_number, facts_json, ts) 
+                    VALUES (@StoryId, @ChunkNumber, @FactsJson, @Ts)";
+        conn.Execute(sql, facts);
+    }
+
+    /// <summary>
+    /// Recupera i fatti di un chunk specifico
+    /// </summary>
+    public ChunkFacts? GetChunkFacts(int storyId, int chunkNumber)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, story_id AS StoryId, chunk_number AS ChunkNumber, 
+                    facts_json AS FactsJson, ts AS Ts 
+                    FROM story_chunk_facts 
+                    WHERE story_id = @sid AND chunk_number = @cn";
+        return conn.QueryFirstOrDefault<ChunkFacts>(sql, new { sid = storyId, cn = chunkNumber });
+    }
+
+    /// <summary>
+    /// Recupera tutti i fatti di una storia
+    /// </summary>
+    public List<ChunkFacts> GetAllChunkFacts(int storyId)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, story_id AS StoryId, chunk_number AS ChunkNumber, 
+                    facts_json AS FactsJson, ts AS Ts 
+                    FROM story_chunk_facts 
+                    WHERE story_id = @sid 
+                    ORDER BY chunk_number";
+        return conn.Query<ChunkFacts>(sql, new { sid = storyId }).ToList();
+    }
+
+    /// <summary>
+    /// Salva lo score di coerenza di un chunk
+    /// </summary>
+    public void SaveCoherenceScore(CoherenceScore score)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"INSERT INTO story_coherence_scores 
+                    (story_id, chunk_number, local_coherence, global_coherence, errors, ts) 
+                    VALUES (@StoryId, @ChunkNumber, @LocalCoherence, @GlobalCoherence, @Errors, @Ts)";
+        conn.Execute(sql, score);
+    }
+
+    /// <summary>
+    /// Recupera tutti gli score di coerenza di una storia
+    /// </summary>
+    public List<CoherenceScore> GetCoherenceScores(int storyId)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, story_id AS StoryId, chunk_number AS ChunkNumber, 
+                    local_coherence AS LocalCoherence, global_coherence AS GlobalCoherence, 
+                    errors AS Errors, ts AS Ts 
+                    FROM story_coherence_scores 
+                    WHERE story_id = @sid 
+                    ORDER BY chunk_number";
+        return conn.Query<CoherenceScore>(sql, new { sid = storyId }).ToList();
+    }
+
+    /// <summary>
+    /// Salva la coerenza globale finale di una storia
+    /// </summary>
+    public void SaveGlobalCoherence(GlobalCoherence coherence)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"INSERT OR REPLACE INTO story_global_coherence 
+                    (story_id, global_coherence, chunk_count, notes, ts) 
+                    VALUES (@StoryId, @GlobalCoherenceValue, @ChunkCount, @Notes, @Ts)";
+        conn.Execute(sql, coherence);
+    }
+
+    /// <summary>
+    /// Recupera la coerenza globale di una storia
+    /// </summary>
+    public GlobalCoherence? GetGlobalCoherence(int storyId)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, story_id AS StoryId, global_coherence AS GlobalCoherenceValue, 
+                    chunk_count AS ChunkCount, notes AS Notes, ts AS Ts 
+                    FROM story_global_coherence 
+                    WHERE story_id = @sid";
+        return conn.QueryFirstOrDefault<GlobalCoherence>(sql, new { sid = storyId });
+    }
+
+    #endregion
 }

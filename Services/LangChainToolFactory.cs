@@ -134,6 +134,12 @@ namespace TinyGenerator.Services
             if (allowedSet.Contains("responsechecker"))
                 RegisterResponseCheckerTool(orchestrator, modelId, agentId);
 
+            if (allowedSet.Contains("chunkfacts") || allowedSet.Contains("chunk_facts"))
+                RegisterChunkFactsExtractorTool(orchestrator, modelId, agentId);
+
+            if (allowedSet.Contains("coherence") || allowedSet.Contains("coherence_calculator"))
+                RegisterCoherenceCalculatorTool(orchestrator, modelId, agentId);
+
             // 'storyevaluator' tool removed in favor of unified EvaluatorTool
 
             var wantsVoiceTool = allowedSet.Contains("voicechoser") || allowedSet.Contains("voicechooser");
@@ -468,6 +474,54 @@ namespace TinyGenerator.Services
             catch (Exception ex)
             {
                 _logger?.Log("Error", "ToolFactory", $"Failed to register ResponseCheckerTool: {ex.Message}");
+            }
+        }
+
+        private void RegisterChunkFactsExtractorTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId)
+        {
+            try
+            {
+                if (_database == null)
+                {
+                    _logger?.Log("Warn", "ToolFactory", "DatabaseService not available, skipping ChunkFactsExtractorTool");
+                    return;
+                }
+
+                var tool = new ChunkFactsExtractorTool(_database, _logger)
+                {
+                    ModelId = modelId,
+                    AgentId = agentId
+                };
+                orchestrator.RegisterTool(tool);
+                _logger?.Log("Info", "ToolFactory", "Registered ChunkFactsExtractorTool");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "ToolFactory", $"Failed to register ChunkFactsExtractorTool: {ex.Message}");
+            }
+        }
+
+        private void RegisterCoherenceCalculatorTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId)
+        {
+            try
+            {
+                if (_database == null)
+                {
+                    _logger?.Log("Warn", "ToolFactory", "DatabaseService not available, skipping CoherenceCalculatorTool");
+                    return;
+                }
+
+                var tool = new CoherenceCalculatorTool(_database, _logger)
+                {
+                    ModelId = modelId,
+                    AgentId = agentId
+                };
+                orchestrator.RegisterTool(tool);
+                _logger?.Log("Info", "ToolFactory", "Registered CoherenceCalculatorTool");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "ToolFactory", $"Failed to register CoherenceCalculatorTool: {ex.Message}");
             }
         }
 

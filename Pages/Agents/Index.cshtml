@@ -54,6 +54,9 @@
                 <td>@(string.IsNullOrWhiteSpace(a.JsonResponseFormat) ? "-" : a.JsonResponseFormat)</td>
                 <td>
                     <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@a.Id">Edit</a>
+                    <form method="post" asp-page-handler="Clone" asp-route-id="@a.Id" class="d-inline">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary me-1">Duplica</button>
+                    </form>
                     @if (a.Role?.Equals("writer", StringComparison.OrdinalIgnoreCase) == true)
                     {
                         <button type="button" class="btn btn-sm btn-outline-success me-1 generate-story-btn" data-agent-id="@a.Id" data-agent-name="@a.Name">

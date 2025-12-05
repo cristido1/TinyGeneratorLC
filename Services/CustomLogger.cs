@@ -38,12 +38,12 @@ namespace TinyGenerator.Services
             _timer = new Timer(async _ => await OnTimerAsync().ConfigureAwait(false), null, _flushInterval, _flushInterval);
         }
 
-        public void Log(string level, string category, string message, string? exception = null, string? state = null)
+        public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null)
         {
-            LogWithChatText(level, category, message, null, exception, state);
+            LogWithChatText(level, category, message, null, exception, state, result);
         }
 
-        private void LogWithChatText(string level, string category, string message, string? chatText = null, string? exception = null, string? state = null)
+        private void LogWithChatText(string level, string category, string message, string? chatText = null, string? exception = null, string? state = null, string? result = null)
         {
             if (_disposed) return;
 
@@ -67,7 +67,8 @@ namespace TinyGenerator.Services
                 ThreadScope = scope,
                 AgentName = null,
                 Context = null,
-                ChatText = chatText
+                ChatText = chatText,
+                Result = string.IsNullOrWhiteSpace(result) ? null : result
             };
 
             bool shouldFlush = false;
@@ -153,15 +154,43 @@ namespace TinyGenerator.Services
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] RESPONSE_JSON: {responseJson}";
             
-            // Extract assistant content from Ollama response JSON for cleaner chat display
+            // Extract assistant content or function calls for cleaner chat display
             string chatText;
             try
             {
                 var json = System.Text.Json.JsonDocument.Parse(responseJson);
-                if (json.RootElement.TryGetProperty("message", out var messageObj) &&
-                    messageObj.TryGetProperty("content", out var contentProp))
+                if (json.RootElement.TryGetProperty("message", out var messageObj))
                 {
-                    chatText = contentProp.GetString() ?? responseJson;
+                    var role = messageObj.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
+                    // If it's a tool response, prefer the tool output
+                    if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) &&
+                        messageObj.TryGetProperty("content", out var toolContent))
+                    {
+                        chatText = toolContent.GetString() ?? responseJson;
+                        LogWithChatText("Information", "ModelResponse", message, chatText);
+                        return;
+                    }
+
+                    // Prefer tool_calls summary if present
+                    if (messageObj.TryGetProperty("tool_calls", out var tcProp) && tcProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var calls = new List<string>();
+                        foreach (var tc in tcProp.EnumerateArray())
+                        {
+                            var fn = tc.GetProperty("function").GetProperty("name").GetString() ?? "unknown_fn";
+                            var args = tc.GetProperty("function").GetProperty("arguments").GetString() ?? "{}";
+                            calls.Add($"{fn} {args}");
+                        }
+                        chatText = string.Join(" | ", calls);
+                    }
+                    else if (messageObj.TryGetProperty("content", out var contentProp))
+                    {
+                        chatText = contentProp.GetString() ?? responseJson;
+                    }
+                    else
+                    {
+                        chatText = responseJson;
+                    }
                 }
                 else
                 {

@@ -38,6 +38,7 @@ namespace TinyGenerator.Services
         private readonly LangChainAgentService _agentService;
         private readonly ICustomLogger _customLogger;
         private readonly IOllamaManagementService _ollamaService;
+        private readonly ICommandDispatcher _commandDispatcher;
         private readonly Dictionary<int, int> _ttsEmotionPenalties = new();
         public const double TtsCoverageThreshold = 0.85;
 
@@ -61,6 +62,16 @@ namespace TinyGenerator.Services
             public long? DurationMs { get; init; }
         }
 
+        private static string SanitizeIdentifier(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "test";
+            var chars = value.Trim().ToLowerInvariant()
+                .Select(c => char.IsLetterOrDigit(c) ? c : '_')
+                .ToArray();
+            var sanitized = new string(chars).Trim('_');
+            return string.IsNullOrWhiteSpace(sanitized) ? "test" : sanitized;
+        }
+
         public LangChainTestService(
             DatabaseService database,
             ProgressService progress,
@@ -68,7 +79,8 @@ namespace TinyGenerator.Services
             ILangChainKernelFactory kernelFactory,
             LangChainAgentService agentService,
             ICustomLogger customLogger,
-            IOllamaManagementService ollamaService)
+            IOllamaManagementService ollamaService,
+            ICommandDispatcher commandDispatcher)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _progress = progress ?? throw new ArgumentNullException(nameof(progress));
@@ -77,6 +89,7 @@ namespace TinyGenerator.Services
             _agentService = agentService ?? throw new ArgumentNullException(nameof(agentService));
             _customLogger = customLogger ?? throw new ArgumentNullException(nameof(customLogger));
             _ollamaService = ollamaService ?? throw new ArgumentNullException(nameof(ollamaService));
+            _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
         }
 
         /// <summary>
@@ -100,6 +113,39 @@ namespace TinyGenerator.Services
                 passed = result.PassedSteps,
                 duration = result.DurationMs
             };
+        }
+
+        public CommandHandle? EnqueueGroupRun(string model, string group)
+        {
+            var context = PrepareGroupRun(model, group);
+            if (context == null) return null;
+
+            var scope = $"tests/{SanitizeIdentifier(group)}/{SanitizeIdentifier(model)}";
+            var metadata = new Dictionary<string, string>
+            {
+                ["runId"] = context.RunId.ToString(),
+                ["model"] = context.ModelName,
+                ["group"] = context.Group
+            };
+
+            return _commandDispatcher.Enqueue(
+                $"test_{SanitizeIdentifier(group)}",
+                async _ =>
+                {
+                    var result = await ExecuteGroupRunAsync(context);
+                    if (result == null)
+                    {
+                        return new CommandResult(false, "Test non eseguito");
+                    }
+
+                    var msg = result.PassedAll
+                        ? $"Test {group} completato ({result.PassedSteps}/{result.Steps})"
+                        : $"Test {group} completato con errori ({result.PassedSteps}/{result.Steps})";
+                    return new CommandResult(result.PassedAll, msg);
+                },
+                runId: context.RunId.ToString(),
+                threadScope: scope,
+                metadata: metadata);
         }
 
         public TestGroupRunContext? PrepareGroupRun(string model, string group)
@@ -752,10 +798,19 @@ namespace TinyGenerator.Services
         {
             _progress?.Append(runId.ToString(), $"[{model}] === TTS TEST ===");
             
-            var ttsStoryText = prompt;
+            // Use the real TTS agent configuration but override only the model under test.
+            var ttsAgent = _database.ListAgents()
+                .FirstOrDefault(a => a.IsActive && a.Role.Equals("tts_json", StringComparison.OrdinalIgnoreCase));
+            var ttsStory = _database.GetStoryById(23);
+            var ttsStoryText = ttsStory?.Story ?? prompt;
+            var allowedPlugins = ParseAgentSkills(ttsAgent) ?? ParseAllowedPlugins(test);
+            var agentPrompt = !string.IsNullOrWhiteSpace(ttsAgent?.Prompt)
+                ? ttsAgent.Prompt!
+                : prompt;
+
             if (!string.IsNullOrWhiteSpace(ttsStoryText))
             {
-                _progress?.Append(runId.ToString(), $"[{model}] Provided TTS prompt ({ttsStoryText.Length} chars)");
+                _progress?.Append(runId.ToString(), $"[{model}] Using story 23 for TTS test ({ttsStoryText.Length} chars)");
             }
 
             const int maxRetries = 3;
@@ -765,12 +820,17 @@ namespace TinyGenerator.Services
             {
                 for (int attempt = 1; attempt <= maxRetries; attempt++)
                 {
-                    var orchestrator = _kernelFactory.CreateOrchestrator(model, ParseAllowedPlugins(test), null, testFolder, ttsStoryText);
+                    var orchestrator = _kernelFactory.CreateOrchestrator(model, allowedPlugins, ttsAgent?.Id, testFolder, ttsStoryText);
                     lastOrchestrator = orchestrator;
                     var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 60;
 
                     var executionPlan = LoadExecutionPlan(test.ExecutionPlan);
-                    var fullPrompt = prompt;
+                    var fullPrompt = $"{agentPrompt}\n\nQuesta è la storia:\n{ttsStoryText}";
+                    var systemMessage = string.IsNullOrWhiteSpace(ttsAgent?.Instructions)
+                        ? executionPlan
+                        : string.IsNullOrWhiteSpace(executionPlan)
+                            ? ttsAgent.Instructions
+                            : $"{ttsAgent.Instructions}\n\n{executionPlan}";
 
                     var hasTools = orchestrator.GetToolSchemas().Any();
                     fullPrompt = AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools);
@@ -788,7 +848,7 @@ namespace TinyGenerator.Services
                         
                         // Create ReAct loop to execute TTS schema generation
                         // Pass execution plan as system message instead of concatenating to user prompt
-                        var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge, systemMessage: executionPlan);
+                        var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge, systemMessage: systemMessage);
                         var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
                         sw.Stop();
                         
@@ -1024,6 +1084,22 @@ namespace TinyGenerator.Services
                 .ToList();
         }
 
+        private IEnumerable<string>? ParseAgentSkills(Agent? agent)
+        {
+            if (agent == null || string.IsNullOrWhiteSpace(agent.Skills))
+                return null;
+
+            try
+            {
+                var skills = JsonSerializer.Deserialize<List<string>>(agent.Skills);
+                return skills?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim());
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private string? LoadExecutionPlan(string? planName)
         {
             if (string.IsNullOrWhiteSpace(planName))
@@ -1149,6 +1225,11 @@ namespace TinyGenerator.Services
             // If we have tools or format will be handled by model (Ollama format parameter), 
             // don't add format instruction to prompt
             if (hasTools)
+                return prompt;
+
+            // Skip forcing JSON format if the prompt already mentions tool functions (e.g., evaluate_full_story/read_story_part)
+            var lower = prompt.ToLowerInvariant();
+            if (lower.Contains("evaluate_full_story") || lower.Contains("read_story_part"))
                 return prompt;
 
             var schemaContent = LoadResponseFormat(responseFormat);

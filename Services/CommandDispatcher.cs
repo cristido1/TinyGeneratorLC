@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 
 namespace TinyGenerator.Services
 {
@@ -50,6 +51,7 @@ namespace TinyGenerator.Services
         private CancellationTokenSource? _cts;
         private long _counter;
         private bool _disposed;
+        private readonly ConcurrentDictionary<string, CommandState> _active = new(StringComparer.OrdinalIgnoreCase);
 
         public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null)
         {
@@ -85,6 +87,17 @@ namespace TinyGenerator.Services
             {
                 throw new InvalidOperationException("La coda comandi non accetta nuovi elementi.");
             }
+
+            var state = new CommandState
+            {
+                RunId = id,
+                OperationName = op,
+                ThreadScope = safeScope,
+                Metadata = metadata,
+                Status = "queued",
+                EnqueuedAt = DateTimeOffset.UtcNow
+            };
+            _active[id] = state;
 
             return new CommandHandle(id, op, workItem.Completion.Task);
         }
@@ -144,6 +157,12 @@ namespace TinyGenerator.Services
             var startMessage = $"[{workItem.RunId}] START {workItem.OperationName}";
             _logger?.Log("Information", "Command", startMessage);
 
+            if (_active.TryGetValue(workItem.RunId, out var state))
+            {
+                state.Status = "running";
+                state.StartedAt = DateTimeOffset.UtcNow;
+            }
+
             try
             {
                 var result = await workItem.Handler(ctx).ConfigureAwait(false);
@@ -162,6 +181,29 @@ namespace TinyGenerator.Services
                 _logger?.Log("Error", "Command", $"[{workItem.RunId}] ERROR {workItem.OperationName}: {ex.Message}", ex.ToString());
                 workItem.Completion.TrySetResult(new CommandResult(false, ex.Message));
             }
+            finally
+            {
+                _active.TryRemove(workItem.RunId, out _);
+            }
+        }
+
+        public IReadOnlyList<CommandSnapshot> GetActiveCommands()
+        {
+            var list = new List<CommandSnapshot>();
+            foreach (var kvp in _active)
+            {
+                var s = kvp.Value;
+                list.Add(new CommandSnapshot(
+                    s.RunId,
+                    s.OperationName,
+                    s.ThreadScope,
+                    s.Status,
+                    s.EnqueuedAt,
+                    s.StartedAt,
+                    s.Metadata));
+            }
+            list.Sort((a, b) => a.EnqueuedAt.CompareTo(b.EnqueuedAt));
+            return list;
         }
 
         public void Dispose()
@@ -175,5 +217,16 @@ namespace TinyGenerator.Services
             catch { }
             _cts?.Dispose();
         }
+    }
+
+    internal sealed class CommandState
+    {
+        public string RunId { get; set; } = string.Empty;
+        public string OperationName { get; set; } = string.Empty;
+        public string ThreadScope { get; set; } = string.Empty;
+        public string Status { get; set; } = "queued";
+        public DateTimeOffset EnqueuedAt { get; set; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset? StartedAt { get; set; }
+        public IReadOnlyDictionary<string, string>? Metadata { get; set; }
     }
 }

@@ -89,6 +89,15 @@ TinyGenerator permette di creare storie complete attraverso un processo struttur
   - `LangChainKernelFactory`: Factory per creazione orchestratori
   - `LangChainAgentService`: Gestione agenti con configurazioni DB
 
+- **Command Pattern**:
+  - `CommandDispatcher`: Dispatcher asincrono per l'esecuzione dei comandi con tracking dello stato
+  - `IStoryCommand`: Interfaccia per comandi relativi alle storie
+  - Comandi disponibili in `Services/Commands/`:
+    - `StartMultiStepStoryCommand`: Avvia generazione storia multi-step
+    - `ExecuteMultiStepTaskCommand`: Esegue task multi-step
+    - `ResumeMultiStepTaskCommand`: Riprende task interrotti
+  - Tutti i comandi principali (evaluation, TTS, generation) devono essere eseguiti tramite `CommandDispatcher.Enqueue()`
+
 - **Tool System**:
   - `LangChainToolFactory`: Factory per creazione tool specializzati
   - Tool implementati in `Skills/`: TextTool, MathTool, MemoryTool, TimeTool, etc.
@@ -185,6 +194,7 @@ Il database SQLite (`data/storage.db`) contiene:
 ## Best Practices
 
 - **LangChain First**: Tutte le nuove funzionalità usano LangChain
+- **Command Pattern**: Tutti i comandi principali (generazione storie, valutazioni, TTS, etc.) devono implementare il pattern Command e utilizzare il `CommandDispatcher` per l'esecuzione asincrona e il tracking dello stato. Vedere `Services/Commands/` per esempi.
 - **Tool Schema**: Mantenere description concise nei tool schemas
 - **Logging**: Usare `ICustomLogger` per logging consistente
 - **Database**: Usare Dapper per query, transazioni per operazioni critiche

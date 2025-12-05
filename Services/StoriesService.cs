@@ -25,6 +25,7 @@ public sealed class StoriesService
     private readonly ICustomLogger? _customLogger;
     private readonly ProgressService? _progress;
     private readonly ICommandDispatcher? _commandDispatcher;
+    private readonly MultiStepOrchestrationService? _multiStepOrchestrator;
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -38,7 +39,8 @@ public sealed class StoriesService
         ICustomLogger? customLogger = null,
         ProgressService? progress = null,
         ILogger<StoriesService>? logger = null,
-        ICommandDispatcher? commandDispatcher = null)
+        ICommandDispatcher? commandDispatcher = null,
+        MultiStepOrchestrationService? multiStepOrchestrator = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _ttsService = ttsService ?? throw new ArgumentNullException(nameof(ttsService));
@@ -47,6 +49,7 @@ public sealed class StoriesService
         _progress = progress;
         _logger = logger;
         _commandDispatcher = commandDispatcher;
+        _multiStepOrchestrator = multiStepOrchestrator;
     }
 
     public long SaveGeneration(string prompt, StoryGenerationResult r, string? memoryKey = null)
@@ -256,13 +259,29 @@ public sealed class StoriesService
             {
                 evaluatorTool.CurrentStoryId = story.Id;
             }
+            
+            // Set CurrentStoryId for coherence evaluation tools
+            var chunkFactsTool = orchestrator.GetTool<ChunkFactsExtractorTool>("extract_chunk_facts");
+            if (chunkFactsTool != null)
+            {
+                chunkFactsTool.CurrentStoryId = story.Id;
+            }
+            
+            var coherenceTool = orchestrator.GetTool<CoherenceCalculatorTool>("calculate_coherence");
+            if (coherenceTool != null)
+            {
+                coherenceTool.CurrentStoryId = story.Id;
+            }
+            
             var chatBridge = _kernelFactory.CreateChatBridge(modelName, agent.Temperature, agent.TopP);
 
             var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
                 ? agent.Instructions
                 : ComposeSystemMessage(agent);
 
-            var prompt = BuildStoryEvaluationPrompt(story);
+            // Use different prompt based on agent role
+            bool isCoherenceEvaluation = agent.Role?.Equals("coherence_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
+            var prompt = BuildStoryEvaluationPrompt(story, isCoherenceEvaluation);
 
             var beforeEvaluations = _database.GetStoryEvaluations(storyId)
                 .Select(e => e.Id)
@@ -284,25 +303,143 @@ public sealed class StoriesService
                 return (false, 0, error);
             }
 
-            var afterEvaluations = _database.GetStoryEvaluations(storyId)
-                .Where(e => !beforeEvaluations.Contains(e.Id))
-                .OrderBy(e => e.Id)
-                .ToList();
-
-            if (afterEvaluations.Count == 0)
+            // Check results based on agent type
+            if (isCoherenceEvaluation)
             {
-                var msg = "L'agente non ha salvato alcuna valutazione.";
-                _progress?.Append(runId, $"[{storyId}] {msg}", "Warn");
-                return (false, 0, msg);
-            }
+                // For coherence evaluation, check if global coherence was saved
+                var globalCoherence = _database.GetGlobalCoherence((int)storyId);
+                if (globalCoherence == null)
+                {
+                    var msg = "L'agente non ha salvato la coerenza globale.";
+                    _progress?.Append(runId, $"[{storyId}] {msg}", "Warn");
+                    TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
+                    return (false, 0, msg);
+                }
 
-            var avgScore = afterEvaluations.Average(e => e.TotalScore);
-            _progress?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
-            return (true, avgScore, null);
+                var score = globalCoherence.GlobalCoherenceValue * 10; // Convert 0-1 to 0-10 scale
+                _progress?.Append(runId, $"[{storyId}] Valutazione di coerenza completata. Score: {score:F2}");
+                TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione di coerenza completata. Score: {score:F2}");
+                return (true, score, null);
+            }
+            else
+            {
+                // For standard evaluation, check stories_evaluations table
+                var afterEvaluations = _database.GetStoryEvaluations(storyId)
+                    .Where(e => !beforeEvaluations.Contains(e.Id))
+                    .OrderBy(e => e.Id)
+                    .ToList();
+
+                if (afterEvaluations.Count == 0)
+                {
+                    var msg = "L'agente non ha salvato alcuna valutazione.";
+                    _progress?.Append(runId, $"[{storyId}] {msg}", "Warn");
+                    TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
+                    return (false, 0, msg);
+                }
+
+                var avgScore = afterEvaluations.Average(e => e.TotalScore);
+                _progress?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
+                TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
+                return (true, avgScore, null);
+            }
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Errore durante EvaluateStoryWithAgent per storia {StoryId} agente {AgentId}", storyId, agentId);
+            TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, ex.Message);
+            return (false, 0, ex.Message);
+        }
+        finally
+        {
+            _progress?.MarkCompleted(runId);
+        }
+
+    }
+
+    private void TryLogEvaluationResult(string runId, long storyId, string? agentName, bool success, string message)
+    {
+        try
+        {
+            var entry = new TinyGenerator.Models.LogEntry
+            {
+                Ts = DateTime.UtcNow.ToString("o"),
+                Level = success ? "Information" : "Warning",
+                Category = "StoryEvaluation",
+                Message = $"[{storyId}] {message}",
+                ThreadScope = runId,
+                ThreadId = 0,
+                AgentName = agentName,
+                Result = success ? "SUCCESS" : "FAILED"
+            };
+            _database.InsertLogsAsync(new[] { entry }).ConfigureAwait(false).GetAwaiter().GetResult();
+        }
+        catch { }
+    }
+
+    public async Task<(bool success, double score, string? error)> EvaluateActionPacingWithAgentAsync(long storyId, int agentId)
+    {
+        if (_kernelFactory == null)
+            return (false, 0, "Kernel factory non disponibile");
+
+        var story = GetStoryById(storyId);
+        if (story == null || string.IsNullOrWhiteSpace(story.Story))
+            return (false, 0, "Storia non trovata o priva di contenuto");
+
+        var agent = _database.GetAgentById(agentId);
+        if (agent == null || !agent.IsActive)
+            return (false, 0, "Agente valutatore non trovato");
+
+        if (!agent.ModelId.HasValue)
+            return (false, 0, "Modello non configurato per l'agente valutatore");
+
+        var modelInfo = _database.GetModelInfoById(agent.ModelId.Value);
+        var modelName = modelInfo?.Name;
+        if (string.IsNullOrWhiteSpace(modelName))
+            return (false, 0, "Modello associato all'agente non disponibile");
+
+        var allowedPlugins = ParseAgentSkills(agent)?.ToList() ?? new List<string>();
+        if (!allowedPlugins.Any())
+            return (false, 0, "L'agente valutatore non ha strumenti abilitati");
+
+        var runId = $"actioneval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+        _progress?.Start(runId);
+        var evaluationOpId = LogScope.GenerateOperationId();
+        using var scope = LogScope.Push($"action_evaluation_{story.Id}", evaluationOpId);
+
+        try
+        {
+            var orchestrator = _kernelFactory.CreateOrchestrator(modelName, allowedPlugins, agent.Id);
+
+            var chatBridge = _kernelFactory.CreateChatBridge(modelName, agent.Temperature, agent.TopP);
+
+            var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
+                ? agent.Instructions
+                : ComposeSystemMessage(agent);
+
+            var prompt = BuildActionPacingPrompt(story);
+
+            var reactLoop = new ReActLoopOrchestrator(
+                orchestrator,
+                _customLogger,
+                progress: _progress,
+                runId: runId,
+                modelBridge: chatBridge,
+                systemMessage: systemMessage);
+
+            var reactResult = await reactLoop.ExecuteAsync(prompt);
+            if (!reactResult.Success)
+            {
+                var error = reactResult.Error ?? "Valutazione azione/ritmo fallita";
+                _progress?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
+                return (false, 0, error);
+            }
+
+            _progress?.Append(runId, $"[{storyId}] Valutazione azione/ritmo completata");
+            return (true, 0, null);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Errore durante EvaluateActionPacingWithAgent per storia {StoryId} agente {AgentId}", storyId, agentId);
             return (false, 0, ex.Message);
         }
         finally
@@ -469,27 +606,69 @@ public sealed class StoriesService
         // This allows the model to process large stories in chunks and reduces token overhead.
         var builder = new StringBuilder();
         builder.AppendLine("You are generating a TTS schema (timeline of narration and character dialogue) for a story.");
-        builder.AppendLine("You must NOT copy the full story text into this prompt.");
-        builder.AppendLine("Instead, use the read_story_part function to retrieve segments of the story (start with part_index=0 and continue requesting parts until you receive \"is_last\": true).");
-        builder.AppendLine("Do not invent story content; rely only on the chunks returned by read_story_part.");
-        builder.AppendLine("Use the available tools (add_narration, add_phrase, confirm) to build the TTS schema step by step as you read through the story.");
-        builder.AppendLine("Call confirm exactly once when you have finished building the complete schema.");
+        builder.AppendLine("Follow the agent instructions. Use read_story_part to fetch the story (part_index from 0 upward until is_last=true) and build the schema with add_narration / add_phrase, then call confirm once finished.");
+        builder.AppendLine("Reproduce the text faithfully and assign each sentence to narration or a character; do not invent content.");
         return builder.ToString();
     }
 
-    private string BuildStoryEvaluationPrompt(StoryRecord story)
+    private string BuildStoryEvaluationPrompt(StoryRecord story, bool isCoherenceEvaluation = false)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("You are evaluating a story and must record your judgement using the available tools.");
-        builder.AppendLine("You must NOT copy the full story text into this prompt.");
-        builder.AppendLine("Instead, use the read_story_part function to retrieve segments of the story (start with part_index=0 and continue requesting parts until you receive \"is_last\": true).");
-        builder.AppendLine("Do not invent story content; rely only on the chunks returned by read_story_part.");
-        builder.AppendLine("After you have reviewed the necessary sections, call the evaluate_full_story function exactly once with the provided story_id.");
-        builder.AppendLine("If you finish your review but fail to call evaluate_full_story, the orchestrator will remind you and ask again up to 3 times — you MUST call the function before the evaluation completes.");
-        builder.AppendLine("Populate the following scores (0-10): narrative_coherence_score, originality_score, emotional_impact_score, action_score.");
-        builder.AppendLine("Also include the corresponding *_defects values (empty string or \"None\" is acceptable if there are no defects).");
-        builder.AppendLine("Do not return an overall evaluation text – the system will compute the aggregate score automatically.");
-        builder.AppendLine("Ensure every score and defect field is present in the final tool call, even if the defect description is empty.");
+        
+        if (isCoherenceEvaluation)
+        {
+            // Prompt for chunk-based coherence evaluation
+            builder.AppendLine("You are analyzing a story's coherence using chunk-based fact extraction and comparison.");
+            builder.AppendLine("You must NOT copy the full story text into this prompt.");
+            builder.AppendLine("Follow this workflow for each chunk:");
+            builder.AppendLine("1. Use read_story_part(part_index=N) to read the chunk (start with 0)");
+            builder.AppendLine("2. Extract objective facts and save with extract_chunk_facts");
+            builder.AppendLine("3. Retrieve previous facts with get_chunk_facts and get_all_previous_facts");
+            builder.AppendLine("4. Compare facts and calculate coherence scores with calculate_coherence");
+            builder.AppendLine("5. Continue until you receive \"is_last\": true");
+            builder.AppendLine("When all chunks are processed, call finalize_global_coherence to save the final score.");
+            builder.AppendLine("Be thorough and document all inconsistencies found.");
+        }
+        else
+        {
+            // Prompt for standard evaluation with EvaluatorTool
+            builder.AppendLine("You are evaluating a story and must record your judgement using the available tools.");
+            builder.AppendLine("You must NOT copy the full story text into this prompt.");
+            builder.AppendLine("Instead, use the read_story_part function to retrieve segments of the story (start with part_index=0 and continue requesting parts until you receive \"is_last\": true).");
+            builder.AppendLine("Do not invent story content; rely only on the chunks returned by read_story_part.");
+            builder.AppendLine("After you have reviewed the necessary sections, call the evaluate_full_story function exactly once with the provided story_id.");
+            builder.AppendLine("If you finish your review but fail to call evaluate_full_story, the orchestrator will remind you and ask again up to 3 times — you MUST call the function before the evaluation completes.");
+            builder.AppendLine("Populate the following scores (0-10): narrative_coherence_score, originality_score, emotional_impact_score, action_score.");
+            builder.AppendLine("All score fields MUST be integers between 0 and 10 (use 0 if you cannot determine a score). Do NOT send strings like \"None\".");
+            builder.AppendLine("Also include the corresponding *_defects values (empty string or \"None\" is acceptable if there are no defects).");
+            builder.AppendLine("Do not return an overall evaluation text – the system will compute the aggregate score automatically.");
+            builder.AppendLine("Ensure every score and defect field is present in the final tool call, even if the defect description is empty.");
+        }
+        
+        return builder.ToString();
+    }
+
+    private string BuildActionPacingPrompt(StoryRecord story)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("You are evaluating ACTION and PACING of a story chunk-by-chunk using the available tools.");
+        builder.AppendLine("Workflow:");
+        builder.AppendLine("1) Read chunk with read_story_part(part_index=N) starting from 0 and increment until is_last=true (do NOT invent chunks).");
+        builder.AppendLine("2) Extract action/pacing profile with extract_action_profile(chunk_number=N, chunk_text=returned content).");
+        builder.AppendLine("3) Compute scores (0.0–1.0):");
+        builder.AppendLine("   - action_score: quantity/quality of action");
+        builder.AppendLine("   - pacing_score: narrative rhythm of the chunk");
+        builder.AppendLine("4) Record scores with calculate_action_pacing(chunk_number=N, action_score=..., pacing_score=..., notes=\"short notes\").");
+        builder.AppendLine("5) Repeat until you receive is_last=true.");
+        builder.AppendLine("6) Finalize with finalize_global_pacing(pacing_score=..., notes=\"brief summary\").");
+        builder.AppendLine();
+        builder.AppendLine("Important:");
+        builder.AppendLine("- Always use the tools; do not answer in free text unless summarizing.");
+        builder.AppendLine("- Do not skip finalize_global_pacing at the end.");
+        builder.AppendLine();
+        builder.AppendLine("Story metadata:");
+        builder.AppendLine($"ID: {story.Id}");
+        builder.AppendLine($"Prompt: {story.Prompt}");
         return builder.ToString();
     }
 
@@ -588,6 +767,12 @@ public sealed class StoriesService
             }
 
             var folderPath = context.FolderPath;
+
+            var multiStepResult = await TryExecuteMultiStepTtsAsync(story, ttsAgent, folderPath);
+            if (multiStepResult.HasValue)
+            {
+                return multiStepResult.Value;
+            }
             
             // Build system message: use agent's prompt + instructions if available
             string? systemMessage = null;
@@ -672,6 +857,74 @@ public sealed class StoriesService
             {
                 _service._logger?.LogError(ex, "Errore durante la generazione del JSON TTS per la storia {Id}", story.Id);
                 return (false, ex.Message);
+            }
+            finally
+            {
+                _service._progress?.MarkCompleted(runId);
+            }
+        }
+
+        private async Task<(bool success, string? message)?> TryExecuteMultiStepTtsAsync(
+            StoryRecord story,
+            Agent ttsAgent,
+            string folderPath)
+        {
+            var orchestratorService = _service._multiStepOrchestrator;
+            if (orchestratorService == null || !ttsAgent.MultiStepTemplateId.HasValue)
+            {
+                return null;
+            }
+
+            var template = _service._database.GetStepTemplateById(ttsAgent.MultiStepTemplateId.Value);
+            if (template == null)
+            {
+                _service._logger?.LogWarning("GenerateTtsSchemaCommand: template {TemplateId} non trovato", ttsAgent.MultiStepTemplateId.Value);
+                return null;
+            }
+
+            if (!string.Equals(template.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+            {
+                _service._logger?.LogWarning("GenerateTtsSchemaCommand: template {TemplateName} non è di tipo tts_schema", template.Name);
+                return null;
+            }
+
+            var configPayload = JsonSerializer.Serialize(new
+            {
+                workingFolder = folderPath,
+                storyText = story.Story ?? string.Empty
+            });
+
+            var threadId = unchecked((int)(story.Id % int.MaxValue));
+            var runId = $"ttsjson_multistep_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+            _service._progress?.Start(runId);
+
+            try
+            {
+                var executionId = await orchestratorService.StartTaskExecutionAsync(
+                    taskType: "tts_schema",
+                    entityId: story.Id,
+                    stepPrompt: template.StepPrompt,
+                    executorAgentId: ttsAgent.Id,
+                    checkerAgentId: null,
+                    configOverrides: configPayload,
+                    initialContext: story.Story ?? string.Empty,
+                    threadId: threadId);
+
+                await orchestratorService.ExecuteAllStepsAsync(executionId, threadId);
+
+                var schemaPath = Path.Combine(folderPath, "tts_schema.json");
+                if (!File.Exists(schemaPath))
+                {
+                    return (false, "L'agente non ha generato il file tts_schema.json");
+                }
+
+                _service._database.UpdateStoryById(story.Id, statusId: TtsSchemaReadyStatusId, updateStatus: true);
+                return (true, $"Schema TTS generato: {schemaPath}");
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogError(ex, "Errore multistep TTS per la storia {StoryId}", story.Id);
+                return (false, $"Errore multistep TTS: {ex.Message}");
             }
             finally
             {

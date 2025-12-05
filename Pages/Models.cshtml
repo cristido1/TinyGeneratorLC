@@ -6,6 +6,33 @@
     var groupsHeader = Model.TestGroups ?? new System.Collections.Generic.List<string>();
     var visibleGroups = groupsHeader.Take(4).ToList();
 }
+<style>
+    /* Allow long model names to wrap instead of truncating */
+    .model-name-col {
+        white-space: normal;
+        word-break: break-word;
+    }
+
+    /* Enable manual column resizing */
+    .resizable-table {
+        table-layout: auto;
+    }
+    .resizable-table th {
+        position: relative;
+    }
+    .resizable-table th .col-resizer {
+        position: absolute;
+        right: 0;
+        top: 0;
+        width: 6px;
+        height: 100%;
+        cursor: col-resize;
+        user-select: none;
+    }
+    #queuePanel {
+        touch-action: none;
+    }
+</style>
 
 <div class="mb-3 d-flex gap-2 align-items-center">
     <a class="btn btn-sm btn-primary" href="/Models/Edit">Nuovo modello</a>
@@ -45,11 +72,11 @@
 </div>
 
 <div class="models-table-wrapper">
-    <table id="modelsTable" class="table table-sm table-striped">
+    <table id="modelsTable" class="table table-sm table-striped resizable-table">
         <thead>
             <tr>
                 <th></th>
-                <th>Name</th>
+                <th class="model-name-col">Name</th>
                 <th>Provider</th>
                 <th>Note</th>
                 <th>Local</th>
@@ -82,9 +109,13 @@
                         : "0";
                 };
 
+                var displayName = (!string.IsNullOrWhiteSpace(m.Name) && m.Name.Contains('/')) 
+                    ? m.Name[(m.Name.LastIndexOf('/') + 1)..] 
+                    : m.Name;
+
                 <tr data-model="@m.Name">
                     <td class="dt-control"></td>
-                    <td>@m.Name</td>
+                    <td class="model-name-col">@displayName</td>
                     <td>
                         @if (m.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
                         {
@@ -138,13 +169,141 @@
     </table>
 </div>
 
+<div id="queuePanel" class="position-fixed bottom-0 end-0 p-3" style="z-index:1040; width: 380px; max-width: 95vw;">
+    <div class="card shadow-sm">
+        <div class="card-header d-flex justify-content-between align-items-center queue-drag-handle" style="cursor: move;">
+            <span>Operazioni in coda / in esecuzione</span>
+            <span class="badge bg-primary">@Model.ActiveCommands.Count</span>
+        </div>
+        <div class="list-group list-group-flush small" style="max-height: 55vh; overflow-y: auto;">
+            @if (Model.ActiveCommands == null || !Model.ActiveCommands.Any())
+            {
+                <div class="list-group-item text-muted">Nessuna operazione in corso</div>
+            }
+            else
+            {
+                foreach (var cmd in Model.ActiveCommands)
+                {
+                    var op = (cmd.Metadata != null && cmd.Metadata.TryGetValue("operation", out var opVal)) ? opVal : cmd.OperationName;
+                    var modelName = (cmd.Metadata != null && cmd.Metadata.TryGetValue("model", out var mn)) ? mn : "-";
+                    var group = (cmd.Metadata != null && cmd.Metadata.TryGetValue("group", out var gn)) ? gn : string.Empty;
+                    var statusClass = cmd.Status.Equals("running", System.StringComparison.OrdinalIgnoreCase) ? "bg-success" : "bg-warning text-dark";
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <div class="fw-semibold">@op</div>
+                                <div class="text-muted">Model: @modelName</div>
+                                @if (!string.IsNullOrWhiteSpace(group))
+                                {
+                                    <div class="text-muted">Group: @group</div>
+                                }
+                            </div>
+                            <span class="badge @statusClass text-uppercase">@cmd.Status</span>
+                        </div>
+                        <div class="text-muted mt-1">
+                            <small>Enqueued: @cmd.EnqueuedAt.ToLocalTime().ToString("HH:mm:ss")</small>
+                            @if (cmd.StartedAt.HasValue)
+                            {
+                                <small class="ms-2">Start: @cmd.StartedAt.Value.ToLocalTime().ToString("HH:mm:ss")</small>
+                            }
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    </div>
+</div>
+
     <!-- Include DataTables from CDN (CSS + JS). If your layout already provides these, duplicates are harmless in dev. -->
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css" />
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 
     <script>
+        // Simple column resize handles
+        (function() {
+            function makeResizable(table) {
+                if (!table) return;
+                const ths = table.querySelectorAll('th');
+                ths.forEach((th, idx) => {
+                    // Skip the expand-control column
+                    if (idx === 0) return;
+                    const handle = document.createElement('span');
+                    handle.className = 'col-resizer';
+                    th.appendChild(handle);
+
+                    let startX = 0;
+                    let startWidth = 0;
+                    handle.addEventListener('mousedown', (e) => {
+                        startX = e.pageX;
+                        startWidth = th.offsetWidth;
+                        document.body.style.cursor = 'col-resize';
+                        const onMove = (ev) => {
+                            const delta = ev.pageX - startX;
+                            const newWidth = Math.max(50, startWidth + delta);
+                            th.style.width = newWidth + 'px';
+                            // Apply width to all cells in this column
+                            table.querySelectorAll('tr').forEach(row => {
+                                const cell = row.children[idx];
+                                if (cell) cell.style.width = newWidth + 'px';
+                            });
+                        };
+                        const onUp = () => {
+                            document.removeEventListener('mousemove', onMove);
+                            document.removeEventListener('mouseup', onUp);
+                            document.body.style.cursor = '';
+                        };
+                        document.addEventListener('mousemove', onMove);
+                        document.addEventListener('mouseup', onUp);
+                    });
+                });
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const tableEl = document.getElementById('modelsTable');
+                makeResizable(tableEl);
+            });
+        })();
+
         $(document).ready(function(){
+            // Draggable queue panel (reuse logic from Stories)
+            (function () {
+                var panel = document.getElementById('queuePanel');
+                if (!panel) return;
+                var handle = panel.querySelector('.queue-drag-handle');
+                if (!handle) return;
+
+                var offsetX = 0, offsetY = 0, startX = 0, startY = 0;
+
+                handle.addEventListener('pointerdown', function (e) {
+                    e.preventDefault();
+                    var rect = panel.getBoundingClientRect();
+                    panel.style.left = rect.left + 'px';
+                    panel.style.top = rect.top + 'px';
+                    panel.style.right = 'auto';
+                    panel.style.bottom = 'auto';
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    offsetX = rect.left;
+                    offsetY = rect.top;
+
+                    var move = function (ev) {
+                        var dx = ev.clientX - startX;
+                        var dy = ev.clientY - startY;
+                        panel.style.left = (offsetX + dx) + 'px';
+                        panel.style.top = (offsetY + dy) + 'px';
+                    };
+
+                    var up = function () {
+                        document.removeEventListener('pointermove', move);
+                        document.removeEventListener('pointerup', up);
+                    };
+
+                    document.addEventListener('pointermove', move);
+                    document.addEventListener('pointerup', up);
+                });
+            })();
+
             // Function to format child row content
             function formatChildRow(model) {
                 return '<div class="test-details-container p-3" style="background-color: #f8f9fa;" data-model="' + model + '">' +

@@ -197,40 +197,11 @@ namespace TinyGenerator.Services
 
                 if (root.TryGetProperty("tool_calls", out var toolCalls))
                 {
-                    foreach (var call in toolCalls.EnumerateArray())
-                    {
-                        if (call.TryGetProperty("function", out var funcElem) &&
-                            funcElem.TryGetProperty("name", out var nameElem))
-                        {
-                            // Get arguments - can be either a string or an object
-                            string argumentsJson = "{}";
-                            if (funcElem.TryGetProperty("arguments", out var argsElem))
-                            {
-                                if (argsElem.ValueKind == JsonValueKind.String)
-                                {
-                                    // Arguments is a string, use as-is
-                                    argumentsJson = argsElem.GetString() ?? "{}";
-                                }
-                                else if (argsElem.ValueKind == JsonValueKind.Object)
-                                {
-                                    // Arguments is an object, serialize it to string
-                                    argumentsJson = argsElem.GetRawText();
-                                }
-                            }
-
-                            calls.Add(new ToolCall
-                            {
-                                ToolName = nameElem.GetString() ?? "unknown",
-                                Arguments = argumentsJson,
-                                Id = (call.TryGetProperty("id", out var id) ? id.GetString() : null) ?? Guid.NewGuid().ToString()
-                            });
-                        }
-                    }
+                    AddToolCallsFromArray(toolCalls, calls);
                 }
                 else
                 {
-                    // Fallback: some models return a function call encoded as JSON inside the "content" string.
-                    // Try to parse content as JSON and extract a single function call { "name": "...", "arguments": { ... } }
+                    // Fallback: models may embed tool_calls JSON inside "content" as a string (common on Ollama)
                     if (root.TryGetProperty("content", out var contentElem) && contentElem.ValueKind == JsonValueKind.String)
                     {
                         var contentStr = contentElem.GetString();
@@ -240,27 +211,32 @@ namespace TinyGenerator.Services
                             {
                                 using var innerDoc = JsonDocument.Parse(contentStr);
                                 var innerRoot = innerDoc.RootElement;
-                                if (innerRoot.ValueKind == JsonValueKind.Object)
-                                {
-                                    if (innerRoot.TryGetProperty("name", out var nameElem))
-                                    {
-                                        string name = nameElem.GetString() ?? "unknown";
-                                        string argsJson = "{}";
-                                        if (innerRoot.TryGetProperty("arguments", out var argsElem))
-                                        {
-                                            if (argsElem.ValueKind == JsonValueKind.Object)
-                                                argsJson = argsElem.GetRawText();
-                                            else if (argsElem.ValueKind == JsonValueKind.String)
-                                                argsJson = argsElem.GetString() ?? "{}";
-                                        }
 
-                                        calls.Add(new ToolCall
-                                        {
-                                            ToolName = name,
-                                            Arguments = argsJson,
-                                            Id = Guid.NewGuid().ToString()
-                                        });
+                                // Case 1: direct { name, arguments }
+                                if (innerRoot.ValueKind == JsonValueKind.Object && innerRoot.TryGetProperty("name", out var nameElem))
+                                {
+                                    string name = nameElem.GetString() ?? "unknown";
+                                    string argsJson = "{}";
+                                    if (innerRoot.TryGetProperty("arguments", out var argsElem))
+                                    {
+                                        if (argsElem.ValueKind == JsonValueKind.Object)
+                                            argsJson = argsElem.GetRawText();
+                                        else if (argsElem.ValueKind == JsonValueKind.String)
+                                            argsJson = argsElem.GetString() ?? "{}";
                                     }
+
+                                    calls.Add(new ToolCall
+                                    {
+                                        ToolName = name,
+                                        Arguments = argsJson,
+                                        Id = Guid.NewGuid().ToString()
+                                    });
+                                }
+
+                                // Case 2: content contains a tool_calls array
+                                if (innerRoot.ValueKind == JsonValueKind.Object && innerRoot.TryGetProperty("tool_calls", out var embeddedCalls))
+                                {
+                                    AddToolCallsFromArray(embeddedCalls, calls);
                                 }
                             }
                             catch
@@ -277,6 +253,36 @@ namespace TinyGenerator.Services
             }
 
             return calls;
+        }
+
+        private static void AddToolCallsFromArray(JsonElement toolCallsElement, List<ToolCall> calls)
+        {
+            if (toolCallsElement.ValueKind != JsonValueKind.Array) return;
+
+            foreach (var call in toolCallsElement.EnumerateArray())
+            {
+                if (!call.TryGetProperty("function", out var funcElem) ||
+                    !funcElem.TryGetProperty("name", out var nameElem))
+                {
+                    continue;
+                }
+
+                string argumentsJson = "{}";
+                if (funcElem.TryGetProperty("arguments", out var argsElem))
+                {
+                    if (argsElem.ValueKind == JsonValueKind.String)
+                        argumentsJson = argsElem.GetString() ?? "{}";
+                    else if (argsElem.ValueKind == JsonValueKind.Object)
+                        argumentsJson = argsElem.GetRawText();
+                }
+
+                calls.Add(new ToolCall
+                {
+                    ToolName = nameElem.GetString() ?? "unknown",
+                    Arguments = argumentsJson,
+                    Id = (call.TryGetProperty("id", out var id) ? id.GetString() : null) ?? Guid.NewGuid().ToString()
+                });
+            }
         }
 
         /// <summary>

@@ -19,6 +19,7 @@ namespace TinyGenerator.Pages
         private readonly IOllamaManagementService _ollamaService;
         private readonly ICommandDispatcher _commandDispatcher;
         private readonly ILogger<ModelsModel>? _logger;
+        private readonly ICustomLogger? _customLogger;
 
         [BindProperty(SupportsGet = true)]
         public bool ShowDisabled { get; set; } = false;
@@ -40,6 +41,7 @@ namespace TinyGenerator.Pages
 
         public List<string> TestGroups { get; set; } = new();
         public List<ModelInfo> Models { get; set; } = new();
+        public IReadOnlyList<CommandSnapshot> ActiveCommands { get; set; } = Array.Empty<CommandSnapshot>();
 
         public ModelsModel(
             DatabaseService database,
@@ -47,7 +49,8 @@ namespace TinyGenerator.Pages
             CostController costController,
             IOllamaManagementService ollamaService,
             ICommandDispatcher commandDispatcher,
-            ILogger<ModelsModel>? logger = null)
+            ILogger<ModelsModel>? logger = null,
+            ICustomLogger? customLogger = null)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _testService = testService ?? throw new ArgumentNullException(nameof(testService));
@@ -55,6 +58,7 @@ namespace TinyGenerator.Pages
             _ollamaService = ollamaService ?? throw new ArgumentNullException(nameof(ollamaService));
             _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
             _logger = logger;
+            _customLogger = customLogger;
         }
 
         public void OnGet()
@@ -82,6 +86,8 @@ namespace TinyGenerator.Pages
                     model.TestDurationSeconds = baseGroupDuration.Value / 1000.0; // Convert ms to seconds
                 }
             }
+
+            ActiveCommands = _commandDispatcher.GetActiveCommands();
         }
 
         public Task<IActionResult> OnPostRunGroupAsync()
@@ -92,21 +98,11 @@ namespace TinyGenerator.Pages
             if (string.IsNullOrWhiteSpace(modelName) || string.IsNullOrWhiteSpace(groupName))
                 return Task.FromResult<IActionResult>(BadRequest("model and group required"));
 
-            var context = _testService.PrepareGroupRun(modelName, groupName);
-            if (context == null)
+            var handle = _testService.EnqueueGroupRun(modelName, groupName);
+            if (handle == null)
                 return Task.FromResult<IActionResult>(BadRequest("Impossibile preparare il test richiesto"));
 
-            try
-            {
-                QueueTestCommand(context);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Failed to enqueue test {Group} for model {Model}", groupName, modelName);
-                return Task.FromResult<IActionResult>(BadRequest(new { error = ex.Message }));
-            }
-
-            return Task.FromResult<IActionResult>(new JsonResult(new { runId = context.RunId }));
+            return Task.FromResult<IActionResult>(new JsonResult(new { runId = handle.RunId }));
         }
 
         public IActionResult OnPostUpdateContext()
@@ -156,10 +152,12 @@ namespace TinyGenerator.Pages
             {
                 try
                 {
-                    var context = _testService.PrepareGroupRun(model.Name, selectedGroup);
-                    if (context == null) continue;
-                    QueueTestCommand(context);
-                    runIds.Add(context.RunId);
+                    var handle = _testService.EnqueueGroupRun(model.Name, selectedGroup);
+                    if (handle == null) continue;
+                    if (int.TryParse(handle.RunId, out var rid))
+                    {
+                        runIds.Add(rid);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -258,45 +256,6 @@ namespace TinyGenerator.Pages
                 return BadRequest(new { error = ex.Message });
             }
         }
-        private void QueueTestCommand(LangChainTestService.TestGroupRunContext context)
-        {
-            var safeGroup = string.IsNullOrWhiteSpace(context.Group) ? "test" : context.Group;
-            var commandCode = $"test_{SanitizeIdentifier(safeGroup)}";
-            var scope = $"test/{SanitizeIdentifier(safeGroup)}";
-
-            _commandDispatcher.Enqueue(
-                commandCode,
-                async _ =>
-                {
-                    try
-                    {
-                        var result = await _testService.ExecuteGroupRunAsync(context);
-                        if (result == null)
-                        {
-                            return new CommandResult(false, $"Test {safeGroup} non eseguito");
-                        }
-
-                        var message = result.PassedAll
-                            ? $"Test {safeGroup} completato ({result.PassedSteps}/{result.Steps})"
-                            : $"Test {safeGroup} completato con errori ({result.PassedSteps}/{result.Steps})";
-                        return new CommandResult(result.PassedAll, message);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogError(ex, "Test {Group} run {RunId} failed", safeGroup, context.RunId);
-                        return new CommandResult(false, ex.Message);
-                    }
-                },
-                runId: context.RunId.ToString(),
-                threadScope: scope,
-                metadata: new Dictionary<string, string>
-                {
-                    ["runId"] = context.RunId.ToString(),
-                    ["model"] = context.ModelInfo?.Name ?? context.ModelName,
-                    ["group"] = safeGroup
-                });
-        }
-
         private static string SanitizeIdentifier(string value)
         {
             if (string.IsNullOrWhiteSpace(value)) return "test";

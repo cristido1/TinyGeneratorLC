@@ -113,5 +113,56 @@ namespace TinyGenerator.Pages.Agents
             // Redirect to Genera page with agent and theme
             return RedirectToPage("/Genera", new { writerAgentId = AgentId, prompt = StoryTheme });
         }
+
+        public IActionResult OnPostClone(int id)
+        {
+            try
+            {
+                var source = _database.GetAgentById(id);
+                if (source == null)
+                {
+                    TempData["Error"] = "Agente non trovato";
+                    return RedirectToPage("/Agents/Index");
+                }
+
+                // Build a new name ensuring uniqueness by appending counters if needed
+                var baseName = $"{source.Name} copia".Trim();
+                var newName = baseName;
+                var suffix = 2;
+                while (_database.GetAgentIdByName(newName) != null)
+                {
+                    newName = $"{baseName} {suffix}";
+                    suffix++;
+                }
+
+                var clone = new Agent
+                {
+                    VoiceId = source.VoiceId,
+                    Name = newName,
+                    Role = source.Role,
+                    ModelId = source.ModelId,
+                    Skills = source.Skills,
+                    Config = source.Config,
+                    JsonResponseFormat = source.JsonResponseFormat,
+                    Prompt = source.Prompt,
+                    Instructions = source.Instructions,
+                    Temperature = source.Temperature,
+                    TopP = source.TopP,
+                    ExecutionPlan = source.ExecutionPlan,
+                    IsActive = source.IsActive,
+                    MultiStepTemplateId = source.MultiStepTemplateId,
+                    Notes = source.Notes
+                };
+
+                _database.InsertAgent(clone);
+                TempData["Success"] = $"Agente duplicato come \"{newName}\"";
+            }
+            catch (Exception ex)
+            {
+                TempData["Error"] = $"Impossibile duplicare l'agente: {ex.Message}";
+            }
+
+            return RedirectToPage("/Agents/Index");
+        }
     }
 }

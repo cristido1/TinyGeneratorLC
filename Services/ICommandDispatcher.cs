@@ -37,6 +37,8 @@ namespace TinyGenerator.Services
             string? runId = null,
             string? threadScope = null,
             IReadOnlyDictionary<string, string>? metadata = null);
+
+        IReadOnlyList<CommandSnapshot> GetActiveCommands();
     }
 
     public sealed class CommandHandle
@@ -52,4 +54,13 @@ namespace TinyGenerator.Services
             CompletionTask = completionTask;
         }
     }
+
+    public sealed record CommandSnapshot(
+        string RunId,
+        string OperationName,
+        string ThreadScope,
+        string Status,
+        DateTimeOffset EnqueuedAt,
+        DateTimeOffset? StartedAt,
+        IReadOnlyDictionary<string, string>? Metadata);
 }

@@ -62,8 +62,14 @@ builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_bas
 // === Semantic Kernel + memoria SQLite ===
 // RIMOSSA la registrazione di IKernel: ora si usa solo Kernel reale tramite KernelFactory
 
+// Ollama monitor service (used for discovering/running local Ollama models)
+// Instantiate without ICustomLogger to avoid circular dependency (DatabaseService -> IOllamaMonitorService -> ICustomLogger -> DatabaseService)
+builder.Services.AddSingleton<IOllamaMonitorService>(sp => new OllamaMonitorService(null));
+
 // Database access service + cost controller (sqlite) - register early so other services can depend on it
-builder.Services.AddSingleton(sp => new TinyGenerator.Services.DatabaseService("data/storage.db"));
+builder.Services.AddSingleton(sp => new TinyGenerator.Services.DatabaseService(
+    "data/storage.db",
+    sp.GetService<IOllamaMonitorService>()));
 
 // Persistent memory service (sqlite) using consolidated storage DB
 builder.Services.AddSingleton<PersistentMemoryService>(sp =>
@@ -95,7 +101,8 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetService<ICustomLogger>(),
     sp.GetService<ProgressService>(),
     sp.GetService<ILogger<StoriesService>>(),
-    sp.GetService<ICommandDispatcher>()));
+    sp.GetService<ICommandDispatcher>(),
+    sp.GetService<MultiStepOrchestrationService>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
@@ -133,15 +140,12 @@ builder.Services.AddSingleton<LangChainAgentService>(sp => new LangChainAgentSer
     sp.GetRequiredService<ILangChainKernelFactory>(),
     sp.GetService<ICustomLogger>()));
 
-// LangChain story generation service (alternative to SK-based StoryGeneratorService)
-builder.Services.AddTransient<LangChainStoryGenerationService>();
-
 // LangChain test service (new testing framework using HybridLangChainOrchestrator)
 builder.Services.AddTransient<LangChainTestService>();
 
 // Multi-step task orchestration services (Sequential Multi-Step Prompting with Response Checker)
-builder.Services.AddScoped<ResponseCheckerService>();
-builder.Services.AddScoped<MultiStepOrchestrationService>();
+builder.Services.AddSingleton<ResponseCheckerService>();
+builder.Services.AddSingleton<MultiStepOrchestrationService>();
 
 // (DatabaseService already registered earlier)
 // Configure custom logger options from configuration (section: AppLog)
@@ -175,9 +179,6 @@ builder.Services.AddSingleton<CostController>(sp =>
 
 // Ollama management service
 builder.Services.AddSingleton<IOllamaManagementService, OllamaManagementService>();
-
-// Ollama monitor service (used for discovering/running local Ollama models)
-builder.Services.AddSingleton<IOllamaMonitorService, OllamaMonitorService>();
 
 Console.WriteLine($"[Startup] About to call builder.Build() at {DateTime.UtcNow:o}");
 var app = builder.Build();
@@ -237,15 +238,16 @@ try
 }
 catch { }
 
-// Seed TTS voices by calling the local TTS service and upserting
-// Seed TTS voices via helper
+// Seed TTS voices by calling the local TTS service and upserting (fire-and-forget to avoid blocking startup)
 var db = app.Services.GetService<TinyGenerator.Services.DatabaseService>();
 var tts = app.Services.GetService<TinyGenerator.Services.TtsService>();
-StartupTasks.SeedTtsVoicesIfNeededAsync(db, tts, builder.Configuration, logger).GetAwaiter().GetResult();
+_ = Task.Run(() => StartupTasks.SeedTtsVoicesIfNeededAsync(db, tts, builder.Configuration, logger));
 
 // Normalize any legacy test prompts at startup so prompts explicitly mention addin/library.function
 // Normalize legacy test prompts using helper
 StartupTasks.NormalizeTestPromptsIfNeeded(db, logger);
+// Ensure evaluator agents have an example evaluate_full_story call in instructions
+StartupTasks.EnsureEvaluatorInstructions(db, logger);
 
 // Clean up old logs if log count exceeds threshold
 // Automatically delete logs older than 7 days if total count > 1000

@@ -126,8 +126,21 @@ namespace TinyGenerator
                     return;
                 }
                 logger?.LogInformation("[Startup] Seeding TTS voices from service...");
-                var added = await db.AddOrUpdateTtsVoicesAsync(tts);
-                logger?.LogInformation("[Startup] Added/Updated {count} TTS voices into tts_voices table", added);
+
+                // Bound the seeding call so startup cannot hang if TTS is unreachable
+                var seedTask = db.AddOrUpdateTtsVoicesAsync(tts);
+                var completed = await Task.WhenAny(seedTask, Task.Delay(TimeSpan.FromSeconds(10)));
+                var added = 0;
+                if (completed == seedTask)
+                {
+                    added = seedTask.Result;
+                    logger?.LogInformation("[Startup] Added/Updated {count} TTS voices into tts_voices table", added);
+                }
+                else
+                {
+                    logger?.LogWarning("[Startup] TTS voice seeding timed out after 10s; skipping service seed");
+                }
+
                 if (added == 0)
                 {
                     var fallbackPath = Path.Combine(Directory.GetCurrentDirectory(), "data", "tts_voices.json");
@@ -164,6 +177,48 @@ namespace TinyGenerator
             catch (Exception ex)
             {
                 logger?.LogWarning(ex, "[Startup] NormalizeTestPrompts failed: {msg}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Append an example evaluate_full_story call to evaluator agents' instructions if missing.
+        /// </summary>
+        public static void EnsureEvaluatorInstructions(DatabaseService? db, ILogger? logger = null)
+        {
+            if (db == null) return;
+            const string snippet = @"Esempio di chiamata valida a evaluate_full_story:
+evaluate_full_story({
+  ""narrative_coherence_score"": 8,
+  ""narrative_coherence_defects"": """",
+  ""originality_score"": 7,
+  ""originality_defects"": """",
+  ""emotional_impact_score"": 6,
+  ""emotional_impact_defects"": """",
+  ""action_score"": 7,
+  ""action_defects"": """"
+});";
+
+            try
+            {
+                var agents = db.ListAgents()?.Where(a => !string.IsNullOrWhiteSpace(a.Role) && a.Role.Contains("evaluat", StringComparison.OrdinalIgnoreCase)).ToList() ?? new List<Models.Agent>();
+                foreach (var agent in agents)
+                {
+                    var instr = agent.Instructions ?? string.Empty;
+                    if (instr.IndexOf("evaluate_full_story", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        instr.IndexOf("action_score", StringComparison.OrdinalIgnoreCase) >= 0)
+                        continue; // already has an example or detailed guidance
+
+                    agent.Instructions = string.IsNullOrWhiteSpace(instr)
+                        ? snippet
+                        : instr.TrimEnd() + "\n\n" + snippet;
+
+                    db.UpdateAgent(agent);
+                    logger?.LogInformation("[Startup] Added evaluate_full_story example to agent {Id} ({Name})", agent.Id, agent.Name);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "[Startup] Unable to append evaluator instructions: {msg}", ex.Message);
             }
         }
 
@@ -257,4 +312,3 @@ namespace TinyGenerator
         }
     }
 }
-

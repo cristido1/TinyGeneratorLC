@@ -147,6 +147,40 @@ namespace TinyGenerator.Services
                     {
                         var jsonList = new List<OllamaModelInfo>();
                         if (string.IsNullOrWhiteSpace(output)) return jsonList;
+
+                        // First try to parse the entire payload (handles JSON array output)
+                        try
+                        {
+                            var doc = System.Text.Json.JsonDocument.Parse(output);
+                            if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            {
+                                foreach (var elem in doc.RootElement.EnumerateArray())
+                                {
+                                    var name = string.Empty;
+                                    if (elem.TryGetProperty("name", out var nameProp))
+                                        name = nameProp.GetString() ?? string.Empty;
+                                    if (string.IsNullOrWhiteSpace(name) && elem.TryGetProperty("model", out var modelProp))
+                                        name = modelProp.GetString() ?? string.Empty;
+                                    if (string.IsNullOrWhiteSpace(name)) continue;
+                                    jsonList.Add(new OllamaModelInfo
+                                    {
+                                        Name = name,
+                                        Size = elem.TryGetProperty("size", out var sizeProp) ? sizeProp.GetString() : null,
+                                        Context = elem.TryGetProperty("details", out var details) 
+                                            ? (details.TryGetProperty("context_length", out var ctxLen) ? ctxLen.GetString() 
+                                                : (details.TryGetProperty("parameter_size", out var ctxProp) ? ctxProp.GetString() : null))
+                                            : null
+                                    });
+                                }
+                                if (jsonList.Count > 0) return jsonList;
+                            }
+                        }
+                        catch
+                        {
+                            // fall back to line-by-line parsing
+                        }
+
+                        // Fallback: parse line by line (older ollama emits NDJSON)
                         foreach (var rawLine in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
                         {
                             var line = rawLine.Trim();
@@ -154,14 +188,20 @@ namespace TinyGenerator.Services
                             try
                             {
                                 var doc = System.Text.Json.JsonDocument.Parse(line);
-                                if (!doc.RootElement.TryGetProperty("name", out var nameProp)) continue;
-                                var name = nameProp.GetString();
+                                var name = string.Empty;
+                                if (doc.RootElement.TryGetProperty("name", out var nameProp))
+                                    name = nameProp.GetString() ?? string.Empty;
+                                if (string.IsNullOrWhiteSpace(name) && doc.RootElement.TryGetProperty("model", out var modelProp))
+                                    name = modelProp.GetString() ?? string.Empty;
                                 if (string.IsNullOrWhiteSpace(name)) continue;
                                 jsonList.Add(new OllamaModelInfo
                                 {
                                     Name = name,
                                     Size = doc.RootElement.TryGetProperty("size", out var sizeProp) ? sizeProp.GetString() : null,
-                                    Context = doc.RootElement.TryGetProperty("details", out var details) && details.TryGetProperty("parameter_size", out var ctxProp) ? ctxProp.GetString() : null
+                                    Context = doc.RootElement.TryGetProperty("details", out var details) 
+                                        ? (details.TryGetProperty("context_length", out var ctxLen) ? ctxLen.GetString() 
+                                            : (details.TryGetProperty("parameter_size", out var ctxProp) ? ctxProp.GetString() : null))
+                                        : null
                                 });
                             }
                             catch

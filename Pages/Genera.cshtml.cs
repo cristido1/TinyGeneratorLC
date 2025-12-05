@@ -9,7 +9,6 @@ namespace TinyGenerator.Pages;
 
 public class GeneraModel : PageModel
 {
-    private readonly LangChainStoryGenerationService _generator;
     private readonly DatabaseService _database;
     private readonly MultiStepOrchestrationService? _orchestrator;
     private readonly CommandDispatcher _dispatcher;
@@ -19,7 +18,6 @@ public class GeneraModel : PageModel
     private readonly NotificationService _notifications;
 
     public GeneraModel(
-        LangChainStoryGenerationService generator,
         DatabaseService database,
         CommandDispatcher dispatcher,
         ICustomLogger customLogger,
@@ -28,7 +26,6 @@ public class GeneraModel : PageModel
         NotificationService notifications,
         MultiStepOrchestrationService? orchestrator = null)
     {
-        _generator = generator;
         _database = database;
         _orchestrator = orchestrator;
         _dispatcher = dispatcher;
@@ -82,54 +79,39 @@ public class GeneraModel : PageModel
             return BadRequest(new { error = "Il prompt è obbligatorio." });
         }
 
+        if (WriterAgentId <= 0)
+        {
+            return BadRequest(new { error = "Seleziona un writer agent per avviare la generazione." });
+        }
+
+        if (_orchestrator == null)
+        {
+            return BadRequest(new { error = "Orchestrator non configurato per la generazione multi-step." });
+        }
+
         var genId = Guid.NewGuid();
         _progress.Start(genId.ToString());
 
-        // Check if agent-based (multi-step) or legacy (single-step)
-        if (WriterAgentId > 0 && _orchestrator != null)
-        {
-            // Use multi-step via command
-            var cmd = new StartMultiStepStoryCommand(
-                Prompt,
-                WriterAgentId,
-                genId,
-                _database,
-                _orchestrator,
-                _dispatcher,
-                _customLogger
-            );
+        var cmd = new StartMultiStepStoryCommand(
+            Prompt,
+            WriterAgentId,
+            genId,
+            _database,
+            _orchestrator,
+            _dispatcher,
+            _customLogger
+        );
 
-            _dispatcher.Enqueue(
-                "StartMultiStepStory",
-                async ctx => {
-                    await cmd.ExecuteAsync(ctx.CancellationToken);
-                    return new CommandResult(true, "Multi-step generation started");
-                },
-                runId: genId.ToString()
-            );
+        _dispatcher.Enqueue(
+            "StartMultiStepStory",
+            async ctx => {
+                await cmd.ExecuteAsync(ctx.CancellationToken);
+                return new CommandResult(true, "Multi-step generation started");
+            },
+            runId: genId.ToString()
+        );
 
-            _progress.Append(genId.ToString(), "🟢 Multi-step generation enqueued");
-        }
-        else
-        {
-            // Fallback to legacy single-step generation
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var result = await _generator.GenerateStoryAsync(Prompt, msg => _progress.Append(genId.ToString(), msg), Writer);
-                    var finalText = result?.Approved ?? result?.StoryA ?? result?.StoryB;
-                    _progress.MarkCompleted(genId.ToString(), finalText);
-                    try { await _notifications.NotifyGroupAsync(genId.ToString(), "Completed", "Generation completed", "success"); } catch { }
-                }
-                catch (Exception ex)
-                {
-                    _progress.Append(genId.ToString(), "ERROR: " + ex.Message);
-                    _progress.MarkCompleted(genId.ToString(), null);
-                    _logger.LogError(ex, "Errore background generazione");
-                }
-            });
-        }
+        _progress.Append(genId.ToString(), "🟢 Multi-step generation enqueued");
 
         try { await _notifications.NotifyGroupAsync(genId.ToString(), "Started", "Generation started", "info"); } catch { }
 

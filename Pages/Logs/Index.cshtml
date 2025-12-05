@@ -21,6 +21,13 @@
     <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="btnClearSelection">Deseleziona</button>
 </div>
 
+<form id="filterForm" class="row g-2 align-items-center mb-3">
+    <div class="col-auto form-check">
+        <input class="form-check-input" type="checkbox" id="onlyResultCheckbox" />
+        <label class="form-check-label" for="onlyResultCheckbox">Solo log con result</label>
+    </div>
+</form>
+
 @if (!string.IsNullOrEmpty(Model.StatusMessage))
 {
     <div class="alert alert-info">@Model.StatusMessage</div>
@@ -33,6 +40,7 @@
             <th style="width:38px;"></th>
             <th>Timestamp</th>
             <th>Level</th>
+            <th>Result</th>
             <th>Operazione</th>
             <th>ThreadId</th>
             <th>AgentName</th>
@@ -56,6 +64,18 @@
             <td class="details-control text-center" title="Mostra dettagli"><button class="btn btn-sm btn-outline-secondary" type="button">+</button></td>
             <td class="timestamp">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</td>
             <td class="level">@log.Level</td>
+            <td class="result">
+                @if (!string.IsNullOrWhiteSpace(log.Result))
+                {
+                    var resUpper = log.Result.Trim().ToUpperInvariant();
+                    var badgeClass = resUpper == "SUCCESS" ? "bg-success" : (resUpper == "FAILED" ? "bg-warning text-dark" : "bg-secondary");
+                    <span class="badge @badgeClass">@resUpper</span>
+                }
+                else
+                {
+                    <span class="text-muted">-</span>
+                }
+            </td>
             <td class="operation">@(!string.IsNullOrWhiteSpace(log.ThreadScope) ? log.ThreadScope : "-")</td>
             <td class="threadid">@(log.ThreadId > 0 ? log.ThreadId.ToString() : "-")</td>
             <td class="agentname">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
@@ -116,12 +136,13 @@
                     { orderable: false, targets: 0 }, // details control column not sortable
                     { responsivePriority: 1, targets: 1 }, // Timestamp always visible
                     { responsivePriority: 2, targets: 2 }, // Level always visible
-                    { responsivePriority: 3, targets: 3 }, // Operation
-                    { responsivePriority: 4, targets: 4 }, // ThreadId
-                    { responsivePriority: 5, targets: 5 }, // AgentName
-                    { responsivePriority: 6, targets: 6 }, // Message
-                    { responsivePriority: 7, targets: 7 }, // Source hidden first on small screens
-                    { orderable: false, targets: 8 }       // Actions
+                    { responsivePriority: 3, targets: 3 }, // Result
+                    { responsivePriority: 4, targets: 4 }, // Operation
+                    { responsivePriority: 5, targets: 5 }, // ThreadId
+                    { responsivePriority: 6, targets: 6 }, // AgentName
+                    { responsivePriority: 7, targets: 7 }, // Message
+                    { responsivePriority: 8, targets: 8 }, // Source
+                    { orderable: false, targets: 9 }       // Actions
                 ],
                 // show column visibility control
                 dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
@@ -192,6 +213,15 @@
                 form.find('input[name="threadId"]').val(threadId);
                 form.find('input[name="threadScope"]').val(scope);
                 form.trigger('submit');
+            });
+
+            // Filter by presence of Result badge
+            $('#onlyResultCheckbox').on('change', function() {
+                if (this.checked) {
+                    table.column('.result').search('.+', true, false).draw();
+                } else {
+                    table.column('.result').search('').draw();
+                }
             });
 
             $('#btnClearAllLogs').on('click', function() {

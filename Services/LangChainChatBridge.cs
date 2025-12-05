@@ -17,6 +17,7 @@ namespace TinyGenerator.Services
     /// - Proper message serialization with tool_choice="auto"
     /// - Function calling response parsing
     /// </summary>
+    
     public class LangChainChatBridge
     {
         private readonly Uri _modelEndpoint;
@@ -44,66 +45,6 @@ namespace TinyGenerator.Services
             _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             _logger = logger;
             _progressService = progressService;
-        }
-
-        /// <summary>
-        /// Test connection to the model endpoint.
-        /// For Ollama, checks if model is loaded.
-        /// </summary>
-        public async Task<bool> TestConnectionAsync(CancellationToken ct = default)
-        {
-            try
-            {
-                _logger?.Log("Info", "LangChainBridge", $"Testing connection to {_modelEndpoint} for model {_modelId}");
-
-                // For Ollama, test with /api/tags to see if model is available
-                if (_modelEndpoint.ToString().Contains("11434", StringComparison.OrdinalIgnoreCase))
-                {
-                    var tagsUrl = new Uri(_modelEndpoint, "/api/tags").ToString();
-                    var response = await _httpClient.GetAsync(tagsUrl, ct);
-                    
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var content = await response.Content.ReadAsStringAsync(ct);
-                        _logger?.Log("Info", "LangChainBridge", $"Ollama tags response: {content}");
-                        return true;
-                    }
-                    else
-                    {
-                        _logger?.Log("Error", "LangChainBridge", $"Ollama connection failed: {response.StatusCode}");
-                        return false;
-                    }
-                }
-                
-                // For OpenAI-compatible, test with a simple text request
-                var testRequest = new
-                {
-                    model = _modelId,
-                    messages = new[] { new { role = "user", content = "test" } }
-                };
-
-                var content2 = new StringContent(
-                    JsonSerializer.Serialize(testRequest),
-                    System.Text.Encoding.UTF8,
-                    "application/json");
-
-                var testUrl = new Uri(_modelEndpoint, "/v1/chat/completions").ToString();
-                var httpRequest = new HttpRequestMessage(HttpMethod.Post, testUrl) { Content = content2 };
-
-                if (!_apiKey.Contains("ollama", StringComparison.OrdinalIgnoreCase))
-                {
-                    httpRequest.Headers.Add("Authorization", $"Bearer {_apiKey}");
-                }
-
-                var testResponse = await _httpClient.SendAsync(httpRequest, ct);
-                _logger?.Log("Info", "LangChainBridge", $"Test connection status: {testResponse.StatusCode}");
-                return testResponse.IsSuccessStatusCode;
-            }
-            catch (Exception ex)
-            {
-                _logger?.Log("Error", "LangChainBridge", $"Connection test failed: {ex.Message}");
-                return false;
-            }
         }
 
         /// <summary>
@@ -340,6 +281,12 @@ namespace TinyGenerator.Services
                     if (ollamaMessage.TryGetProperty("content", out var content) && content.ValueKind != JsonValueKind.Null)
                     {
                         textContent = content.GetString();
+
+                        // Some models return tool_calls serialized as JSON inside content; try to parse them
+                        if (!string.IsNullOrWhiteSpace(textContent) && toolCalls.Count == 0)
+                        {
+                            TryParseEmbeddedToolCalls(textContent, toolCalls);
+                        }
                     }
 
                     // Extract tool calls from Ollama format
@@ -385,6 +332,82 @@ namespace TinyGenerator.Services
             }
 
             return (textContent, toolCalls);
+        }
+
+        private static void TryParseEmbeddedToolCalls(string content, List<ToolCallFromModel> toolCalls)
+        {
+            ParseToolCallsFromString(content, toolCalls);
+        }
+
+        private static void ParseToolCallsFromString(string? content, List<ToolCallFromModel> toolCalls)
+        {
+            if (string.IsNullOrWhiteSpace(content)) return;
+            var trimmed = content.Trim();
+            if (!(trimmed.StartsWith("{") || trimmed.StartsWith("["))) return;
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                ParseToolCallsFromElement(doc.RootElement, toolCalls);
+            }
+            catch
+            {
+                // ignore parse errors
+            }
+        }
+
+        private static void ParseToolCallsFromElement(JsonElement root, List<ToolCallFromModel> toolCalls)
+        {
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("tool_calls", out var calls) && calls.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var call in calls.EnumerateArray())
+                    {
+                        if (!call.TryGetProperty("function", out var func)) continue;
+
+                        var argsJson = "{}";
+                        if (func.TryGetProperty("arguments", out var argsElement))
+                        {
+                            if (argsElement.ValueKind == JsonValueKind.Object)
+                                argsJson = argsElement.GetRawText();
+                            else if (argsElement.ValueKind == JsonValueKind.String)
+                                argsJson = argsElement.GetString() ?? "{}";
+                        }
+
+                        var toolName = (func.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null) ?? "unknown";
+                        var toolId = (call.TryGetProperty("id", out var idProp) ? idProp.GetString() : null) ?? Guid.NewGuid().ToString();
+
+                        if (toolCalls.Any(tc => tc.Id == toolId && tc.Arguments == argsJson))
+                            continue;
+
+                        toolCalls.Add(new ToolCallFromModel
+                        {
+                            Id = toolId,
+                            ToolName = toolName,
+                            Arguments = argsJson
+                        });
+                    }
+                }
+
+                if (root.TryGetProperty("content", out var contentProp))
+                {
+                    if (contentProp.ValueKind == JsonValueKind.String)
+                    {
+                        ParseToolCallsFromString(contentProp.GetString(), toolCalls);
+                    }
+                    else if (contentProp.ValueKind == JsonValueKind.Object || contentProp.ValueKind == JsonValueKind.Array)
+                    {
+                        ParseToolCallsFromElement(contentProp, toolCalls);
+                    }
+                }
+            }
+            else if (root.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in root.EnumerateArray())
+                {
+                    ParseToolCallsFromElement(item, toolCalls);
+                }
+            }
         }
     }
 

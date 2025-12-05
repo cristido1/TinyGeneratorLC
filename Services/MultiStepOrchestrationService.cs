@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
+using TinyGenerator.Skills;
 
 namespace TinyGenerator.Services
 {
@@ -16,6 +18,7 @@ namespace TinyGenerator.Services
         private readonly ResponseCheckerService _checkerService;
         private readonly ITokenizer _tokenizerService;
         private readonly ICustomLogger _logger;
+        private readonly Dictionary<long, List<string>> _chunkCache = new();
 
         public MultiStepOrchestrationService(
             ILangChainKernelFactory kernelFactory,
@@ -92,7 +95,7 @@ namespace TinyGenerator.Services
         {
             var lines = stepPrompt.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             var steps = new List<string>();
-            var stepPattern = new Regex(@"^\s*\d+\.\s*(.+)$", RegexOptions.Compiled);
+            var stepPattern = new Regex(@"^\s*\d+[.\)]\s*(.+)$", RegexOptions.Compiled);
 
             foreach (var line in lines)
             {
@@ -109,7 +112,7 @@ namespace TinyGenerator.Services
                 var originalNumbers = new List<int>();
                 foreach (var line in lines)
                 {
-                    var match = Regex.Match(line.Trim(), @"^(\d+)\.");
+                    var match = Regex.Match(line.Trim(), @"^(\d+)[.\)]");
                     if (match.Success && int.TryParse(match.Groups[1].Value, out var num))
                     {
                         originalNumbers.Add(num);
@@ -156,6 +159,27 @@ namespace TinyGenerator.Services
             Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - Execution found: status={execution.Status}, current_step={execution.CurrentStep}, max_step={execution.MaxStep}");
             _logger.Log("Information", "MultiStep", $"Executing all steps for execution {executionId}, current_step={execution.CurrentStep}, max_step={execution.MaxStep}, status={execution.Status}");
             if (_logger is CustomLogger cl2) await cl2.FlushAsync();
+
+            // If the step prompt uses CHUNK placeholders, align the max step to the available chunks
+            if (execution.StepPrompt.Contains("{{CHUNK_", StringComparison.OrdinalIgnoreCase))
+            {
+                var chunks = GetChunksForExecution(execution);
+                var stepsCount = ParseAndRenumberSteps(execution.StepPrompt, threadId).Count;
+                var targetMax = Math.Min(stepsCount, chunks.Count == 0 ? stepsCount : chunks.Count);
+
+                if (chunks.Count == 0)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Nessun chunk disponibile per execution {executionId}. Verranno usati gli step originali.");
+                }
+
+                if (targetMax > 0 && targetMax != execution.MaxStep)
+                {
+                    execution.MaxStep = targetMax;
+                    execution.UpdatedAt = DateTime.UtcNow.ToString("o");
+                    _database.UpdateTaskExecution(execution);
+                    _logger.Log("Information", "MultiStep", $"Allineato max_step a {targetMax} in base ai chunk disponibili");
+                }
+            }
 
             // Update status to in_progress
             Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - Updating status to in_progress");
@@ -259,6 +283,37 @@ namespace TinyGenerator.Services
             // Build context from placeholders
             var context = await BuildStepContextAsync(execution.CurrentStep, stepInstruction, previousSteps, threadId, ct);
 
+            var hasChunkPlaceholder = stepInstruction.Contains("{{CHUNK_", StringComparison.OrdinalIgnoreCase);
+            var chunks = GetChunksForExecution(execution);
+            var (stepWithChunks, missingChunk) = ReplaceChunkPlaceholders(stepInstruction, chunks, execution.CurrentStep);
+            stepInstruction = stepWithChunks;
+
+            var chunkText = execution.CurrentStep <= chunks.Count
+                ? chunks[execution.CurrentStep - 1]
+                : string.Empty;
+            // If the step prompt already contains the chunk via placeholders, avoid prepending it again
+            var chunkIntro = !hasChunkPlaceholder && !string.IsNullOrWhiteSpace(chunkText)
+                ? $"### CHUNK {execution.CurrentStep}\n{chunkText}\n\n"
+                : string.Empty;
+
+            if (hasChunkPlaceholder && missingChunk)
+            {
+                _logger.Log("Information", "MultiStep", $"Chunk mancante per lo step {execution.CurrentStep}; l'esecuzione verrà considerata completata.");
+                execution.CurrentStep = execution.MaxStep + 1;
+                execution.UpdatedAt = DateTime.UtcNow.ToString("o");
+                _database.UpdateTaskExecution(execution);
+                return new TaskExecutionStep
+                {
+                    ExecutionId = executionId,
+                    StepNumber = execution.CurrentStep,
+                    StepInstruction = stepInstruction,
+                    StepOutput = string.Empty,
+                    AttemptCount = execution.RetryCount + 1,
+                    StartedAt = DateTime.UtcNow.ToString("o"),
+                    CompletedAt = DateTime.UtcNow.ToString("o")
+                };
+            }
+
             // If this is a retry (RetryCount > 0), prepend validation failure feedback
             if (execution.RetryCount > 0)
             {
@@ -310,8 +365,11 @@ Correggi l'output tenendo conto del feedback ricevuto.
             // Check if stepInstruction contains {{PROMPT}} tag
             string fullPrompt;
             string systemMessage = executorAgent.Instructions ?? string.Empty;
+            var attachInitialContext = execution.CurrentStep == 1
+                && !hasChunkPlaceholder
+                && !string.IsNullOrWhiteSpace(execution.InitialContext);
 
-            if (stepInstruction.Contains("{{PROMPT}}") && !string.IsNullOrWhiteSpace(execution.InitialContext))
+            if (stepInstruction.Contains("{{PROMPT}}") && !string.IsNullOrWhiteSpace(execution.InitialContext) && !hasChunkPlaceholder)
             {
                 // Replace {{PROMPT}} tag with initial context
                 var stepWithPrompt = stepInstruction.Replace("{{PROMPT}}", execution.InitialContext);
@@ -326,12 +384,17 @@ Correggi l'output tenendo conto del feedback ricevuto.
                     ? stepInstruction
                     : $"{context}\n\n---\n\n{stepInstruction}";
 
-                if (execution.CurrentStep == 1 && !string.IsNullOrWhiteSpace(execution.InitialContext))
+                if (attachInitialContext)
                 {
                     systemMessage = string.IsNullOrEmpty(systemMessage)
                         ? $"**CONTESTO DELLA STORIA**:\n{execution.InitialContext}"
                         : $"{systemMessage}\n\n**CONTESTO DELLA STORIA**:\n{execution.InitialContext}";
                 }
+            }
+
+            if (!string.IsNullOrWhiteSpace(chunkIntro))
+            {
+                fullPrompt = $"{chunkIntro}{fullPrompt}";
             }
 
             // Create timeout for this step (5 minutes)
@@ -350,11 +413,30 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 
                 var executorAgentModelInfo = _database.GetModelInfoById(executorAgent.ModelId ?? 0);
                 var executorModelName = executorAgentModelInfo?.Name ?? "phi3:mini";
+                var (workingFolder, ttsStoryText) = GetExecutionTtsConfig(execution);
                 
                 _logger.Log("Information", "MultiStep", $"Creating orchestrator for model: {executorModelName}, skills: {executorAgent.Skills}");
                 if (_logger is CustomLogger cl5) await cl5.FlushAsync();
                 
-                var orchestrator = _kernelFactory.CreateOrchestrator(executorModelName, ParseSkills(executorAgent.Skills));
+                var orchestrator = _kernelFactory.CreateOrchestrator(
+                    executorModelName,
+                    ParseSkills(executorAgent.Skills),
+                    executorAgent.Id,
+                    workingFolder,
+                    ttsStoryText);
+
+                if (execution.EntityId.HasValue)
+                {
+                    var ttsTool = orchestrator.GetTool<TtsSchemaTool>("ttsschema");
+                    if (ttsTool != null)
+                    {
+                        ttsTool.CurrentStoryId = execution.EntityId.Value;
+                        if (hasChunkPlaceholder)
+                        {
+                            ttsTool.AllowReadStoryPart = false;
+                        }
+                    }
+                }
                 var bridge = _kernelFactory.CreateChatBridge(executorModelName);
                 var loop = new ReActLoopOrchestrator(
                     orchestrator, 
@@ -529,6 +611,83 @@ Correggi l'output tenendo conto del feedback ricevuto.
             catch
             {
                 return new List<string>();
+            }
+        }
+
+        private List<string> GetChunksForExecution(TaskExecution execution)
+        {
+            if (_chunkCache.TryGetValue(execution.Id, out var cached)) return cached;
+
+            string? sourceText = execution.InitialContext;
+
+            if (string.IsNullOrWhiteSpace(sourceText) && execution.EntityId.HasValue)
+            {
+                var story = _database.GetStoryById(execution.EntityId.Value);
+                sourceText = story?.Story;
+            }
+
+            sourceText ??= string.Empty;
+            var chunks = StoryChunkHelper.SplitIntoChunks(sourceText);
+            _chunkCache[execution.Id] = chunks;
+            return chunks;
+        }
+
+        private (string replaced, bool missingChunk) ReplaceChunkPlaceholders(string instruction, List<string> chunks, int stepNumber)
+        {
+            if (!instruction.Contains("{{CHUNK_", StringComparison.OrdinalIgnoreCase))
+                return (instruction, false);
+
+            var missing = false;
+
+            var replaced = Regex.Replace(instruction, @"\{\{CHUNK_(\d+)\}\}", match =>
+            {
+                if (!int.TryParse(match.Groups[1].Value, out var idx) || idx < 1)
+                    return match.Value;
+
+                if (idx <= chunks.Count)
+                {
+                    return chunks[idx - 1];
+                }
+
+                missing = true;
+                return $"[CHUNK_{idx}_NON_DISPONIBILE]";
+            });
+
+            if (missing)
+            {
+                _logger.Log("Warning", "MultiStep", $"Chunk placeholder richiesto oltre i chunk disponibili (disponibili: {chunks.Count}) per step {stepNumber}");
+            }
+
+            return (replaced, missing);
+        }
+
+        private (string? workingFolder, string? storyText) GetExecutionTtsConfig(TaskExecution execution)
+        {
+            if (string.IsNullOrWhiteSpace(execution.Config))
+                return (null, null);
+
+            try
+            {
+                using var doc = JsonDocument.Parse(execution.Config);
+                var root = doc.RootElement;
+                string? folder = null;
+                string? text = null;
+
+                if (root.TryGetProperty("workingFolder", out var folderProp))
+                {
+                    folder = folderProp.GetString();
+                }
+
+                if (root.TryGetProperty("storyText", out var textProp))
+                {
+                    text = textProp.GetString();
+                }
+
+                return (folder, text);
+            }
+            catch
+            {
+                return (null, null);
             }
         }
 
@@ -811,6 +970,11 @@ RIASSUNTO:";
             execution.Status = "completed";
             execution.UpdatedAt = DateTime.UtcNow.ToString("o");
             _database.UpdateTaskExecution(execution);
+
+            if (_chunkCache.ContainsKey(executionId))
+            {
+                _chunkCache.Remove(executionId);
+            }
 
             _logger.Log("Information", "MultiStep", $"Execution {executionId} completed successfully");
 

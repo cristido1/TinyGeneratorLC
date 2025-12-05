@@ -23,6 +23,7 @@ namespace TinyGenerator.Skills
         public string? LastFunctionResult { get; set; }
         public string? LastResult { get; set; }
         public long? CurrentStoryId { get; set; }
+        private List<string>? _chunksCache;
 
         public IReadOnlyCollection<int> RequestedParts => _requestedParts;
 
@@ -36,7 +37,7 @@ namespace TinyGenerator.Skills
         {
             return CreateFunctionSchema(
                 "evaluate_full_story",
-                "Provide the complete evaluation for a story. Call this exactly once when you finish your review.",
+                "Provide the complete evaluation for a story. Call this exactly once when you finish your review. The story_id is managed internally; do not pass it.",
                 BuildFullStoryProperties(),
                 RequiredProperties);
         }
@@ -75,12 +76,14 @@ namespace TinyGenerator.Skills
             return Task.FromResult(JsonSerializer.Serialize(new { error = $"Unknown function: {functionName}" }));
         }
 
-        private readonly int _storyChunkSize = 1500;
+        private readonly int _storyChunkSize = 1800;
 
         private async Task<string> EvaluateFullStoryAsync(string jsonInput)
         {
             try
             {
+                EnsureStoryChunks();
+
                 var input = JsonSerializer.Deserialize<EvaluateFullStoryInput>(jsonInput, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
@@ -103,7 +106,7 @@ namespace TinyGenerator.Skills
 
                 var payload = new
                 {
-                    story_id = CurrentStoryId,
+                    story_id = CurrentStoryId, // kept in payload for downstream systems, not required from the model
                     narrative_coherence_score = narrative,
                     narrative_coherence_defects = input.NarrativeCoherenceDefects,
                     originality_score = originality,
@@ -153,6 +156,8 @@ namespace TinyGenerator.Skills
         {
             try
             {
+                EnsureStoryChunks();
+
                 var input = JsonSerializer.Deserialize<ReadStoryPartInput>(jsonInput, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
@@ -172,33 +177,24 @@ namespace TinyGenerator.Skills
                 // register requested part for loop detection
                 try { _requestedParts.Add(input.PartIndex); } catch { }
 
-                var story = _database?.GetStoryById(CurrentStoryId.Value);
-                
-                if (story == null || string.IsNullOrEmpty(story.Story))
-                {
-                    return JsonSerializer.Serialize(new { error = "Story not found or empty" });
-                }
-
-                var text = story.Story;
-                var start = input.PartIndex * _storyChunkSize;
-                if (start >= text.Length)
+                var chunks = _chunksCache ?? new List<string>();
+                if (input.PartIndex >= chunks.Count)
                 {
                     return JsonSerializer.Serialize(new { error = "part_index out of range" });
                 }
 
-                var end = Math.Min(text.Length, start + _storyChunkSize);
-                var chunk = text[start..end];
+                var chunk = chunks[input.PartIndex];
                 var payload = new
                 {
                     part_index = input.PartIndex,
                     text = chunk,
-                    is_last = end >= text.Length
+                    is_last = input.PartIndex >= chunks.Count - 1
                 };
 
                 // Diagnostic logging: report that a story part was read and its length
                 try
                 {
-                    var isLast = end >= text.Length;
+                    var isLast = input.PartIndex >= chunks.Count - 1;
                     CustomLogger?.Log("Info", "EvaluatorTool", $"ReadStoryPart part={input.PartIndex} len={chunk.Length} is_last={isLast}");
                 }
                 catch { }
@@ -219,15 +215,9 @@ namespace TinyGenerator.Skills
 
         public bool HasRequestedAllParts()
         {
-            string storyText = string.Empty;
-            if (CurrentStoryId.HasValue && _database != null)
-            {
-                var s = _database.GetStoryById(CurrentStoryId.Value);
-                storyText = s?.Story ?? string.Empty;
-            }
-            if (string.IsNullOrEmpty(storyText))
-                return false;
-            var totalParts = Math.Max(1, (int)Math.Ceiling((double)storyText.Length / _storyChunkSize));
+            EnsureStoryChunks();
+            var totalParts = _chunksCache?.Count ?? 0;
+            if (totalParts == 0) return false;
             return _requestedParts.Count >= totalParts;
         }
 
@@ -292,6 +282,15 @@ namespace TinyGenerator.Skills
             "emotional_impact_score",
             "action_score"
         };
+
+        private void EnsureStoryChunks()
+        {
+            if (_chunksCache != null) return;
+            if (!CurrentStoryId.HasValue || _database == null) return;
+            var s = _database.GetStoryById(CurrentStoryId.Value);
+            var storyText = s?.Story ?? string.Empty;
+            _chunksCache = StoryChunkHelper.SplitIntoChunks(storyText, _storyChunkSize);
+        }
 
         public class EvaluateFullStoryInput
         {

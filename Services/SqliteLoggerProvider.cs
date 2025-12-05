@@ -59,7 +59,7 @@ namespace TinyGenerator.Services
                     var db = _database;
                     db.WithSqliteConnection(conn => {
                         using var cmd = conn.CreateCommand();
-                        cmd.CommandText = "INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context) VALUES (@ts, @level, @cat, @msg, @ex, @st, @tid, @agent, @ctx)";
+                        cmd.CommandText = "INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context, Result) VALUES (@ts, @level, @cat, @msg, @ex, @st, @tid, @agent, @ctx, @res)";
                         cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow.ToString("o"));
                         cmd.Parameters.AddWithValue("@level", logLevel.ToString());
                         cmd.Parameters.AddWithValue("@cat", _category ?? "");
@@ -69,6 +69,7 @@ namespace TinyGenerator.Services
                         cmd.Parameters.AddWithValue("@tid", Environment.CurrentManagedThreadId);
                         cmd.Parameters.AddWithValue("@agent", DBNull.Value);
                         cmd.Parameters.AddWithValue("@ctx", DBNull.Value);
+                        cmd.Parameters.AddWithValue("@res", DBNull.Value);
                         cmd.ExecuteNonQuery();
                         return 0;
                     });

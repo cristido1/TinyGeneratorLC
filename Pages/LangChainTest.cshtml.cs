@@ -10,7 +10,6 @@ namespace TinyGenerator.Pages
 {
     public class LangChainTestModel : PageModel
     {
-        private readonly LangChainStoryGenerationService _langChainService;
         private readonly ICustomLogger? _logger;
 
         [BindProperty]
@@ -30,9 +29,8 @@ namespace TinyGenerator.Pages
 
         public StoryGenerationResult? Result { get; set; }
 
-        public LangChainTestModel(LangChainStoryGenerationService langChainService, ICustomLogger? logger = null)
+        public LangChainTestModel(ICustomLogger? logger = null)
         {
-            _langChainService = langChainService;
             _logger = logger;
         }
 
@@ -50,18 +48,12 @@ namespace TinyGenerator.Pages
                 if (string.IsNullOrWhiteSpace(Theme))
                     Theme = "A mysterious adventure in the enchanted forest";
 
-                var writerModelsArray = WriterModels?.Split(",", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? new[] { "phi3:mini" };
-
-                Result = await _langChainService.GenerateStoriesAsync(
-                    theme: Theme,
-                    writerModels: writerModelsArray,
-                    evaluatorModel: EvaluatorModel,
-                    modelEndpoint: ModelEndpoint,
-                    apiKey: ApiKey,
-                    progress: msg => _logger?.Log("Info", "LangChainTest", msg),
-                    ct: HttpContext.RequestAborted);
-
-                _logger?.Log("Info", "LangChainTest", $"Generation completed: {Result.Message}");
+                _logger?.Log("Warning", "LangChainTest", "Legacy LangChainStoryGenerationService removed. Use StartMultiStepStoryCommand flow instead.");
+                Result = new StoryGenerationResult
+                {
+                    Success = false,
+                    Message = "Legacy LangChainStoryGenerationService has been removed. Use the multi-step command flow (StartMultiStepStoryCommand)."
+                };
             }
             catch (Exception ex)
             {

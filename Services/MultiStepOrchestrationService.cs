@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -18,20 +19,25 @@ namespace TinyGenerator.Services
         private readonly ResponseCheckerService _checkerService;
         private readonly ITokenizer _tokenizerService;
         private readonly ICustomLogger _logger;
+        private readonly IConfiguration _configuration;
         private readonly Dictionary<long, List<string>> _chunkCache = new();
+        private readonly bool _autoRecoverStaleExecutions;
 
         public MultiStepOrchestrationService(
             ILangChainKernelFactory kernelFactory,
             DatabaseService database,
             ResponseCheckerService checkerService,
             ITokenizer tokenizerService,
-            ICustomLogger logger)
+            ICustomLogger logger,
+            IConfiguration configuration)
         {
             _kernelFactory = kernelFactory;
             _database = database;
             _checkerService = checkerService;
             _tokenizerService = tokenizerService;
             _logger = logger;
+            _configuration = configuration;
+            _autoRecoverStaleExecutions = _configuration.GetValue<bool>("MultiStep:AutoRecoverStaleExecutions", false);
         }
 
         public async Task<long> StartTaskExecutionAsync(
@@ -50,7 +56,18 @@ namespace TinyGenerator.Services
             var activeExecution = _database.GetActiveExecutionForEntity(entityId, taskType);
             if (activeExecution != null)
             {
-                throw new InvalidOperationException($"An active execution (id={activeExecution.Id}) already exists for entity {entityId} of type {taskType}");
+                // User requested behavior: remove any existing partial/active execution and start a fresh one.
+                try
+                {
+                    _logger.Log("Information", "MultiStep", $"Removing existing active execution (id={activeExecution.Id}) for entity {entityId} task {taskType} to start a new one.");
+                    _database.DeleteTaskExecution(activeExecution.Id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log($"Failed to delete existing execution {activeExecution.Id}: {ex.Message}", "MultiStep", "Error");
+                    // If deletion fails, surface original error to avoid silent state corruption
+                    throw new InvalidOperationException($"An active execution (id={activeExecution.Id}) already exists for entity {entityId} of type {taskType}");
+                }
             }
 
             // Get task type info
@@ -262,7 +279,6 @@ namespace TinyGenerator.Services
             {
                 throw new ArgumentException($"Task execution {executionId} not found");
             }
-
             if (execution.Status != "in_progress")
             {
                 throw new InvalidOperationException($"Execution {executionId} is not in progress (status: {execution.Status})");
@@ -277,11 +293,19 @@ namespace TinyGenerator.Services
                 throw new InvalidOperationException($"Could not extract step instruction for step {execution.CurrentStep}");
             }
 
-            // Get previous steps for context
+            // Get previous steps (we'll only build context when retrying a failed step)
             var previousSteps = _database.GetTaskExecutionSteps(executionId);
 
-            // Build context from placeholders
-            var context = await BuildStepContextAsync(execution.CurrentStep, stepInstruction, previousSteps, threadId, ct);
+            // By default do NOT include previous step outputs in the prompt for the next step.
+            // Only build a context when this is a retry (execution.RetryCount > 0) so the agent
+            // receives the previous output and the validation feedback. This ensures a clean
+            // conversation on normal progression between steps.
+            var context = string.Empty;
+            List<ConversationMessage>? extraMessages = null;
+            if (execution.RetryCount > 0)
+            {
+                context = await BuildStepContextAsync(execution.CurrentStep, stepInstruction, previousSteps, threadId, ct);
+            }
 
             var hasChunkPlaceholder = stepInstruction.Contains("{{CHUNK_", StringComparison.OrdinalIgnoreCase);
             var chunks = GetChunksForExecution(execution);
@@ -324,7 +348,18 @@ namespace TinyGenerator.Services
 
                 if (lastAttempt?.ParsedValidation != null && !lastAttempt.ParsedValidation.IsValid)
                 {
-                    var feedbackMessage = $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
+                    // If the previous validation included a SystemMessageOverride, inject it into the
+                    // `systemMessage` instead of placing the feedback inside the user prompt/context.
+                    if (!string.IsNullOrWhiteSpace(lastAttempt.ParsedValidation.SystemMessageOverride))
+                    {
+                        extraMessages = new List<ConversationMessage>
+                        {
+                            new ConversationMessage { Role = "system", Content = lastAttempt.ParsedValidation.SystemMessageOverride }
+                        };
+                    }
+                    else
+                    {
+                        var feedbackMessage = $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
 
 Il tentativo precedente è stato respinto per il seguente motivo:
 {lastAttempt.ParsedValidation.Reason}
@@ -337,7 +372,12 @@ Output precedente che è stato respinto:
 Correggi l'output tenendo conto del feedback ricevuto.
 
 ";
-                    context = string.IsNullOrEmpty(context) ? feedbackMessage : $"{feedbackMessage}\n{context}";
+                        // Add feedback as a separate assistant message (do not insert into user prompt)
+                        extraMessages = new List<ConversationMessage>
+                        {
+                            new ConversationMessage { Role = "assistant", Content = feedbackMessage }
+                        };
+                    }
                 }
             }
 
@@ -365,6 +405,7 @@ Correggi l'output tenendo conto del feedback ricevuto.
             // Check if stepInstruction contains {{PROMPT}} tag
             string fullPrompt;
             string systemMessage = executorAgent.Instructions ?? string.Empty;
+            // Note: any validation-requested system overrides are injected via `extraMessages`
             var attachInitialContext = execution.CurrentStep == 1
                 && !hasChunkPlaceholder
                 && !string.IsNullOrWhiteSpace(execution.InitialContext);
@@ -406,6 +447,7 @@ Correggi l'output tenendo conto del feedback ricevuto.
 
             // Invoke executor agent
             string output;
+            List<Dictionary<string, object>> executorToolSchemas = new();
             try
             {
                 _logger.Log("Information", "MultiStep", $"Getting model info for executor agent, ModelId={executorAgent.ModelId}");
@@ -425,27 +467,36 @@ Correggi l'output tenendo conto del feedback ricevuto.
                     workingFolder,
                     ttsStoryText);
 
+                // Capture available tool schemas for later reminder use
+                try
+                {
+                    executorToolSchemas = orchestrator.GetToolSchemas();
+                }
+                catch
+                {
+                    executorToolSchemas = new List<Dictionary<string, object>>();
+                }
+
                 if (execution.EntityId.HasValue)
                 {
                     var ttsTool = orchestrator.GetTool<TtsSchemaTool>("ttsschema");
                     if (ttsTool != null)
                     {
                         ttsTool.CurrentStoryId = execution.EntityId.Value;
-                        if (hasChunkPlaceholder)
-                        {
-                            ttsTool.AllowReadStoryPart = false;
-                        }
                     }
                 }
-                var bridge = _kernelFactory.CreateChatBridge(executorModelName);
+                var bridge = _kernelFactory.CreateChatBridge(executorModelName, executorAgent.Temperature, executorAgent.TopP);
                 var loop = new ReActLoopOrchestrator(
-                    orchestrator, 
-                    _logger, 
-                    maxIterations: 100, 
-                    progress: null, 
-                    runId: null, 
+                    orchestrator,
+                    _logger,
+                    maxIterations: 100,
+                    progress: null,
+                    runId: null,
                     modelBridge: bridge,
-                    systemMessage: systemMessage); // Use combined system message with context
+                    systemMessage: systemMessage,
+                    responseChecker: _checkerService,
+                    agentRole: executorAgent.Role,
+                    extraMessages: extraMessages); // Pass extra messages (assistant/system) for retry feedback
 
                 _logger.Log("Information", "MultiStep", $"About to execute ReAct loop - systemMessage length: {systemMessage?.Length ?? 0}, prompt length: {fullPrompt?.Length ?? 0}");
                 if (_logger is CustomLogger cl6) await cl6.FlushAsync();
@@ -473,18 +524,116 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 throw new TimeoutException("Step execution exceeded 5 minute timeout");
             }
 
-            // Validate output with checker
+            // Validate output with deterministic checks (no LLM checker by default)
             var taskTypeInfo = _database.GetTaskTypeByCode(execution.TaskType);
             var validationCriteria = taskTypeInfo?.ParsedValidationCriteria;
 
-            var validationResult = await _checkerService.ValidateStepOutputAsync(
-                stepInstruction,
-                output,
-                validationCriteria,
-                threadId,
-                executorAgent.Name,
-                executorAgent.ModelName
-            );
+            ValidationResult baseValidation;
+
+            // Task-specific deterministic checks (e.g., TTS coverage) are executed here
+            if (string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+            {
+                // Use chunkText for coverage comparison (may be empty if not applicable)
+                var ttsResult = _checkerService.ValidateTtsSchemaResponse(output, chunkText ?? string.Empty, 0.90);
+
+                var reasons = new List<string>();
+                if (ttsResult.Errors.Any()) reasons.AddRange(ttsResult.Errors);
+                if (ttsResult.Warnings.Any()) reasons.AddRange(ttsResult.Warnings);
+
+                baseValidation = new ValidationResult
+                {
+                    IsValid = ttsResult.IsValid,
+                    Reason = ttsResult.FeedbackMessage ?? (reasons.Count > 0 ? string.Join("; ", reasons) : "TTS validation result"),
+                    NeedsRetry = !ttsResult.IsValid,
+                    SemanticScore = null
+                };
+            }
+            else
+            {
+                // Generic deterministic/basic checks (no LLM invocation)
+                baseValidation = await _checkerService.ValidateStepOutputAsync(
+                    stepInstruction,
+                    output,
+                    validationCriteria,
+                    threadId,
+                    executorAgent.Name,
+                    executorAgent.ModelName,
+                    execution.TaskType
+                );
+            }
+
+            // If the executor agent exposes skills/tools but the output contains no tool calls,
+            // craft a short tool-use reminder using the response_checker (LLM) to help the agent.
+            try
+            {
+                var skills = ParseSkills(executorAgent.Skills);
+                if (skills.Count > 0 && !_checkerService.ContainsToolCalls(output))
+                {
+                    // Build a short reminder to return to the agent on retry
+                    var toolSchemas = executorToolSchemas;
+                    var reminderObj = await _checkerService.BuildToolUseReminderAsync(
+                        systemMessage,
+                        fullPrompt,
+                        output,
+                        toolSchemas,
+                        execution.RetryCount);
+
+                    if (reminderObj != null && !string.IsNullOrWhiteSpace(reminderObj.Value.content))
+                    {
+                        baseValidation = new ValidationResult
+                        {
+                            IsValid = false,
+                            Reason = reminderObj.Value.content,
+                            NeedsRetry = true,
+                            SemanticScore = null,
+                            SystemMessageOverride = string.Equals(reminderObj.Value.role, "system", StringComparison.OrdinalIgnoreCase)
+                                ? reminderObj.Value.content
+                                : null
+                        };
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Log("Warning", "MultiStep", $"Tool-reminder generation failed: {ex.Message}");
+            }
+
+            ValidationResult validationResult;
+
+            if (!baseValidation.IsValid)
+            {
+                // Base validation failed - use that result
+                validationResult = baseValidation;
+            }
+            else
+            {
+                // For writer-type agents perform additional writer-specific validation (semantic checks)
+                var writerRoles = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "writer",
+                    "story_writer",
+                    "text_writer"
+                };
+
+                if (!string.IsNullOrWhiteSpace(executorAgent.Role) && writerRoles.Contains(executorAgent.Role))
+                {
+                    var writerValidation = await _checkerService.ValidateWriterResponseAsync(
+                        stepInstruction,
+                        output,
+                        validationCriteria,
+                        threadId,
+                        executorAgent.Name,
+                        executorAgent.ModelName,
+                        execution.TaskType
+                    );
+
+                    validationResult = writerValidation;
+                }
+                else
+                {
+                    validationResult = baseValidation;
+                }
+            }
 
             if (validationResult.IsValid)
             {
@@ -733,6 +882,20 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 else
                 {
                     content = string.Join("\n\n", targetSteps.Select(s => s.StepOutput));
+
+                    // Sanitize outputs that are raw ttsschema tool_calls (add_narration/add_phrase).
+                    // If a previous step produced only tool calls, reinserirli nel prompt causes the
+                    // next executor to simply repeat them. Replace with a short summary instead.
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(content) &&
+                            Regex.IsMatch(content, @"\badd_(?:narration|phrase)\s*\(", RegexOptions.IgnoreCase))
+                        {
+                            var callMatches = Regex.Matches(content, @"\badd_(?:narration|phrase)\s*\(", RegexOptions.IgnoreCase);
+                            content = $"[TTS tool calls recorded: {callMatches.Count} entries]";
+                        }
+                    }
+                    catch { }
                 }
 
                 string label = stepFrom == stepTo ? $"Step {stepFrom}" : $"Steps {stepFrom}-{stepTo}";
@@ -876,7 +1039,7 @@ RIASSUNTO:";
                 var fullPrompt = string.IsNullOrEmpty(context) ? stepInstruction : $"{context}\n\n---\n\n{stepInstruction}";
                 var fallbackModelName = fallbackModel.Name;
                 var orchestrator = _kernelFactory.CreateOrchestrator(fallbackModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(fallbackModelName);
+                var bridge = _kernelFactory.CreateChatBridge(fallbackModelName, currentAgent.Temperature, currentAgent.TopP);
                 var loop = new ReActLoopOrchestrator(orchestrator, _logger, modelBridge: bridge);
 
                 using var stepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -887,16 +1050,36 @@ RIASSUNTO:";
 
                 if (string.IsNullOrWhiteSpace(output)) return false;
 
-                // Validate fallback output
+                // Validate fallback output (use TTS deterministic check if relevant)
                 var taskTypeInfo = _database.GetTaskTypeByCode(execution.TaskType);
-                var validationResult = await _checkerService.ValidateStepOutputAsync(
-                    stepInstruction,
-                    output,
-                    taskTypeInfo?.ParsedValidationCriteria,
-                    threadId,
-                    $"{currentAgent.Name} (fallback: {fallbackModel.Name})",
-                    fallbackModel.Name
-                );
+                ValidationResult validationResult;
+
+                if (string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ttsResult = _checkerService.ValidateTtsSchemaResponse(output, string.Empty, 0.90);
+                    var reasons = new List<string>();
+                    if (ttsResult.Errors.Any()) reasons.AddRange(ttsResult.Errors);
+                    if (ttsResult.Warnings.Any()) reasons.AddRange(ttsResult.Warnings);
+
+                    validationResult = new ValidationResult
+                    {
+                        IsValid = ttsResult.IsValid,
+                        Reason = ttsResult.FeedbackMessage ?? (reasons.Count > 0 ? string.Join("; ", reasons) : "TTS validation result"),
+                        NeedsRetry = !ttsResult.IsValid,
+                        SemanticScore = null
+                    };
+                }
+                else
+                {
+                    validationResult = await _checkerService.ValidateStepOutputAsync(
+                        stepInstruction,
+                        output,
+                        taskTypeInfo?.ParsedValidationCriteria,
+                        threadId,
+                        $"{currentAgent.Name} (fallback: {fallbackModel.Name})",
+                        fallbackModel.Name
+                    );
+                }
 
                 if (validationResult.IsValid)
                 {
@@ -964,6 +1147,96 @@ RIASSUNTO:";
             if (execution.EntityId.HasValue && execution.TaskType == "story")
             {
                 _database.UpdateStoryById(execution.EntityId.Value, story: merged);
+            }
+
+            // If this is a TTS schema generation, aggregate all tool calls from steps
+            // and persist a final `tts_schema.json` in the configured working folder.
+            if (string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var chunks = GetChunksForExecution(execution);
+                    var schema = new TtsSchema();
+
+                    foreach (var step in steps.OrderBy(s => s.StepNumber))
+                    {
+                        var stepOutput = step.StepOutput ?? string.Empty;
+                        var chunkText = step.StepNumber <= chunks.Count ? chunks[step.StepNumber - 1] : string.Empty;
+
+                        var ttsResult = _checkerService.ValidateTtsSchemaResponse(stepOutput, chunkText, 0.90);
+
+                        foreach (var parsed in ttsResult.ExtractedToolCalls)
+                        {
+                            try
+                            {
+                                if (string.Equals(parsed.FunctionName, "add_narration", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (parsed.Arguments.TryGetValue("text", out var txtObj))
+                                    {
+                                        var text = txtObj?.ToString() ?? string.Empty;
+                                        var phrase = new TtsPhrase { Character = "Narratore", Text = text, Emotion = "neutral" };
+                                        schema.Timeline.Add(phrase);
+                                        if (!schema.Characters.Any(c => c.Name.Equals("Narratore", StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            schema.Characters.Add(new TtsCharacter { Name = "Narratore", Voice = "default", VoiceId = string.Empty, Gender = "", EmotionDefault = "" });
+                                        }
+                                    }
+                                }
+                                else if (string.Equals(parsed.FunctionName, "add_phrase", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    parsed.Arguments.TryGetValue("character", out var charObj);
+                                    parsed.Arguments.TryGetValue("text", out var txtObj);
+                                    parsed.Arguments.TryGetValue("emotion", out var emoObj);
+
+                                    var character = charObj?.ToString() ?? string.Empty;
+                                    if (string.IsNullOrWhiteSpace(character))
+                                    {
+                                        character = $"Character{schema.Characters.Count + 1}";
+                                    }
+                                    var text = txtObj?.ToString() ?? string.Empty;
+                                    var emotion = emoObj?.ToString() ?? "neutral";
+
+                                    if (!schema.Characters.Any(c => c.Name.Equals(character, StringComparison.OrdinalIgnoreCase)))
+                                    {
+                                        schema.Characters.Add(new TtsCharacter { Name = character, Voice = "default", VoiceId = string.Empty, Gender = "", EmotionDefault = string.Empty });
+                                    }
+
+                                    var phrase = new TtsPhrase { Character = character, Text = text, Emotion = emotion };
+                                    schema.Timeline.Add(phrase);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.Log("Warning", "MultiStep", $"Failed to convert parsed tool call to phrase: {ex.Message}");
+                            }
+                        }
+                    }
+
+                    // Persist final schema to working folder (from execution config)
+                    var (workingFolder, storyText) = GetExecutionTtsConfig(execution);
+                    if (string.IsNullOrWhiteSpace(workingFolder))
+                    {
+                        // default location under data/tts/<executionId>
+                        workingFolder = Path.Combine("data", "tts", executionId.ToString());
+                    }
+
+                    try
+                    {
+                        Directory.CreateDirectory(workingFolder);
+                        var filePath = Path.Combine(workingFolder, "tts_schema.json");
+                        var json = JsonSerializer.Serialize(schema, new JsonSerializerOptions { WriteIndented = true });
+                        File.WriteAllText(filePath, json);
+                        _logger.Log("Information", "MultiStep", $"Saved final TTS schema to {filePath}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Log("Warning", "MultiStep", $"Failed to save final TTS schema: {ex.Message}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Error while assembling final TTS schema: {ex.Message}");
+                }
             }
 
             // Mark execution as completed

@@ -293,7 +293,8 @@ public sealed class StoriesService
                 progress: _progress,
                 runId: runId,
                 modelBridge: chatBridge,
-                systemMessage: systemMessage);
+                systemMessage: systemMessage,
+                agentRole: agent.Role);
 
             var reactResult = await reactLoop.ExecuteAsync(prompt);
             if (!reactResult.Success)
@@ -424,7 +425,8 @@ public sealed class StoriesService
                 progress: _progress,
                 runId: runId,
                 modelBridge: chatBridge,
-                systemMessage: systemMessage);
+                systemMessage: systemMessage,
+                agentRole: agent.Role);
 
             var reactResult = await reactLoop.ExecuteAsync(prompt);
             if (!reactResult.Success)
@@ -833,7 +835,8 @@ public sealed class StoriesService
                     progress: _service._progress,
                     runId: runId,
                     modelBridge: chatBridge,
-                    systemMessage: systemMessage);
+                    systemMessage: systemMessage,
+                    agentRole: ttsAgent.Role);
 
                 var reactResult = await reactLoop.ExecuteAsync(userPrompt);
 
@@ -1034,7 +1037,8 @@ public sealed class StoriesService
                         progress: _service._progress,
                         runId: runId,
                         modelBridge: chatBridge,
-                        systemMessage: systemMessage);
+                        systemMessage: systemMessage,
+                        agentRole: voiceAgent.Role);
 
                     var reactResult = await reactLoop.ExecuteAsync(basePrompt);
                     if (!reactResult.Success)

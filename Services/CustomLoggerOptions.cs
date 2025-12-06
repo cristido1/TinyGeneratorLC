@@ -8,6 +8,9 @@ namespace TinyGenerator.Services
         public int FlushIntervalMs { get; set; } = 2000;
         // Enable logging of raw request and response JSON
         public bool LogRequestResponse { get; set; } = true;
+        // Enable logging of tool (function) responses (messages with role == "tool").
+        // Set to false to avoid noisy per-function logs like add_narration responses.
+        public bool LogToolResponses { get; set; } = true;
         // Enable logging of other signals (e.g., progress, info)
         public bool OtherLogs { get; set; } = false;
     }

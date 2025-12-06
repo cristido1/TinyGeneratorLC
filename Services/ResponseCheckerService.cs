@@ -28,34 +28,43 @@ namespace TinyGenerator.Services
             _httpClient = httpClientFactory.CreateClient();
         }
 
-        public async Task<ValidationResult> ValidateStepOutputAsync(
+        /// <summary>
+        /// Validate writer responses including semantic alignment checks (embeddings).
+        /// This is intended to be used for writer-type agents where semantic similarity
+        /// between the instruction and the output is required.
+        /// </summary>
+        public async Task<ValidationResult> ValidateWriterResponseAsync(
             string stepInstruction,
             string modelOutput,
             Dictionary<string, object>? validationCriteria,
             int threadId,
             string? agentName = null,
-            string? modelName = null)
+            string? modelName = null,
+            string? taskType = null)
         {
-            _logger.Log("Information", "MultiStep", $"Starting step validation - Agent: {agentName}, Model: {modelName}");
+            _logger.Log("Information", "MultiStep", $"Starting writer-specific validation - Agent: {agentName}, Model: {modelName}");
 
-            // Calculate semantic alignment (best-effort)
             double? semanticScore = null;
             try
             {
-                semanticScore = await CalculateSemanticAlignmentAsync(stepInstruction, modelOutput);
+                // Skip semantic calculation for tts_schema explicitly
+                if (!string.Equals(taskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+                {
+                    semanticScore = await CalculateSemanticAlignmentAsync(stepInstruction, modelOutput);
+                }
             }
             catch (Exception ex)
             {
                 _logger.Log("Warning", "MultiStep", $"Semantic alignment calculation failed: {ex.Message}");
             }
 
-            // Check semantic threshold first (if available)
+            // If semantic threshold is provided in validationCriteria, enforce it early
             if (semanticScore.HasValue && validationCriteria != null && validationCriteria.ContainsKey("semantic_threshold"))
             {
                 var threshold = Convert.ToDouble(validationCriteria["semantic_threshold"]);
                 if (semanticScore.Value < threshold)
                 {
-                    _logger.Log("Warning", "MultiStep", $"Semantic score {semanticScore.Value:F2} below threshold {threshold:F2}, validation failed");
+                    _logger.Log("Warning", "MultiStep", $"Semantic score {semanticScore.Value:F2} below threshold {threshold:F2}, writer validation failed");
                     return new ValidationResult
                     {
                         IsValid = false,
@@ -66,79 +75,81 @@ namespace TinyGenerator.Services
                 }
             }
 
-            // Get checker agent
+            // Delegate to the generic checker agent for the remaining checks, but include semantic info in the prompt
             var checkerAgent = _database.ListAgents()
                 .FirstOrDefault(a => a.Role == "response_checker" && a.IsActive);
 
             if (checkerAgent == null)
             {
-                _logger.Log("Warning", "MultiStep", "No active response_checker agent found, skipping validation");
-                // Fallback: consider valid if no checker available
+                _logger.Log("Warning", "MultiStep", "No active response_checker agent found for writer validation, skipping validation");
                 return new ValidationResult
                 {
                     IsValid = true,
                     Reason = "No checker agent available",
                     NeedsRetry = false,
-                    SemanticScore = semanticScore
+                    SemanticScore = null
                 };
             }
 
-            // Build validation prompt
             var criteriaJson = validationCriteria != null ? JsonSerializer.Serialize(validationCriteria) : "{}";
-            var semanticInfo = semanticScore.HasValue ? $"\n\nSemantic Alignment Score: {semanticScore.Value:F2} (0-1 scale)" : "";
+            var semanticInfo = semanticScore.HasValue ? $"Semantic Alignment Score: {semanticScore.Value:F2} (0-1 scale)" : string.Empty;
 
-            var prompt = $@"You are a Response Checker. Validate if the writer's output meets the requirements.
+            var sb = new StringBuilder();
+            sb.AppendLine("You are a Response Checker. Validate if the writer's output meets the requirements.");
+            sb.AppendLine();
+            sb.AppendLine("**Step Instruction:**");
+            sb.AppendLine(stepInstruction);
+            sb.AppendLine();
+            sb.AppendLine("**Writer Output:**");
+            sb.AppendLine(modelOutput);
+            sb.AppendLine();
+            sb.AppendLine("**Validation Criteria:");
+            sb.AppendLine(criteriaJson);
+            if (!string.IsNullOrEmpty(semanticInfo))
+            {
+                sb.AppendLine();
+                sb.AppendLine(semanticInfo);
+            }
+            sb.AppendLine();
+            sb.AppendLine("**Your Task:");
+            sb.AppendLine("Check if the output:");
+            sb.AppendLine("1. Adheres to the step requirements");
+            sb.AppendLine("2. Contains no questions or requests for clarification");
+            sb.AppendLine("3. Does not anticipate future steps");
+            sb.AppendLine("4. Is complete (not truncated)");
+            sb.AppendLine("5. Meets minimum length if specified");
+            sb.AppendLine();
+            sb.AppendLine("Return ONLY a JSON object with this structure:");
+            sb.AppendLine("{");
+            sb.AppendLine("  \"is_valid\": true or false,");
+            sb.AppendLine("  \"reason\": \"brief explanation\",");
+            sb.AppendLine("  \"needs_retry\": true or false");
+            sb.AppendLine("}");
 
-**Step Instruction:**
-{stepInstruction}
+            var prompt = sb.ToString();
 
-**Writer Output:**
-{modelOutput}
-
-**Validation Criteria:**
-{criteriaJson}{semanticInfo}
-
-**Your Task:**
-Check if the output:
-1. Adheres to the step requirements
-2. Contains no questions or requests for clarification
-3. Does not anticipate future steps
-4. Is complete (not truncated)
-5. Meets minimum length if specified
-
-Return ONLY a JSON object with this structure:
-{{
-  ""is_valid"": true or false,
-  ""reason"": ""brief explanation"",
-  ""needs_retry"": true or false
-}}";
-
-            _logger.Log("Information", "MultiStep", $"Invoking checker agent: {checkerAgent.Name}");
-
-            // Invoke checker agent via ReActLoop
             try
             {
                 var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
                 var checkerModelName = modelInfo?.Name ?? "phi3:mini";
-                
+
                 var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
                 var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
                 var loop = new ReActLoopOrchestrator(orchestrator, _logger, maxIterations: 5, modelBridge: bridge);
 
                 var result = await loop.ExecuteAsync(prompt);
 
-                _logger.Log("Information", "MultiStep", $"Checker raw response: {result.FinalResponse}");
+                _logger.Log("Information", "MultiStep", $"Checker raw response (writer): {result.FinalResponse}");
 
-                // Parse JSON response
+                // Parse JSON response and include semantic score
                 var validationResult = ParseValidationResponse(result.FinalResponse, semanticScore);
-                _logger.Log("Information", "MultiStep", $"Validation result: is_valid={validationResult.IsValid}, reason={validationResult.Reason}");
+                _logger.Log("Information", "MultiStep", $"Writer validation result: is_valid={validationResult.IsValid}, reason={validationResult.Reason}");
 
                 return validationResult;
             }
             catch (Exception ex)
             {
-                _logger.Log("Error", "MultiStep", $"Checker agent invocation failed: {ex.Message}", ex.ToString());
-                // Fallback: consider invalid and needs retry
+                _logger.Log("Error", "MultiStep", $"Checker agent invocation failed (writer): {ex.Message}", ex.ToString());
                 return new ValidationResult
                 {
                     IsValid = false,
@@ -149,12 +160,69 @@ Return ONLY a JSON object with this structure:
             }
         }
 
+        public async Task<ValidationResult> ValidateStepOutputAsync(
+            string stepInstruction,
+            string modelOutput,
+            Dictionary<string, object>? validationCriteria,
+            int threadId,
+            string? agentName = null,
+            string? modelName = null,
+            string? taskType = null)
+        {
+            _logger.Log("Information", "MultiStep", $"Starting step validation - Agent: {agentName}, Model: {modelName}");
+
+            // Perform only deterministic/basic checks here and DO NOT invoke the response_checker agent.
+            // Response checker (LLM) calls are disabled by default and will be invoked only when
+            // the executor produced free text instead of expected tool calls (see orchestrator logic).
+
+            // Basic deterministic checks
+            if (string.IsNullOrWhiteSpace(modelOutput))
+            {
+                return new ValidationResult
+                {
+                    IsValid = false,
+                    Reason = "Model output is empty",
+                    NeedsRetry = true,
+                    SemanticScore = null
+                };
+            }
+
+            // Additional deterministic checks could be added here (length, simple required tokens, etc.)
+            // For now, accept the output as valid at this stage; task-specific deterministic
+            // checks (e.g. TTS coverage) are performed by the orchestrator before calling this.
+
+            return new ValidationResult
+            {
+                IsValid = true,
+                Reason = "Deterministic checks passed",
+                NeedsRetry = false,
+                SemanticScore = null
+            };
+        }
+
+        /// <summary>
+        /// Heuristic to detect whether the model output contains tool calls (e.g. ttsschema functions).
+        /// Used by orchestrator to decide whether to invoke the response_checker to craft a reminder.
+        /// </summary>
+        public bool ContainsToolCalls(string modelOutput)
+        {
+            if (string.IsNullOrWhiteSpace(modelOutput)) return false;
+
+            // Quick heuristics: presence of known function names or a tool_calls/json structure
+            if (modelOutput.IndexOf("add_narration", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (modelOutput.IndexOf("add_phrase", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (modelOutput.IndexOf("\"tool_calls\"", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (modelOutput.IndexOf("\"function\"", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            return false;
+        }
+
         /// <summary>
         /// Ask a response_checker agent to craft a corrective message when the primary model
         /// replies con testo libero invece di usare i tool. Restituisce la risposta da
         /// inviare al modello principale (plain text) oppure null se non disponibile.
         /// </summary>
-        public async Task<string?> BuildToolUseReminderAsync(
+        public async Task<(string role, string content)?> BuildToolUseReminderAsync(
             string? systemMessage,
             string userPrompt,
             string modelResponse,
@@ -219,7 +287,11 @@ Return ONLY a JSON object with this structure:
                     return null;
                 }
 
-                return reply;
+                // Decide whether this reminder should be injected as a system message
+                // For TTS schema scenarios, prefer using a system message so reminders don't appear inside the user prompt.
+                var wantsSystem = toolNames.Any(n => string.Equals(n, "ttsschema", StringComparison.OrdinalIgnoreCase));
+                var role = wantsSystem ? "system" : "assistant";
+                return (role, reply);
             }
             catch (Exception ex)
             {
@@ -427,6 +499,256 @@ Return ONLY a JSON object with this structure:
             if (magnitude1 == 0 || magnitude2 == 0) return 0;
 
             return dotProduct / (magnitude1 * magnitude2);
+        }
+
+        /// <summary>
+        /// Validates TTS schema response by checking text coverage and tool_call completeness.
+        /// Tolerant of formatting issues, focuses on coverage analysis.
+        /// Returns validation result with feedback message for model retry.
+        /// </summary>
+        public TtsValidationResult ValidateTtsSchemaResponse(
+            string modelResponse,
+            string originalStoryChunk,
+            double minimumCoverageThreshold = 0.90)
+        {
+            var result = new TtsValidationResult
+            {
+                IsValid = false,
+                CoveragePercent = 0,
+                OriginalChars = 0,
+                CoveredChars = 0,
+                RemainingChars = 0
+            };
+
+            try
+            {
+                // Step 1: Try to deserialize response to ApiResponse
+                ApiResponse? apiResponse = null;
+                try
+                {
+                    apiResponse = JsonSerializer.Deserialize<ApiResponse>(modelResponse);
+                }
+                catch (JsonException)
+                {
+                    result.Warnings.Add("Response is not valid JSON, attempting fallback parsing");
+                }
+
+                // Step 2: Extract tool_calls from ApiResponse or fallback to manual parsing
+                if (apiResponse?.Message?.ToolCalls != null && apiResponse.Message.ToolCalls.Count > 0)
+                {
+                    // Extract from structured response
+                    foreach (var tc in apiResponse.Message.ToolCalls)
+                    {
+                        if (tc.Function == null) continue;
+
+                        var parsedCall = new ParsedToolCall
+                        {
+                            Id = tc.Function.Name ?? "unknown",
+                            FunctionName = tc.Function.Name ?? "unknown"
+                        };
+
+                        // Parse arguments
+                        if (tc.Function.Arguments != null)
+                        {
+                            try
+                            {
+                                if (tc.Function.Arguments is JsonElement jsonElem)
+                                {
+                                    parsedCall.Arguments = JsonSerializer.Deserialize<Dictionary<string, object>>(jsonElem.GetRawText()) ?? new();
+                                }
+                                else if (tc.Function.Arguments is string str)
+                                {
+                                    parsedCall.Arguments = JsonSerializer.Deserialize<Dictionary<string, object>>(str) ?? new();
+                                }
+                                else
+                                {
+                                    var serialized = JsonSerializer.Serialize(tc.Function.Arguments);
+                                    parsedCall.Arguments = JsonSerializer.Deserialize<Dictionary<string, object>>(serialized) ?? new();
+                                }
+                            }
+                            catch
+                            {
+                                result.Warnings.Add($"Failed to parse arguments for tool_call {tc.Function.Name}");
+                            }
+                        }
+
+                        result.ExtractedToolCalls.Add(parsedCall);
+                    }
+                }
+                else
+                {
+                    // Fallback: manually extract tool_calls from response text
+                    ExtractToolCallsFromText(modelResponse, result);
+                }
+
+                // Step 3: Build temporary TTS schema and extract all text
+                var allExtractedText = new List<string>();
+                foreach (var tc in result.ExtractedToolCalls)
+                {
+                    // Check for required parameters
+                    if (tc.FunctionName == "add_narration")
+                    {
+                        if (!tc.Arguments.ContainsKey("text"))
+                        {
+                            result.Errors.Add($"Tool call {tc.FunctionName} missing required parameter 'text'");
+                            continue;
+                        }
+                        var text = tc.Arguments["text"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            allExtractedText.Add(text);
+                        }
+                    }
+                    else if (tc.FunctionName == "add_phrase")
+                    {
+                        if (!tc.Arguments.ContainsKey("text"))
+                        {
+                            result.Errors.Add($"Tool call {tc.FunctionName} missing required parameter 'text'");
+                            continue;
+                        }
+                        if (!tc.Arguments.ContainsKey("character"))
+                        {
+                            result.Errors.Add($"Tool call {tc.FunctionName} missing required parameter 'character'");
+                        }
+                        if (!tc.Arguments.ContainsKey("emotion"))
+                        {
+                            result.Warnings.Add($"Tool call {tc.FunctionName} missing optional parameter 'emotion'");
+                        }
+                        var text = tc.Arguments["text"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            allExtractedText.Add(text);
+                        }
+                    }
+                }
+
+                // Step 4: Calculate text coverage
+                var normalizedOriginal = NormalizeText(originalStoryChunk);
+                var remainingText = normalizedOriginal;
+
+                foreach (var extractedText in allExtractedText)
+                {
+                    var normalizedExtracted = NormalizeText(extractedText);
+                    if (string.IsNullOrWhiteSpace(normalizedExtracted)) continue;
+
+                    // Remove matched text from remaining (case-insensitive)
+                    var index = remainingText.IndexOf(normalizedExtracted, StringComparison.OrdinalIgnoreCase);
+                    if (index >= 0)
+                    {
+                        remainingText = remainingText.Remove(index, normalizedExtracted.Length);
+                    }
+                }
+
+                result.OriginalChars = normalizedOriginal.Length;
+                result.RemainingChars = remainingText.Length;
+                result.CoveredChars = result.OriginalChars - result.RemainingChars;
+                result.CoveragePercent = result.OriginalChars > 0
+                    ? (double)result.CoveredChars / result.OriginalChars
+                    : 0;
+
+                // Step 5: Validate coverage threshold
+                if (result.CoveragePercent >= minimumCoverageThreshold)
+                {
+                    result.IsValid = true;
+                    result.FeedbackMessage = $"Text coverage: {result.CoveragePercent:P1}. Schema is valid.";
+                }
+                else
+                {
+                    result.IsValid = false;
+                    var missingPercent = (1 - result.CoveragePercent) * 100;
+                    result.FeedbackMessage = $"Text coverage only {result.CoveragePercent:P1} (missing {missingPercent:F1}%). You must include ALL text from the original story with multiple calls in the response. Please add all the narration or dialogue phrases to cover at least {minimumCoverageThreshold:P0} of the source text.";
+                    // For TTS schema coverage failures, prefer injecting the corrective feedback as a system message
+                    // so the agent receives it outside of the user prompt.
+                    result.ShouldInjectAsSystem = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Errors.Add($"Validation exception: {ex.Message}");
+                result.FeedbackMessage = "Failed to validate response due to parsing error. Ensure your response contains valid tool_calls with all required parameters.";
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Fallback method to extract tool_calls from raw response text using regex/heuristics.
+        /// </summary>
+        private void ExtractToolCallsFromText(string responseText, TtsValidationResult result)
+        {
+            try
+            {
+                // Try to parse as JSON and look for tool_calls array or embedded tool_calls
+                using var doc = JsonDocument.Parse(responseText);
+                var root = doc.RootElement;
+
+                // Look for tool_calls at various levels
+                if (root.TryGetProperty("tool_calls", out var toolCallsArray))
+                {
+                    ParseToolCallsArray(toolCallsArray, result);
+                }
+                else if (root.TryGetProperty("message", out var message) && 
+                         message.TryGetProperty("tool_calls", out var msgToolCalls))
+                {
+                    ParseToolCallsArray(msgToolCalls, result);
+                }
+            }
+            catch
+            {
+                result.Warnings.Add("Could not extract tool_calls from response text");
+            }
+        }
+
+        private void ParseToolCallsArray(JsonElement toolCallsArray, TtsValidationResult result)
+        {
+            if (toolCallsArray.ValueKind != JsonValueKind.Array) return;
+
+            foreach (var tc in toolCallsArray.EnumerateArray())
+            {
+                if (!tc.TryGetProperty("function", out var func)) continue;
+
+                var parsedCall = new ParsedToolCall
+                {
+                    Id = tc.TryGetProperty("id", out var idElem) ? idElem.GetString() ?? "unknown" : "unknown",
+                    FunctionName = func.TryGetProperty("name", out var nameElem) ? nameElem.GetString() ?? "unknown" : "unknown"
+                };
+
+                if (func.TryGetProperty("arguments", out var argsElem))
+                {
+                    try
+                    {
+                        if (argsElem.ValueKind == JsonValueKind.Object)
+                        {
+                            parsedCall.Arguments = JsonSerializer.Deserialize<Dictionary<string, object>>(argsElem.GetRawText()) ?? new();
+                        }
+                        else if (argsElem.ValueKind == JsonValueKind.String)
+                        {
+                            var argsStr = argsElem.GetString() ?? "{}";
+                            parsedCall.Arguments = JsonSerializer.Deserialize<Dictionary<string, object>>(argsStr) ?? new();
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore parse errors for individual arguments
+                    }
+                }
+
+                result.ExtractedToolCalls.Add(parsedCall);
+            }
+        }
+
+        /// <summary>
+        /// Normalize text for coverage comparison: remove punctuation, lowercase, trim whitespace.
+        /// </summary>
+        private string NormalizeText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+
+            // Remove common punctuation
+            var normalized = System.Text.RegularExpressions.Regex.Replace(text, @"[.,!?;:\""\'\-\(\)\[\]]", "");
+            // Collapse multiple spaces
+            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ");
+            return normalized.Trim().ToLowerInvariant();
         }
     }
 }

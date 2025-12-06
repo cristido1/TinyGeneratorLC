@@ -22,10 +22,10 @@ namespace TinyGenerator.Pages
         public string ApiKey { get; set; } = "ollama-dummy-key";
 
         [BindProperty]
-        public string WriterModels { get; set; } = "phi3:mini-128k,mistral:7b-instruct-q4_K_M";
+        public string WriterModels { get; set; } = "LongWriter-llama3.1-8b-GGUF:Q4_K_M";
 
         [BindProperty]
-        public string EvaluatorModel { get; set; } = "qwen2.5:3b";
+        public string EvaluatorModel { get; set; } = "qwen3:4b-instruct";
 
         public StoryGenerationResult? Result { get; set; }
 

@@ -165,11 +165,11 @@ namespace TinyGenerator.Services
                                     jsonList.Add(new OllamaModelInfo
                                     {
                                         Name = name,
-                                        Size = elem.TryGetProperty("size", out var sizeProp) ? sizeProp.GetString() : null,
+                                        Size = elem.TryGetProperty("size", out var sizeProp) ? (sizeProp.GetString() ?? string.Empty) : string.Empty,
                                         Context = elem.TryGetProperty("details", out var details) 
-                                            ? (details.TryGetProperty("context_length", out var ctxLen) ? ctxLen.GetString() 
-                                                : (details.TryGetProperty("parameter_size", out var ctxProp) ? ctxProp.GetString() : null))
-                                            : null
+                                            ? (details.TryGetProperty("context_length", out var ctxLen) ? (ctxLen.GetString() ?? string.Empty) 
+                                                : (details.TryGetProperty("parameter_size", out var ctxProp) ? (ctxProp.GetString() ?? string.Empty) : string.Empty))
+                                            : string.Empty
                                     });
                                 }
                                 if (jsonList.Count > 0) return jsonList;
@@ -197,11 +197,11 @@ namespace TinyGenerator.Services
                                 jsonList.Add(new OllamaModelInfo
                                 {
                                     Name = name,
-                                    Size = doc.RootElement.TryGetProperty("size", out var sizeProp) ? sizeProp.GetString() : null,
+                                    Size = doc.RootElement.TryGetProperty("size", out var sizeProp) ? (sizeProp.GetString() ?? string.Empty) : string.Empty,
                                     Context = doc.RootElement.TryGetProperty("details", out var details) 
-                                        ? (details.TryGetProperty("context_length", out var ctxLen) ? ctxLen.GetString() 
-                                            : (details.TryGetProperty("parameter_size", out var ctxProp) ? ctxProp.GetString() : null))
-                                        : null
+                                        ? (details.TryGetProperty("context_length", out var ctxLen) ? (ctxLen.GetString() ?? string.Empty) 
+                                            : (details.TryGetProperty("parameter_size", out var ctxProp) ? (ctxProp.GetString() ?? string.Empty) : string.Empty))
+                                        : string.Empty
                                 });
                             }
                             catch

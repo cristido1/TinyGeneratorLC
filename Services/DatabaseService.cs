@@ -2976,6 +2976,69 @@ SELECT last_insert_rowid();";
         return conn.QueryFirstOrDefault<TinyGenerator.Models.TaskExecution>(sql, new { id });
     }
 
+    public void DeleteTaskExecution(long executionId)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            conn.Execute("DELETE FROM task_execution_steps WHERE execution_id = @eid", new { eid = executionId }, tx);
+            conn.Execute("DELETE FROM task_executions WHERE id = @id", new { id = executionId }, tx);
+            tx.Commit();
+        }
+        catch
+        {
+            try { tx.Rollback(); } catch { }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Delete active task executions (and their steps). If entityId is provided, limit to that entity.
+    /// If taskType is provided, limit to that task type. Returns number of executions deleted.
+    /// </summary>
+    public int DeleteActiveExecutions(long? entityId = null, string? taskType = null)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            var whereClauses = new List<string> { "status IN ('pending','in_progress')" };
+            var parameters = new DynamicParameters();
+            if (entityId.HasValue)
+            {
+                whereClauses.Add("entity_id = @eid");
+                parameters.Add("@eid", entityId.Value);
+            }
+            if (!string.IsNullOrWhiteSpace(taskType))
+            {
+                whereClauses.Add("task_type = @tt");
+                parameters.Add("@tt", taskType);
+            }
+
+            var where = string.Join(" AND ", whereClauses);
+
+            // Find matching execution ids
+            var selectSql = $"SELECT id FROM task_executions WHERE {where}";
+            var ids = conn.Query<long>(selectSql, parameters).ToList();
+            foreach (var id in ids)
+            {
+                conn.Execute("DELETE FROM task_execution_steps WHERE execution_id = @eid", new { eid = id }, tx);
+                conn.Execute("DELETE FROM task_executions WHERE id = @id", new { id }, tx);
+            }
+
+            tx.Commit();
+            return ids.Count;
+        }
+        catch
+        {
+            try { tx.Rollback(); } catch { }
+            throw;
+        }
+    }
+
     public void UpdateTaskExecution(TinyGenerator.Models.TaskExecution execution)
     {
         using var conn = CreateConnection();

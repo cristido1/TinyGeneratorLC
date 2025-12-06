@@ -1,0 +1,347 @@
+DESIGN ARCHITETTURA AGENTI CON MEMORIA PER PIPELINE TTS
+Versione: 1.0
+Lingua: Italiano
+Destinatario: modello che deve implementare il codice (es. Sonnet 4.5)
+
+======================================================================
+SEZIONE 0 – CONTESTO GENERALE
+======================================================================
+Abbiamo una pipeline che deve:
+- Prendere in input un testo di storia (chunk).
+- Convertirlo in una sequenza di tool_call TTS (add_narration, add_phrase, ecc.).
+- Validare lo schema TTS (JSON, struttura, regole).
+- In caso di fallimento, analizzare l’errore, salvare memoria e riprovare con una strategia migliore.
+
+L’obiettivo NON è solo “chiamare il modello”, ma costruire un SISTEMA DI AGENTI che:
+- Ha OBIETTIVI espliciti.
+- Ha MEMORIA persistente.
+- Riceve FEEDBACK strutturato sugli errori.
+- Può ADATTARE la strategia nei tentativi successivi.
+
+I modelli LLM NON evolvono da soli: l’evoluzione avviene a livello di sistema tramite:
+- Memoria strutturata (database).
+- Cicli obiettivo → azione → valutazione → feedback → nuova azione.
+
+======================================================================
+SEZIONE 1 – RUOLI/AGENTI PRINCIPALI
+======================================================================
+Gli agenti non sono entità magiche; sono combinazioni di:
+- Prompt (istruzioni).
+- Modello LLM.
+- Stato/memoria esterna (DB, file, embeddings).
+
+Qui definiamo i ruoli logici. L’implementazione concreta può usare classi C# diverse, ma la responsabilità deve rimanere chiara.
+
+1) ORCHESTRATOR_AGENT
+   - Responsabilità:
+     - Ricevere il TASK di alto livello (es. “Converti questo chunk in tool_call TTS valide”).
+     - Creare un GOAL (obiettivo) esplicito con:
+       - descrizione,
+       - vincoli,
+       - modello target,
+       - parametri (max tentativi, temperature, ecc.).
+     - Coordina gli altri agenti (Writer, Validator, ErrorAnalyzer, MemoryManager).
+     - Decide quando fermarsi (successo, fallimento, troppi tentativi).
+   - Input:
+     - Testo della storia (chunk).
+     - Parametri di esecuzione.
+   - Output:
+     - Risultato finale valido (schema TTS) OPPURE fallimento con motivazione.
+
+2) TTS_WRITER_AGENT
+   - Responsabilità:
+     - Prendere un chunk di testo e generare la lista di tool_call TTS (add_narration, add_phrase, ecc.).
+     - Seguire le regole rigide sul formato.
+     - Utilizzare, se disponibile, “strategie” salvate in memoria per migliorare il comportamento.
+   - Input:
+     - Chunk di storia.
+     - Istruzioni di sistema (prompt base).
+     - “Strategie” e “lezioni apprese” recuperate da MemoryManager.
+   - Output:
+     - Testo o JSON con la lista di tool_call.
+
+3) TTS_VALIDATOR / PARSER (CODICE, NON LLM)
+   - Responsabilità (interamente lato programma, NO LLM):
+     - Verificare che l’output del TTS_WRITER sia:
+       - Sintatticamente valido (JSON corretto o formato atteso).
+       - Semanticamente valido (solo funzioni ammesse, parametri corretti, nessun testo fuori tool_call).
+     - Restituire:
+       - IsValid (true/false).
+       - Lista dettagliata di errori (codici + messaggi + posizione se possibile).
+   - Input:
+     - Output generato dal TTS_WRITER.
+   - Output:
+     - Oggetto di validazione (es. TtsValidationResult).
+
+4) ERROR_ANALYZER_AGENT
+   - Responsabilità:
+     - Leggere il risultato di validazione e il contenuto generato.
+     - Capire il TIPO DI ERRORE:
+       - Es: “LOOP_INCOMPLETO”, “TESTO_FUORI_TOOL_CALL”, “JSON_NON_VALIDO”, “DIALOGO_MAL_RICONOSCIUTO”, ecc.
+     - Collegare l’errore agli errori storici simili (tramite MemoryManager).
+     - Generare una “strategia testuale” riutilizzabile per i tentativi futuri del Writer.
+       - Es: “In passato il modello si fermava dopo la prima tool_call. Strategia: ribadire esplicitamente di continuare a generare una tool_call per ogni frase, fino a fine chunk”.
+   - Input:
+     - Risultato validator.
+     - Output generato fallito.
+     - Memoria storica di errori simili.
+   - Output:
+     - Strategia / hint testuale per migliorare la prossima chiamata al Writer.
+     - Record aggiornato in memoria (nuovo pattern di errore).
+
+5) MEMORY_MANAGER_AGENT (ASTRAZIONE – implementato in codice)
+   - Responsabilità:
+     - Fornire API semplici per salvare e leggere:
+       - Goals (obiettivi).
+       - Attempts (tentativi).
+       - Errori e pattern di errore.
+       - Strategie collegate.
+       - Esempi di successi (esempi di output buoni).
+     - Esporre funzioni tipo:
+       - SaveGoal(...)
+       - SaveAttempt(...)
+       - SaveErrorPattern(...)
+       - GetRelevantStrategiesForTaskType(...)
+       - GetLastSuccessfulExamplesForTaskType(...)
+   - Input:
+     - Oggetti di dominio (goal, attempt, error, strategy, ecc.).
+   - Output:
+     - Dati persistiti in DB + risultati delle query (per gli altri agenti).
+
+6) (OPZIONALE) GOAL_PLANNER_AGENT
+   - Responsabilità:
+     - Dato un GOAL complesso, scomporlo in sotto-passaggi.
+     - Es: per il TTS schema potrebbe decidere:
+       - Step 1: rileggere il chunk e frammentarlo in frasi.
+       - Step 2: classificare ogni frase in NARRAZIONE o DIALOGO.
+       - Step 3: generare le tool_call finali.
+     - Questo ruolo può essere incorporato nell’ORCHESTRATOR in una prima versione.
+
+
+======================================================================
+SEZIONE 2 – STRUTTURA DELLA MEMORIA (DB / SQLITE)
+======================================================================
+La memoria NON è solo log; deve essere strutturata per poter cercare pattern e strategie.
+
+Un possibile schema minimo (tabelle logiche):
+
+1) GOALS
+   - goal_id (PK)
+   - created_at
+   - goal_type (es. "TTS_CONVERSION")
+   - description
+   - constraints (JSON, opzionale)
+   - status (pending, success, failed)
+
+2) ATTEMPTS
+   - attempt_id (PK)
+   - goal_id (FK → GOALS)
+   - created_at
+   - model_name
+   - parameters_json (temperature, top_p, ecc.)
+   - input_summary (es. hash o primi N caratteri del chunk)
+   - raw_output (output completo del modello)
+   - validation_status (success, failed)
+   - validation_errors_json
+   - attempt_index (0,1,2,... per lo stesso goal)
+
+3) ERROR_PATTERNS
+   - error_pattern_id (PK)
+   - error_code (es. "LOOP_INCOMPLETO", "JSON_INVALIDO", "TESTO_FUORI_TOOL_CALL")
+   - description
+   - detection_criteria (testo o JSON per descrivere quando considerare un errore “simile”)
+   - created_at
+
+4) STRATEGIES
+   - strategy_id (PK)
+   - error_pattern_id (FK → ERROR_PATTERNS, opzionale)
+   - task_type (es. "TTS_CONVERSION")
+   - strategy_text (testo in linguaggio naturale, pronto da inserire nel prompt del Writer)
+   - usage_count
+   - last_used_at
+
+5) SUCCESS_EXAMPLES
+   - example_id (PK)
+   - task_type
+   - model_name
+   - input_summary
+   - output_excerpt
+   - notes (perché considerato “buon esempio”)
+
+NOTE:
+- È sufficiente una prima versione semplice.
+- Si può sempre normalizzare di più dopo.
+- Lo scopo non è modellare tutto perfettamente, ma AVERE un posto dove:
+  - ritrovare gli errori,
+  - collegarli a strategie,
+  - fornire al Writer esempi e “lezioni apprese”.
+
+
+======================================================================
+SEZIONE 3 – GOAL LOOP (CICLO DI OBIETTIVI E FEEDBACK)
+======================================================================
+Qui descriviamo il flusso logico che il codice deve implementare.
+
+------------------------------------
+3.1 CREAZIONE GOAL
+------------------------------------
+1) L’applicazione ha un chunk di testo da convertire in schema TTS.
+2) ORCHESTRATOR_AGENT crea un nuovo goal:
+   - goal_type = "TTS_CONVERSION"
+   - description = "Convertire il chunk in lista di tool_call TTS valide"
+   - constraints = JSON con:
+     - modello da usare
+     - max tentativi (es. 3)
+     - parametri di generazione (temperature, max_tokens, ecc.)
+3) MEMORY_MANAGER.SaveGoal(goal).
+
+------------------------------------
+3.2 RACCOLTA STRATEGIE ESISTENTI
+------------------------------------
+1) MEMORY_MANAGER.GetRelevantStrategiesForTaskType("TTS_CONVERSION"):
+   - restituisce lista di strategy_text da usare nel prompt.
+2) MEMORY_MANAGER.GetLastSuccessfulExamplesForTaskType("TTS_CONVERSION"):
+   - opzionale: usati come esempi few-shot nel prompt del Writer.
+
+------------------------------------
+3.3 LOOP DI TENTATIVI
+------------------------------------
+Pseudo-flusso:
+
+for attempt_index in 0..MAX_ATTEMPTS-1:
+    1) Prepara prompt per TTS_WRITER_AGENT:
+       - Istruzioni stabili (regole di conversione).
+       - Strategia/e textuali dalle STRATEGIES.
+       - (Opzionale) esempi recenti di successo.
+
+    2) Chiama il modello (TTS_WRITER_AGENT) → ottiene output.
+
+    3) Crea record ATTEMPT con:
+       - goal_id
+       - attempt_index
+       - model_name
+       - parameters_json
+       - raw_output
+
+    4) Chiama TTS_VALIDATOR:
+       - validation_result = Validate(raw_output)
+
+    5) Aggiorna ATTEMPT con:
+       - validation_status
+       - validation_errors_json
+
+    6) Se validation_result.IsValid == true:
+       - Segna GOAL come success.
+       - (Opzionale) salva un SUCCESS_EXAMPLE.
+       - Ritorna l’output valido → fine loop.
+
+    7) Se validation_result.IsValid == false:
+       - Chiama ERROR_ANALYZER_AGENT:
+         - input: raw_output, validation_errors_json, task_type
+         - output: strategy_text + identificazione error_pattern
+       - MEMORY_MANAGER:
+         - SaveErrorPattern se necessario.
+         - SaveStrategy collegando la strategia all’errore o al task_type.
+       - Loop continua con un nuovo tentativo (se non superato MAX_ATTEMPTS).
+
+Se tutti i tentativi falliscono:
+   - Segna GOAL come failed.
+   - Restituisce al chiamante uno stato di fallimento + info su ultimo errore.
+
+Questo è il “GOAL LOOP”:  
+il sistema non si limita a chiamare il modello, ma:
+- raccoglie errori,
+- genera strategie,
+- aggiorna la memoria,
+- cerca di migliorare il tentativo successivo.
+
+
+======================================================================
+SEZIONE 4 – COME USARE LA MEMORIA PER FAR “EVOLVERE” GLI AGENTI
+======================================================================
+L’evoluzione NON avviene nel modello, ma nella combinazione:
+- prompt + strategie + esempi + parametri.
+
+Ogni fallimento aggiornato in memoria permette di:
+
+1) Riconoscere pattern ricorrenti
+   - Es: “modello si ferma dopo la prima tool_call” → LOOP_INCOMPLETO.
+   - Es: “presenza di testo fuori dalle tool_call” → TESTO_FUORI_TOOL_CALL.
+
+2) Associare a ogni pattern una strategia
+   - Es per LOOP_INCOMPLETO:
+     - “Ribadisci nel prompt: continua a generare una tool_call per OGNI frase, fino alla fine del chunk, senza fermarti dopo la prima tool_call.”
+   - Es per TESTO_FUORI_TOOL_CALL:
+     - “Ribadire: NON aggiungere alcun testo esterno, l’output deve contenere SOLO tool_call.”
+
+3) Incrementare la qualità dei prompt nel tempo
+   - Il Writer riceve sempre più “lezioni apprese”.
+   - La probabilità di errore scende, pur usando gli stessi modelli.
+
+4) Permettere confronti tra modelli
+   - La stessa struttura GOAL/ATTEMPTS può essere riutilizzata per confrontare:
+     - GPT-4o-mini vs GPT-5-mini vs Qwen vs Llama.
+   - A ogni modello si possono assegnare punteggi di:
+     - tasso di successo,
+     - numero medio di tentativi,
+     - tipi di errori più frequenti.
+
+
+======================================================================
+SEZIONE 5 – LINEE GUIDA PER IMPLEMENTAZIONE (INDICAZIONI PER SONNET)
+======================================================================
+1) NON generare codice monolitico.
+   - Separare chiaramente:
+     - classi per gli agenti (Orchestrator, Writer, ErrorAnalyzer, ecc.),
+     - classi per il dominio (Goal, Attempt, Strategy, ErrorPattern),
+     - classi/repository per accesso DB (MemoryManager).
+
+2) Rendere il MEMORY_MANAGER un layer pulito
+   - Esporre metodi di alto livello:
+     - CreateGoal, RegisterAttempt, RegisterStrategy, ecc.
+   - Evitare che gli agenti parlino direttamente con il DB.
+
+3) TTS_VALIDATOR deve essere deterministico e indipendente dal modello
+   - Niente AI nella validazione.
+   - Deve poter girare offline e sempre restituire lo stesso risultato a parità di input.
+
+4) ERROR_ANALYZER_AGENT può usare un LLM
+   - Qui ha senso usare un modello bravo nel ragionamento:
+     - Legge gli errori,
+     - Raggruppa,
+     - Genera strategia testuale.
+   - L’output deve essere SEMPRE salvato in STRATEGIES per riuso.
+
+5) L’ORCHESTRATOR deve loggare chiaramente il ciclo
+   - Per ogni GOAL:
+     - tentativi fatti,
+     - strategie usate,
+     - modello usato,
+     - esito finale.
+
+6) Tenere separato il concetto di:
+   - “memoria a breve termine” (context window della singola chiamata al modello),
+   - “memoria a lungo termine” (DB + embeddings).
+   - Le informazioni critiche vanno SEMPRE nella memoria a lungo termine se devono essere riutilizzate in future esecuzioni.
+
+
+======================================================================
+SEZIONE 6 – RIASSUNTO PER USO IMMEDIATO
+======================================================================
+- Questo file descrive:
+  - I ruoli degli agenti.
+  - La struttura minima della memoria (tabelle logiche).
+  - Il GOAL LOOP con tentativi multipli, validazione e analisi errori.
+  - Come usare memoria + strategie per “far evolvere” il sistema.
+
+- Il modello a cui verrà passato (es. Sonnet 4.5) dovrà:
+  - Generare le classi C# per questi agenti.
+  - Definire le entità per GOAL, ATTEMPT, ERROR_PATTERN, STRATEGY, SUCCESS_EXAMPLE.
+  - Implementare il ciclo: goal → tentativi → validazione → analisi errori → nuove strategie → success/fail.
+
+- L’obiettivo finale:
+  - Non è solo avere un modello che “a volte funziona”.
+  - È avere un SISTEMA che:
+    - impara dai propri errori,
+    - registra le soluzioni,
+    - e diventa progressivamente più affidabile senza cambiare modello di base.

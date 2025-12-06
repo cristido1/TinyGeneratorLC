@@ -64,9 +64,9 @@ namespace TinyGenerator.Pages.TtsVoices
                 var all = _db.ListTtsVoices() ?? new List<TtsVoice>();
                 var total = all.Count;
 
-                var draw = Request.Query.ContainsKey("draw") ? int.Parse(Request.Query["draw"]) : 0;
-                var start = Request.Query.ContainsKey("start") ? int.Parse(Request.Query["start"]) : 0;
-                var length = Request.Query.ContainsKey("length") ? int.Parse(Request.Query["length"]) : 25;
+                var draw = 0; int.TryParse(Request.Query.ContainsKey("draw") ? Request.Query["draw"].ToString() : null, out draw);
+                var start = 0; int.TryParse(Request.Query.ContainsKey("start") ? Request.Query["start"].ToString() : null, out start);
+                var length = 25; int.TryParse(Request.Query.ContainsKey("length") ? Request.Query["length"].ToString() : null, out length);
                 var search = Request.Query.ContainsKey("search[value]") ? Request.Query["search[value]"].ToString() : string.Empty;
 
                 IEnumerable<TtsVoice> filtered = all;

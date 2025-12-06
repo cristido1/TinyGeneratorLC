@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using TinyGenerator.Models;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Services
@@ -230,12 +231,69 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Parse chat completion response.
         /// Handles both OpenAI format (with choices/tool_calls) and Ollama format (with message).
+        /// Step 1: Try structured deserialization via ApiResponse
+        /// Step 2: Fallback to manual parsing if deserialization fails
         /// </summary>
-        public static (string? textContent, List<ToolCallFromModel> toolCalls) ParseChatResponse(string jsonResponse)
+        public static (string? textContent, List<ToolCallFromModel> toolCalls) ParseChatResponse(string? jsonResponse)
         {
             var toolCalls = new List<ToolCallFromModel>();
             string? textContent = null;
 
+            if (string.IsNullOrWhiteSpace(jsonResponse)) return (textContent, toolCalls);
+
+            // Step 1: Try structured deserialization to ApiResponse
+            try
+            {
+                var apiResponse = JsonSerializer.Deserialize<ApiResponse>(jsonResponse);
+                
+                if (apiResponse?.Message != null)
+                {
+                    textContent = apiResponse.Message.Content;
+
+                    // Extract tool_calls from structured response
+                    if (apiResponse.Message.ToolCalls != null && apiResponse.Message.ToolCalls.Count > 0)
+                    {
+                        foreach (var tc in apiResponse.Message.ToolCalls)
+                        {
+                            if (tc.Function == null) continue;
+                            
+                            var argsJson = "{}";
+                            if (tc.Function.Arguments != null)
+                            {
+                                // Arguments can be object or already serialized string
+                                if (tc.Function.Arguments is JsonElement jsonElem)
+                                {
+                                    argsJson = jsonElem.GetRawText();
+                                }
+                                else if (tc.Function.Arguments is string str)
+                                {
+                                    argsJson = str;
+                                }
+                                else
+                                {
+                                    argsJson = JsonSerializer.Serialize(tc.Function.Arguments);
+                                }
+                            }
+
+                            toolCalls.Add(new ToolCallFromModel
+                            {
+                                Id = tc.Id ?? Guid.NewGuid().ToString(),
+                                ToolName = tc.Function.Name ?? "unknown",
+                                Arguments = argsJson
+                            });
+                        }
+                    }
+
+                    // Success with ApiResponse deserialization
+                    return (textContent, toolCalls);
+                }
+            }
+            catch (JsonException)
+            {
+                // ApiResponse deserialization failed, proceed to fallback parsing
+            }
+
+            // Step 2: Fallback manual parsing
             try
             {
                 var doc = JsonDocument.Parse(jsonResponse);

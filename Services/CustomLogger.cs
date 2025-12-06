@@ -21,6 +21,7 @@ namespace TinyGenerator.Services
         private readonly int _batchSize;
         private readonly TimeSpan _flushInterval;
         private readonly bool _logRequestResponse;
+        private readonly bool _logToolResponses;
         private readonly bool _otherLogs;
         private bool _disposed;
 
@@ -32,6 +33,7 @@ namespace TinyGenerator.Services
             _batchSize = Math.Max(1, options.BatchSize);
             _flushInterval = TimeSpan.FromMilliseconds(Math.Max(100, options.FlushIntervalMs));
             _logRequestResponse = options.LogRequestResponse;
+            _logToolResponses = options.LogToolResponses;
             _otherLogs = options.OtherLogs;
 
             // Timer triggers periodic flush (best-effort)
@@ -162,9 +164,14 @@ namespace TinyGenerator.Services
                 if (json.RootElement.TryGetProperty("message", out var messageObj))
                 {
                     var role = messageObj.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null;
-                    // If it's a tool response, prefer the tool output
-                    if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) &&
-                        messageObj.TryGetProperty("content", out var toolContent))
+                    // If it's a tool response and tool logging is disabled, skip persisting it
+                    if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) && !_logToolResponses)
+                    {
+                        return;
+                    }
+
+                    // If it's a tool response and logging is enabled, prefer the tool output
+                    if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) && messageObj.TryGetProperty("content", out var toolContent))
                     {
                         chatText = toolContent.GetString() ?? responseJson;
                         LogWithChatText("Information", "ModelResponse", message, chatText);
@@ -202,7 +209,7 @@ namespace TinyGenerator.Services
                 // Fallback to full JSON if parsing fails
                 chatText = responseJson;
             }
-            
+
             LogWithChatText("Information", "ModelResponse", message, chatText);
         }
 

@@ -375,6 +375,58 @@
     <script src="~/lib/datatables/js/buttons.colVis.min.js"></script>
     <script src="~/lib/datatables/js/dataTables.colReorder.min.js"></script>
 
+    <!-- Project DataTables extensions (auto-init, refresh button, colvis persistence) -->
+    <style>
+        /* DataTable action buttons styling: compact white icon buttons, left of search */
+        .dataTables_wrapper .dt-top {
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+        }
+
+        .dataTables_wrapper .dt-top .dataTables_filter {
+            margin-left: auto; /* push search to the right */
+        }
+
+        .dt-action-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+            background: #ffffff;
+            color: #444;
+            cursor: pointer;
+            box-shadow: none;
+            font-size: 0.9rem;
+        }
+
+        .dt-action-btn:hover {
+            background: #f8f9fa;
+            color: var(--bs-primary);
+            border-color: #dfe3e6;
+        }
+
+        .dt-btn-icon {
+            width: 16px;
+            height: 16px;
+            display: inline-block;
+            vertical-align: middle;
+            stroke: currentColor;
+        }
+
+        /* ensure buttons container sits inline and doesn't wrap */
+        .dataTables_wrapper .dt-buttons {
+            display: inline-flex !important;
+            align-items: center;
+            gap: .25rem;
+        }
+    </style>
+    <script src="~/js/datatable-extensions.js" asp-append-version="true"></script>
+
     <!-- SweetAlert2 JS (local) -->
     <script src="~/lib/sweetalert2/sweetalert2.min.js"></script>
     <script src="~/js/sweetalert-config.js" asp-append-version="true"></script>

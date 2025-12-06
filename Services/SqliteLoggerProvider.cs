@@ -8,7 +8,7 @@ namespace TinyGenerator.Services
     // Simple SQLite logger provider that writes log entries to a `logs` table in storage.db
     public class SqliteLoggerProvider : ILoggerProvider
     {
-        private readonly DatabaseService _database;
+        private readonly DatabaseService? _database;
 
         public SqliteLoggerProvider(DatabaseService database)
         {
@@ -30,7 +30,7 @@ namespace TinyGenerator.Services
             // This provider doesn't need to ensure the table exists
         }
 
-        public ILogger CreateLogger(string categoryName) => new SqliteLogger(_database, categoryName);
+        public ILogger CreateLogger(string categoryName) => new SqliteLogger(_database!, categoryName);
 
         public void Dispose() { }
 

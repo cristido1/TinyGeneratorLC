@@ -76,6 +76,9 @@ namespace TinyGenerator.Models
         public bool NeedsRetry { get; set; }
         public double? SemanticScore { get; set; }
         public Dictionary<string, object>? ValidationDetails { get; set; }
+        // Optional: if set, this message should be injected as a system message on the next retry
+        // instead of being included inside the user prompt/context.
+        public string? SystemMessageOverride { get; set; }
     }
 
     public class TaskTypeInfo

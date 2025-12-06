@@ -78,6 +78,8 @@ namespace TinyGenerator.Services
         private readonly LangChainChatBridge? _modelBridge;
         private readonly string? _systemMessage;
         private readonly ResponseCheckerService? _responseChecker;
+        private readonly string? _agentRole;
+        private readonly List<ConversationMessage>? _initialExtraMessages;
         private List<ConversationMessage> _messageHistory;
         private int _toolReminderAttempts = 0;
 
@@ -89,7 +91,9 @@ namespace TinyGenerator.Services
             string? runId = null,
             LangChainChatBridge? modelBridge = null,
             string? systemMessage = null,
-            ResponseCheckerService? responseChecker = null)
+            ResponseCheckerService? responseChecker = null,
+            string? agentRole = null,
+            List<ConversationMessage>? extraMessages = null)
         {
             _tools = tools;
             _logger = logger;
@@ -99,6 +103,8 @@ namespace TinyGenerator.Services
             _modelBridge = modelBridge;
             _systemMessage = systemMessage;
             _responseChecker = responseChecker;
+            _agentRole = agentRole;
+            _initialExtraMessages = extraMessages;
             _messageHistory = new List<ConversationMessage>();
         }
 
@@ -138,6 +144,15 @@ namespace TinyGenerator.Services
                 _logger?.Log("Info", "ReActLoop", $"Added system message (length={_systemMessage.Length})");
                 Console.WriteLine($"[DEBUG ReActLoop] Added system message (length={_systemMessage.Length})");
             }
+            // Add any initial assistant/system messages provided by the caller (e.g., validation feedback)
+            if (_initialExtraMessages != null && _initialExtraMessages.Count > 0)
+            {
+                foreach (var m in _initialExtraMessages)
+                {
+                    _messageHistory.Add(m);
+                    _logger?.Log("Info", "ReActLoop", $"Injected initial message role={m.Role} len={m.Content?.Length ?? 0}");
+                }
+            }
             
             _messageHistory.Add(new ConversationMessage { Role = "user", Content = userPrompt });
 
@@ -153,6 +168,8 @@ namespace TinyGenerator.Services
                 {
                     result.Success = false;
                     result.Error = "Cancelled by user";
+                    result.IterationCount = iteration + 1;
+                    LogFinalOutcome(result);
                     return result;
                 }
 
@@ -171,6 +188,7 @@ namespace TinyGenerator.Services
                         result.FinalResponse = "No response from model";
                         result.Success = true;
                         result.IterationCount = iteration + 1;
+                        LogFinalOutcome(result);
                         return result;
                     }
 
@@ -230,6 +248,7 @@ namespace TinyGenerator.Services
                             result.Error = $"Model failed to call {missingFinal} after 3 attempts (required final function never returned)";
                             result.IterationCount = iteration + 1;
                             _logger?.Log("Warn", "ReActLoop", $"Exceeded retry attempts for missing {missingFinal}: final function not returned");
+                            LogFinalOutcome(result);
                             return result;
                         }
 
@@ -239,23 +258,23 @@ namespace TinyGenerator.Services
                         {
                             try
                             {
-                                var reminder = await _responseChecker.BuildToolUseReminderAsync(
+                                var reminderObj = await _responseChecker.BuildToolUseReminderAsync(
                                     _systemMessage,
                                     userPrompt,
                                     modelResponse,
                                     toolSchemas,
                                     _toolReminderAttempts);
 
-                                if (!string.IsNullOrWhiteSpace(reminder))
+                                if (reminderObj != null)
                                 {
                                     _toolReminderAttempts++;
                                     _messageHistory.Add(new ConversationMessage
                                     {
-                                        Role = "assistant",
-                                        Content = reminder
+                                        Role = reminderObj.Value.role,
+                                        Content = reminderObj.Value.content
                                     });
 
-                                    _logger?.Log("Info", "ReActLoop", $"response_checker injected reminder attempt {_toolReminderAttempts}/2");
+                                    _logger?.Log("Info", "ReActLoop", $"response_checker injected reminder (role={reminderObj.Value.role}) attempt {_toolReminderAttempts}/2");
                                     iteration++;
                                     continue;
                                 }
@@ -273,6 +292,7 @@ namespace TinyGenerator.Services
                         result.Success = true;
                         result.IterationCount = iteration + 1;
                         _logger?.Log("Info", "ReActLoop", "Model finished (no tool calls)");
+                        LogFinalOutcome(result);
                         return result;
                     }
 
@@ -283,12 +303,12 @@ namespace TinyGenerator.Services
                         try
                         {
                             // Track function call counts and detect potential loops
-                                OnFunctionCalled(call.ToolName, call.Arguments);
+                                OnFunctionCalled(call.ToolName ?? string.Empty, call.Arguments);
 
                                 _logger?.Log("Info", "ReActLoop", $"  Executing tool: {call.ToolName}");
-                                _progress?.Append(_runId, $"  📞 Tool: {call.ToolName}");
+                                _progress?.Append(_runId ?? string.Empty, $"  📞 Tool: {call.ToolName}");
                             
-                                var output = await _tools.ExecuteToolAsync(call.ToolName, call.Arguments);
+                                var output = await _tools.ExecuteToolAsync(call.ToolName ?? string.Empty, call.Arguments ?? string.Empty);
                             toolResults.Add((call.Id, output));
                             // Log tool output as a pseudo-model response so chat_text shows the function result
                             try
@@ -313,7 +333,7 @@ namespace TinyGenerator.Services
                                 var outLen = output?.Length ?? 0;
                                 var preview = outLen > 200 ? (output?.Substring(0, 200) + "...") : output;
                                 _logger?.Log("Info", "ReActLoop", $"  Tool {call.ToolName} result length={outLen}");
-                                _progress?.Append(_runId, $"  ✓ {call.ToolName} output length: {outLen}");
+                                _progress?.Append(_runId ?? string.Empty, $"  ✓ {call.ToolName} output length: {outLen}");
                                 // Also log small preview for quick debugging
                                 if (outLen > 0 && outLen <= 500)
                                     _logger?.Log("Debug", "ReActLoop", $"  Tool {call.ToolName} preview: {preview}");
@@ -322,16 +342,16 @@ namespace TinyGenerator.Services
                             
                             result.ExecutedTools.Add(new ToolExecutionRecord
                             {
-                                ToolName = call.ToolName,
-                                Input = call.Arguments,
-                                Output = output,
+                                ToolName = call.ToolName ?? string.Empty,
+                                Input = call.Arguments ?? string.Empty,
+                                Output = output ?? string.Empty,
                                 IterationNumber = iteration + 1
                             });
                         }
                         catch (Exception ex)
                         {
                             _logger?.Log("Error", "ReActLoop", $"  Tool execution failed: {ex.Message}");
-                            _progress?.Append(_runId, $"  ✗ {call.ToolName} error: {ex.Message}");
+                            _progress?.Append(_runId ?? string.Empty, $"  ✗ {call.ToolName} error: {ex.Message}");
                             
                             toolResults.Add((call.Id, JsonSerializer.Serialize(new { error = ex.Message })));
                         }
@@ -392,16 +412,11 @@ namespace TinyGenerator.Services
                     try
                     {
                         var ttsTool = _tools.GetToolByFunctionName("ttsschema") as TinyGenerator.Skills.TtsSchemaTool;
-                        if (ttsTool != null && ttsTool.LastChunkIndex.HasValue)
+                        // Current TtsSchemaTool implementation does not expose LastChunkIndex/HasCoveredCurrentChunk APIs.
+                        // Skip the coverage guard when the methods/properties are not available.
+                        if (ttsTool != null)
                         {
-                            if (!ttsTool.HasCoveredCurrentChunk(out var coverage, 0.9))
-                            {
-                                var assistantPrompt = $"Non hai ancora coperto il chunk corrente (copertura {coverage * 100:0.0}%). Completa le chiamate add_narration/add_phrase per questo chunk prima di leggere il successivo, poi riprova.";
-                                _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = assistantPrompt });
-                                _logger?.Log("Info", "ReActLoop", $"TTS chunk incomplete coverage: {coverage * 100:0.0}%");
-                                iteration++;
-                                continue;
-                            }
+                            // no-op; keep placeholder for future coverage checks
                         }
                     }
                     catch { }
@@ -423,7 +438,7 @@ namespace TinyGenerator.Services
                     {
                         var plain = ExtractPlainTextResponse(modelResponse);
                         _logger?.Log("Info", "ReActLoop", $"Assistant message added: plainContentLen={plain?.Length ?? 0}, toolCalls={toolCalls.Count}, rawResponseLen={modelResponse?.Length ?? 0}");
-                        _progress?.Append(_runId, $"Assistant content length: {plain?.Length ?? 0}, toolCalls: {toolCalls.Count}");
+                        _progress?.Append(_runId ?? string.Empty, $"Assistant content length: {plain?.Length ?? 0}, toolCalls: {toolCalls.Count}");
                     }
                     catch { }
 
@@ -496,6 +511,7 @@ namespace TinyGenerator.Services
                                                 result.Success = false;
                                                 result.Error = errMsg;
                                                 result.IterationCount = iteration + 1;
+                                                LogFinalOutcome(result);
                                                 return result;
                                             }
                                         }
@@ -528,6 +544,7 @@ namespace TinyGenerator.Services
                                     result.Success = true;
                                     result.IterationCount = iteration + 1;
                                     _logger?.Log("Info", "ReActLoop", "evaluate_full_story completed; stopping loop without further read_story_part checks");
+                                    LogFinalOutcome(result);
                                     return result;
                                 }
                             }
@@ -569,6 +586,7 @@ namespace TinyGenerator.Services
                                                 result.Success = false;
                                                 result.Error = "Evaluator attempted evaluation without reading all parts after multiple warnings";
                                                 result.IterationCount = iteration + 1;
+                                                LogFinalOutcome(result);
                                                 return result;
                                             }
                                         }
@@ -621,6 +639,7 @@ namespace TinyGenerator.Services
                                             result.Success = false;
                                             result.Error = $"Missing required fields for {toolName} after 3 attempts: {missing}";
                                             result.IterationCount = iteration + 1;
+                                            LogFinalOutcome(result);
                                             return result;
                                         }
                                     }
@@ -640,6 +659,7 @@ namespace TinyGenerator.Services
                     result.Success = false;
                     result.Error = ex.Message;
                     result.IterationCount = iteration + 1;
+                    LogFinalOutcome(result);
                     return result;
                 }
 
@@ -650,6 +670,7 @@ namespace TinyGenerator.Services
             result.Success = false;
             result.Error = $"Exceeded maximum iterations ({_maxIterations})";
             result.IterationCount = _maxIterations;
+            LogFinalOutcome(result);
             return result;
         }
 
@@ -769,6 +790,18 @@ namespace TinyGenerator.Services
             }
             catch { }
             return modelResponse;
+        }
+
+        private void LogFinalOutcome(ReActResult result)
+        {
+            try
+            {
+                var level = result.Success ? "Info" : "Error";
+                _logger?.Log(level, "ReActLoop", $"Final outcome: success={result.Success}, iterations={result.IterationCount}, error={result.Error}");
+                _progress?.Append(_runId ?? string.Empty, $"Final: success={result.Success}, iterations={result.IterationCount}{(string.IsNullOrEmpty(result.Error) ? string.Empty : ", error=" + result.Error)}");
+                Console.WriteLine($"[DEBUG ReActLoop] Final outcome: success={result.Success}, iterations={result.IterationCount}, error={result.Error}");
+            }
+            catch { }
         }
 
         /// <summary>

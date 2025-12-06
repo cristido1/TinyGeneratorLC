@@ -33,7 +33,7 @@
     <div class="alert alert-info">@Model.StatusMessage</div>
 }
 
-<table id="logsTable" class="table table-bordered table-sm table-pastel table-compact">
+<table id="logsTable" class="table table-bordered table-sm table-pastel table-compact datatable">
     <thead>
         <tr>
             <!-- details-control column (official DataTables row details style) -->
@@ -52,7 +52,23 @@
     <tbody>
     @foreach (var log in Model.LogEntries)
     {
-        <tr data-id="@log.Id"
+            var src = (log.Source ?? string.Empty).ToLowerInvariant();
+            var msg = (log.Message ?? string.Empty).ToLowerInvariant();
+            var chat = (log.ChatText ?? string.Empty).ToLowerInvariant();
+            bool isModelSource = src.Contains("ollama") || src.Contains("openai") || src.Contains("model") || src.Contains("llm") || src.Contains("ai");
+            bool isRequest = false;
+            bool isResponse = false;
+            if (isModelSource)
+            {
+                if (msg.Contains("request") || msg.Contains("prompt") || msg.Contains("sending") || msg.Contains("calling") || chat.Contains("prompt") ) isRequest = true;
+                if (msg.Contains("response") || msg.Contains("result") || msg.Contains("choices") || msg.Contains("output") || chat.Contains("response") || chat.Contains("output")) isResponse = true;
+            }
+
+            var rowClass = "";
+            if (isRequest) rowClass = "log-model-request";
+            else if (isResponse) rowClass = "log-model-response";
+
+        <tr class="@rowClass" data-id="@log.Id"
             data-ts="@log.Ts" 
             data-threadid="@log.ThreadId" 
             data-threadscope="@log.ThreadScope"
@@ -103,6 +119,35 @@
 
 @section Styles {
     <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
+    <style>
+        /* Highlight model requests (pastel green) and responses (pastel yellow) */
+        .log-model-request {
+            background-color: #e9f7ec !important; /* pastel green */
+        }
+        .log-model-request td {
+            background-color: transparent !important;
+        }
+        .log-model-request td.message {
+            background-color: rgba(34,139,34,0.06) !important;
+            border-left: 4px solid rgba(34,139,34,0.14);
+        }
+
+        .log-model-response {
+            background-color: #fffbe6 !important; /* pastel yellow */
+        }
+        .log-model-response td {
+            background-color: transparent !important;
+        }
+        .log-model-response td.message {
+            background-color: rgba(255,193,7,0.06) !important;
+            border-left: 4px solid rgba(255,193,7,0.14);
+        }
+
+        /* Slightly bolder text for message cells containing model payloads */
+        .log-model-request td.message, .log-model-response td.message {
+            font-weight: 500;
+        }
+    </style>
 }
 
 @section Scripts {

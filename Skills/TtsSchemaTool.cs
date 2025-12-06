@@ -21,16 +21,10 @@ namespace TinyGenerator.Skills
         private TtsSchema _schema;
         private readonly DatabaseService? _database;
         private readonly int _storyChunkSize = 1800;
-        private int _confirmAttempts = 0;
-        private const int MaxConfirmAttempts = 3;
-        private const double MinimumTextCoverageThreshold = 0.90; // 90%
         // Track which part indexes have been requested by the model to avoid infinite loops
         private readonly HashSet<int> _requestedParts = new();
         public long? CurrentStoryId { get; set; }
         private List<string>? _chunksCache;
-        private int? _lastChunkIndex;
-        private int _chunkTimelineStart = 0;
-        private string _lastChunkText = string.Empty;
 
         private static readonly HashSet<string> SupportedEmotions = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -73,11 +67,9 @@ namespace TinyGenerator.Skills
         public int? AgentId { get; set; }
         public string? LastFunctionCalled { get; set; }
         public string? LastFunctionResult { get; set; }
-        public bool AllowReadStoryPart { get; set; } = true;
 
         // Expose read-only info for external loop orchestrator
         public IReadOnlyCollection<int> RequestedParts => _requestedParts;
-        public int? LastChunkIndex => _lastChunkIndex;
 
         public TtsSchemaTool(string workingFolder, string? storyText = null, ICustomLogger? logger = null, DatabaseService? database = null) 
             : base("ttsschema", "TTS schema operations", logger)
@@ -94,15 +86,8 @@ namespace TinyGenerator.Skills
             }
         }
 
-        public override IEnumerable<string> FunctionNames
-        {
-            get
-            {
-                if (AllowReadStoryPart)
-                    return new[] { "add_narration", "add_phrase", "confirm", "read_story_part" };
-                return new[] { "add_narration", "add_phrase", "confirm" };
-            }
-        }
+        public override IEnumerable<string> FunctionNames =>
+            new[] { "add_narration", "add_phrase" };
 
         public override Dictionary<string, object> GetSchema() => CreateAddNarrationSchema();
 
@@ -110,19 +95,6 @@ namespace TinyGenerator.Skills
         {
             yield return CreateAddNarrationSchema();
             yield return CreateAddPhraseSchema();
-            yield return CreateConfirmSchema();
-
-            if (AllowReadStoryPart)
-            {
-                yield return CreateFunctionSchema(
-                    "read_story_part",
-                    "Reads a segment of the story for reference.",
-                    new Dictionary<string, object>
-                    {
-                        { "part_index", new Dictionary<string, object> { { "type", "integer" }, { "description", "0-based segment index" } } }
-                    },
-                    new List<string> { "part_index" });
-            }
         }
 
         private Dictionary<string, object> CreateAddNarrationSchema()
@@ -182,23 +154,13 @@ namespace TinyGenerator.Skills
             );
         }
 
-        private Dictionary<string, object> CreateConfirmSchema()
-        {
-            return CreateFunctionSchema(
-                "confirm",
-                "Validates and saves the generated TTS schema",
-                new Dictionary<string, object>(),
-                new List<string>()
-            );
-        }
-
         public override async Task<string> ExecuteAsync(string input)
         {
             try
             {
                 return SerializeResult(new
                 {
-                    error = "Call add_narration, add_phrase or confirm directly. The generic ttsschema entry is no longer available."
+                    error = "Call add_narration or add_phrase directly. The generic ttsschema entry is no longer available."
                 });
             }
             catch (Exception ex)
@@ -214,8 +176,6 @@ namespace TinyGenerator.Skills
             {
                 "add_narration" => Task.FromResult(ExecuteAddNarration(input)),
                 "add_phrase" => Task.FromResult(ExecuteAddPhrase(input)),
-                "confirm" => Task.FromResult(ExecuteConfirm()),
-                "read_story_part" => ReadStoryPartAsync(input),
                 _ => Task.FromResult(SerializeResult(new { error = $"Unknown function: {functionName}" }))
             };
         }
@@ -246,74 +206,9 @@ namespace TinyGenerator.Skills
             return result;
         }
 
-        private string ExecuteConfirm()
-        {
-            LastFunctionCalled = "confirm";
-            var result = ConfirmSchemaAllowSave();
-            LastFunctionResult = result;
-            return result;
-        }
 
-        private async Task<string> ReadStoryPartAsync(string jsonInput)
-        {
-            // NOTE: In modalità multistep con chunk forniti nel prompt ({{CHUNK_n}}),
-            // questa funzione non viene chiamata dal modello: i chunk sono già inseriti nello step.
-            // Rimane disponibile per la modalità tradizionale con read_story_part.
-            try
-            {
-                EnsureStoryChunks();
 
-                var input = ParseInput<ReadStoryPartInput>(jsonInput);
-                if (input == null)
-                    return SerializeResult(new { error = "Invalid input format" });
 
-                // Ignore any incoming story_id; rely solely on CurrentStoryId
-                input.StoryId = CurrentStoryId;
-
-                if (input.PartIndex < 0)
-                    return SerializeResult(new { error = "part_index must be non-negative" });
-
-                if (!CurrentStoryId.HasValue || CurrentStoryId.Value <= 0)
-                    return SerializeResult(new { error = "CurrentStoryId not set" });
-
-                // register that this part was requested (helps the orchestrator avoid infinite loops)
-                try
-                {
-                    _requestedParts.Add(input.PartIndex);
-                }
-                catch { }
-
-                var chunks = _chunksCache ?? new List<string>();
-                if (input.PartIndex >= chunks.Count)
-                    return SerializeResult(new { error = "part_index out of range" });
-
-                var chunk = chunks[input.PartIndex];
-                _lastChunkIndex = input.PartIndex;
-                _chunkTimelineStart = _schema.Timeline.Count;
-                _lastChunkText = chunk;
-                var payload = new
-                {
-                    part_index = input.PartIndex,
-                    text = chunk,
-                    is_last = input.PartIndex >= chunks.Count - 1
-                };
-
-                // Diagnostic logging: report that a story part was read and its length
-                try
-                {
-                    var isLast = input.PartIndex >= chunks.Count - 1;
-                    CustomLogger?.Log("Info", "TtsSchemaTool", $"ReadStoryPart part={input.PartIndex} len={chunk.Length} is_last={isLast}");
-                }
-                catch { }
-
-                return SerializeResult(payload);
-            }
-            catch (Exception ex)
-            {
-                CustomLogger?.Log("Error", "TtsSchemaTool", $"ReadStoryPart failed: {ex.Message}", ex.ToString());
-                return SerializeResult(new { error = ex.Message });
-            }
-        }
 
         internal string AddNarration(string? text)
         {
@@ -383,50 +278,7 @@ namespace TinyGenerator.Skills
             });
         }
 
-        internal string ConfirmSchemaAllowSave()
-        {
-            try
-            {
-                _confirmAttempts++;
 
-                var validationResult = CheckSchema();
-
-                // If validation failed but we have attempts remaining, return retry message
-                var resultObj = JsonSerializer.Deserialize<JsonElement>(validationResult);
-                if (resultObj.TryGetProperty("error", out var errorProp))
-                {
-                    // This is an error response
-                    return validationResult; // Return as-is; ReActLoop will present it to model for retry
-                }
-
-                // Validation passed - save the file
-                var filePath = Path.Combine(_workingFolder, "tts_schema.json");
-                File.WriteAllText(filePath, JsonSerializer.Serialize(_schema, DefaultOptions));
-
-                try
-                {
-                    var parsed = JsonDocument.Parse(validationResult).RootElement;
-                    return SerializeResult(new { validation = parsed, saved = true });
-                }
-                catch
-                {
-                    // if parsing fails, return raw validation string
-                    return SerializeResult(new { validation = validationResult, saved = true });
-                }
-            }
-            catch (Exception ex)
-            {
-                return SerializeResult(new { error = ex.Message });
-            }
-        }
-
-        /// <summary>
-        /// Resets the confirm attempt counter. Called by orchestrator before each new story generation.
-        /// </summary>
-        public void ResetConfirmAttempts()
-        {
-            _confirmAttempts = 0;
-        }
 
         /// <summary>
         /// Reset the internal set of requested parts (called when starting a new generation).
@@ -516,156 +368,7 @@ namespace TinyGenerator.Skills
             }
         }
 
-        private string CheckSchema()
-        {
-            if (_schema.Characters.Count == 0)
-                return SerializeResult(new { error = "No characters defined" });
 
-            if (!_schema.Characters.Any(c => c.Name.Equals("Narratore", StringComparison.OrdinalIgnoreCase)))
-                return SerializeResult(new { error = "Narratore character is required" });
-
-            if (_schema.Timeline.Count == 0)
-                return SerializeResult(new { error = "No timeline entries" });
-
-            if (string.IsNullOrWhiteSpace(_storyText))
-                return SerializeResult(new { error = "Missing story text" });
-
-            var unusedError = CheckUnusedCharacters();
-            if (unusedError != null)
-                return unusedError;
-
-            var characterError = CheckCharacterConsistency();
-            if (characterError != null)
-                return characterError;
-
-            var coverageError = CheckTextCoverage();
-            if (coverageError != null)
-                return coverageError;
-
-            return SerializeResult(new { result = "Schema is valid" });
-        }
-
-        private string? CheckUnusedCharacters()
-        {
-            var phraseCharacters = _schema.Timeline
-                .OfType<TtsPhrase>()
-                .Select(p => p.Character)
-                .Where(c => !string.IsNullOrWhiteSpace(c))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var unusedCharacters = _schema.Characters
-                .Where(c => !phraseCharacters.Contains(c.Name))
-                .Select(c => c.Name)
-                .ToList();
-
-            if (unusedCharacters.Count > 0)
-            {
-                return SerializeResult(new { error = $"Unused characters: {string.Join(", ", unusedCharacters)}" });
-            }
-
-            return null;
-        }
-
-        private string? CheckCharacterConsistency()
-        {
-            var definedCharacters = _schema.Characters
-                .Select(c => c.Name)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var undefinedCharacters = _schema.Timeline
-                .OfType<TtsPhrase>()
-                .Select(p => p.Character)
-                .Where(c => !string.IsNullOrWhiteSpace(c) && !definedCharacters.Contains(c))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (undefinedCharacters.Count > 0)
-            {
-                return SerializeResult(new { error = $"Undefined characters: {string.Join(", ", undefinedCharacters)}" });
-            }
-
-            return null;
-        }
-
-        private string? CheckTextCoverage()
-        {
-            if (string.IsNullOrWhiteSpace(_storyText) && _chunksCache == null)
-                return SerializeResult(new { error = "Missing story text for coverage check" });
-
-            EnsureStoryChunks();
-            var fullStory = _storyText;
-            if (string.IsNullOrWhiteSpace(fullStory) && _chunksCache != null)
-            {
-                fullStory = string.Join("", _chunksCache);
-            }
-            if (string.IsNullOrWhiteSpace(fullStory))
-                return SerializeResult(new { error = "Missing story text for coverage check" });
-
-            // Create a mutable copy of the story text to remove covered parts
-            var remainingText = fullStory;
-
-            // Collect all text from timeline entries (narrations and phrases)
-            var timelineTexts = _schema.Timeline
-                .OfType<TtsPhrase>()
-                .Select(p => p.Text)
-                .Where(t => !string.IsNullOrWhiteSpace(t))
-                .ToList();
-
-            if (!timelineTexts.Any())
-                return SerializeResult(new { error = "No timeline text entries to cover source story" });
-
-            // Remove each timeline text from the remaining story text (case-insensitive)
-            foreach (var text in timelineTexts)
-            {
-                if (string.IsNullOrWhiteSpace(text))
-                    continue;
-
-                // Find and remove the text (case-insensitive, first match)
-                var lowerRemaining = remainingText.ToLower();
-                var lowerText = text.ToLower();
-                var index = lowerRemaining.IndexOf(lowerText);
-
-                if (index >= 0)
-                {
-                    // Remove the matched text (using original casing positions)
-                    remainingText = remainingText.Remove(index, text.Length);
-                }
-            }
-
-            // Calculate coverage percentage
-            var originalLength = _storyText.Length;
-            var remainingLength = remainingText.Length;
-            var coveragePercentage = (originalLength - remainingLength) / (double)originalLength;
-
-            // Check if coverage meets threshold
-            if (coveragePercentage < MinimumTextCoverageThreshold)
-            {
-                var uncoveredPercentage = (1 - coveragePercentage) * 100;
-                var attemptsRemaining = MaxConfirmAttempts - _confirmAttempts;
-
-                if (attemptsRemaining > 0)
-                {
-                    return SerializeResult(new
-                    {
-                        error = $"Text coverage only {coveragePercentage * 100:F1}% (uncovered: {uncoveredPercentage:F1}%). Must cover at least 90% of the source story. Please add narration or phrases for the missing parts. Attempts remaining: {attemptsRemaining}",
-                        coverage_percentage = coveragePercentage * 100,
-                        remaining_attempts = attemptsRemaining
-                    });
-                }
-                else
-                {
-                    return SerializeResult(new
-                    {
-                        error = $"Text coverage {coveragePercentage * 100:F1}% is below 90% threshold. Maximum retry attempts ({MaxConfirmAttempts}) exceeded. Schema generation failed.",
-                        coverage_percentage = coveragePercentage * 100,
-                        attempts_exhausted = true
-                    });
-                }
-            }
-
-            return null;
-        }
 
         private class NarrationRequest
         {
@@ -679,15 +382,7 @@ namespace TinyGenerator.Skills
             public string? Emotion { get; set; }
         }
 
-        private class ReadStoryPartInput
-        {
-            // story_id is managed internally via CurrentStoryId; this field is ignored if provided
-            [JsonPropertyName("story_id")]
-            public long? StoryId { get; set; }
 
-            [JsonPropertyName("part_index")]
-            public int PartIndex { get; set; }
-        }
 
         private static string ExtractStorySegment(string? promptText)
         {
@@ -718,34 +413,7 @@ namespace TinyGenerator.Skills
             return extracted;
         }
 
-        public bool HasCoveredCurrentChunk(out double coveragePercent, double minCoverage = 0.9)
-        {
-            coveragePercent = 0;
-            if (!_lastChunkIndex.HasValue || string.IsNullOrWhiteSpace(_lastChunkText))
-                return false;
 
-            var remaining = _lastChunkText;
-            var entries = _schema.Timeline.Skip(_chunkTimelineStart)
-                .OfType<TtsPhrase>()
-                .Select(p => p.Text)
-                .Where(t => !string.IsNullOrWhiteSpace(t));
-
-            foreach (var t in entries)
-            {
-                var lowerRem = remaining.ToLower();
-                var lowerT = t.ToLower();
-                var idx = lowerRem.IndexOf(lowerT, StringComparison.Ordinal);
-                if (idx >= 0)
-                {
-                    remaining = remaining.Remove(idx, t.Length);
-                }
-            }
-
-            var origLen = _lastChunkText.Length;
-            var remainingLen = remaining.Length;
-            coveragePercent = origLen == 0 ? 0 : (origLen - remainingLen) / (double)origLen;
-            return coveragePercent >= minCoverage;
-        }
 
         private void EnsureStoryChunks()
         {

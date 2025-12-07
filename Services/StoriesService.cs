@@ -911,7 +911,8 @@ public sealed class StoriesService
                     checkerAgentId: null,
                     configOverrides: configPayload,
                     initialContext: story.Story ?? string.Empty,
-                    threadId: threadId);
+                    threadId: threadId,
+                    templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions);
 
                 await orchestratorService.ExecuteAllStepsAsync(executionId, threadId);
 

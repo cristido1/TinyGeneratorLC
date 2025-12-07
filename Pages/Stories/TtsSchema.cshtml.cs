@@ -117,7 +117,7 @@ namespace TinyGenerator.Pages.Stories
         public class SaveRequest
         {
             public long StoryId { get; set; }
-            public string Content { get; set; }
+            public string Content { get; set; } = string.Empty;
         }
 
         public class DeleteRequest

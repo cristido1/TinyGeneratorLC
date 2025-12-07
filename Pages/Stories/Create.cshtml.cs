@@ -63,7 +63,7 @@ namespace TinyGenerator.Pages.Stories
                 metadata: new Dictionary<string, string>
                 {
                     ["operation"] = "create_story",
-                    ["prompt"] = (Prompt ?? string.Empty).Length > 80 ? (Prompt.Substring(0, 80) + "...") : (Prompt ?? string.Empty),
+                    ["prompt"] = (Prompt != null && Prompt.Length > 80) ? (Prompt.Substring(0, 80) + "...") : (Prompt ?? string.Empty),
                     ["agentId"] = AgentId?.ToString() ?? string.Empty
                 });
 

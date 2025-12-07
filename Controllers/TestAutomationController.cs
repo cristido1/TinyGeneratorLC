@@ -170,7 +170,7 @@ public class TestAutomationController : ControllerBase
     /// GET /api/TestAutomation/command/{commandId}
     /// </summary>
     [HttpGet("command/{commandId}")]
-    public async Task<IActionResult> GetCommandStatus(string commandId)
+    public IActionResult GetCommandStatus(string commandId)
     {
         try
         {

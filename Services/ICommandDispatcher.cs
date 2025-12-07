@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 namespace TinyGenerator.Services
 {
     public sealed record CommandResult(bool Success, string? Message);
+    public sealed record CommandCompletedEventArgs(string RunId, string OperationName, bool Success, string? Message);
 
     public sealed class CommandContext
     {
@@ -39,6 +40,16 @@ namespace TinyGenerator.Services
             IReadOnlyDictionary<string, string>? metadata = null);
 
         IReadOnlyList<CommandSnapshot> GetActiveCommands();
+
+        /// <summary>
+        /// Attende il completamento di un comando identificato dal runId e restituisce il relativo CommandResult.
+        /// </summary>
+        Task<CommandResult> WaitForCompletionAsync(string runId, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Evento sollevato alla conclusione di ogni comando (successo o errore).
+        /// </summary>
+        event Action<CommandCompletedEventArgs>? CommandCompleted;
     }
 
     public sealed class CommandHandle

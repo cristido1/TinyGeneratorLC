@@ -3092,7 +3092,7 @@ SELECT last_insert_rowid();";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates WHERE id = @id LIMIT 1";
+        var sql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, instructions AS Instructions, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates WHERE id = @id LIMIT 1";
         return conn.QueryFirstOrDefault<TinyGenerator.Models.StepTemplate>(sql, new { id });
     }
 
@@ -3100,7 +3100,7 @@ SELECT last_insert_rowid();";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates WHERE name = @name LIMIT 1";
+        var sql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, instructions AS Instructions, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates WHERE name = @name LIMIT 1";
         return conn.QueryFirstOrDefault<TinyGenerator.Models.StepTemplate>(sql, new { name });
     }
 
@@ -3108,7 +3108,7 @@ SELECT last_insert_rowid();";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var baseSql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates";
+        var baseSql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, instructions AS Instructions, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates";
         var sql = taskType == null
             ? baseSql + " ORDER BY name"
             : baseSql + " WHERE task_type = @tt ORDER BY name";
@@ -3124,13 +3124,13 @@ SELECT last_insert_rowid();";
         if (existing.HasValue)
         {
             // Update
-            var sql = @"UPDATE step_templates SET task_type=@TaskType, step_prompt=@StepPrompt, description=@Description, updated_at=@UpdatedAt WHERE id=@Id";
-            conn.Execute(sql, new { template.TaskType, template.StepPrompt, template.Description, UpdatedAt = DateTime.UtcNow.ToString("o"), Id = existing.Value });
+            var sql = @"UPDATE step_templates SET task_type=@TaskType, step_prompt=@StepPrompt, instructions=@Instructions, description=@Description, updated_at=@UpdatedAt WHERE id=@Id";
+            conn.Execute(sql, new { template.TaskType, template.StepPrompt, template.Instructions, template.Description, UpdatedAt = DateTime.UtcNow.ToString("o"), Id = existing.Value });
         }
         else
         {
             // Insert
-            var sql = @"INSERT INTO step_templates (name, task_type, step_prompt, description, created_at, updated_at) VALUES (@Name, @TaskType, @StepPrompt, @Description, @CreatedAt, @UpdatedAt)";
+            var sql = @"INSERT INTO step_templates (name, task_type, step_prompt, instructions, description, created_at, updated_at) VALUES (@Name, @TaskType, @StepPrompt, @Instructions, @Description, @CreatedAt, @UpdatedAt)";
             conn.Execute(sql, template);
         }
     }
@@ -3139,7 +3139,7 @@ SELECT last_insert_rowid();";
     {
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"UPDATE step_templates SET name=@Name, task_type=@TaskType, step_prompt=@StepPrompt, description=@Description, updated_at=@UpdatedAt WHERE id=@Id";
+        var sql = @"UPDATE step_templates SET name=@Name, task_type=@TaskType, step_prompt=@StepPrompt, instructions=@Instructions, description=@Description, updated_at=@UpdatedAt WHERE id=@Id";
         conn.Execute(sql, template);
     }
 

@@ -150,7 +150,7 @@ namespace TinyGenerator.Tests
             var httpFactory = new TestHttpFactory();
             var logger = new TestLogger();
 
-            var checker = new TinyGenerator.Services.ResponseCheckerService(null, null, logger, httpFactory);
+            var checker = new TinyGenerator.Services.ResponseCheckerService(null!, null!, logger, httpFactory);
             var ttsResult = checker.ValidateTtsSchemaResponse(json, chunk, 0.90);
 
             // Assert - we expect the reconstructed tool_calls to cover most of the chunk

@@ -86,6 +86,12 @@
                     </div>
 
                     <div class="mb-3">
+                        <label for="templateInstructions" class="form-label">Instructions (override agent)</label>
+                        <textarea class="form-control font-monospace" id="templateInstructions" name="instructions" rows="6" placeholder="System prompt da usare al posto delle istruzioni dell'agente"></textarea>
+                        <div class="form-text">Se valorizzato, viene usato come messaggio di sistema per tutti gli step al posto delle istruzioni dell'agente.</div>
+                    </div>
+
+                    <div class="mb-3">
                         <label for="templateStepPrompt" class="form-label">Step Prompt <span class="text-danger">*</span></label>
                         <textarea class="form-control font-monospace" id="templateStepPrompt" name="stepPrompt" rows="15" required></textarea>
                         <div class="form-text">
@@ -141,10 +147,15 @@
                         try {
                             var template = JSON.parse(templateJson);
                             var stepPrompt = template.StepPrompt || '';
+                            var instructions = template.Instructions || '';
                             
                             // Parse steps (lines starting with digit followed by dot)
                             var steps = stepPrompt.split('\n').filter(line => /^\d+\./.test(line.trim()));
-                            var stepsHtml = '<div class="p-3"><h6>Template Steps:</h6><ol class="list-group list-group-numbered mt-2">';
+                            var stepsHtml = '<div class="p-3">';
+                            if (instructions) {
+                                stepsHtml += '<div class="mb-3"><h6 class="mb-1">Instructions override</h6><pre class="bg-light border p-2" style="max-height:140px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(instructions) + '</pre></div>';
+                            }
+                            stepsHtml += '<h6>Template Steps:</h6><ol class="list-group list-group-numbered mt-2">';
                             
                             if (steps.length > 0) {
                                 steps.forEach(function(step) {
@@ -172,6 +183,7 @@
             $('#templateName').val('');
             $('#templateTaskType').val('story');
             $('#templateDescription').val('');
+            $('#templateInstructions').val('');
             $('#templateStepPrompt').val('');
         }
 
@@ -183,6 +195,7 @@
                 $('#templateName').val(template.Name);
                 $('#templateTaskType').val(template.TaskType);
                 $('#templateDescription').val(template.Description || '');
+                $('#templateInstructions').val(template.Instructions || '');
                 $('#templateStepPrompt').val(template.StepPrompt || '');
 
                 var modal = new bootstrap.Modal(document.getElementById('modalEditTemplate'));

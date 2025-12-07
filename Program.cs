@@ -253,7 +253,7 @@ StartupTasks.EnsureEvaluatorInstructions(db, logger);
 // Automatically delete logs older than 7 days if total count > 1000
 try
 {
-    db.CleanupOldLogs(daysOld: 7, countThreshold: 1000);
+    db?.CleanupOldLogs(daysOld: 7, countThreshold: 1000);
 }
 catch (Exception ex)
 {

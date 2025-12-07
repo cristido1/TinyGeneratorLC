@@ -34,6 +34,13 @@
             </div>
 
             <div class="mb-3">
+                <label asp-for="Template.Instructions" class="form-label">Instructions (override agent)</label>
+                <textarea asp-for="Template.Instructions" class="form-control font-monospace" rows="6" placeholder="System prompt da usare al posto delle istruzioni dell'agente"></textarea>
+                <span asp-validation-for="Template.Instructions" class="text-danger"></span>
+                <div class="form-text">Se valorizzato, viene usato come system message per tutti gli step.</div>
+            </div>
+
+            <div class="mb-3">
                 <label asp-for="Template.StepPrompt" class="form-label">Step Prompt <span class="text-danger">*</span></label>
                 <textarea asp-for="Template.StepPrompt" class="form-control font-monospace" rows="20" required style="font-size: 0.9rem;"></textarea>
                 <span asp-validation-for="Template.StepPrompt" class="text-danger"></span>

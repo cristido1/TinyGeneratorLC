@@ -82,7 +82,8 @@ namespace TinyGenerator.Services.Commands
                     checkerAgentId: null, // Use default checker from task_types
                     configOverrides: null,
                     initialContext: _theme, // ← Pass user theme as initial context!
-                    threadId: threadId
+                    threadId: threadId,
+                    templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions
                 );
 
                 _logger.Log("Information", "MultiStep", $"Started task execution {executionId}");

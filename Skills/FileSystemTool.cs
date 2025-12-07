@@ -59,17 +59,19 @@ namespace TinyGenerator.Skills
             );
         }
 
-        public override async Task<string> ExecuteAsync(string input)
+        public override Task<string> ExecuteAsync(string input)
         {
             try
             {
                 var request = ParseInput<FileSystemToolRequest>(input);
                 if (request == null)
-                    return SerializeResult(new { error = "Invalid input format" });
+                    return Task.FromResult(SerializeResult(new { error = "Invalid input format" }));
+                if (string.IsNullOrWhiteSpace(request.Path))
+                    return Task.FromResult(SerializeResult(new { error = "Path is required" }));
 
                 CustomLogger?.Log("Info", "FileSystemTool", $"Executing operation: {request.Operation} on path: {request.Path}");
 
-                return request.Operation?.ToLowerInvariant() switch
+                var result = request.Operation?.ToLowerInvariant() switch
                 {
                     "file_exists" => SerializeResult(new { result = File.Exists(request.Path) }),
                     "read_all_text" => SerializeResult(new 
@@ -81,11 +83,12 @@ namespace TinyGenerator.Skills
                     "describe" => SerializeResult(new { result = "Available operations: file_exists(path), read_all_text(path), write_all_text(path, content), delete_file(path). Example: read_all_text('/path/to/file.txt') returns the contents of the file." }),
                     _ => SerializeResult(new { error = $"Unknown operation: {request.Operation}" })
                 };
+                return Task.FromResult(result);
             }
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "FileSystemTool", $"Error executing operation: {ex.Message}", ex.ToString());
-                return SerializeResult(new { error = ex.Message });
+                return Task.FromResult(SerializeResult(new { error = ex.Message }));
             }
         }
 
@@ -93,6 +96,10 @@ namespace TinyGenerator.Skills
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(request.Path))
+                {
+                    return SerializeResult(new { error = "Path is required" });
+                }
                 File.WriteAllText(request.Path, request.Content ?? string.Empty);
                 return SerializeResult(new { result = "File written successfully", path = request.Path });
             }

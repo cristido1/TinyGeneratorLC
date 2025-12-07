@@ -39,7 +39,7 @@ namespace TinyGenerator.Pages
             // Display default form
         }
 
-        public async Task<IActionResult> OnPostAsync()
+        public IActionResult OnPost()
         {
             try
             {

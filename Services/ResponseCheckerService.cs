@@ -170,6 +170,7 @@ namespace TinyGenerator.Services
             string? taskType = null)
         {
             _logger.Log("Information", "MultiStep", $"Starting step validation - Agent: {agentName}, Model: {modelName}");
+            await Task.CompletedTask;
 
             // Perform only deterministic/basic checks here and DO NOT invoke the response_checker agent.
             // Response checker (LLM) calls are disabled by default and will be invoked only when

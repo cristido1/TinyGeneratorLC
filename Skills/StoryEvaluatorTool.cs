@@ -75,28 +75,29 @@ namespace TinyGenerator.Skills
             );
         }
 
-        public override async Task<string> ExecuteAsync(string input)
+        public override Task<string> ExecuteAsync(string input)
         {
             try
             {
                 var request = ParseInput<StoryEvaluatorToolRequest>(input);
                 if (request == null)
-                    return SerializeResult(new { error = "Invalid input format" });
+                    return Task.FromResult(SerializeResult(new { error = "Invalid input format" }));
 
                 CustomLogger?.Log("Info", "StoryEvaluatorTool", $"Executing operation: {request.Operation}");
 
-                return request.Operation?.ToLowerInvariant() switch
+                var result = request.Operation?.ToLowerInvariant() switch
                 {
                     "evaluate_single_feature" => ExecuteEvaluateSingleFeature(request),
                     "evaluate_full_story" => ExecuteEvaluateFullStory(request),
                     "describe" => SerializeResult(new { result = "Available operations: evaluate_single_feature(score, defects, feature) and evaluate_full_story(...all categories...). The orchestrator must set the tool's CurrentStoryId before use." }),
                     _ => SerializeResult(new { error = $"Unknown operation: {request.Operation}" })
                 };
+                return Task.FromResult(result);
             }
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "StoryEvaluatorTool", $"Error executing operation: {ex.Message}", ex.ToString());
-                return SerializeResult(new { error = ex.Message });
+                return Task.FromResult(SerializeResult(new { error = ex.Message }));
             }
         }
 

@@ -52,6 +52,9 @@ namespace TinyGenerator.Services
         private long _counter;
         private bool _disposed;
         private readonly ConcurrentDictionary<string, CommandState> _active = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Task<CommandResult>> _completionTasks = new(StringComparer.OrdinalIgnoreCase);
+
+        public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
         public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null)
         {
@@ -98,6 +101,7 @@ namespace TinyGenerator.Services
                 EnqueuedAt = DateTimeOffset.UtcNow
             };
             _active[id] = state;
+            _completionTasks[id] = workItem.Completion.Task;
 
             return new CommandHandle(id, op, workItem.Completion.Task);
         }
@@ -170,20 +174,26 @@ namespace TinyGenerator.Services
                 var endLevel = result.Success ? "Information" : "Error";
                 _logger?.Log(endLevel, "Command", $"[{workItem.RunId}] END {workItem.OperationName} => {finalMessage}");
                 workItem.Completion.TrySetResult(result);
+                RaiseCompleted(workItem.RunId, workItem.OperationName, result);
             }
             catch (OperationCanceledException oce)
             {
                 _logger?.Log("Warning", "Command", $"[{workItem.RunId}] CANCEL {workItem.OperationName}: {oce.Message}", oce.ToString());
-                workItem.Completion.TrySetResult(new CommandResult(false, "Operazione annullata"));
+                var result = new CommandResult(false, "Operazione annullata");
+                workItem.Completion.TrySetResult(result);
+                RaiseCompleted(workItem.RunId, workItem.OperationName, result);
             }
             catch (Exception ex)
             {
                 _logger?.Log("Error", "Command", $"[{workItem.RunId}] ERROR {workItem.OperationName}: {ex.Message}", ex.ToString());
-                workItem.Completion.TrySetResult(new CommandResult(false, ex.Message));
+                var result = new CommandResult(false, ex.Message);
+                workItem.Completion.TrySetResult(result);
+                RaiseCompleted(workItem.RunId, workItem.OperationName, result);
             }
             finally
             {
                 _active.TryRemove(workItem.RunId, out _);
+                _completionTasks.TryRemove(workItem.RunId, out _);
             }
         }
 
@@ -216,6 +226,41 @@ namespace TinyGenerator.Services
             }
             catch { }
             _cts?.Dispose();
+        }
+
+        public async Task<CommandResult> WaitForCompletionAsync(string runId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(runId))
+                throw new ArgumentException("runId is required", nameof(runId));
+
+            if (!_completionTasks.TryGetValue(runId, out var task))
+            {
+                return new CommandResult(false, $"Comando {runId} non trovato o già completato.");
+            }
+
+            var completed = await Task.WhenAny(task, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
+            if (completed != task)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+
+            _completionTasks.TryRemove(runId, out _);
+            return await task.ConfigureAwait(false);
+        }
+
+        private void RaiseCompleted(string runId, string operationName, CommandResult result)
+        {
+            var handlers = CommandCompleted;
+            if (handlers == null) return;
+
+            try
+            {
+                handlers(new CommandCompletedEventArgs(runId, operationName, result.Success, result.Message));
+            }
+            catch
+            {
+                // Intentionally swallow exceptions from event subscribers
+            }
         }
     }
 

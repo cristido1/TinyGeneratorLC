@@ -73,17 +73,17 @@ namespace TinyGenerator.Skills
             );
         }
 
-        public override async Task<string> ExecuteAsync(string input)
+        public override Task<string> ExecuteAsync(string input)
         {
             try
             {
                 var request = ParseInput<StoryWriterToolRequest>(input);
                 if (request == null)
-                    return SerializeResult(new { error = "Invalid input format" });
+                    return Task.FromResult(SerializeResult(new { error = "Invalid input format" }));
 
                 CustomLogger?.Log("Info", "StoryWriterTool", $"Executing operation: {request.Operation}");
 
-                return request.Operation?.ToLowerInvariant() switch
+                var result = request.Operation?.ToLowerInvariant() switch
                 {
                     "create_story" => ExecuteCreateStory(request),
                     "read_story" => ExecuteReadStory(request),
@@ -92,11 +92,12 @@ namespace TinyGenerator.Skills
                     "describe" => SerializeResult(new { result = "Available operations: create_story(story), read_story(id), update_story(id, story?, status?), delete_story(id). Returns JSON confirmation." }),
                     _ => SerializeResult(new { error = $"Unknown operation: {request.Operation}" })
                 };
+                return Task.FromResult(result);
             }
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "StoryWriterTool", $"Error executing operation: {ex.Message}", ex.ToString());
-                return SerializeResult(new { error = ex.Message });
+                return Task.FromResult(SerializeResult(new { error = ex.Message }));
             }
         }
 

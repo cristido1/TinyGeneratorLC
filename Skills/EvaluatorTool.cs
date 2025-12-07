@@ -78,7 +78,7 @@ namespace TinyGenerator.Skills
 
         private readonly int _storyChunkSize = 1800;
 
-        private async Task<string> EvaluateFullStoryAsync(string jsonInput)
+        private Task<string> EvaluateFullStoryAsync(string jsonInput)
         {
             try
             {
@@ -90,14 +90,14 @@ namespace TinyGenerator.Skills
                 });
 
                 if (input == null)
-                    return JsonSerializer.Serialize(new { error = "Invalid input format" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = "Invalid input format" }));
 
                 var validationError = ValidateInput(input);
                 if (validationError != null)
-                    return JsonSerializer.Serialize(new { error = validationError });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = validationError }));
 
                 if (!CurrentStoryId.HasValue || CurrentStoryId <= 0)
-                    return JsonSerializer.Serialize(new { error = "Internal error: story id not provided" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = "Internal error: story id not provided" }));
 
                 var narrative = input.NarrativeCoherenceScore!.Value;
                 var originality = input.OriginalityScore!.Value;
@@ -143,16 +143,16 @@ namespace TinyGenerator.Skills
                 }
 
                 CustomLogger?.Log("Info", "EvaluatorTool", $"Full story evaluation stored for story {CurrentStoryId} (score {totalScore:F2})");
-                return await Task.FromResult(LastResult ?? "{}");
+                return Task.FromResult(LastResult ?? "{}");
             }
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "EvaluatorTool", $"Execution failed: {ex.Message}", ex.ToString());
-                return JsonSerializer.Serialize(new { error = ex.Message });
+                return Task.FromResult(JsonSerializer.Serialize(new { error = ex.Message }));
             }
         }
 
-        private async Task<string> ReadStoryPartAsync(string jsonInput)
+        private Task<string> ReadStoryPartAsync(string jsonInput)
         {
             try
             {
@@ -164,15 +164,15 @@ namespace TinyGenerator.Skills
                 });
 
                 if (input == null)
-                    return JsonSerializer.Serialize(new { error = "Invalid input format" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = "Invalid input format" }));
 
                 if (input.PartIndex < 0)
                 {
-                    return JsonSerializer.Serialize(new { error = "part_index must be non-negative" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = "part_index must be non-negative" }));
                 }
 
                 if (!CurrentStoryId.HasValue || CurrentStoryId.Value <= 0)
-                    return JsonSerializer.Serialize(new { error = "CurrentStoryId not set" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = "CurrentStoryId not set" }));
 
                 // register requested part for loop detection
                 try { _requestedParts.Add(input.PartIndex); } catch { }
@@ -180,7 +180,7 @@ namespace TinyGenerator.Skills
                 var chunks = _chunksCache ?? new List<string>();
                 if (input.PartIndex >= chunks.Count)
                 {
-                    return JsonSerializer.Serialize(new { error = "part_index out of range" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = "part_index out of range" }));
                 }
 
                 var chunk = chunks[input.PartIndex];
@@ -199,12 +199,12 @@ namespace TinyGenerator.Skills
                 }
                 catch { }
 
-                return JsonSerializer.Serialize(payload);
+                return Task.FromResult(JsonSerializer.Serialize(payload));
             }
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "EvaluatorTool", $"ReadStoryPart failed: {ex.Message}", ex.ToString());
-                return JsonSerializer.Serialize(new { error = ex.Message });
+                return Task.FromResult(JsonSerializer.Serialize(new { error = ex.Message }));
             }
         }
 

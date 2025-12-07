@@ -100,8 +100,9 @@ namespace TinyGenerator.Skills
             return Task.FromResult(JsonSerializer.Serialize(new { error }));
         }
 
-        private async Task<string> ExtractChunkFactsAsync(string jsonInput)
+        private Task<string> ExtractChunkFactsAsync(string? jsonInput)
         {
+            var safeInput = jsonInput ?? string.Empty;
             CustomLogger?.Log("Info", "ChunkFactsExtractor", $"[ExtractChunkFactsAsync] START - StoryId: {CurrentStoryId}, Input: {jsonInput?.Substring(0, Math.Min(200, jsonInput?.Length ?? 0))}");
             
             try
@@ -112,11 +113,11 @@ namespace TinyGenerator.Skills
                 {
                     var error = "No CurrentStoryId set on ChunkFactsExtractorTool";
                     CustomLogger?.Log("Error", "ChunkFactsExtractor", $"[ExtractChunkFactsAsync] {error}");
-                    return JsonSerializer.Serialize(new { error });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error }));
                 }
 
                 CustomLogger?.Log("Info", "ChunkFactsExtractor", $"[ExtractChunkFactsAsync] Deserializing input...");
-                var input = JsonSerializer.Deserialize<ExtractChunkFactsInput>(jsonInput);
+                var input = JsonSerializer.Deserialize<ExtractChunkFactsInput>(safeInput);
                 
                 CustomLogger?.Log("Info", "ChunkFactsExtractor", $"[ExtractChunkFactsAsync] Deserialized - ChunkNumber: {input?.ChunkNumber}, Facts null: {input?.Facts == null}");
                 
@@ -124,7 +125,7 @@ namespace TinyGenerator.Skills
                 {
                     var error = "Invalid input: missing facts";
                     CustomLogger?.Log("Error", "ChunkFactsExtractor", $"[ExtractChunkFactsAsync] {error}");
-                    return JsonSerializer.Serialize(new { error });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error }));
                 }
 
                 CustomLogger?.Log("Info", "ChunkFactsExtractor", $"[ExtractChunkFactsAsync] Facts received - Characters: {input.Facts.Characters?.Count ?? 0}, Locations: {input.Facts.Locations?.Count ?? 0}, Events: {input.Facts.Events?.Count ?? 0}");
@@ -133,10 +134,10 @@ namespace TinyGenerator.Skills
                 if (_processedChunks.Contains(input.ChunkNumber))
                 {
                     CustomLogger?.Log("Warn", "ChunkFactsExtractor", $"[ExtractChunkFactsAsync] Chunk {input.ChunkNumber} already processed");
-                    return JsonSerializer.Serialize(new { 
+                    return Task.FromResult(JsonSerializer.Serialize(new { 
                         warning = $"Chunk {input.ChunkNumber} already processed", 
                         chunk_number = input.ChunkNumber 
-                    });
+                    }));
                 }
 
                 // Salva i fatti nel database
@@ -167,17 +168,18 @@ namespace TinyGenerator.Skills
                 LastFunctionResult = result;
                 LastResult = result;
                 CustomLogger?.Log("Info", "ChunkFactsExtractor", $"[ExtractChunkFactsAsync] Returning result: {result}");
-                return result;
+                return Task.FromResult(result);
             }
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "ChunkFactsExtractor", $"[ChunkFactsExtractor] Error: {ex.Message}");
-                return JsonSerializer.Serialize(new { error = ex.Message });
+                return Task.FromResult(JsonSerializer.Serialize(new { error = ex.Message }));
             }
         }
 
-        private async Task<string> ReadStoryPartAsync(string jsonInput)
+        private Task<string> ReadStoryPartAsync(string? jsonInput)
         {
+            var safeInput = jsonInput ?? string.Empty;
             CustomLogger?.Log("Info", "ChunkFactsExtractor", $"[ReadStoryPartAsync] START - Input: {jsonInput}");
             
             try
@@ -188,19 +190,19 @@ namespace TinyGenerator.Skills
                 {
                     var error = "No CurrentStoryId set on ChunkFactsExtractorTool";
                     CustomLogger?.Log("Error", "ChunkFactsExtractor", error);
-                    return JsonSerializer.Serialize(new { error });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error }));
                 }
 
-                var input = JsonSerializer.Deserialize<ReadStoryPartInput>(jsonInput);
+                var input = JsonSerializer.Deserialize<ReadStoryPartInput>(safeInput);
                 if (input == null)
                 {
-                    return JsonSerializer.Serialize(new { error = "Invalid input" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = "Invalid input" }));
                 }
 
                 var story = _database.GetStoryById(CurrentStoryId.Value);
                 if (story == null)
                 {
-                    return JsonSerializer.Serialize(new { error = $"Story {CurrentStoryId} not found" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = $"Story {CurrentStoryId} not found" }));
                 }
 
                 var fullText = story.Story ?? string.Empty;
@@ -208,7 +210,7 @@ namespace TinyGenerator.Skills
 
                 if (input.PartIndex < 0 || input.PartIndex >= totalChunks)
                 {
-                    return JsonSerializer.Serialize(new { error = $"Invalid part_index {input.PartIndex}. Story has {totalChunks} parts (0-{totalChunks - 1})" });
+                    return Task.FromResult(JsonSerializer.Serialize(new { error = $"Invalid part_index {input.PartIndex}. Story has {totalChunks} parts (0-{totalChunks - 1})" }));
                 }
 
                 var start = input.PartIndex * _storyChunkSize;
@@ -225,12 +227,12 @@ namespace TinyGenerator.Skills
                 });
 
                 LastFunctionResult = result;
-                return result;
+                return Task.FromResult(result);
             }
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "ChunkFactsExtractor", $"[ChunkFactsExtractor] ReadStoryPart error: {ex.Message}");
-                return JsonSerializer.Serialize(new { error = ex.Message });
+                return Task.FromResult(JsonSerializer.Serialize(new { error = ex.Message }));
             }
         }
 

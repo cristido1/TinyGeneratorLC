@@ -28,7 +28,8 @@ namespace TinyGenerator.Pages.StepTemplates
             string name,
             string taskType,
             string? description,
-            string stepPrompt)
+            string stepPrompt,
+            string? instructions)
         {
             if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(taskType) || string.IsNullOrWhiteSpace(stepPrompt))
             {
@@ -50,6 +51,7 @@ namespace TinyGenerator.Pages.StepTemplates
                 Name = name,
                 TaskType = taskType,
                 Description = description,
+                Instructions = string.IsNullOrWhiteSpace(instructions) ? null : instructions,
                 StepPrompt = stepPrompt,
                 CreatedAt = id == 0 ? DateTime.UtcNow.ToString("o") : string.Empty,
                 UpdatedAt = DateTime.UtcNow.ToString("o")

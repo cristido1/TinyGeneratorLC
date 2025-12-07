@@ -154,19 +154,20 @@ namespace TinyGenerator.Skills
             );
         }
 
-        public override async Task<string> ExecuteAsync(string input)
+        public override Task<string> ExecuteAsync(string input)
         {
             try
             {
-                return SerializeResult(new
+                var payload = SerializeResult(new
                 {
                     error = "Call add_narration or add_phrase directly. The generic ttsschema entry is no longer available."
                 });
+                return Task.FromResult(payload);
             }
             catch (Exception ex)
             {
                 CustomLogger?.Log("Error", "TtsSchemaTool", $"Error executing operation: {ex.Message}", ex.ToString());
-                return SerializeResult(new { error = ex.Message });
+                return Task.FromResult(SerializeResult(new { error = ex.Message }));
             }
         }
 

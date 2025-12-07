@@ -115,6 +115,7 @@ namespace TinyGenerator.Models
         public string Name { get; set; } = string.Empty;
         public string TaskType { get; set; } = string.Empty;
         public string StepPrompt { get; set; } = string.Empty;
+        public string? Instructions { get; set; }
         public string? Description { get; set; }
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
         public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");

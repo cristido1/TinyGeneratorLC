@@ -146,7 +146,7 @@
                                 </li>
                             }
                         }
-                        @if (Model.Evaluators.Any())
+                        @if (Model.Evaluators?.Any() == true)
                         {
                             <li><hr class="dropdown-divider"></li>
                             <li><h6 class="dropdown-header">Valuta con agente</h6></li>
@@ -159,7 +159,7 @@
                                 </li>
                             }
                         }
-                        @if (Model.ActionEvaluators.Any())
+                        @if (Model.ActionEvaluators?.Any() == true)
                         {
                             <li><hr class="dropdown-divider"></li>
                             <li><h6 class="dropdown-header">Valuta azione/ritmo</h6></li>

@@ -81,7 +81,11 @@ namespace TinyGenerator.Pages.TtsVoices
 
                 var recordsFiltered = filtered.Count();
 
-                var orderCol = Request.Query.ContainsKey("order[0][column]") ? int.Parse(Request.Query["order[0][column]"]) : 0;
+                var orderCol = 0;
+                if (Request.Query.ContainsKey("order[0][column]") && !int.TryParse(Request.Query["order[0][column]"], out orderCol))
+                {
+                    orderCol = 0;
+                }
                 var orderDir = Request.Query.ContainsKey("order[0][dir]") ? Request.Query["order[0][dir]"].ToString() : "asc";
 
                 // Client table includes an initial Actions column at index 0, then Name at index 1 etc.
@@ -233,8 +237,6 @@ namespace TinyGenerator.Pages.TtsVoices
 
                 // Return the audio bytes
                 return File(audioBytes, "audio/wav");
-
-                return NotFound();
             }
             catch (Exception ex)
             {
@@ -247,6 +249,7 @@ namespace TinyGenerator.Pages.TtsVoices
         {
             try
             {
+                await Task.CompletedTask;
                 if (id <= 0) return new JsonResult(new { error = "Invalid id" }) { StatusCode = 400 };
                 _db.DeleteTtsVoiceById(id);
                 return new JsonResult(new { success = true });

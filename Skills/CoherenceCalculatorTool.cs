@@ -101,6 +101,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
+                await Task.CompletedTask;
                 LastFunctionCalled = "calculate_coherence";
                 
                 if (!CurrentStoryId.HasValue)
@@ -178,6 +179,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
+                await Task.CompletedTask;
                 LastFunctionCalled = "get_chunk_facts";
 
                 if (!CurrentStoryId.HasValue)
@@ -224,6 +226,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
+                await Task.CompletedTask;
                 LastFunctionCalled = "get_all_previous_facts";
 
                 if (!CurrentStoryId.HasValue)
@@ -272,6 +275,7 @@ namespace TinyGenerator.Skills
         {
             try
             {
+                await Task.CompletedTask;
                 LastFunctionCalled = "finalize_global_coherence";
 
                 if (!CurrentStoryId.HasValue)

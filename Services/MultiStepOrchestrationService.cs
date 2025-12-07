@@ -48,9 +48,11 @@ namespace TinyGenerator.Services
             int? checkerAgentId = null,
             string? configOverrides = null,
             string? initialContext = null,
-            int threadId = 0)
+            int threadId = 0,
+            string? templateInstructions = null)
         {
             _logger.Log("Information", "MultiStep", "Starting task execution");
+            await Task.CompletedTask;
 
             // Check for active execution lock
             var activeExecution = _database.GetActiveExecutionForEntity(entityId, taskType);
@@ -84,6 +86,9 @@ namespace TinyGenerator.Services
                 throw new ArgumentException("Step prompt contains no valid steps");
             }
 
+            // Merge any config overrides with template-level instructions so they persist across reloads
+            var mergedConfig = MergeConfigWithTemplateInstructions(configOverrides, templateInstructions);
+
             // Create execution record
             var execution = new TaskExecution
             {
@@ -97,7 +102,7 @@ namespace TinyGenerator.Services
                 Status = "pending",
                 ExecutorAgentId = executorAgentId,
                 CheckerAgentId = checkerAgentId,
-                Config = configOverrides,
+                Config = mergedConfig,
                 CreatedAt = DateTime.UtcNow.ToString("o"),
                 UpdatedAt = DateTime.UtcNow.ToString("o")
             };
@@ -404,7 +409,10 @@ Correggi l'output tenendo conto del feedback ricevuto.
 
             // Check if stepInstruction contains {{PROMPT}} tag
             string fullPrompt;
-            string systemMessage = executorAgent.Instructions ?? string.Empty;
+            var templateInstructions = GetTemplateInstructions(execution);
+            string systemMessage = !string.IsNullOrWhiteSpace(templateInstructions)
+                ? templateInstructions!
+                : executorAgent.Instructions ?? string.Empty;
             // Note: any validation-requested system overrides are injected via `extraMessages`
             var attachInitialContext = execution.CurrentStep == 1
                 && !hasChunkPlaceholder
@@ -584,7 +592,7 @@ Correggi l'output tenendo conto del feedback ricevuto.
                     var toolSchemas = executorToolSchemas;
                     var reminderObj = await _checkerService.BuildToolUseReminderAsync(
                         systemMessage,
-                        fullPrompt,
+                        fullPrompt ?? string.Empty,
                         output,
                         toolSchemas,
                         execution.RetryCount);
@@ -726,6 +734,7 @@ Correggi l'output tenendo conto del feedback ricevuto.
 
         private async Task<Agent> GetExecutorAgentAsync(TaskExecution execution, int threadId)
         {
+            await Task.CompletedTask;
             Agent? agent = null;
 
             if (execution.ExecutorAgentId.HasValue)
@@ -890,6 +899,59 @@ Correggi l'output tenendo conto del feedback ricevuto.
             catch
             {
                 return (null, null);
+            }
+        }
+
+        private string? GetTemplateInstructions(TaskExecution execution)
+        {
+            if (string.IsNullOrWhiteSpace(execution.Config))
+                return null;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(execution.Config);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("templateInstructions", out var instrProp))
+                {
+                    return instrProp.GetString();
+                }
+            }
+            catch
+            {
+                // ignore parse errors: just return null
+            }
+
+            return null;
+        }
+
+        private string? MergeConfigWithTemplateInstructions(string? configOverrides, string? templateInstructions)
+        {
+            if (string.IsNullOrWhiteSpace(templateInstructions))
+                return configOverrides;
+
+            try
+            {
+                Dictionary<string, object?> dict;
+                if (string.IsNullOrWhiteSpace(configOverrides))
+                {
+                    dict = new Dictionary<string, object?>();
+                }
+                else
+                {
+                    dict = JsonSerializer.Deserialize<Dictionary<string, object?>>(configOverrides) ?? new Dictionary<string, object?>();
+                }
+
+                dict["templateInstructions"] = templateInstructions;
+                return JsonSerializer.Serialize(dict);
+            }
+            catch
+            {
+                // Fall back to a minimal JSON that preserves the override and original raw config
+                return JsonSerializer.Serialize(new
+                {
+                    templateInstructions,
+                    rawConfig = configOverrides
+                });
             }
         }
 
@@ -1178,6 +1240,7 @@ RIASSUNTO:";
             }
 
             _logger.Log("Information", "MultiStep", $"Completing execution {executionId}");
+            await Task.CompletedTask;
 
             var steps = _database.GetTaskExecutionSteps(executionId);
             var taskTypeInfo = _database.GetTaskTypeByCode(execution.TaskType);

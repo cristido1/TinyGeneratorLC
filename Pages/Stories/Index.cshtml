@@ -12,6 +12,10 @@
 <div class="d-flex justify-content-between mb-3">
     <h3>Storie salvate</h3>
     <div class="d-flex gap-2">
+        <form method="post" asp-page-handler="TestTtsSchema" class="d-inline">
+            <input type="hidden" name="storyId" value="32" />
+            <button type="submit" class="btn btn-outline-secondary">Test tts_schema (story 32, tutti i modelli)</button>
+        </form>
         <div class="btn-group">
             <button type="button" class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
                 Valuta tutti

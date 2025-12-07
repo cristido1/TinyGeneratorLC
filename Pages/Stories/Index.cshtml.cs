@@ -185,6 +185,28 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public IActionResult OnPostTestTtsSchema(long storyId = 32)
+        {
+            var runId = QueueStoryCommand(
+                storyId,
+                "test_tts_schema",
+                async ctx =>
+                {
+                    var (ok, msg) = await _stories.TestTtsSchemaAllModelsAsync(storyId, ctx.CancellationToken);
+                    return new CommandResult(ok, msg);
+                },
+                $"Avvio test tts_schema su story {storyId} per tutti i modelli.",
+                threadScopeOverride: $"story/test_tts_schema/{storyId}",
+                metadata: new Dictionary<string, string>
+                {
+                    ["storyId"] = storyId.ToString(),
+                    ["operation"] = "test_tts_schema_all_models"
+                });
+
+            TempData["StatusMessage"] = $"Test tts_schema avviato (run {runId}).";
+            return RedirectToPage();
+        }
+
         public IActionResult OnPostGenerateTts(long id, string folderName)
         {
             var runId = QueueStoryCommand(

@@ -20,7 +20,7 @@ namespace TinyGenerator.Skills
         private readonly string _storyText;
         private TtsSchema _schema;
         private readonly DatabaseService? _database;
-        private readonly int _storyChunkSize = 1800;
+        private readonly int _storyChunkSize = 1000;
         // Track which part indexes have been requested by the model to avoid infinite loops
         private readonly HashSet<int> _requestedParts = new();
         public long? CurrentStoryId { get; set; }

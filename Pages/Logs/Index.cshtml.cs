@@ -76,6 +76,49 @@ namespace TinyGenerator.Pages.Logs
             return RedirectToPage();
         }
 
+        public IActionResult OnPostAnalyzeMissing()
+        {
+            var pending = _db.ListThreadsPendingAnalysis(500);
+            if (pending.Count == 0)
+            {
+                StatusMessage = "Nessun thread in attesa di analisi.";
+                return RedirectToPage();
+            }
+
+            foreach (var tid in pending)
+            {
+                var threadId = tid.ToString();
+                var runId = $"logan_{threadId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+                var sanitizedScope = SanitizeIdentifier($"thread_{threadId}");
+
+                _dispatcher.Enqueue(
+                    "log_analyzer",
+                    async ctx =>
+                    {
+                        try
+                        {
+                            var (success, message) = await _analysisService.AnalyzeThreadAsync(threadId, null, ctx.CancellationToken);
+                            return new CommandResult(success, message ?? (success ? "Analisi completata" : "Analisi fallita"));
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger?.LogError(ex, "Analisi log fallita per thread {Thread}", threadId);
+                            return new CommandResult(false, ex.Message);
+                        }
+                    },
+                    runId: runId,
+                    threadScope: $"log/{sanitizedScope}",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["threadId"] = threadId,
+                        ["threadScope"] = sanitizedScope
+                    });
+            }
+
+            StatusMessage = $"Analisi avviata per {pending.Count} thread.";
+            return RedirectToPage();
+        }
+
         public IActionResult OnPostClearAllLogs()
         {
             try

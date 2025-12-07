@@ -76,7 +76,7 @@ namespace TinyGenerator.Skills
             return Task.FromResult(JsonSerializer.Serialize(new { error = $"Unknown function: {functionName}" }));
         }
 
-        private readonly int _storyChunkSize = 1800;
+        private readonly int _storyChunkSize = 1000;
 
         private Task<string> EvaluateFullStoryAsync(string jsonInput)
         {

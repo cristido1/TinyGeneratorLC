@@ -9,7 +9,7 @@ namespace TinyGenerator.Services
     /// </summary>
     public static class StoryChunkHelper
     {
-        public static List<string> SplitIntoChunks(string storyText, int targetSize = 1800, int boundaryWindow = 200)
+        public static List<string> SplitIntoChunks(string storyText, int targetSize = 1000, int boundaryWindow = 150)
         {
             var chunks = new List<string>();
             if (string.IsNullOrEmpty(storyText))

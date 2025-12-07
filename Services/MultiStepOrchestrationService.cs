@@ -49,7 +49,8 @@ namespace TinyGenerator.Services
             string? configOverrides = null,
             string? initialContext = null,
             int threadId = 0,
-            string? templateInstructions = null)
+            string? templateInstructions = null,
+            string? executorModelOverride = null)
         {
             _logger.Log("Information", "MultiStep", "Starting task execution");
             await Task.CompletedTask;
@@ -87,7 +88,7 @@ namespace TinyGenerator.Services
             }
 
             // Merge any config overrides with template-level instructions so they persist across reloads
-            var mergedConfig = MergeConfigWithTemplateInstructions(configOverrides, templateInstructions);
+            var mergedConfig = MergeConfigWithTemplateInstructions(configOverrides, templateInstructions, executorModelOverride);
 
             // Create execution record
             var execution = new TaskExecution
@@ -462,7 +463,10 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 if (_logger is CustomLogger cl4) await cl4.FlushAsync();
                 
                 var executorAgentModelInfo = _database.GetModelInfoById(executorAgent.ModelId ?? 0);
-                var executorModelName = executorAgentModelInfo?.Name ?? "phi3:mini";
+                var modelOverride = GetExecutionModelOverride(execution);
+                var executorModelName = !string.IsNullOrWhiteSpace(modelOverride)
+                    ? modelOverride!
+                    : executorAgentModelInfo?.Name ?? "phi3:mini";
                 var (workingFolder, ttsStoryText) = GetExecutionTtsConfig(execution);
                 
                 _logger.Log("Information", "MultiStep", $"Creating orchestrator for model: {executorModelName}, skills: {executorAgent.Skills}");
@@ -926,7 +930,12 @@ Correggi l'output tenendo conto del feedback ricevuto.
 
         private string? MergeConfigWithTemplateInstructions(string? configOverrides, string? templateInstructions)
         {
-            if (string.IsNullOrWhiteSpace(templateInstructions))
+            return MergeConfigWithTemplateInstructions(configOverrides, templateInstructions, null);
+        }
+
+        private string? MergeConfigWithTemplateInstructions(string? configOverrides, string? templateInstructions, string? executorModelOverride)
+        {
+            if (string.IsNullOrWhiteSpace(templateInstructions) && string.IsNullOrWhiteSpace(executorModelOverride))
                 return configOverrides;
 
             try
@@ -941,7 +950,14 @@ Correggi l'output tenendo conto del feedback ricevuto.
                     dict = JsonSerializer.Deserialize<Dictionary<string, object?>>(configOverrides) ?? new Dictionary<string, object?>();
                 }
 
-                dict["templateInstructions"] = templateInstructions;
+                if (!string.IsNullOrWhiteSpace(templateInstructions))
+                {
+                    dict["templateInstructions"] = templateInstructions;
+                }
+                if (!string.IsNullOrWhiteSpace(executorModelOverride))
+                {
+                    dict["executorModelOverride"] = executorModelOverride;
+                }
                 return JsonSerializer.Serialize(dict);
             }
             catch
@@ -950,9 +966,31 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 return JsonSerializer.Serialize(new
                 {
                     templateInstructions,
+                    executorModelOverride,
                     rawConfig = configOverrides
                 });
             }
+        }
+
+        private string? GetExecutionModelOverride(TaskExecution execution)
+        {
+            if (string.IsNullOrWhiteSpace(execution.Config))
+                return null;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(execution.Config);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("executorModelOverride", out var modelProp))
+                {
+                    return modelProp.GetString();
+                }
+            }
+            catch
+            {
+            }
+
+            return null;
         }
 
         private async Task<string> BuildStepContextAsync(

@@ -25,7 +25,7 @@ namespace TinyGenerator.Skills
         public string? LastResult { get; set; }
         public long? CurrentStoryId { get; set; }
 
-        private readonly int _storyChunkSize = 1500;
+        private readonly int _storyChunkSize = 1000;
 
         public ChunkFactsExtractorTool(DatabaseService database, ICustomLogger? logger = null) 
             : base("extract_chunk_facts", "Extract objective facts from story chunks", logger)

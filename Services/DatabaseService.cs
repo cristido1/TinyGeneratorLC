@@ -623,6 +623,21 @@ public sealed class DatabaseService
         conn.Execute(sql, parameters);
     }
 
+    public void UpdateModelTtsScore(string modelName, double score)
+    {
+        if (string.IsNullOrWhiteSpace(modelName)) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        var now = DateTime.UtcNow.ToString("o");
+        var sql = @"
+UPDATE models
+SET TtsScore = @Score,
+    TotalScore = WriterScore + BaseScore + TextEvalScore + @Score + MusicScore + FxScore + AmbientScore,
+    UpdatedAt = @UpdatedAt
+WHERE Name = @Name";
+        conn.Execute(sql, new { Score = score, UpdatedAt = now, Name = modelName });
+    }
+
     /// <summary>
     /// Return list of available test groups.
     /// </summary>
@@ -2466,6 +2481,25 @@ VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generat
         using var conn = CreateConnection();
         conn.Open();
         conn.Execute("DELETE FROM Log_analysis WHERE threadId = @tid", new { tid = threadId });
+    }
+
+    /// <summary>
+    /// Restituisce la lista dei threadId presenti nei log che non hanno analisi salvata.
+    /// </summary>
+    public List<int> ListThreadsPendingAnalysis(int max = 200)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+SELECT DISTINCT l.ThreadId
+FROM Log l
+WHERE l.ThreadId IS NOT NULL
+  AND l.ThreadId > 0
+  AND (l.analized IS NULL OR l.analized = 0)
+  AND NOT EXISTS (SELECT 1 FROM Log_analysis la WHERE la.threadId = l.ThreadId)
+ORDER BY l.ThreadId DESC
+LIMIT @max";
+        return conn.Query<int>(sql, new { max }).ToList();
     }
 
     public void InsertLogAnalysis(TinyGenerator.Models.LogAnalysis analysis)

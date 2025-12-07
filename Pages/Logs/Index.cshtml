@@ -12,7 +12,9 @@
         <button type="button" class="btn btn-sm btn-outline-success me-2" id="btnExportSelected" disabled>Export ThreadId selezionato</button>
         <a class="btn btn-sm btn-outline-success me-2" asp-page-handler="Export">Export tutti</a>
         <button type="button" class="btn btn-sm btn-outline-danger me-2" id="btnClearAllLogs">Cancella tutti i log</button>
-        <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Analysis">Analisi log</a>
+        <form method="post" asp-page-handler="AnalyzeMissing" class="d-inline">
+            <button type="submit" class="btn btn-sm btn-outline-primary">Analizza log</button>
+        </form>
     </div>
 </div>
 
@@ -113,6 +115,8 @@
     <input type="hidden" name="threadId" />
     <input type="hidden" name="threadScope" />
 </form>
+
+<form id="analyzeAllForm" method="post" asp-page-handler="AnalyzeMissing" class="d-none"></form>
 
 <form id="clearLogsForm" method="post" asp-page-handler="ClearAllLogs" class="d-none">
 </form>

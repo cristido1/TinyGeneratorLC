@@ -531,6 +531,105 @@ public sealed class StoriesService
             new AssignVoicesCommand(this));
     }
 
+    /// <summary>
+    /// Esegue un test tts_schema sullo storyId specificato per tutti i modelli abilitati e aggiorna il campo TtsScore.
+    /// </summary>
+    public async Task<(bool success, string message)> TestTtsSchemaAllModelsAsync(long storyId, CancellationToken cancellationToken = default)
+    {
+        var story = _database.GetStoryById(storyId);
+        if (story == null) return (false, $"Story {storyId} non trovata");
+        if (_multiStepOrchestrator == null) return (false, "MultiStepOrchestrator non disponibile");
+
+        var models = _database.ListModels()
+            .Where(m => m.Enabled && !m.NoTools)
+            .OrderBy(m => m.TestDurationSeconds ?? double.MaxValue)
+            .ToList();
+        if (models.Count == 0) return (false, "Nessun modello abilitato trovato");
+
+        var results = new List<string>();
+        var anyFail = false;
+
+        foreach (var model in models)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var (ok, msg) = await RunTtsSchemaForModelAsync(story, model, cancellationToken);
+                results.Add($"{model.Name}: {(ok ? "ok" : "fail")} ({msg})");
+                if (!ok) anyFail = true;
+            }
+            catch (Exception ex)
+            {
+                anyFail = true;
+                results.Add($"{model.Name}: fail ({ex.Message})");
+                _logger?.LogError(ex, "Errore test tts_schema per il modello {Model}", model.Name);
+            }
+        }
+
+        var summary = string.Join("; ", results);
+        return (!anyFail, summary);
+    }
+
+    private async Task<(bool success, string message)> RunTtsSchemaForModelAsync(StoryRecord story, ModelInfo model, CancellationToken cancellationToken)
+    {
+        if (_multiStepOrchestrator == null)
+        {
+            return (false, "MultiStepOrchestrator non disponibile");
+        }
+
+        var ttsAgent = _database.ListAgents()
+            .FirstOrDefault(a => a.IsActive && a.Role?.Equals("tts_json", StringComparison.OrdinalIgnoreCase) == true && a.MultiStepTemplateId.HasValue);
+
+        if (ttsAgent == null)
+        {
+            return (false, "Nessun agente tts_json con template multi-step configurato");
+        }
+
+        var template = _database.GetStepTemplateById(ttsAgent.MultiStepTemplateId!.Value);
+        if (template == null || !string.Equals(template.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, "Template multi-step TTS non trovato o con task_type errato");
+        }
+
+        // Prepara cartella storia
+        var folderPath = EnsureStoryFolder(story);
+
+        var configPayload = JsonSerializer.Serialize(new
+        {
+            workingFolder = folderPath,
+            storyText = story.Story ?? string.Empty
+        });
+
+        var threadId = unchecked((int)(story.Id % int.MaxValue));
+
+        try
+        {
+            var executionId = await _multiStepOrchestrator.StartTaskExecutionAsync(
+                taskType: "tts_schema",
+                entityId: story.Id,
+                stepPrompt: template.StepPrompt,
+                executorAgentId: ttsAgent.Id,
+                checkerAgentId: null,
+                configOverrides: configPayload,
+                initialContext: story.Story ?? string.Empty,
+                threadId: threadId,
+                templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions,
+                executorModelOverride: model.Name);
+
+            await _multiStepOrchestrator.ExecuteAllStepsAsync(executionId, threadId, null, cancellationToken);
+
+            var schemaPath = Path.Combine(folderPath, "tts_schema.json");
+            var success = File.Exists(schemaPath);
+            _database.UpdateModelTtsScore(model.Name, success ? 1 : 0);
+            return (success, success ? "tts_schema generato" : "File tts_schema.json non trovato");
+        }
+        catch (Exception ex)
+        {
+            _database.UpdateModelTtsScore(model.Name, 0);
+            return (false, ex.Message);
+        }
+    }
+
     private string EnsureStoryFolder(StoryRecord story)
     {
         var baseFolder = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder");

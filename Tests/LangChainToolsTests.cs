@@ -30,7 +30,7 @@ namespace TinyGenerator.Tests
             var function = schema["function"] as Dictionary<string, object>;
             Assert.NotNull(function);
             Assert.Equal("text", function["name"]);
-            Assert.Contains("text manipulation", function["description"]?.ToString()?.ToLower() ?? "");
+            Assert.Contains("text functions", function["description"]?.ToString()?.ToLower() ?? "");
         }
 
         [Fact]

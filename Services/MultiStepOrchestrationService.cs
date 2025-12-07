@@ -512,10 +512,21 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 }
                 output = result.FinalResponse ?? string.Empty;
 
+                // If FinalResponse is empty but we executed tool calls, reconstruct a tool_calls JSON
+                // from the executed tools so the TTS validator can parse it.
                 if (string.IsNullOrWhiteSpace(output))
                 {
-                    Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - Output is empty! result object: {result != null}, FinalResponse: '{result?.FinalResponse ?? "(null)"}'");
-                    throw new InvalidOperationException("Executor agent produced empty output");
+                    if (result.ExecutedTools != null && result.ExecutedTools.Count > 0)
+                    {
+                        output = ReconstructToolCallsJsonFromToolRecords(result.ExecutedTools);
+                        _logger.Log("Information", "MultiStep", $"Reconstructed output from executed tools (count={result.ExecutedTools.Count}) for validation (threadId={threadId})");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(output))
+                    {
+                        Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - Output is empty! result object: {result != null}, FinalResponse: '{result?.FinalResponse ?? "(null)"}'");
+                        throw new InvalidOperationException("Executor agent produced empty output");
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -779,6 +790,48 @@ Correggi l'output tenendo conto del feedback ricevuto.
             var chunks = StoryChunkHelper.SplitIntoChunks(sourceText);
             _chunkCache[execution.Id] = chunks;
             return chunks;
+        }
+
+        private static object TryParseJsonOrString(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return new Dictionary<string, object?>();
+            try
+            {
+                // Attempt to parse string as JSON; if it works, return the deserialized object
+                var obj = JsonSerializer.Deserialize<object>(s);
+                return obj ?? s;
+            }
+            catch
+            {
+                // Not JSON — return the original string
+                return s;
+            }
+        }
+
+        /// <summary>
+        /// Reconstruct a tool_calls JSON object from executed tool records. Useful when the model
+        /// returned no assistant content but tools executed successfully and we need a predictable
+        /// payload for downstream validators.
+        /// </summary>
+        public static string ReconstructToolCallsJsonFromToolRecords(List<ReActLoopOrchestrator.ToolExecutionRecord> executedTools)
+        {
+            if (executedTools == null || executedTools.Count == 0) return string.Empty;
+
+            var reconstructed = new Dictionary<string, object>
+            {
+                ["tool_calls"] = executedTools.Select((t, idx) => new Dictionary<string, object>
+                {
+                    ["id"] = $"recon_{idx}",
+                    ["type"] = "function",
+                    ["function"] = new Dictionary<string, object>
+                    {
+                        ["name"] = t.ToolName ?? string.Empty,
+                        ["arguments"] = TryParseJsonOrString(t.Input ?? string.Empty)
+                    }
+                }).ToList()
+            };
+
+            return JsonSerializer.Serialize(reconstructed);
         }
 
         private (string replaced, bool missingChunk) ReplaceChunkPlaceholders(string instruction, List<string> chunks, int stepNumber)

@@ -916,6 +916,13 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         conn.Execute(sql, parameters);
     }
 
+    public void UpdateTestRunNotes(int runId, string? notes)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("UPDATE model_test_runs SET notes = @notes WHERE id = @id", new { id = runId, notes });
+    }
+
     public int AddTestStep(int runId, int stepNumber, string stepName, string? inputJson = null)
     {
         using var conn = CreateConnection();
@@ -2294,6 +2301,41 @@ INSERT INTO step_templates (name, task_type, step_prompt, description, created_a
 VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generation with 6 chapters', datetime('now'), datetime('now'))",
                 new { stepPrompt = defaultStepPrompt });
             Console.WriteLine("[DB] Seeded default step_templates");
+        }
+
+        // Patch tts_schema templates: correct task_type and ensure instructions are populated
+        try
+        {
+            conn.Execute("UPDATE step_templates SET task_type='tts_schema' WHERE name LIKE 'tts_schema%' AND task_type <> 'tts_schema'");
+
+            var instr = conn.ExecuteScalar<string?>("SELECT instructions FROM step_templates WHERE name='tts_schema_chunk_fixed20' LIMIT 1");
+            if (string.IsNullOrWhiteSpace(instr))
+            {
+                var defaultInstr = @"Leggi attentamente il testo e trascrivilo integralmente nel formato seguente, senza riassumere o saltare frasi, senza aggiungere note o testo extra.
+
+Usa SOLO queste sezioni ripetute nell’ordine del testo:
+
+[NARRATORE]
+Testo narrativo così come appare nel chunk
+
+[PERSONAGGIO: NomePersonaggio | EMOZIONE: emotion]
+Battuta di dialogo così come appare nel testo
+
+Regole:
+- NON includere il testo originale nella risposta.
+- NON cambiare lingua, NON abbreviare, NON riassumere.
+- Se non è chiaramente un dialogo, usa NARRATORE.
+- EMOZIONE: usa una tra neutral, happy, sad, angry, fearful, disgusted, surprised (default neutral se non indicata).
+- Non aggiungere spiegazioni o altro testo fuori dai blocchi.
+- Copri tutto il testo, più blocchi uno dopo l’altro finché il testo è esaurito.";
+
+                conn.Execute("UPDATE step_templates SET instructions=@instr WHERE name='tts_schema_chunk_fixed20'", new { instr = defaultInstr });
+                Console.WriteLine("[DB] Patched instructions for tts_schema_chunk_fixed20");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning patching tts_schema templates: {ex.Message}");
         }
     }
 

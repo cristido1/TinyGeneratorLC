@@ -10,6 +10,7 @@ namespace TinyGenerator.Services.Commands
         private readonly DatabaseService _database;
         private readonly ICustomLogger _logger;
         private readonly ProgressService? _progressService;
+        private readonly ICommandDispatcher? _dispatcher;
 
         public ResumeMultiStepTaskCommand(
             long executionId,
@@ -17,7 +18,8 @@ namespace TinyGenerator.Services.Commands
             MultiStepOrchestrationService orchestrator,
             DatabaseService database,
             ICustomLogger logger,
-            ProgressService? progressService = null)
+            ProgressService? progressService = null,
+            ICommandDispatcher? dispatcher = null)
         {
             _executionId = executionId;
             _generationId = generationId;
@@ -25,6 +27,7 @@ namespace TinyGenerator.Services.Commands
             _database = database;
             _logger = logger;
             _progressService = progressService;
+            _dispatcher = dispatcher;
         }
 
         public async Task ExecuteAsync(CancellationToken ct = default)
@@ -60,6 +63,7 @@ namespace TinyGenerator.Services.Commands
                 {
                     _logger.Log("Information", "MultiStep", $"Step {current}/{max}: {stepDesc}");
                     _progressService?.BroadcastStepProgress(_generationId, current, max, stepDesc);
+                    _dispatcher?.UpdateStep(_generationId.ToString(), current, max);
                 }
 
                 // Resume execution

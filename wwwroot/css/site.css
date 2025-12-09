@@ -175,195 +175,6 @@ body {
 .toast-container.tg-toast-sm-container { padding: 6px !important; }
 .toast-container.tg-toast-sm-container .tg-toast-sm { margin-top: 4px !important; margin-bottom: 4px !important; }
 
-/* --- ACTIVE AGENTS BADGE SYSTEM ------------------------------------------------------- */
-/* Container for agent badges (fixed position, top-left) */
-#active-agents-container {
-    position: fixed;
-    top: 80px;
-    left: 20px;
-    z-index: 9998;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    pointer-events: none;
-}
-
-/* Individual agent badge */
-.agent-badge {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(250, 250, 252, 0.98));
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(100, 120, 180, 0.2);
-    border-radius: 12px;
-    padding: 8px 12px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
-    animation: slideInLeft 0.3s ease-out;
-    min-width: 180px;
-    max-width: 220px;
-    pointer-events: auto;
-}
-
-.agent-badge.removing {
-    animation: slideOutLeft 0.3s ease-in forwards;
-}
-
-/* Agent badge icon (emoji) */
-.agent-badge-icon {
-    font-size: 24px;
-    line-height: 1;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-}
-
-/* Animazione per icona pensiero (cervello, default) */
-.agent-badge-icon.icon-thinking {
-    animation: thinking 1.5s ease-in-out infinite;
-}
-
-@keyframes thinking {
-    0%, 100% { transform: scale(1) rotate(0deg); }
-    25% { transform: scale(1.1) rotate(-5deg); }
-    75% { transform: scale(1.1) rotate(5deg); }
-}
-
-/* Animazione per icona scrittura (penna) */
-.agent-badge-icon.icon-writing {
-    animation: writing 1.2s ease-in-out infinite;
-}
-
-@keyframes writing {
-    0%, 100% { transform: translateX(0) rotate(0deg); }
-    25% { transform: translateX(-3px) rotate(-15deg); }
-    50% { transform: translateX(3px) rotate(15deg); }
-    75% { transform: translateX(-2px) rotate(-10deg); }
-}
-
-/* Animazione per icona TTS (bocca che parla) */
-.agent-badge-icon.icon-talking {
-    animation: talking 0.8s ease-in-out infinite;
-}
-
-@keyframes talking {
-    0%, 100% { transform: scaleY(1); }
-    50% { transform: scaleY(1.3); }
-}
-
-/* Animazione per icona check/valutazione */
-.agent-badge-icon.icon-checking {
-    animation: checking 1.5s ease-in-out infinite;
-}
-
-@keyframes checking {
-    0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
-    50% { transform: scale(1.2) rotate(360deg); opacity: 0.7; }
-}
-
-/* Animazione per icona musica (note musicali) */
-.agent-badge-icon.icon-music {
-    animation: music 1s ease-in-out infinite;
-}
-
-@keyframes music {
-    0%, 100% { transform: translateY(0) rotate(0deg); }
-    25% { transform: translateY(-4px) rotate(-10deg); }
-    50% { transform: translateY(0) rotate(0deg); }
-    75% { transform: translateY(-2px) rotate(10deg); }
-}
-
-/* Animazione per icona warmup (fuoco) */
-.agent-badge-icon.icon-warmup {
-    animation: warmup 0.6s ease-in-out infinite;
-}
-
-@keyframes warmup {
-    0%, 100% { transform: scale(1) translateY(0); }
-    50% { transform: scale(1.15) translateY(-2px); }
-}
-
-/* Agent badge content (text) */
-.agent-badge-content {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    flex: 1;
-}
-
-.agent-badge-name {
-    font-weight: 600;
-    font-size: 11px;
-    color: #ffffff;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.agent-badge-status {
-    font-size: 10px;
-    color: rgba(255,255,255,0.9);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* Ensure emoji/icon contrast inside badge */
-.agent-badge-icon {
-    color: #ffffff;
-}
-
-/* Slide in/out animations */
-@keyframes slideInLeft {
-    from {
-        opacity: 0;
-        transform: translateX(-100%);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
-}
-
-@keyframes slideOutLeft {
-    from {
-        opacity: 1;
-        transform: translateX(0);
-    }
-    to {
-        opacity: 0;
-        transform: translateX(-100%);
-    }
-}
-
-/* Shimmer effect on badge background */
-.agent-badge::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-    animation: shimmer 2s infinite;
-}
-
-@keyframes shimmer {
-    0% { left: -100%; }
-    100% { left: 100%; }
-}
-
-/* News ticker removed globally — keep CSS safe fallback in case markup remains */
-.news-ticker { display: none !important; }
-
-/* Restore normal body padding (removed dedicated news-ticker bottom padding) */
-body { padding-bottom: initial !important; }
-
-/* Prevent LiveMonitor from covering news ticker */
 .log-entry {
     max-height: calc(100vh - 150px);
     overflow-y: auto;
@@ -372,3 +183,96 @@ body { padding-bottom: initial !important; }
 
 
 
+
+/* --- COMMAND PANEL (GLOBAL) ------------------------------------------------------- */
+#command-panel {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 9997;
+    width: 360px;
+    max-width: 90vw;
+    font-family: "Poppins", "Inter", sans-serif;
+}
+
+.command-panel-card {
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+}
+
+.command-panel-header {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    color: white;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 700;
+}
+
+.command-panel-body {
+    max-height: 360px;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.command-panel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cmd-item {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 8px;
+    background: #fff;
+}
+
+.cmd-item.running {
+    border-color: #3b82f6;
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.3);
+}
+
+.cmd-item.completed {
+    border-color: #22c55e;
+    background: #f0fdf4;
+    box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.2);
+}
+
+.cmd-item.failed {
+    border-color: #ef4444;
+    background: #fef2f2;
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.3);
+}
+
+.cmd-item.cancelled {
+    border-color: #6b7280;
+    background: #f9fafb;
+    opacity: 0.8;
+}
+
+.cmd-error {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.3;
+}
+
+.cmd-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+.cmd-op {
+    color: #111827;
+}
+
+.cmd-meta {
+    font-size: 12px;
+}

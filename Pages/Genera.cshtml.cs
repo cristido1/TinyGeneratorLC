@@ -54,9 +54,9 @@ public class GeneraModel : PageModel
 
     public void OnGet()
     {
-        // Load writer agents for dropdown
+        // Load writer agents for dropdown (only those with a multi-step template)
         Agents = _database.ListAgents()
-            .Where(a => a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase))
+            .Where(a => a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase) && a.MultiStepTemplateId.HasValue)
             .OrderBy(a => a.Name)
             .ToList();
 
@@ -68,6 +68,12 @@ public class GeneraModel : PageModel
                 var template = _database.GetStepTemplateById(agent.MultiStepTemplateId.Value);
                 agent.MultiStepTemplateName = template?.Name;
             }
+        }
+
+        // Default selection: first available agent
+        if (WriterAgentId == 0 && Agents.Count > 0)
+        {
+            WriterAgentId = Agents[0].Id;
         }
     }
 
@@ -87,6 +93,22 @@ public class GeneraModel : PageModel
         if (_orchestrator == null)
         {
             return BadRequest(new { error = "Orchestrator non configurato per la generazione multi-step." });
+        }
+
+        // Validate agent and template before enqueueing
+        var agent = _database.GetAgentById(WriterAgentId);
+        if (agent == null)
+        {
+            return BadRequest(new { error = $"Agente {WriterAgentId} non trovato." });
+        }
+        if (!agent.MultiStepTemplateId.HasValue)
+        {
+            return BadRequest(new { error = $"L'agente {agent.Name} non ha un template multi-step configurato." });
+        }
+        var template = _database.GetStepTemplateById(agent.MultiStepTemplateId.Value);
+        if (template == null)
+        {
+            return BadRequest(new { error = $"Template multi-step {agent.MultiStepTemplateId.Value} non trovato." });
         }
 
         var genId = Guid.NewGuid();

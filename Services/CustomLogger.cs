@@ -57,6 +57,25 @@ namespace TinyGenerator.Services
 
             var scope = LogScope.Current;
 
+            // Derive a default Result if not provided, to track SUCCESS/FAILED consistently
+            string? derivedResult = result;
+            if (string.IsNullOrWhiteSpace(derivedResult))
+            {
+                var lvl = (level ?? string.Empty).Trim().ToLowerInvariant();
+                var msg = message?.ToLowerInvariant() ?? string.Empty;
+
+                // Mark failures on error/fatal or messages that clearly indicate failure
+                if (lvl == "error" || lvl == "fatal" || msg.Contains("fail") || msg.Contains("error"))
+                {
+                    derivedResult = "FAILED";
+                }
+                // Mark success on messages that clearly indicate completion/passed
+                else if (msg.Contains("success") || msg.Contains("completed") || msg.Contains("passed"))
+                {
+                    derivedResult = "SUCCESS";
+                }
+            }
+
             var entry = new LogEntry
             {
                 Ts = DateTime.UtcNow.ToString("o"),
@@ -70,7 +89,7 @@ namespace TinyGenerator.Services
                 AgentName = null,
                 Context = null,
                 ChatText = chatText,
-                Result = string.IsNullOrWhiteSpace(result) ? null : result
+                Result = string.IsNullOrWhiteSpace(derivedResult) ? null : derivedResult
             };
 
             bool shouldFlush = false;

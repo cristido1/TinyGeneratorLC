@@ -40,6 +40,8 @@ namespace TinyGenerator.Services
             IReadOnlyDictionary<string, string>? metadata = null);
 
         IReadOnlyList<CommandSnapshot> GetActiveCommands();
+        void UpdateStep(string runId, int current, int max);
+        void UpdateRetry(string runId, int retryCount);
 
         /// <summary>
         /// Attende il completamento di un comando identificato dal runId e restituisce il relativo CommandResult.
@@ -73,5 +75,12 @@ namespace TinyGenerator.Services
         string Status,
         DateTimeOffset EnqueuedAt,
         DateTimeOffset? StartedAt,
-        IReadOnlyDictionary<string, string>? Metadata);
+        DateTimeOffset? CompletedAt,
+        IReadOnlyDictionary<string, string>? Metadata,
+        string? AgentName = null,
+        string? ModelName = null,
+        int? CurrentStep = null,
+        int? MaxStep = null,
+        int RetryCount = 0,
+        string? ErrorMessage = null);
 }

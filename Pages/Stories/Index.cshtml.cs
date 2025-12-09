@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -237,6 +239,73 @@ namespace TinyGenerator.Pages.Stories
                 "Generazione JSON TTS avviata in background.");
             TempData["StatusMessage"] = $"Generazione JSON TTS avviata (run {runId}).";
             return RedirectToPage();
+        }
+
+        public IActionResult OnGetTtsAudio(long id, string file)
+        {
+            if (string.IsNullOrWhiteSpace(file)) return NotFound();
+            var story = _stories.GetStoryById(id);
+            if (story == null || string.IsNullOrWhiteSpace(story.Folder)) return NotFound();
+
+            var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
+            var filePath = Path.Combine(folderPath, file);
+            if (!System.IO.File.Exists(filePath)) return NotFound();
+
+            var ext = Path.GetExtension(file)?.ToLowerInvariant();
+            var contentType = ext switch
+            {
+                ".wav" => "audio/wav",
+                ".mp3" => "audio/mpeg",
+                ".ogg" => "audio/ogg",
+                _ => "application/octet-stream"
+            };
+
+            return PhysicalFile(filePath, contentType);
+        }
+
+        public IActionResult OnGetTtsPlaylist(long id)
+        {
+            var story = _stories.GetStoryById(id);
+            if (story == null || string.IsNullOrWhiteSpace(story.Folder)) return NotFound();
+
+            var schemaPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder, "tts_schema.json");
+            if (!System.IO.File.Exists(schemaPath)) return NotFound("tts_schema.json mancante");
+
+            try
+            {
+                var json = System.IO.File.ReadAllText(schemaPath);
+                var root = JsonNode.Parse(json) as JsonObject;
+                if (root == null || root["Timeline"] is not JsonArray timeline) return NotFound("Timeline mancante nello schema");
+
+                var items = new List<object>();
+
+                foreach (var node in timeline.OfType<JsonObject>())
+                {
+                    if (!node.TryGetPropertyValue("FileName", out var fNode)) continue;
+                    var fileName = fNode?.GetValue<string>() ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(fileName)) continue;
+
+                    var character = node.TryGetPropertyValue("Character", out var cNode) ? cNode?.ToString() ?? "" : "";
+                    var text = node.TryGetPropertyValue("Text", out var tNode) ? tNode?.ToString() ?? "" : "";
+                    var durationMs = node.TryGetPropertyValue("DurationMs", out var dNode) ? dNode?.GetValue<int?>() : null;
+
+                    var url = Url.Page("/Stories/Index", null, new { handler = "TtsAudio", id = story.Id, file = fileName }, Request.Scheme);
+                    items.Add(new
+                    {
+                        url,
+                        character,
+                        text,
+                        durationMs
+                    });
+                }
+
+                return new JsonResult(new { items, gapMs = 2000 });
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Impossibile creare la playlist TTS per la storia {StoryId}", id);
+                return StatusCode(500, ex.Message);
+            }
         }
 
         public IActionResult OnPostAssignVoices(long id)

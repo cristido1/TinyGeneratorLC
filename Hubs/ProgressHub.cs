@@ -7,10 +7,12 @@ namespace TinyGenerator.Hubs
     public class ProgressHub : Hub
     {
         private readonly ProgressService? _progressService;
+        private readonly ICommandDispatcher? _dispatcher;
 
-        public ProgressHub(ProgressService? progressService = null)
+        public ProgressHub(ProgressService? progressService = null, ICommandDispatcher? dispatcher = null)
         {
             _progressService = progressService;
+            _dispatcher = dispatcher;
         }
 
         public override async Task OnConnectedAsync()
@@ -21,6 +23,15 @@ namespace TinyGenerator.Hubs
                 if (snapshot.Count > 0)
                 {
                     await Clients.Caller.SendAsync("BusyModelsUpdated", snapshot);
+                }
+            }
+
+            if (_dispatcher != null)
+            {
+                var commands = _dispatcher.GetActiveCommands();
+                if (commands?.Count > 0)
+                {
+                    await Clients.Caller.SendAsync("CommandListUpdated", commands);
                 }
             }
 

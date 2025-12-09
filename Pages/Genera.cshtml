@@ -16,16 +16,15 @@
 
         <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px">
             <div style="display:flex; align-items:center; gap:8px;">
-                <label for="WriterAgentId" class="note-title" style="margin:0">Scegli writer agent</label>
-                <select id="WriterAgentId" name="WriterAgentId" class="keep-input" style="width:280px; padding:8px">
-                    <option value="0">Legacy (A/B/C)</option>
+                <label for="WriterAgentId" class="note-title" style="margin:0">Scegli writer agent (multi-step)</label>
+                <select id="WriterAgentId" name="WriterAgentId" class="keep-input" style="width:320px; padding:8px" required>
                     @foreach (var agent in Model.Agents)
                     {
-                        <option value="@agent.Id">
+                        <option value="@agent.Id" selected="@(Model.WriterAgentId == agent.Id ? "selected" : null)">
                             @agent.Name
                             @if (!string.IsNullOrEmpty(agent.MultiStepTemplateName))
                             {
-                                <text> [Multi-step: @agent.MultiStepTemplateName]</text>
+                                <text> [Template: @agent.MultiStepTemplateName]</text>
                             }
                         </option>
                     }

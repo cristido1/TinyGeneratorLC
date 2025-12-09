@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using TinyGenerator.Models;
@@ -455,66 +457,20 @@ public sealed class StoriesService
     /// </summary>
     public async Task<(bool success, string? error)> GenerateTtsForStoryAsync(long storyId, string folderName)
     {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(folderName))
-                return (false, "Folder name is required");
+        if (string.IsNullOrWhiteSpace(folderName))
+            return (false, "Folder name is required");
 
-            var story = GetStoryById(storyId);
-            if (story == null)
-                return (false, "Story not found");
+        var story = GetStoryById(storyId);
+        if (story == null)
+            return (false, "Story not found");
 
-            if (string.IsNullOrWhiteSpace(story.Story))
-                return (false, "Story has no content");
+        // Usa il nuovo flusso basato su tts_schema.json e timeline
+        var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", folderName);
+        Directory.CreateDirectory(folderPath);
 
-            // Get available voices
-            var voices = await _ttsService.GetVoicesAsync();
-            if (voices == null || voices.Count == 0)
-                return (false, "No TTS voices available");
-
-            // Use first Italian voice or first available voice
-            var voice = voices.FirstOrDefault(v => v.Language?.StartsWith("it", StringComparison.OrdinalIgnoreCase) == true)
-                ?? voices.First();
-
-            // Create output directory
-            var outputDir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "wwwroot", "audio", folderName);
-            System.IO.Directory.CreateDirectory(outputDir);
-
-            // Synthesize audio
-            var result = await _ttsService.SynthesizeAsync(voice.Id, story.Story, "it");
-            
-            if (result == null)
-                return (false, "TTS synthesis failed");
-
-            // Save audio file
-            var audioFileName = $"story_{storyId}.mp3";
-            var audioFilePath = System.IO.Path.Combine(outputDir, audioFileName);
-
-            if (!string.IsNullOrWhiteSpace(result.AudioBase64))
-            {
-                var audioBytes = Convert.FromBase64String(result.AudioBase64);
-                await System.IO.File.WriteAllBytesAsync(audioFilePath, audioBytes);
-            }
-            else if (!string.IsNullOrWhiteSpace(result.AudioUrl))
-            {
-                // Download from URL if base64 not provided
-                using var httpClient = new System.Net.Http.HttpClient();
-                var audioBytes = await httpClient.GetByteArrayAsync(result.AudioUrl);
-                await System.IO.File.WriteAllBytesAsync(audioFilePath, audioBytes);
-            }
-            else
-            {
-                return (false, "No audio data in TTS response");
-            }
-
-            _logger?.LogInformation("Generated TTS for story {StoryId} to {Path}", storyId, audioFilePath);
-            return (true, null);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to generate TTS for story {StoryId}", storyId);
-            return (false, ex.Message);
-        }
+        var context = new StoryCommandContext(story, folderPath, null);
+        var (success, message) = await StartTtsAudioGenerationAsync(context);
+        return (success, message);
     }
 
     public Task<(bool success, string? message)> GenerateTtsSchemaJsonAsync(long storyId)
@@ -601,10 +557,41 @@ public sealed class StoriesService
         });
 
         var threadId = unchecked((int)(story.Id % int.MaxValue));
+        var sw = Stopwatch.StartNew();
+        const string testGroup = "tts";
+        int? runId = null;
+        int? stepId = null;
+        long? executionId = null;
+        var totalSteps = CountSteps(template.StepPrompt);
 
         try
         {
-            var executionId = await _multiStepOrchestrator.StartTaskExecutionAsync(
+            runId = _database.CreateTestRun(
+                model.Name,
+                testGroup,
+                description: $"tts_schema story {story.Id}",
+                passed: false,
+                durationMs: null,
+                notes: null,
+                testFolder: folderPath);
+
+            if (runId.HasValue)
+            {
+                stepId = _database.AddTestStep(
+                    runId.Value,
+                    1,
+                    "tts_schema",
+                    JsonSerializer.Serialize(new { storyId = story.Id, model = model.Name }));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Impossibile creare i record di test TTS per il modello {Model}", model.Name);
+        }
+
+        try
+        {
+            executionId = await _multiStepOrchestrator.StartTaskExecutionAsync(
                 taskType: "tts_schema",
                 entityId: story.Id,
                 stepPrompt: template.StepPrompt,
@@ -616,18 +603,153 @@ public sealed class StoriesService
                 templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions,
                 executorModelOverride: model.Name);
 
-            await _multiStepOrchestrator.ExecuteAllStepsAsync(executionId, threadId, null, cancellationToken);
+            if (executionId.HasValue)
+            {
+                await _multiStepOrchestrator.ExecuteAllStepsAsync(executionId.Value, threadId, null, cancellationToken);
+            }
 
             var schemaPath = Path.Combine(folderPath, "tts_schema.json");
             var success = File.Exists(schemaPath);
-            _database.UpdateModelTtsScore(model.Name, success ? 1 : 0);
+            var score = success ? 10 : 0;
+            _database.UpdateModelTtsScore(model.Name, score);
+
+            if (stepId.HasValue)
+            {
+                try
+                {
+                    var outputJson = success
+                        ? JsonSerializer.Serialize(new { message = "tts_schema generato" })
+                        : null;
+                    var error = success ? null : "File tts_schema.json non trovato";
+                    _database.UpdateTestStepResult(stepId.Value, success, outputJson, error, sw.ElapsedMilliseconds);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Impossibile aggiornare lo step di test TTS per il modello {Model}", model.Name);
+                }
+            }
+
+            if (runId.HasValue)
+            {
+                try
+                {
+                    _database.UpdateTestRunResult(runId.Value, success, sw.ElapsedMilliseconds);
+                    _database.RecalculateModelGroupScore(model.Name, testGroup);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Impossibile aggiornare il run di test TTS per il modello {Model}", model.Name);
+                }
+            }
+
             return (success, success ? "tts_schema generato" : "File tts_schema.json non trovato");
         }
         catch (Exception ex)
         {
-            _database.UpdateModelTtsScore(model.Name, 0);
+            // Calcola punteggio parziale in base allo step raggiunto
+            var partialScore = 0.0;
+            if (executionId.HasValue)
+            {
+                try
+                {
+                    var exec = _database.GetTaskExecutionById(executionId.Value);
+                    var completedSteps = exec != null ? Math.Max(0, exec.CurrentStep - 1) : 0;
+
+                    var steps = _database.GetTaskExecutionSteps(executionId.Value);
+                    if (steps != null && steps.Count > 0)
+                    {
+                        var maxStepRecorded = steps.Max(s => s.StepNumber);
+                        completedSteps = Math.Max(completedSteps, maxStepRecorded);
+                    }
+
+                    if (totalSteps > 0)
+                    {
+                        partialScore = Math.Round((double)completedSteps / totalSteps * 10.0, 1);
+                    }
+                }
+                catch (Exception innerEx)
+                {
+                    _logger?.LogWarning(innerEx, "Impossibile calcolare punteggio parziale per il modello {Model}", model.Name);
+                }
+            }
+
+            _database.UpdateModelTtsScore(model.Name, partialScore);
+
+            if (stepId.HasValue)
+            {
+                try
+                {
+                    var errorMsg = ex.Message;
+                    _database.UpdateTestStepResult(stepId.Value, false, null, errorMsg, sw.ElapsedMilliseconds);
+                }
+                catch (Exception innerEx)
+                {
+                    _logger?.LogWarning(innerEx, "Impossibile aggiornare il fallimento del test TTS per il modello {Model}", model.Name);
+                }
+            }
+
+            if (runId.HasValue)
+            {
+                try
+                {
+                    var errMsg = ex.Message;
+                    if (partialScore > 0 && totalSteps > 0)
+                    {
+                        errMsg = $"Step incompleti: punteggio parziale {partialScore:0.0}/10. Dettaglio: {ex.Message}";
+                    }
+
+                    _database.UpdateTestRunResult(runId.Value, false, sw.ElapsedMilliseconds);
+                    _database.UpdateTestRunNotes(runId.Value, errMsg);
+                    _database.RecalculateModelGroupScore(model.Name, testGroup);
+                }
+                catch (Exception innerEx)
+                {
+                    _logger?.LogWarning(innerEx, "Impossibile chiudere il run di test TTS per il modello {Model}", model.Name);
+                }
+            }
+
             return (false, ex.Message);
         }
+        finally
+        {
+            sw.Stop();
+        }
+    }
+
+    private static int CountSteps(string stepPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(stepPrompt)) return 0;
+        var lines = stepPrompt.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var count = 0;
+        foreach (var l in lines)
+        {
+            var trimmed = l.TrimStart();
+            if (char.IsDigit(trimmed.FirstOrDefault()))
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static string CleanTtsText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+        var cleaned = new List<string>();
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            // Skip lines that are only bracketed metadata (e.g., [PERSONAGGIO: ...])
+            if (Regex.IsMatch(trimmed, @"^\[[^\]]+\]$")) continue;
+            // Remove inline bracketed metadata
+            var withoutTags = Regex.Replace(trimmed, @"\[[^\]]+\]", string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(withoutTags))
+            {
+                cleaned.Add(withoutTags);
+            }
+        }
+        return string.Join(" ", cleaned);
     }
 
     private string EnsureStoryFolder(StoryRecord story)
@@ -861,11 +983,11 @@ public sealed class StoriesService
                 return (false, "Il modello associato all'agente tts_json non è configurato");
 
             var allowedPlugins = ParseAgentSkills(ttsAgent)?.ToList() ?? new List<string>();
-            if (!allowedPlugins.Any())
-            {
-                _service._logger?.LogWarning("GenerateTtsSchemaCommand: agent {AgentId} has no tools configured", ttsAgent.Id);
-                return (false, "L'agente tts_json non ha strumenti abilitati");
-            }
+           // if (!allowedPlugins.Any())
+            //{
+             //   _service._logger?.LogWarning("GenerateTtsSchemaCommand: agent {AgentId} has no tools configured", ttsAgent.Id);
+              //  return (false, "L'agente tts_json non ha strumenti abilitati");
+            //}
 
             var folderPath = context.FolderPath;
 
@@ -988,6 +1110,15 @@ public sealed class StoriesService
             {
                 _service._logger?.LogWarning("GenerateTtsSchemaCommand: template {TemplateName} non è di tipo tts_schema", template.Name);
                 return null;
+            }
+
+            // Ensure instructions are stored on the template (no hardcoded defaults)
+            if (string.IsNullOrWhiteSpace(template.Instructions) &&
+                string.Equals(template.Name, "tts_schema_chunk_fixed20", StringComparison.OrdinalIgnoreCase))
+            {
+                template.Instructions = StoriesServiceDefaults.GetDefaultTtsStructuredInstructions();
+                template.UpdatedAt = DateTime.UtcNow.ToString("o");
+                _service._database.UpdateStepTemplate(template);
             }
 
             var configPayload = JsonSerializer.Serialize(new
@@ -1605,8 +1736,8 @@ public sealed class StoriesService
                 continue;
             }
 
-            if (!TryReadPhrase(entry, out var characterName, out var text, out var emotion))
-                continue;
+                if (!TryReadPhrase(entry, out var characterName, out var text, out var emotion))
+                    continue;
 
             phraseCounter++;
 
@@ -1626,7 +1757,14 @@ public sealed class StoriesService
             int? durationFromResult;
             try
             {
-                (audioBytes, durationFromResult) = await GenerateAudioBytesAsync(character.VoiceId!, text, emotion);
+                var cleanText = CleanTtsText(text);
+                if (string.IsNullOrWhiteSpace(cleanText))
+                {
+                    _progress?.Append(runId, $"[{story.Id}] Salto frase vuota dopo pulizia (character={characterName})");
+                    continue;
+                }
+
+                (audioBytes, durationFromResult) = await GenerateAudioBytesAsync(character.VoiceId!, cleanText, emotion);
             }
             catch (Exception ex)
             {
@@ -1941,5 +2079,25 @@ public sealed class StoriesService
 
         public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
             => Task.FromResult<(bool success, string? message)>((false, _message));
+    }
+
+    internal static class StoriesServiceDefaults
+    {
+        public static string GetDefaultTtsStructuredInstructions() => @"Leggi attentamente il testo del chunk e trascrivilo integralmente nel formato seguente, senza riassumere o saltare frasi, senza aggiungere note o testo extra.
+
+Usa SOLO queste sezioni ripetute nell’ordine del testo:
+
+[NARRATORE]
+Testo narrativo così come appare nel chunk
+
+[PERSONAGGIO: NomePersonaggio | EMOZIONE: emotion]
+Battuta di dialogo così come appare nel chunk
+
+Regole:
+- NON cambiare lingua, NON abbreviare, NON riassumere.
+- Se non è chiaramente un dialogo, usa NARRATORE.
+- EMOZIONE: usa una tra neutral, happy, sad, angry, fearful, disgusted, surprised (default neutral se non indicata).
+- Non aggiungere spiegazioni o altro testo fuori dai blocchi.
+- Copri tutto il chunk, più blocchi uno dopo l’altro finché il chunk è esaurito.";
     }
 }

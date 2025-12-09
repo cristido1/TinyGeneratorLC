@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 
@@ -47,19 +48,22 @@ namespace TinyGenerator.Services
         private readonly Channel<CommandWorkItem> _queue;
         private readonly int _parallelism;
         private readonly ICustomLogger? _logger;
+        private readonly Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? _hubContext;
         private readonly List<Task> _workers = new();
         private CancellationTokenSource? _cts;
         private long _counter;
         private bool _disposed;
         private readonly ConcurrentDictionary<string, CommandState> _active = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, CommandState> _completed = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<CommandResult>> _completionTasks = new(StringComparer.OrdinalIgnoreCase);
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
-        public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null)
+        public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null, Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? hubContext = null)
         {
             _parallelism = Math.Max(1, options?.Value?.MaxParallelCommands ?? 2);
             _logger = logger;
+            _hubContext = hubContext;
             _queue = Channel.CreateUnbounded<CommandWorkItem>(new UnboundedChannelOptions
             {
                 SingleWriter = false,
@@ -98,10 +102,16 @@ namespace TinyGenerator.Services
                 ThreadScope = safeScope,
                 Metadata = metadata,
                 Status = "queued",
-                EnqueuedAt = DateTimeOffset.UtcNow
+                EnqueuedAt = DateTimeOffset.UtcNow,
+                AgentName = metadata != null && metadata.TryGetValue("agentName", out var an) ? an : null,
+                ModelName = metadata != null && metadata.TryGetValue("modelName", out var mn) ? mn : null,
+                CurrentStep = metadata != null && metadata.TryGetValue("stepCurrent", out var sc) && int.TryParse(sc, out var c) ? c : null,
+                MaxStep = metadata != null && metadata.TryGetValue("stepMax", out var sm) && int.TryParse(sm, out var m) ? m : null
             };
             _active[id] = state;
             _completionTasks[id] = workItem.Completion.Task;
+
+            _ = BroadcastCommandsAsync();
 
             return new CommandHandle(id, op, workItem.Completion.Task);
         }
@@ -166,6 +176,7 @@ namespace TinyGenerator.Services
                 state.Status = "running";
                 state.StartedAt = DateTimeOffset.UtcNow;
             }
+            await BroadcastCommandsAsync().ConfigureAwait(false);
 
             try
             {
@@ -174,6 +185,15 @@ namespace TinyGenerator.Services
                 var endLevel = result.Success ? "Information" : "Error";
                 _logger?.Log(endLevel, "Command", $"[{workItem.RunId}] END {workItem.OperationName} => {finalMessage}");
                 workItem.Completion.TrySetResult(result);
+                
+                // Aggiorna stato completato
+                if (_active.TryGetValue(workItem.RunId, out var completedState))
+                {
+                    completedState.Status = result.Success ? "completed" : "failed";
+                    completedState.CompletedAt = DateTimeOffset.UtcNow;
+                    completedState.ErrorMessage = result.Success ? null : result.Message;
+                }
+                
                 RaiseCompleted(workItem.RunId, workItem.OperationName, result);
             }
             catch (OperationCanceledException oce)
@@ -181,6 +201,14 @@ namespace TinyGenerator.Services
                 _logger?.Log("Warning", "Command", $"[{workItem.RunId}] CANCEL {workItem.OperationName}: {oce.Message}", oce.ToString());
                 var result = new CommandResult(false, "Operazione annullata");
                 workItem.Completion.TrySetResult(result);
+                
+                if (_active.TryGetValue(workItem.RunId, out var cancelledState))
+                {
+                    cancelledState.Status = "cancelled";
+                    cancelledState.CompletedAt = DateTimeOffset.UtcNow;
+                    cancelledState.ErrorMessage = "Operazione annullata";
+                }
+                
                 RaiseCompleted(workItem.RunId, workItem.OperationName, result);
             }
             catch (Exception ex)
@@ -188,18 +216,40 @@ namespace TinyGenerator.Services
                 _logger?.Log("Error", "Command", $"[{workItem.RunId}] ERROR {workItem.OperationName}: {ex.Message}", ex.ToString());
                 var result = new CommandResult(false, ex.Message);
                 workItem.Completion.TrySetResult(result);
+                
+                if (_active.TryGetValue(workItem.RunId, out var errorState))
+                {
+                    errorState.Status = "failed";
+                    errorState.CompletedAt = DateTimeOffset.UtcNow;
+                    errorState.ErrorMessage = ex.Message;
+                }
+                
                 RaiseCompleted(workItem.RunId, workItem.OperationName, result);
             }
             finally
             {
-                _active.TryRemove(workItem.RunId, out _);
+                // Sposta da _active a _completed per mostrare per 5 minuti
+                if (_active.TryRemove(workItem.RunId, out var finalState))
+                {
+                    _completed[workItem.RunId] = finalState;
+                    // Schedula rimozione dopo 5 minuti
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+                        _completed.TryRemove(workItem.RunId, out _);
+                        await BroadcastCommandsAsync().ConfigureAwait(false);
+                    });
+                }
                 _completionTasks.TryRemove(workItem.RunId, out _);
+                await BroadcastCommandsAsync().ConfigureAwait(false);
             }
         }
 
         public IReadOnlyList<CommandSnapshot> GetActiveCommands()
         {
             var list = new List<CommandSnapshot>();
+            
+            // Aggiungi comandi attivi (queued o running)
             foreach (var kvp in _active)
             {
                 var s = kvp.Value;
@@ -210,10 +260,65 @@ namespace TinyGenerator.Services
                     s.Status,
                     s.EnqueuedAt,
                     s.StartedAt,
-                    s.Metadata));
+                    s.CompletedAt,
+                    s.Metadata,
+                    s.AgentName,
+                    s.ModelName,
+                    s.CurrentStep,
+                    s.MaxStep,
+                    s.RetryCount,
+                    s.ErrorMessage));
             }
+            
+            // Aggiungi comandi completati (da mostrare per 5 minuti)
+            foreach (var kvp in _completed)
+            {
+                var s = kvp.Value;
+                list.Add(new CommandSnapshot(
+                    s.RunId,
+                    s.OperationName,
+                    s.ThreadScope,
+                    s.Status,
+                    s.EnqueuedAt,
+                    s.StartedAt,
+                    s.CompletedAt,
+                    s.Metadata,
+                    s.AgentName,
+                    s.ModelName,
+                    s.CurrentStep,
+                    s.MaxStep,
+                    s.RetryCount,
+                    s.ErrorMessage));
+            }
+            
             list.Sort((a, b) => a.EnqueuedAt.CompareTo(b.EnqueuedAt));
             return list;
+        }
+
+        public void UpdateStep(string runId, int current, int max)
+        {
+            if (_active.TryGetValue(runId, out var state))
+            {
+                state.CurrentStep = current;
+                state.MaxStep = max;
+                _ = BroadcastCommandsAsync();
+            }
+        }
+
+        public void UpdateRetry(string runId, int retryCount)
+        {
+            if (_active.TryGetValue(runId, out var state))
+            {
+                state.RetryCount = retryCount;
+                _ = BroadcastCommandsAsync();
+            }
+        }
+
+        private Task BroadcastCommandsAsync()
+        {
+            if (_hubContext == null) return Task.CompletedTask;
+            var snapshot = GetActiveCommands();
+            return _hubContext.Clients.All.SendAsync("CommandListUpdated", snapshot);
         }
 
         public void Dispose()
@@ -272,6 +377,13 @@ namespace TinyGenerator.Services
         public string Status { get; set; } = "queued";
         public DateTimeOffset EnqueuedAt { get; set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset? StartedAt { get; set; }
+        public DateTimeOffset? CompletedAt { get; set; }
         public IReadOnlyDictionary<string, string>? Metadata { get; set; }
+        public string? AgentName { get; set; }
+        public string? ModelName { get; set; }
+        public int? CurrentStep { get; set; }
+        public int? MaxStep { get; set; }
+        public int RetryCount { get; set; }
+        public string? ErrorMessage { get; set; }
     }
 }

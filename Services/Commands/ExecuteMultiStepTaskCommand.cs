@@ -10,6 +10,7 @@ namespace TinyGenerator.Services.Commands
         private readonly DatabaseService _database;
         private readonly ICustomLogger _logger;
         private readonly ProgressService? _progressService;
+        private readonly ICommandDispatcher? _dispatcher;
 
         public ExecuteMultiStepTaskCommand(
             long executionId,
@@ -17,7 +18,8 @@ namespace TinyGenerator.Services.Commands
             MultiStepOrchestrationService orchestrator,
             DatabaseService database,
             ICustomLogger logger,
-            ProgressService? progressService = null)
+            ProgressService? progressService = null,
+            ICommandDispatcher? dispatcher = null)
         {
             _executionId = executionId;
             _generationId = generationId;
@@ -25,6 +27,7 @@ namespace TinyGenerator.Services.Commands
             _database = database;
             _logger = logger;
             _progressService = progressService;
+            _dispatcher = dispatcher;
         }
 
         public async Task ExecuteAsync(CancellationToken ct = default)
@@ -55,6 +58,13 @@ namespace TinyGenerator.Services.Commands
                 {
                     _logger.Log("Information", "MultiStep", $"Step {current}/{max}: {stepDesc}");
                     _progressService?.BroadcastStepProgress(_generationId, current, max, stepDesc);
+                    _dispatcher?.UpdateStep(_generationId.ToString(), current, max);
+                }
+                
+                // Retry callback
+                void ReportRetry(int retryCount)
+                {
+                    _dispatcher?.UpdateRetry(_generationId.ToString(), retryCount);
                 }
 
                 // Execute all steps
@@ -66,7 +76,8 @@ namespace TinyGenerator.Services.Commands
                     _executionId,
                     threadId,
                     (desc, current, max, stepDesc) => ReportProgress(current, max, stepDesc),
-                    executionCts.Token
+                    executionCts.Token,
+                    retryCount => ReportRetry(retryCount)
                 );
                 Console.WriteLine($"[DEBUG] ExecuteMultiStepTaskCommand - ExecuteAllStepsAsync completed successfully");
 
@@ -84,6 +95,7 @@ namespace TinyGenerator.Services.Commands
                     execution.Status = "cancelled";
                     execution.UpdatedAt = DateTime.UtcNow.ToString("o");
                     _database.UpdateTaskExecution(execution);
+                    TryDeleteStoryForExecution(execution);
                 }
 
                 _progressService?.BroadcastTaskComplete(_generationId, "cancelled");
@@ -104,9 +116,26 @@ namespace TinyGenerator.Services.Commands
                     execution.Status = "failed";
                     execution.UpdatedAt = DateTime.UtcNow.ToString("o");
                     _database.UpdateTaskExecution(execution);
+                    TryDeleteStoryForExecution(execution);
                 }
 
                 _progressService?.BroadcastTaskComplete(_generationId, "failed");
+            }
+        }
+
+        private void TryDeleteStoryForExecution(TaskExecution execution)
+        {
+            try
+            {
+                if (execution.TaskType == "story" && execution.EntityId.HasValue)
+                {
+                    _database.DeleteStoryById(execution.EntityId.Value);
+                    _logger.Log("Information", "MultiStep", $"Deleted placeholder story {execution.EntityId.Value} after failed/cancelled execution {_executionId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Log("Warning", "MultiStep", $"Unable to delete placeholder story for execution {_executionId}: {ex.Message}");
             }
         }
     }

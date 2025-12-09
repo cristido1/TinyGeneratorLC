@@ -6,6 +6,7 @@ using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.Memory;
 using TinyGenerator;
 using TinyGenerator.Services;
+using Microsoft.AspNetCore.SignalR;
 using TinyGenerator.Hubs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -89,7 +90,12 @@ builder.Services.AddSingleton<ProgressService>();
 builder.Services.AddSingleton<NotificationService>();
 // Command dispatcher (background command queue with configurable parallelism)
 builder.Services.Configure<CommandDispatcherOptions>(builder.Configuration.GetSection("CommandDispatcher"));
-builder.Services.AddSingleton<CommandDispatcher>();
+builder.Services.AddSingleton<CommandDispatcher>(sp =>
+    new CommandDispatcher(
+        sp.GetService<IOptions<CommandDispatcherOptions>>(),
+        sp.GetService<ICustomLogger>(),
+        sp.GetService<IHubContext<TinyGenerator.Hubs.ProgressHub>>()
+    ));
 builder.Services.AddSingleton<ICommandDispatcher>(sp => sp.GetRequiredService<CommandDispatcher>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>());
 

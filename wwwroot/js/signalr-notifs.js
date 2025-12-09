@@ -78,6 +78,17 @@
             .withUrl('/progressHub')
             .withAutomaticReconnect()
             .build();
+        let startPromise = null;
+
+        async function ensureStarted() {
+            if (connection.state === 'Connected') return;
+            if (startPromise) return startPromise;
+            startPromise = connection.start().catch(err => {
+                startPromise = null; // reset so we can retry later
+                throw err;
+            });
+            return startPromise;
+        }
 
         connection.on('AppNotification', function(payload) {
             // payload might be object or string args
@@ -118,7 +129,7 @@
             } catch(e) { console.warn('ProgressCompleted handler failed', e); }
         });
 
-        connection.start().then(function(){
+        ensureStarted().then(function(){
             console.debug('SignalR connected: progressHub');
         }).catch(function(err){
             console.warn('SignalR connect failed', err);
@@ -127,10 +138,24 @@
         window.appSignalR = {
             connection: connection,
             joinGroup: async function(group){
-                try { await connection.invoke('JoinGroup', group); return true; } catch(e){ console.warn('joinGroup failed', e); return false; }
+                try {
+                    await ensureStarted();
+                    await connection.invoke('JoinGroup', group);
+                    return true;
+                } catch(e){
+                    console.warn('joinGroup failed', e);
+                    return false;
+                }
             },
             leaveGroup: async function(group){
-                try { await connection.invoke('LeaveGroup', group); return true; } catch(e){ console.warn('leaveGroup failed', e); return false; }
+                try {
+                    await ensureStarted();
+                    await connection.invoke('LeaveGroup', group);
+                    return true;
+                } catch(e){
+                    console.warn('leaveGroup failed', e);
+                    return false;
+                }
             }
             ,
             registerRunMap: function(map) {

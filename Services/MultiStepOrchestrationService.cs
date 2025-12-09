@@ -160,7 +160,8 @@ namespace TinyGenerator.Services
             long executionId,
             int threadId,
             Action<string, int, int, string>? progressCallback = null,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            Action<int>? retryCallback = null)
         {
             Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync START - executionId={executionId}, threadId={threadId}");
             _logger.Log("Information", "MultiStep", $"[START] ExecuteAllStepsAsync for execution {executionId}, threadId={threadId}");
@@ -232,7 +233,7 @@ namespace TinyGenerator.Services
                     progressCallback?.Invoke($"Execution:{executionId}", execution.CurrentStep, execution.MaxStep, stepInstruction ?? string.Empty);
 
                     Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - About to call ExecuteNextStepAsync");
-                    await ExecuteNextStepAsync(executionId, threadId, ct);
+                    await ExecuteNextStepAsync(executionId, threadId, ct, retryCallback);
                     Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - ExecuteNextStepAsync completed");
 
                     // Reload execution to get updated state
@@ -278,7 +279,8 @@ namespace TinyGenerator.Services
         public async Task<TaskExecutionStep> ExecuteNextStepAsync(
             long executionId,
             int threadId,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            Action<int>? retryCallback = null)
         {
             var execution = _database.GetTaskExecutionById(executionId);
             if (execution == null)
@@ -365,7 +367,20 @@ namespace TinyGenerator.Services
                     }
                     else
                     {
-                        var feedbackMessage = $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
+                        var feedbackMessage = string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase)
+                            ? $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
+
+Il tentativo precedente è stato respinto per il seguente motivo:
+{lastAttempt.ParsedValidation.Reason}
+
+Ripeti la trascrizione del chunk usando SOLO blocchi:
+[NARRATORE]
+Testo narrativo
+[PERSONAGGIO: Nome | EMOZIONE: emotion]
+Testo parlato
+NON aggiungere altro testo o JSON, copri tutto il chunk senza saltare nulla.
+"
+                            : $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
 
 Il tentativo precedente è stato respinto per il seguente motivo:
 {lastAttempt.ParsedValidation.Reason}
@@ -411,7 +426,7 @@ Correggi l'output tenendo conto del feedback ricevuto.
             // Check if stepInstruction contains {{PROMPT}} tag
             string fullPrompt;
             var templateInstructions = GetTemplateInstructions(execution);
-            string systemMessage = !string.IsNullOrWhiteSpace(templateInstructions)
+            var systemMessage = !string.IsNullOrWhiteSpace(templateInstructions)
                 ? templateInstructions!
                 : executorAgent.Instructions ?? string.Empty;
             // Note: any validation-requested system overrides are injected via `extraMessages`
@@ -551,13 +566,23 @@ Correggi l'output tenendo conto del feedback ricevuto.
             var taskTypeInfo = _database.GetTaskTypeByCode(execution.TaskType);
             var validationCriteria = taskTypeInfo?.ParsedValidationCriteria;
 
+            // If tts_schema and the model did not return tool_calls, try to convert structured text blocks to tool_calls JSON
+            if (string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+            {
+                var converted = ConvertStructuredTtsTextToToolCalls(output);
+                if (!string.IsNullOrWhiteSpace(converted))
+                {
+                    output = converted;
+                }
+            }
+
             ValidationResult baseValidation;
 
             // Task-specific deterministic checks (e.g., TTS coverage) are executed here
             if (string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
             {
                 // Use chunkText for coverage comparison (may be empty if not applicable)
-                var ttsResult = _checkerService.ValidateTtsSchemaResponse(output, chunkText ?? string.Empty, 0.90);
+                var ttsResult = _checkerService.ValidateTtsSchemaResponse(output, chunkText ?? string.Empty, 0.80);
 
                 var reasons = new List<string>();
                 if (ttsResult.Errors.Any()) reasons.AddRange(ttsResult.Errors);
@@ -585,40 +610,42 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 );
             }
 
-            // If the executor agent exposes skills/tools but the output contains no tool calls,
-            // craft a short tool-use reminder using the response_checker (LLM) to help the agent.
-            try
+            // Skip tool-use reminders for tts_schema (ora usa output testuale strutturato).
+            if (!string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
             {
-                var skills = ParseSkills(executorAgent.Skills);
-                if (skills.Count > 0 && !_checkerService.ContainsToolCalls(output))
+                try
                 {
-                    // Build a short reminder to return to the agent on retry
-                    var toolSchemas = executorToolSchemas;
-                    var reminderObj = await _checkerService.BuildToolUseReminderAsync(
-                        systemMessage,
-                        fullPrompt ?? string.Empty,
-                        output,
-                        toolSchemas,
-                        execution.RetryCount);
-
-                    if (reminderObj != null && !string.IsNullOrWhiteSpace(reminderObj.Value.content))
+                    var skills = ParseSkills(executorAgent.Skills);
+                    if (skills.Count > 0 && !_checkerService.ContainsToolCalls(output))
                     {
-                        baseValidation = new ValidationResult
+                        // Build a short reminder to return to the agent on retry
+                        var toolSchemas = executorToolSchemas;
+                        var reminderObj = await _checkerService.BuildToolUseReminderAsync(
+                            systemMessage,
+                            fullPrompt ?? string.Empty,
+                            output,
+                            toolSchemas,
+                            execution.RetryCount);
+
+                        if (reminderObj != null && !string.IsNullOrWhiteSpace(reminderObj.Value.content))
                         {
-                            IsValid = false,
-                            Reason = reminderObj.Value.content,
-                            NeedsRetry = true,
-                            SemanticScore = null,
-                            SystemMessageOverride = string.Equals(reminderObj.Value.role, "system", StringComparison.OrdinalIgnoreCase)
-                                ? reminderObj.Value.content
-                                : null
-                        };
+                            baseValidation = new ValidationResult
+                            {
+                                IsValid = false,
+                                Reason = reminderObj.Value.content,
+                                NeedsRetry = true,
+                                SemanticScore = null,
+                                SystemMessageOverride = string.Equals(reminderObj.Value.role, "system", StringComparison.OrdinalIgnoreCase)
+                                    ? reminderObj.Value.content
+                                    : null
+                            };
+                        }
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.Log("Warning", "MultiStep", $"Tool-reminder generation failed: {ex.Message}");
+                catch (Exception ex)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Tool-reminder generation failed: {ex.Message}");
+                }
             }
 
             ValidationResult validationResult;
@@ -706,11 +733,14 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 execution.RetryCount++;
                 execution.UpdatedAt = DateTime.UtcNow.ToString("o");
                 _database.UpdateTaskExecution(execution);
+                
+                // Notifica retry al dispatcher
+                retryCallback?.Invoke(execution.RetryCount);
 
                 if (execution.RetryCount <= 2)
                 {
                     // Retry same step with feedback
-                    return await ExecuteNextStepAsync(executionId, threadId, ct);
+                    return await ExecuteNextStepAsync(executionId, threadId, ct, retryCallback);
                 }
                 else
                 {
@@ -991,6 +1021,117 @@ Correggi l'output tenendo conto del feedback ricevuto.
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Convert a structured text response (blocks like [NARRATORE] ... or [PERSONAGGIO: X | EMOZIONE: Y]) into a tool_calls JSON.
+        /// Returns null/empty if conversion is not applicable.
+        /// </summary>
+        private static string? ConvertStructuredTtsTextToToolCalls(string? output)
+        {
+            if (string.IsNullOrWhiteSpace(output)) return null;
+            // If it already contains tool_calls or add_narration/add_phrase, skip
+            if (output.IndexOf("add_narration", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                output.IndexOf("add_phrase", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                output.IndexOf("\"tool_calls\"", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return null;
+            }
+
+            var lines = output.Replace("\r\n", "\n").Split('\n');
+            var blocks = new List<(string type, string character, string emotion, List<string> content)>();
+            string? currentType = null;
+            string currentCharacter = string.Empty;
+            string currentEmotion = "neutral";
+            var buffer = new List<string>();
+
+            var narratorRegex = new Regex(@"^\[\s*NARRATORE\s*\]\s*$", RegexOptions.IgnoreCase);
+            var characterRegex = new Regex(@"\[\s*PERSONAGGIO:\s*(?<name>[^\]|]+?)\s*(?:\|\s*EMOZIONE:\s*(?<emo>[^\]]+))?\s*\]\s*", RegexOptions.IgnoreCase);
+
+            void Flush()
+            {
+                if (currentType == null) return;
+                var text = string.Join("\n", buffer).Trim();
+                if (string.IsNullOrWhiteSpace(text)) return;
+                blocks.Add((currentType, currentCharacter, currentEmotion, new List<string> { text }));
+                buffer.Clear();
+            }
+
+            foreach (var rawLine in lines)
+            {
+                var line = rawLine ?? string.Empty;
+                if (narratorRegex.IsMatch(line))
+                {
+                    Flush();
+                    currentType = "narration";
+                    currentCharacter = "Narratore";
+                    currentEmotion = "neutral";
+                    continue;
+                }
+
+                var cm = characterRegex.Match(line);
+                if (cm.Success)
+                {
+                    Flush();
+                    currentType = "phrase";
+                    currentCharacter = cm.Groups["name"].Value.Trim();
+                    currentEmotion = string.IsNullOrWhiteSpace(cm.Groups["emo"].Value)
+                        ? "neutral"
+                        : cm.Groups["emo"].Value.Trim();
+                    continue;
+                }
+
+                buffer.Add(line);
+            }
+            Flush();
+
+            if (blocks.Count == 0) return null;
+
+            var toolCalls = new List<Dictionary<string, object>>();
+            int idx = 0;
+            foreach (var b in blocks)
+            {
+                if (b.type == "narration")
+                {
+                    toolCalls.Add(new Dictionary<string, object>
+                    {
+                        ["id"] = $"conv_{idx++}",
+                        ["type"] = "function",
+                        ["function"] = new Dictionary<string, object>
+                        {
+                            ["name"] = "add_narration",
+                            ["arguments"] = new Dictionary<string, object>
+                            {
+                                ["text"] = b.content[0]
+                            }
+                        }
+                    });
+                }
+                else
+                {
+                    toolCalls.Add(new Dictionary<string, object>
+                    {
+                        ["id"] = $"conv_{idx++}",
+                        ["type"] = "function",
+                        ["function"] = new Dictionary<string, object>
+                        {
+                            ["name"] = "add_phrase",
+                            ["arguments"] = new Dictionary<string, object>
+                            {
+                                ["character"] = string.IsNullOrWhiteSpace(b.character) ? "Narratore" : b.character,
+                                ["emotion"] = string.IsNullOrWhiteSpace(b.emotion) ? "neutral" : b.emotion,
+                                ["text"] = b.content[0]
+                            }
+                        }
+                    });
+                }
+            }
+
+            var jsonObj = new Dictionary<string, object>
+            {
+                ["tool_calls"] = toolCalls
+            };
+            return JsonSerializer.Serialize(jsonObj);
         }
 
         private async Task<string> BuildStepContextAsync(
@@ -1300,7 +1441,26 @@ RIASSUNTO:";
             // Update entity if linked
             if (execution.EntityId.HasValue && execution.TaskType == "story")
             {
-                _database.UpdateStoryById(execution.EntityId.Value, story: merged);
+                var agent = await GetExecutorAgentAsync(execution, threadId);
+                var modelOverride = GetExecutionModelOverride(execution);
+                int? modelId = null;
+
+                if (!string.IsNullOrWhiteSpace(modelOverride))
+                {
+                    var modelInfoByName = _database.GetModelInfo(modelOverride);
+                    modelId = modelInfoByName?.Id;
+                }
+
+                if (modelId == null && agent?.ModelId != null)
+                {
+                    modelId = agent.ModelId;
+                }
+
+                _database.UpdateStoryById(
+                    execution.EntityId.Value,
+                    story: merged,
+                    agentId: agent?.Id,
+                    modelId: modelId);
             }
 
             // If this is a TTS schema generation, aggregate all tool calls from steps
@@ -1315,9 +1475,15 @@ RIASSUNTO:";
                     foreach (var step in steps.OrderBy(s => s.StepNumber))
                     {
                         var stepOutput = step.StepOutput ?? string.Empty;
+                        // Ensure stepOutput is converted to tool_calls if the executor produced structured text
+                        var converted = ConvertStructuredTtsTextToToolCalls(stepOutput);
+                        if (!string.IsNullOrWhiteSpace(converted))
+                        {
+                            stepOutput = converted;
+                        }
                         var chunkText = step.StepNumber <= chunks.Count ? chunks[step.StepNumber - 1] : string.Empty;
 
-                        var ttsResult = _checkerService.ValidateTtsSchemaResponse(stepOutput, chunkText, 0.90);
+                        var ttsResult = _checkerService.ValidateTtsSchemaResponse(stepOutput, chunkText, 0.80);
 
                         foreach (var parsed in ttsResult.ExtractedToolCalls)
                         {

@@ -255,9 +255,14 @@
                                     {
                                         @foreach (var m in Model.AvailableModels)
                                         {
-                                            <option value="@m.Name" selected="@(m.Name == Model.SelectedModel)">
-                                                @m.Name
-                                            </option>
+                                            if (m.Name == Model.SelectedModel)
+                                            {
+                                                <option value="@m.Name" selected>@m.Name</option>
+                                            }
+                                            else
+                                            {
+                                                <option value="@m.Name">@m.Name</option>
+                                            }
                                         }
                                     }
                                 </select>
@@ -346,6 +351,7 @@
                         {
                             <div class="chat-footer">
                                 <form method="post" asp-page-handler="SendMessage" asp-route-model="@Model.SelectedModel">
+                                    @Html.AntiForgeryToken()
                                     <div class="chat-input-group">
                                         <input type="text" class="form-control" name="message" 
                                                placeholder="Scrivi un messaggio..." required autocomplete="off" />

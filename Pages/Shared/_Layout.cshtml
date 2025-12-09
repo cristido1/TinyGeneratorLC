@@ -180,137 +180,6 @@
             position: static !important;
         }
         
-        /* Active agents badges */
-        #active-agents-container {
-            position: fixed;
-            bottom: 20px;
-            left: 20px;
-            z-index: 9998;
-            display: flex;
-            flex-direction: column-reverse;
-            gap: 8px;
-            max-width: 220px;
-        }
-        
-        .agent-badge {
-            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
-            color: white;
-            padding: 8px 12px;
-            border-radius: 6px;
-            box-shadow: 0 3px 8px rgba(22, 163, 74, 0.4);
-            font-family: 'Roboto Mono', monospace;
-            font-size: 11px;
-            animation: slideInLeft 0.3s ease-out;
-            position: relative;
-            overflow: hidden;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .agent-badge.model-badge {
-            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-            box-shadow: 0 3px 8px rgba(37, 99, 235, 0.4);
-        }
-        
-        .agent-badge::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-            animation: shimmer 2s infinite;
-        }
-        
-        .agent-badge-icon {
-            font-size: 16px;
-            animation: thinking 1.5s ease-in-out infinite;
-            z-index: 1;
-        }
-
-        .agent-badge-icon.icon-busy {
-            animation: pulseBusy 1.4s ease-in-out infinite;
-        }
-        
-        .agent-badge-content {
-            flex: 1;
-            min-width: 0;
-            z-index: 1;
-        }
-        
-        @@keyframes slideInLeft {
-            from {
-                transform: translateX(-100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-        
-        @@keyframes slideOutLeft {
-            from {
-                transform: translateX(0);
-                opacity: 1;
-            }
-            to {
-                transform: translateX(-100%);
-                opacity: 0;
-            }
-        }
-        
-        @@keyframes shimmer {
-            to {
-                left: 100%;
-            }
-        }
-        
-        @@keyframes thinking {
-            0%, 100% {
-                transform: scale(1) rotate(0deg);
-            }
-            25% {
-                transform: scale(1.15) rotate(-8deg);
-            }
-            75% {
-                transform: scale(1.15) rotate(8deg);
-            }
-        }
-
-        @@keyframes pulseBusy {
-            0%, 100% { transform: scale(1); opacity: 0.85; }
-            50% { transform: scale(1.2); opacity: 1; }
-        }
-        
-        .agent-badge.removing {
-            animation: slideOutLeft 0.3s ease-in forwards;
-        }
-        
-        .agent-badge-name {
-            font-weight: 600;
-            font-size: 11px;
-            margin-bottom: 2px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        
-        .agent-badge-status {
-            font-size: 10px;
-            opacity: 0.9;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .agent-badge.model-badge .agent-badge-status {
-            opacity: 1;
-        }
     </style>
     
     @await RenderSectionAsync("Styles", required: false)
@@ -320,8 +189,6 @@
     <!-- Space background canvas (stars + spaceship) -->
     <canvas id="space-canvas"></canvas>
     
-    <!-- Active agents badges container -->
-    <div id="active-agents-container"></div>
     <!-- Main content area with header (title + home icon) rendered by layout -->
     @{
         var path = Context.Request.Path.HasValue ? Context.Request.Path.Value.ToLowerInvariant() : "/";
@@ -357,7 +224,9 @@
     </div>
 
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="~/lib/signalr/signalr.min.js"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
+    <script src="~/js/command-panel.js" asp-append-version="true"></script>
 
     <!-- Shared JS libs: jQuery (local + CDN fallback), SignalR, DataTables and Buttons -->
     <script src="~/lib/jquery/jquery.min.js"></script>
@@ -435,9 +304,6 @@
     <!-- <script src="~/js/matrix_effect.js" asp-append-version="true"></script> -->
     <!-- Space background effect (stars + occasional spaceship) -->
     <script src="~/js/space-background.js" asp-append-version="true"></script>
-
-    <!-- Active Agents Badge Manager -->
-    <script src="~/js/active-agents.js" asp-append-version="true"></script>
 
     <!-- App SignalR notification client (toasts) -->
     <script src="~/js/signalr-notifs.js" asp-append-version="true"></script>

@@ -32,17 +32,7 @@ namespace TinyGenerator.Pages
 
         public void OnGet(string? model)
         {
-            // Load available models
-            AvailableModels = _database.ListModels();
-
-            if (!string.IsNullOrEmpty(model) && AvailableModels.Any(m => m.Name == model))
-            {
-                SelectedModel = model;
-                SelectedModelInfo = AvailableModels.FirstOrDefault(m => m.Name == model);
-                
-                // Load conversation history from session
-                ConversationHistory = GetConversationHistory(model);
-            }
+            InitializePage(model);
         }
 
         public async Task<IActionResult> OnPostSendMessage(string model, string message)
@@ -54,7 +44,7 @@ namespace TinyGenerator.Pages
                 if (modelInfo == null)
                 {
                     TempData["Error"] = "Modello non trovato";
-                    return RedirectToPage("Chat", new { model });
+                    return Redirect($"/Chat?model={System.Net.WebUtility.UrlEncode(model)}");
                 }
 
                 // Get conversation history from session
@@ -148,12 +138,14 @@ namespace TinyGenerator.Pages
                 // Save updated history to session
                 SaveConversationHistory(model, history);
 
-                return RedirectToPage("Chat", new { model });
+                InitializePage(model);
+                return Page();
             }
             catch (Exception ex)
             {
                 TempData["Error"] = $"Errore: {ex.Message}";
-                return RedirectToPage("Chat", new { model });
+                InitializePage(model);
+                return Page();
             }
         }
 
@@ -169,7 +161,35 @@ namespace TinyGenerator.Pages
                 return LocalRedirect(returnUrl);
             }
 
-            return RedirectToPage("Chat", new { model });
+            return Redirect($"/Chat?model={System.Net.WebUtility.UrlEncode(model)}");
+        }
+
+        private void InitializePage(string? model)
+        {
+            // Load available models
+            AvailableModels = _database.ListModels();
+
+            // If route parameter is empty, try fallback to querystring (safer for names containing slashes)
+            if (string.IsNullOrEmpty(model))
+            {
+                if (Request?.Query != null && Request.Query.ContainsKey("model"))
+                {
+                    var q = Request.Query["model"].ToString();
+                    if (!string.IsNullOrEmpty(q))
+                    {
+                        model = System.Net.WebUtility.UrlDecode(q);
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(model) && AvailableModels.Any(m => m.Name == model))
+            {
+                SelectedModel = model;
+                SelectedModelInfo = AvailableModels.FirstOrDefault(m => m.Name == model);
+                
+                // Load conversation history from session
+                ConversationHistory = GetConversationHistory(model);
+            }
         }
 
         private List<ConversationMessage> GetConversationHistory(string modelName)

@@ -510,7 +510,7 @@ namespace TinyGenerator.Services
         public TtsValidationResult ValidateTtsSchemaResponse(
             string modelResponse,
             string originalStoryChunk,
-            double minimumCoverageThreshold = 0.90)
+            double minimumCoverageThreshold = 0.80)
         {
             var result = new TtsValidationResult
             {
@@ -649,19 +649,19 @@ namespace TinyGenerator.Services
 
                 // Step 5: Validate coverage threshold
                 if (result.CoveragePercent >= minimumCoverageThreshold)
-                {
-                    result.IsValid = true;
-                    result.FeedbackMessage = $"Text coverage: {result.CoveragePercent:P1}. Schema is valid.";
-                }
-                else
-                {
-                    result.IsValid = false;
-                    var missingPercent = (1 - result.CoveragePercent) * 100;
-                    result.FeedbackMessage = $"Text coverage only {result.CoveragePercent:P1} (missing {missingPercent:F1}%). You must include ALL text from the original story with multiple calls in the response. Please add all the narration or dialogue phrases to cover at least {minimumCoverageThreshold:P0} of the source text.";
-                    // For TTS schema coverage failures, prefer injecting the corrective feedback as a system message
-                    // so the agent receives it outside of the user prompt.
-                    result.ShouldInjectAsSystem = true;
-                }
+            {
+                result.IsValid = true;
+                result.FeedbackMessage = $"Text coverage: {result.CoveragePercent:P1}. Schema is valid.";
+            }
+            else
+            {
+                result.IsValid = false;
+                var missingPercent = (1 - result.CoveragePercent) * 100;
+                result.FeedbackMessage = $"Text coverage only {result.CoveragePercent:P1} (missing {missingPercent:F1}%). Trascrivi tutto il chunk con blocchi [NARRATORE] o [PERSONAGGIO: Nome | EMOZIONE: emotion], senza saltare nulla, finché il testo è esaurito.";
+                // For TTS schema coverage failures, prefer injecting the corrective feedback as a system message
+                // so the agent receives it outside of the user prompt.
+                result.ShouldInjectAsSystem = true;
+            }
             }
             catch (Exception ex)
             {

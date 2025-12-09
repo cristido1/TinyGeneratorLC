@@ -7,10 +7,14 @@
     var visibleGroups = groupsHeader.Take(4).ToList();
 }
 <style>
-    /* Allow long model names to wrap instead of truncating */
+    /* Allow long model names to wrap instead of truncating; never truncate */
     .model-name-col {
-        white-space: normal;
-        word-break: break-word;
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+        overflow: visible !important;
+        hyphens: auto !important;
+        max-width: none !important;
     }
 
     /* Enable manual column resizing */
@@ -109,13 +113,9 @@
                         : "0";
                 };
 
-                var displayName = (!string.IsNullOrWhiteSpace(m.Name) && m.Name.Contains('/')) 
-                    ? m.Name[(m.Name.LastIndexOf('/') + 1)..] 
-                    : m.Name;
-
                 <tr data-model="@m.Name">
                     <td class="dt-control"></td>
-                    <td class="model-name-col">@displayName</td>
+                    <td class="model-name-col">@m.Name</td>
                     <td>
                         @if (m.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
                         {
@@ -152,7 +152,7 @@
                             <div class="btn-group">
                                 <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">Run</button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="/Chat/@System.Net.WebUtility.UrlEncode(m.Name)">💬 Chat with model</a></li>
+                                    <li><a class="dropdown-item" href="/Chat?model=@System.Net.WebUtility.UrlEncode(m.Name)">💬 Chat with model</a></li>
                                     <li><hr class="dropdown-divider"></li>
                                     <li><a class="dropdown-item run-model-all" href="#" data-model="@m.Name">All tests</a></li>
                                     @foreach(var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
@@ -398,6 +398,62 @@
                     loadTestGroups(model, container);
                 }
             });
+
+            // Live update for the bottom-right queue panel using ProgressHub (SignalR)
+            (function() {
+                if (typeof signalR === 'undefined') return;
+                try {
+                    const qPanel = document.getElementById('queuePanel');
+                    if (!qPanel) return;
+
+                    const badge = qPanel.querySelector('.card-header .badge');
+                    const list = qPanel.querySelector('.list-group');
+
+                    const render = (cmds) => {
+                        if (!Array.isArray(cmds) || cmds.length === 0) {
+                            if (badge) badge.textContent = '0';
+                            if (list) list.innerHTML = '<div class="list-group-item text-muted">Nessuna operazione in corso</div>';
+                            return;
+                        }
+
+                        if (badge) badge.textContent = cmds.length;
+
+                        const html = cmds.map(c => {
+                            const op = c.OperationName || c.ThreadScope || '';
+                            const modelName = (c.Metadata && c.Metadata.model) ? c.Metadata.model : (c.ModelName || '-');
+                            const statusClass = (c.Status || '').toLowerCase() === 'running' ? 'bg-success' : 'bg-warning text-dark';
+                            const enq = c.EnqueuedAt ? new Date(c.EnqueuedAt).toLocaleTimeString() : '';
+                            const started = c.StartedAt ? new Date(c.StartedAt).toLocaleTimeString() : '';
+                            const stepInfo = (c.CurrentStep && c.MaxStep) ? `<small class="ms-2">Step: ${c.CurrentStep}/${c.MaxStep}</small>` : '';
+
+                            return `
+                                <div class="list-group-item">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div>
+                                            <div class="fw-semibold">${op}</div>
+                                            <div class="text-muted">Model: ${modelName}</div>
+                                        </div>
+                                        <span class="badge ${statusClass} text-uppercase">${c.Status || ''}</span>
+                                    </div>
+                                    <div class="text-muted mt-1">
+                                        <small>Enqueued: ${enq}</small>
+                                        ${started ? `<small class="ms-2">Start: ${started}</small>` : ''}
+                                        ${stepInfo}
+                                    </div>
+                                </div>`;
+                        }).join('');
+
+                        if (list) list.innerHTML = html;
+                    };
+
+                    const conn = new signalR.HubConnectionBuilder().withUrl('/progressHub').withAutomaticReconnect().build();
+                    conn.on('CommandListUpdated', cmds => render(cmds || []));
+                    // When connected the hub will push an initial snapshot if any active commands exist
+                    conn.start().catch(e => console.debug('QueuePanel SR connect failed', e));
+                } catch (e) {
+                    console.error('QueuePanel live update failed', e);
+                }
+            })();
 
             function postHandler(handler, data) {
                 return fetch('?handler=' + handler, { method: 'POST', headers: { 'Accept': 'application/json' }, body: data });

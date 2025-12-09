@@ -10,7 +10,7 @@ namespace TinyGenerator.Services.Commands
         private readonly Guid _generationId;
         private readonly DatabaseService _database;
         private readonly MultiStepOrchestrationService _orchestrator;
-        private readonly CommandDispatcher _dispatcher;
+        private readonly ICommandDispatcher _dispatcher;
         private readonly ICustomLogger _logger;
 
         public StartMultiStepStoryCommand(
@@ -19,7 +19,7 @@ namespace TinyGenerator.Services.Commands
             Guid generationId,
             DatabaseService database,
             MultiStepOrchestrationService orchestrator,
-            CommandDispatcher dispatcher,
+            ICommandDispatcher dispatcher,
             ICustomLogger logger)
         {
             _theme = theme;
@@ -68,8 +68,16 @@ namespace TinyGenerator.Services.Commands
 
                 _logger.Log("Information", "MultiStep", $"Using template: {template.Name}");
 
-                // Create story record first  
-                var storyId = _database.InsertSingleStory(_theme, "[Multi-step generation in progress...]", agentId: _writerAgentId);
+                // Create story record first (store agent and model if available)
+                // Prefer executor model override if provided in agent metadata (optional)
+                int? modelId = agent.ModelId;
+                if (!string.IsNullOrWhiteSpace(agent.ModelName))
+                {
+                    var modelInfo = _database.GetModelInfo(agent.ModelName);
+                    if (modelInfo?.Id != null) modelId = modelInfo.Id;
+                }
+
+                var storyId = _database.InsertSingleStory(_theme, "[Multi-step generation in progress...]", agentId: _writerAgentId, modelId: modelId);
 
                 _logger.Log("Information", "MultiStep", $"Created story record {storyId}");
 
@@ -97,12 +105,20 @@ namespace TinyGenerator.Services.Commands
                             _generationId,
                             _orchestrator,
                             _database,
-                            _logger
+                            _logger,
+                            progressService: null,
+                            dispatcher: _dispatcher
                         );
                         await executeCmd.ExecuteAsync(ctx.CancellationToken);
                         return new CommandResult(true, "Task execution completed");
                     },
-                    runId: _generationId.ToString()
+                    runId: _generationId.ToString(),
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["agentName"] = agent.Name ?? string.Empty,
+                        ["modelName"] = modelId.HasValue ? (_database.GetModelInfoById(modelId.Value)?.Name ?? string.Empty) : string.Empty,
+                        ["operation"] = "story_multi_step"
+                    }
                 );
 
                 _logger.Log("Information", "MultiStep", $"Enqueued ExecuteMultiStepTaskCommand");

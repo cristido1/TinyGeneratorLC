@@ -144,96 +144,47 @@ namespace TinyGenerator.Services
                         Console.WriteLine($"[TtsService] Response body: {respText}");
                     }
 
-                    if (!resp.IsSuccessStatusCode) continue;
-
-                    // Handle JSON or raw audio responses
-                    var media = resp.Content.Headers.ContentType?.MediaType ?? string.Empty;
-                    if (media.StartsWith("application/json") || media.Contains("json"))
+                    if (resp.IsSuccessStatusCode)
                     {
-                        var result = await resp.Content.ReadFromJsonAsync<SynthesisResult>();
-                        if (result != null) return result;
-                    }
-                    else if (media.StartsWith("audio/") || media == "application/octet-stream" || string.IsNullOrEmpty(media))
-                    {
-                        // Treat body as raw audio bytes -> return base64
-                        try
+                        // Handle JSON or raw audio responses
+                        var media = resp.Content.Headers.ContentType?.MediaType ?? string.Empty;
+                        if (media.StartsWith("application/json") || media.Contains("json"))
                         {
+                            var result = await resp.Content.ReadFromJsonAsync<SynthesisResult>();
+                            if (result != null) return result;
+                            throw new InvalidOperationException("TTS response JSON vuoto/non interpretabile");
+                        }
+
+                        if (media.StartsWith("audio/") || media == "application/octet-stream" || string.IsNullOrEmpty(media))
+                        {
+                            // Treat body as raw audio bytes -> return base64
                             var bytes = await resp.Content.ReadAsByteArrayAsync();
                             var b64 = Convert.ToBase64String(bytes);
                             return new SynthesisResult { AudioBase64 = b64 };
                         }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[TtsService] Error reading binary response for {path}: {ex}");
-                        }
+
+                        throw new InvalidOperationException($"TTS risposta con media type non gestito: {media}");
+                    }
+
+                    // Only probe the next endpoint if the current one is clearly missing (404/405)
+                    if (resp.StatusCode != System.Net.HttpStatusCode.NotFound &&
+                        resp.StatusCode != System.Net.HttpStatusCode.MethodNotAllowed)
+                    {
+                        throw new InvalidOperationException($"TTS endpoint {path} ha risposto {(int)resp.StatusCode} {resp.StatusCode}");
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[TtsService] Exception posting to {path}: {ex}");
-                    // ignore and try next
-                }
-            }
-
-            // If initial attempts fail, try alternative payload shape used by some TTS servers
-            // e.g. { model: "voice_templates", speaker: "<id>", text: "...", language: "it" }
-            try
-            {
-                var altPayload = new Dictionary<string, object?>
-                {
-                    ["text"] = text,
-                    ["language"] = language
-                };
-
-                // If voiceId looks like 'model:speaker' split it, otherwise use as speaker
-                if (voiceId.Contains(":"))
-                {
-                    var parts = voiceId.Split(new[] { ':' }, 2);
-                    altPayload["model"] = parts[0];
-                    altPayload["speaker"] = parts[1];
-                }
-                else
-                {
-                    altPayload["model"] = "voice_templates";
-                    altPayload["speaker"] = voiceId;
-                }
-
-                var altJson = JsonSerializer.Serialize(altPayload);
-                Console.WriteLine($"[TtsService] Attempting alt payload for synth: {altJson}");
-
-                foreach (var path in candidates)
-                {
-                    try
+                    Console.WriteLine($"[TtsService] Exception posting to {path}: {ex.Message}");
+                    if (ex is InvalidOperationException)
                     {
-                        var resp = await _http.PostAsJsonAsync(path, altPayload);
-                        var media = resp.Content.Headers.ContentType?.MediaType ?? string.Empty;
-                        Console.WriteLine($"[TtsService] Alt Response {path} -> Status: {(int)resp.StatusCode} {resp.StatusCode}; Media={media}");
-                        if (!resp.IsSuccessStatusCode) continue;
-
-                        if (media.Contains("json"))
-                        {
-                            var result = await resp.Content.ReadFromJsonAsync<SynthesisResult>();
-                            if (result != null) return result;
-                        }
-                        else
-                        {
-                            var bytes = await resp.Content.ReadAsByteArrayAsync();
-                            return new SynthesisResult { AudioBase64 = Convert.ToBase64String(bytes) };
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[TtsService] Alt payload exception posting to {path}: {ex}");
+                        throw;
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[TtsService] Exception building/sending alt payload: {ex}");
+
+            return null;
         }
-
-        return null;
-    }
 
     private static List<VoiceInfo>? ParseVoicesPayload(string? payload)
     {

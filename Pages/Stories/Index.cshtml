@@ -12,9 +12,12 @@
 <div class="d-flex justify-content-between mb-3">
     <h3>Storie salvate</h3>
     <div class="d-flex gap-2">
-        <form method="post" asp-page-handler="TestTtsSchema" class="d-inline">
-            <input type="hidden" name="storyId" value="32" />
-            <button type="submit" class="btn btn-outline-secondary">Test tts_schema (story 32, tutti i modelli)</button>
+        <form method="post" asp-page-handler="TestTtsSchema" class="d-inline d-flex align-items-center gap-2">
+            <div class="input-group input-group-sm" style="width: 150px;">
+                <span class="input-group-text">StoryId</span>
+                <input type="number" class="form-control" name="storyId" value="32" min="1" />
+            </div>
+            <button type="submit" class="btn btn-outline-secondary btn-sm">Test tts_schema (tutti i modelli)</button>
         </form>
         <div class="btn-group">
             <button type="button" class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
@@ -148,6 +151,9 @@
                                         <button type="submit" class="dropdown-item">🎙️ Assegna voci</button>
                                     </form>
                                 </li>
+                                <li>
+                                    <a href="#" class="dropdown-item tts-playlist-btn" data-story-id="@s.Id">▶️ Ascolta sequenza TTS</a>
+                                </li>
                             }
                         }
                         @if (Model.Evaluators?.Any() == true)
@@ -197,6 +203,7 @@
 </table>
 
 <form id="bulkEvaluateForm" method="post" asp-page-handler="EvaluateAll"></form>
+<audio id="ttsPlaylistAudio" class="d-none"></audio>
 
 <!-- Coherence details modal -->
 <div class="modal fade" id="coherenceModal" tabindex="-1" aria-labelledby="coherenceModalLabel" aria-hidden="true">
@@ -581,6 +588,92 @@
                 } catch (err) {
                     console.warn('Unable to persist column visibility', err);
                 }
+            });
+
+            // TTS playlist playback (sequence with 2s gap)
+            var ttsAudio = document.getElementById('ttsPlaylistAudio');
+            var ttsQueue = [];
+            var ttsGapMs = 2000;
+            var ttsIndex = 0;
+            var ttsPlaying = false;
+            var ttsStopRequested = false;
+            var ttsCurrentBtn = null;
+
+            function resetTtsState() {
+                ttsQueue = [];
+                ttsIndex = 0;
+                ttsPlaying = false;
+                ttsStopRequested = false;
+                if (ttsCurrentBtn) {
+                    ttsCurrentBtn.textContent = '▶️ Ascolta sequenza TTS';
+                    ttsCurrentBtn.classList.remove('text-danger');
+                    ttsCurrentBtn = null;
+                }
+            }
+
+            function playNextTts() {
+                if (ttsStopRequested || ttsIndex >= ttsQueue.length) {
+                    resetTtsState();
+                    return;
+                }
+                var item = ttsQueue[ttsIndex];
+                ttsAudio.src = item.url;
+                ttsAudio.play().catch(function(err){
+                    console.warn('Errore riproduzione TTS', err);
+                    // Skip on error
+                    ttsIndex++;
+                    setTimeout(playNextTts, ttsGapMs);
+                });
+            }
+
+            ttsAudio.addEventListener('ended', function(){
+                if (ttsStopRequested) {
+                    resetTtsState();
+                    return;
+                }
+                ttsIndex++;
+                setTimeout(playNextTts, ttsGapMs);
+            });
+
+            $(document).on('click', '.tts-playlist-btn', function(e){
+                e.preventDefault();
+                var btn = this;
+                var storyId = $(btn).data('story-id');
+                if (!storyId) return;
+
+                // Toggle stop
+                if (ttsPlaying && ttsCurrentBtn === btn) {
+                    ttsStopRequested = true;
+                    ttsAudio.pause();
+                    ttsAudio.currentTime = 0;
+                    resetTtsState();
+                    return;
+                }
+
+                fetch(`?handler=TtsPlaylist&id=${storyId}`)
+                    .then(function(res){
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        return res.json();
+                    })
+                    .then(function(data){
+                        if (!data || !data.items || data.items.length === 0) {
+                            alert('Nessuna traccia TTS disponibile per questa storia.');
+                            return;
+                        }
+                        ttsQueue = data.items;
+                        ttsGapMs = data.gapMs || 2000;
+                        ttsIndex = 0;
+                        ttsStopRequested = false;
+                        ttsPlaying = true;
+                        ttsCurrentBtn = btn;
+                        btn.textContent = '⏹️ Stop TTS';
+                        btn.classList.add('text-danger');
+                        playNextTts();
+                    })
+                    .catch(function(err){
+                        console.error('Errore caricamento playlist TTS', err);
+                        alert('Impossibile avviare la riproduzione TTS.');
+                    });
             });
 
             // Handle expand/collapse for evaluation details using DataTables child rows API

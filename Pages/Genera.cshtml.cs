@@ -130,7 +130,12 @@ public class GeneraModel : PageModel
                 await cmd.ExecuteAsync(ctx.CancellationToken);
                 return new CommandResult(true, "Multi-step generation started");
             },
-            runId: genId.ToString()
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["agentName"] = agent.Name ?? "unknown",
+                ["modelName"] = agent.ModelName ?? "unknown"
+            }
         );
 
         _progress.Append(genId.ToString(), "🟢 Multi-step generation enqueued");

@@ -129,7 +129,9 @@ public class TestAutomationController : ControllerBase
             var metadata = new Dictionary<string, string>
             {
                 ["storyId"] = request.StoryId.ToString(),
-                ["voiceId"] = request.VoiceId.ToString()
+                ["voiceId"] = request.VoiceId.ToString(),
+                ["agentName"] = "tts_generator",
+                ["modelName"] = "tts_engine"
             };
 
             var handle = _dispatcher.Enqueue(

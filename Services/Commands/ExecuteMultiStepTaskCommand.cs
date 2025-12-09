@@ -95,7 +95,7 @@ namespace TinyGenerator.Services.Commands
                     execution.Status = "cancelled";
                     execution.UpdatedAt = DateTime.UtcNow.ToString("o");
                     _database.UpdateTaskExecution(execution);
-                    TryDeleteStoryForExecution(execution);
+                    // No need to delete story - it's not created yet if execution fails
                 }
 
                 _progressService?.BroadcastTaskComplete(_generationId, "cancelled");
@@ -116,26 +116,10 @@ namespace TinyGenerator.Services.Commands
                     execution.Status = "failed";
                     execution.UpdatedAt = DateTime.UtcNow.ToString("o");
                     _database.UpdateTaskExecution(execution);
-                    TryDeleteStoryForExecution(execution);
+                    // No need to delete story - it's not created yet if execution fails
                 }
 
                 _progressService?.BroadcastTaskComplete(_generationId, "failed");
-            }
-        }
-
-        private void TryDeleteStoryForExecution(TaskExecution execution)
-        {
-            try
-            {
-                if (execution.TaskType == "story" && execution.EntityId.HasValue)
-                {
-                    _database.DeleteStoryById(execution.EntityId.Value);
-                    _logger.Log("Information", "MultiStep", $"Deleted placeholder story {execution.EntityId.Value} after failed/cancelled execution {_executionId}");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Log("Warning", "MultiStep", $"Unable to delete placeholder story for execution {_executionId}: {ex.Message}");
             }
         }
     }

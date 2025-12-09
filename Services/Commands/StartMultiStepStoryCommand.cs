@@ -68,8 +68,8 @@ namespace TinyGenerator.Services.Commands
 
                 _logger.Log("Information", "MultiStep", $"Using template: {template.Name}");
 
-                // Create story record first (store agent and model if available)
-                // Prefer executor model override if provided in agent metadata (optional)
+                // Don't create story record yet - will be created after successful generation
+                // Store model info for later use
                 int? modelId = agent.ModelId;
                 if (!string.IsNullOrWhiteSpace(agent.ModelName))
                 {
@@ -77,14 +77,10 @@ namespace TinyGenerator.Services.Commands
                     if (modelInfo?.Id != null) modelId = modelInfo.Id;
                 }
 
-                var storyId = _database.InsertSingleStory(_theme, "[Multi-step generation in progress...]", agentId: _writerAgentId, modelId: modelId);
-
-                _logger.Log("Information", "MultiStep", $"Created story record {storyId}");
-
-                // Start task execution
+                // Start task execution without entity (story will be created on success)
                 var executionId = await _orchestrator.StartTaskExecutionAsync(
                     taskType: "story",
-                    entityId: storyId,
+                    entityId: null, // No entity yet - will be created on success
                     stepPrompt: template.StepPrompt,
                     executorAgentId: agent.Id,
                     checkerAgentId: null, // Use default checker from task_types
@@ -94,7 +90,7 @@ namespace TinyGenerator.Services.Commands
                     templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions
                 );
 
-                _logger.Log("Information", "MultiStep", $"Started task execution {executionId}");
+                _logger.Log("Information", "MultiStep", $"Started task execution {executionId} (story will be created on success)");
 
                 // Enqueue execution command
                 _dispatcher.Enqueue(

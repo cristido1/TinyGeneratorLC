@@ -185,14 +185,15 @@
                 foreach (var cmd in Model.ActiveCommands)
                 {
                     var op = (cmd.Metadata != null && cmd.Metadata.TryGetValue("operation", out var opVal)) ? opVal : cmd.OperationName;
-                    var modelName = (cmd.Metadata != null && cmd.Metadata.TryGetValue("model", out var mn)) ? mn : "-";
+                    var agentName = cmd.AgentName ?? "-";
+                    var modelName = cmd.ModelName ?? "-";
                     var group = (cmd.Metadata != null && cmd.Metadata.TryGetValue("group", out var gn)) ? gn : string.Empty;
                     var statusClass = cmd.Status.Equals("running", System.StringComparison.OrdinalIgnoreCase) ? "bg-success" : "bg-warning text-dark";
                     <div class="list-group-item">
                         <div class="d-flex justify-content-between align-items-start">
                             <div>
                                 <div class="fw-semibold">@op</div>
-                                <div class="text-muted">Model: @modelName</div>
+                                <div class="text-muted">Agent: @agentName | Model: @modelName</div>
                                 @if (!string.IsNullOrWhiteSpace(group))
                                 {
                                     <div class="text-muted">Group: @group</div>
@@ -420,7 +421,8 @@
 
                         const html = cmds.map(c => {
                             const op = c.OperationName || c.ThreadScope || '';
-                            const modelName = (c.Metadata && c.Metadata.model) ? c.Metadata.model : (c.ModelName || '-');
+                            const agentName = c.AgentName || '-';
+                            const modelName = c.ModelName || '-';
                             const statusClass = (c.Status || '').toLowerCase() === 'running' ? 'bg-success' : 'bg-warning text-dark';
                             const enq = c.EnqueuedAt ? new Date(c.EnqueuedAt).toLocaleTimeString() : '';
                             const started = c.StartedAt ? new Date(c.StartedAt).toLocaleTimeString() : '';
@@ -431,7 +433,7 @@
                                     <div class="d-flex justify-content-between align-items-start">
                                         <div>
                                             <div class="fw-semibold">${op}</div>
-                                            <div class="text-muted">Model: ${modelName}</div>
+                                            <div class="text-muted">Agent: ${agentName} | Model: ${modelName}</div>
                                         </div>
                                         <span class="badge ${statusClass} text-uppercase">${c.Status || ''}</span>
                                     </div>

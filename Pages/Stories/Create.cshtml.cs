@@ -51,6 +51,7 @@ namespace TinyGenerator.Pages.Stories
 
             // Enqueue creation as command
             var runId = $"create_story_{DateTime.UtcNow:yyyyMMddHHmmss}";
+            var agent = AgentId.HasValue ? _database.GetAgentById(AgentId.Value) : null;
             _dispatcher.Enqueue(
                 "create_story",
                 async ctx =>
@@ -64,7 +65,9 @@ namespace TinyGenerator.Pages.Stories
                 {
                     ["operation"] = "create_story",
                     ["prompt"] = (Prompt != null && Prompt.Length > 80) ? (Prompt.Substring(0, 80) + "...") : (Prompt ?? string.Empty),
-                    ["agentId"] = AgentId?.ToString() ?? string.Empty
+                    ["agentId"] = AgentId?.ToString() ?? string.Empty,
+                    ["agentName"] = agent?.Name ?? "unknown",
+                    ["modelName"] = agent?.ModelName ?? "unknown"
                 });
 
             TempData["StatusMessage"] = $"Creazione storia accodata (run {runId}).";

@@ -29,14 +29,33 @@
     function renderCommands(cmds) {
         console.log('Rendering commands:', cmds); // DEBUG
         if (!Array.isArray(cmds)) cmds = [];
-        countEl.textContent = cmds.length;
-        if (cmds.length === 0) {
+        
+        // Filtra comandi attivi (queued/running) o completati da meno di 5 minuti
+        const now = new Date();
+        const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+        
+        const visibleCommands = cmds.filter(c => {
+            const status = (c.Status || '').toLowerCase();
+            // Mostra sempre queued e running
+            if (status === 'queued' || status === 'running') return true;
+            
+            // Per completed/failed/cancelled, mostra solo se recenti (< 5 min)
+            if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+                const completedAt = c.CompletedAt ? new Date(c.CompletedAt) : null;
+                return completedAt && completedAt >= fiveMinutesAgo;
+            }
+            
+            return false;
+        });
+        
+        countEl.textContent = visibleCommands.length;
+        if (visibleCommands.length === 0) {
             emptyEl.style.display = '';
             cmdListEl.innerHTML = '';
             return;
         }
         emptyEl.style.display = 'none';
-        cmdListEl.innerHTML = cmds.map(c => {
+        cmdListEl.innerHTML = visibleCommands.map(c => {
             const status = (c.Status || '').toLowerCase();
             let statusClass = 'queued';
             let statusBadgeClass = 'bg-warning text-dark';
@@ -48,31 +67,41 @@
                 statusIcon = '▶️';
             } else if (status === 'completed') {
                 statusClass = 'completed';
-                statusBadgeClass = 'bg-success';
-                statusIcon = '✅';
-            } else if (status === 'failed') {
-                statusClass = 'failed';
-                statusBadgeClass = 'bg-danger';
-                statusIcon = '❌';
-            } else if (status === 'cancelled') {
-                statusClass = 'cancelled';
-                statusBadgeClass = 'bg-secondary';
-                statusIcon = '⛔';
-            }
-            
             const stepInfo = (c.CurrentStep && c.MaxStep) ? `Step ${c.CurrentStep}/${c.MaxStep}` : '';
             const retryInfo = (c.RetryCount > 0) ? `Retry: ${c.RetryCount}` : '';
-            const agent = c.AgentName ? `👤 ${c.AgentName}` : '';
+            
+            // Informazioni principali sempre visibili
+            const agent = c.AgentName || 'N/A';
+            const op = c.OperationName || c.ThreadScope || 'N/A';
             
             // Mostra solo l'ultima parte del nome del modello dopo la barra
-            let modelShort = c.ModelName || '';
-            if (modelShort && modelShort.includes('/')) {
+            let modelShort = c.ModelName || 'N/A';
+            if (modelShort && modelShort !== 'N/A' && modelShort.includes('/')) {
                 modelShort = modelShort.substring(modelShort.lastIndexOf('/') + 1);
             }
-            const model = modelShort ? `🧠 ${modelShort}` : '';
             
-            const op = c.OperationName || c.ThreadScope || '';
             const errorMsg = c.ErrorMessage ? `<div class="cmd-error text-danger small mt-1">⚠️ ${c.ErrorMessage}</div>` : '';
+            
+            // Costruisci cmd-meta con agente, modello e info opzionali
+            const metaParts = [];
+            metaParts.push(`<span class="me-2">👤 ${agent}</span>`);
+            metaParts.push(`<span class="me-2">🧠 ${modelShort}</span>`);
+            if (stepInfo) metaParts.push(`<span class="me-2">${stepInfo}</span>`);
+            if (retryInfo) metaParts.push(`<span class="me-2 text-warning">${retryInfo}</span>`);
+            
+            const metaHtml = `<div class="cmd-meta">${metaParts.join('')}</div>`;
+            
+            return `
+                <div class="cmd-item ${statusClass}">
+                    <div class="cmd-top">
+                        <span class="cmd-op">${statusIcon} ${op}</span>
+                        <span class="cmd-status badge ${statusBadgeClass}">${c.Status || 'unknown'}</span>
+                    </div>
+                    ${metaHtml}
+                    ${errorMsg}
+                </div>
+            `;          ${retryInfo ? `<span class="me-2 text-warning">${retryInfo}</span>` : ''}
+                    </div>` : '';
             
             return `
                 <div class="cmd-item ${statusClass}">
@@ -80,12 +109,7 @@
                         <span class="cmd-op">${statusIcon} ${op}</span>
                         <span class="cmd-status badge ${statusBadgeClass}">${c.Status || ''}</span>
                     </div>
-                    <div class="cmd-meta">
-                        ${agent ? `<span class="me-2">${agent}</span>` : ''}
-                        ${model ? `<span class="me-2">${model}</span>` : ''}
-                        ${stepInfo ? `<span class="me-2">${stepInfo}</span>` : ''}
-                        ${retryInfo ? `<span class="me-2 text-warning">${retryInfo}</span>` : ''}
-                    </div>
+                    ${metaHtml}
                     ${errorMsg}
                 </div>
             `;

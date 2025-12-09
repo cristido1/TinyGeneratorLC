@@ -304,16 +304,18 @@ namespace TinyGenerator.Services
             // Get previous steps (we'll only build context when retrying a failed step)
             var previousSteps = _database.GetTaskExecutionSteps(executionId);
 
-            // By default do NOT include previous step outputs in the prompt for the next step.
-            // Only build a context when this is a retry (execution.RetryCount > 0) so the agent
-            // receives the previous output and the validation feedback. This ensures a clean
-            // conversation on normal progression between steps.
+            // Build context from step placeholders ({{STEP_1}}, {{STEP_2}}, etc.)
+            // This must be done ALWAYS, not just on retry, to resolve the placeholders in the instruction.
+            // Only filter to completed steps from prior step numbers.
+            var completedPreviousSteps = previousSteps
+                .Where(s => s.StepNumber < execution.CurrentStep && !string.IsNullOrWhiteSpace(s.StepOutput))
+                .ToList();
+            
+            // Replace placeholders in stepInstruction
+            stepInstruction = await ReplaceStepPlaceholdersAsync(stepInstruction, completedPreviousSteps, threadId, ct);
+            
             var context = string.Empty;
             List<ConversationMessage>? extraMessages = null;
-            if (execution.RetryCount > 0)
-            {
-                context = await BuildStepContextAsync(execution.CurrentStep, stepInstruction, previousSteps, threadId, ct);
-            }
 
             var hasChunkPlaceholder = stepInstruction.Contains("{{CHUNK_", StringComparison.OrdinalIgnoreCase);
             var chunks = GetChunksForExecution(execution);
@@ -323,8 +325,17 @@ namespace TinyGenerator.Services
             var chunkText = execution.CurrentStep <= chunks.Count
                 ? chunks[execution.CurrentStep - 1]
                 : string.Empty;
+            
             // If the step prompt already contains the chunk via placeholders, avoid prepending it again
-            var chunkIntro = !hasChunkPlaceholder && !string.IsNullOrWhiteSpace(chunkText)
+            // For "story" task type, don't prepend the chunk if it's the InitialContext (first step)
+            // because it's already included via {{PROMPT}} or in the system message
+            var isStoryWithInitialContext = execution.TaskType == "story" 
+                && execution.CurrentStep == 1 
+                && chunkText == execution.InitialContext;
+            
+            var chunkIntro = !hasChunkPlaceholder 
+                && !string.IsNullOrWhiteSpace(chunkText)
+                && !isStoryWithInitialContext
                 ? $"### CHUNK {execution.CurrentStep}\n{chunkText}\n\n"
                 : string.Empty;
 
@@ -1134,6 +1145,72 @@ Correggi l'output tenendo conto del feedback ricevuto.
             return JsonSerializer.Serialize(jsonObj);
         }
 
+        private async Task<string> ReplaceStepPlaceholdersAsync(
+            string instruction,
+            List<TaskExecutionStep> previousSteps,
+            int threadId,
+            CancellationToken ct)
+        {
+            // Parse placeholders: {{STEP_N}}, {{STEP_N_SUMMARY}}, {{STEP_N_EXTRACT:filter}}, {{STEPS_N-M_SUMMARY}}
+            var placeholderPattern = @"\{\{STEP(?:S)?_(\d+)(?:-(\d+))?(?:_(SUMMARY|EXTRACT):(.+?))?\}\}";
+            var matches = Regex.Matches(instruction, placeholderPattern);
+
+            if (matches.Count == 0)
+            {
+                return instruction;
+            }
+
+            var result = instruction;
+
+            foreach (Match match in matches)
+            {
+                int stepFrom = int.Parse(match.Groups[1].Value);
+                int stepTo = match.Groups[2].Success ? int.Parse(match.Groups[2].Value) : stepFrom;
+                string mode = match.Groups[3].Value; // SUMMARY, EXTRACT, or empty
+                string filter = match.Groups[4].Value;
+
+                var targetSteps = previousSteps.Where(s => s.StepNumber >= stepFrom && s.StepNumber <= stepTo).ToList();
+
+                if (!targetSteps.Any())
+                {
+                    // Placeholder references non-existent step, replace with empty or warning
+                    result = result.Replace(match.Value, $"[Step {stepFrom} not yet available]");
+                    continue;
+                }
+
+                string content;
+                if (mode == "SUMMARY")
+                {
+                    content = await GenerateSummaryAsync(targetSteps, threadId, ct);
+                }
+                else if (mode == "EXTRACT")
+                {
+                    content = ExtractContent(targetSteps.First().StepOutput ?? string.Empty, filter);
+                }
+                else
+                {
+                    content = string.Join("\n\n", targetSteps.Select(s => s.StepOutput));
+
+                    // Sanitize outputs that are raw ttsschema tool_calls (add_narration/add_phrase).
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(content) &&
+                            Regex.IsMatch(content, @"\badd_(?:narration|phrase)\s*\(", RegexOptions.IgnoreCase))
+                        {
+                            var callMatches = Regex.Matches(content, @"\badd_(?:narration|phrase)\s*\(", RegexOptions.IgnoreCase);
+                            content = $"[TTS tool calls recorded: {callMatches.Count} entries]";
+                        }
+                    }
+                    catch { }
+                }
+
+                // Replace the placeholder with the actual content
+                result = result.Replace(match.Value, content);
+            }
+
+            return result;
+        }
+
         private async Task<string> BuildStepContextAsync(
             int currentStep,
             string instruction,
@@ -1438,8 +1515,8 @@ RIASSUNTO:";
                 _ => string.Join("\n\n", steps.Select(s => s.StepOutput))
             };
 
-            // Update entity if linked
-            if (execution.EntityId.HasValue && execution.TaskType == "story")
+            // Create or update story entity
+            if (execution.TaskType == "story")
             {
                 var agent = await GetExecutorAgentAsync(execution, threadId);
                 var modelOverride = GetExecutionModelOverride(execution);
@@ -1456,11 +1533,29 @@ RIASSUNTO:";
                     modelId = agent.ModelId;
                 }
 
-                _database.UpdateStoryById(
-                    execution.EntityId.Value,
-                    story: merged,
-                    agentId: agent?.Id,
-                    modelId: modelId);
+                if (execution.EntityId.HasValue)
+                {
+                    // Story already exists, update it
+                    _database.UpdateStoryById(
+                        execution.EntityId.Value,
+                        story: merged,
+                        agentId: agent?.Id,
+                        modelId: modelId);
+                    
+                    _logger.Log("Information", "MultiStep", $"Updated story {execution.EntityId.Value} with final text");
+                }
+                else
+                {
+                    // Create story only now with the complete text
+                    var prompt = execution.InitialContext ?? "[No prompt]";
+                    var storyId = _database.InsertSingleStory(prompt, merged, agentId: agent?.Id, modelId: modelId);
+                    
+                    // Update execution with the new entity ID
+                    execution.EntityId = storyId;
+                    _database.UpdateTaskExecution(execution);
+                    
+                    _logger.Log("Information", "MultiStep", $"Created story {storyId} with final text on successful completion");
+                }
             }
 
             // If this is a TTS schema generation, aggregate all tool calls from steps

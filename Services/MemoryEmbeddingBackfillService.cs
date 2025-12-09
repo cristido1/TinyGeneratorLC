@@ -65,7 +65,9 @@ namespace TinyGenerator.Services
                 metadata: new Dictionary<string, string>
                 {
                     ["reason"] = reason,
-                    ["ts"] = DateTime.UtcNow.ToString("o")
+                    ["ts"] = DateTime.UtcNow.ToString("o"),
+                    ["agentName"] = "memory_backfill_worker",
+                    ["modelName"] = "embedding_model"
                 });
 
             _ = handle.CompletionTask.ContinueWith(t => OnCommandCompleted(t), TaskScheduler.Default);

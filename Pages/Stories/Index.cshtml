@@ -238,7 +238,8 @@
             {
                 foreach (var cmd in Model.ActiveCommands)
                 {
-                    var agentName = (cmd.Metadata != null && cmd.Metadata.TryGetValue("agentName", out var an)) ? an : "-";
+                    var agentName = cmd.AgentName ?? "-";
+                    var modelName = cmd.ModelName ?? "-";
                     var agentRole = (cmd.Metadata != null && cmd.Metadata.TryGetValue("agentRole", out var ar)) ? ar : string.Empty;
                     var op = (cmd.Metadata != null && cmd.Metadata.TryGetValue("operation", out var opVal)) ? opVal : cmd.OperationName;
                     var storyId = (cmd.Metadata != null && cmd.Metadata.TryGetValue("storyId", out var sid)) ? sid : "-";
@@ -249,6 +250,7 @@
                                 <div class="fw-semibold">@op</div>
                                 <div class="text-muted">Story: @storyId</div>
                                 <div class="text-muted">Agente: @agentName @(string.IsNullOrWhiteSpace(agentRole) ? "" : $"({agentRole})")</div>
+                                <div class="text-muted">Model: @modelName</div>
                             </div>
                             <span class="badge @statusClass text-uppercase">@cmd.Status</span>
                         </div>

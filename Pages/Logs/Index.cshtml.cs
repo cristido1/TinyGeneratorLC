@@ -69,7 +69,9 @@ namespace TinyGenerator.Pages.Logs
                 metadata: new Dictionary<string, string>
                 {
                     ["threadId"] = threadId,
-                    ["threadScope"] = safeScope
+                    ["threadScope"] = safeScope,
+                    ["agentName"] = "log_analyzer",
+                    ["modelName"] = "analysis_engine"
                 });
 
             StatusMessage = $"Analisi avviata per il thread {threadId}.";
@@ -110,6 +112,8 @@ namespace TinyGenerator.Pages.Logs
                     threadScope: $"log/{sanitizedScope}",
                     metadata: new Dictionary<string, string>
                     {
+                        ["agentName"] = "log_analyzer",
+                        ["modelName"] = "analysis_engine",
                         ["threadId"] = threadId,
                         ["threadScope"] = sanitizedScope
                     });

@@ -72,7 +72,6 @@ namespace TinyGenerator.Services
 
         private readonly HybridLangChainOrchestrator _tools;
         private readonly ICustomLogger? _logger;
-        private readonly ProgressService? _progress;
         private readonly string? _runId;
         private readonly int _maxIterations;
         private readonly LangChainChatBridge? _modelBridge;
@@ -87,7 +86,6 @@ namespace TinyGenerator.Services
             HybridLangChainOrchestrator tools,
             ICustomLogger? logger = null,
             int maxIterations = 100,
-            ProgressService? progress = null,
             string? runId = null,
             LangChainChatBridge? modelBridge = null,
             string? systemMessage = null,
@@ -97,7 +95,6 @@ namespace TinyGenerator.Services
         {
             _tools = tools;
             _logger = logger;
-            _progress = progress;
             _runId = runId;
             _maxIterations = maxIterations;
             _modelBridge = modelBridge;
@@ -306,7 +303,7 @@ namespace TinyGenerator.Services
                                 OnFunctionCalled(call.ToolName ?? string.Empty, call.Arguments);
 
                                 _logger?.Log("Info", "ReActLoop", $"  Executing tool: {call.ToolName}");
-                                _progress?.Append(_runId ?? string.Empty, $"  📞 Tool: {call.ToolName}");
+                                _logger?.Append(_runId ?? string.Empty, $"  📞 Tool: {call.ToolName}");
                             
                                 var output = await _tools.ExecuteToolAsync(call.ToolName ?? string.Empty, call.Arguments ?? string.Empty);
                             toolResults.Add((call.Id, output));
@@ -333,7 +330,7 @@ namespace TinyGenerator.Services
                                 var outLen = output?.Length ?? 0;
                                 var preview = outLen > 200 ? (output?.Substring(0, 200) + "...") : output;
                                 _logger?.Log("Info", "ReActLoop", $"  Tool {call.ToolName} result length={outLen}");
-                                _progress?.Append(_runId ?? string.Empty, $"  ✓ {call.ToolName} output length: {outLen}");
+                                _logger?.Append(_runId ?? string.Empty, $"  ✓ {call.ToolName} output length: {outLen}");
                                 // Also log small preview for quick debugging
                                 if (outLen > 0 && outLen <= 500)
                                     _logger?.Log("Debug", "ReActLoop", $"  Tool {call.ToolName} preview: {preview}");
@@ -351,7 +348,7 @@ namespace TinyGenerator.Services
                         catch (Exception ex)
                         {
                             _logger?.Log("Error", "ReActLoop", $"  Tool execution failed: {ex.Message}");
-                            _progress?.Append(_runId ?? string.Empty, $"  ✗ {call.ToolName} error: {ex.Message}");
+                            _logger?.Append(_runId ?? string.Empty, $"  ✗ {call.ToolName} error: {ex.Message}");
                             
                             toolResults.Add((call.Id, JsonSerializer.Serialize(new { error = ex.Message })));
                         }
@@ -438,7 +435,7 @@ namespace TinyGenerator.Services
                     {
                         var plain = ExtractPlainTextResponse(modelResponse);
                         _logger?.Log("Info", "ReActLoop", $"Assistant message added: plainContentLen={plain?.Length ?? 0}, toolCalls={toolCalls.Count}, rawResponseLen={modelResponse?.Length ?? 0}");
-                        _progress?.Append(_runId ?? string.Empty, $"Assistant content length: {plain?.Length ?? 0}, toolCalls: {toolCalls.Count}");
+                        _logger?.Append(_runId ?? string.Empty, $"Assistant content length: {plain?.Length ?? 0}, toolCalls: {toolCalls.Count}");
                     }
                     catch { }
 
@@ -798,7 +795,7 @@ namespace TinyGenerator.Services
             {
                 var level = result.Success ? "Info" : "Error";
                 _logger?.Log(level, "ReActLoop", $"Final outcome: success={result.Success}, iterations={result.IterationCount}, error={result.Error}");
-                _progress?.Append(_runId ?? string.Empty, $"Final: success={result.Success}, iterations={result.IterationCount}{(string.IsNullOrEmpty(result.Error) ? string.Empty : ", error=" + result.Error)}");
+                _logger?.Append(_runId ?? string.Empty, $"Final: success={result.Success}, iterations={result.IterationCount}{(string.IsNullOrEmpty(result.Error) ? string.Empty : ", error=" + result.Error)}");
                 Console.WriteLine($"[DEBUG ReActLoop] Final outcome: success={result.Success}, iterations={result.IterationCount}, error={result.Error}");
             }
             catch { }

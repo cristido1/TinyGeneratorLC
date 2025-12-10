@@ -14,16 +14,12 @@ public class GeneraModel : PageModel
     private readonly CommandDispatcher _dispatcher;
     private readonly ICustomLogger _customLogger;
     private readonly ILogger<GeneraModel> _logger;
-    private readonly ProgressService _progress;
-    private readonly NotificationService _notifications;
 
     public GeneraModel(
         DatabaseService database,
         CommandDispatcher dispatcher,
         ICustomLogger customLogger,
         ILogger<GeneraModel> logger,
-        ProgressService progress,
-        NotificationService notifications,
         MultiStepOrchestrationService? orchestrator = null)
     {
         _database = database;
@@ -31,8 +27,6 @@ public class GeneraModel : PageModel
         _dispatcher = dispatcher;
         _customLogger = customLogger;
         _logger = logger;
-        _progress = progress;
-        _notifications = notifications;
     }
 
     [BindProperty]
@@ -112,7 +106,7 @@ public class GeneraModel : PageModel
         }
 
         var genId = Guid.NewGuid();
-        _progress.Start(genId.ToString());
+        _customLogger.Start(genId.ToString());
 
         var cmd = new StartMultiStepStoryCommand(
             Prompt,
@@ -138,9 +132,9 @@ public class GeneraModel : PageModel
             }
         );
 
-        _progress.Append(genId.ToString(), "🟢 Multi-step generation enqueued");
+        _customLogger.Append(genId.ToString(), "🟢 Multi-step generation enqueued");
 
-        try { await _notifications.NotifyGroupAsync(genId.ToString(), "Started", "Generation started", "info"); } catch { }
+        try { await _customLogger.NotifyGroupAsync(genId.ToString(), "Started", "Generation started", "info"); } catch { }
 
         return new JsonResult(new { id = genId.ToString() });
     }
@@ -149,9 +143,9 @@ public class GeneraModel : PageModel
     public IActionResult OnGetProgress(string id)
     {
         if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "id mancante" });
-        var messages = _progress.Get(id);
-        var completed = _progress.IsCompleted(id);
-        var result = _progress.GetResult(id);
+        var messages = _customLogger.Get(id);
+        var completed = _customLogger.IsCompleted(id);
+        var result = _customLogger.GetResult(id);
         return new JsonResult(new { messages, completed, result });
     }
 }

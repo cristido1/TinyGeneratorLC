@@ -1,9 +1,5 @@
 using System.IO;
 using System.Diagnostics;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.Connectors.Ollama;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
-using Microsoft.SemanticKernel.Memory;
 using TinyGenerator;
 using TinyGenerator.Services;
 using Microsoft.AspNetCore.SignalR;
@@ -54,8 +50,8 @@ builder.Services.AddControllers();
 
 // SignalR for live progress updates
 builder.Services.AddSignalR();
-builder.Services.AddHttpClient();
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("default"));
+// Register a named HttpClient "default" and rely on IHttpClientFactory elsewhere.
+builder.Services.AddHttpClient("default");
 
 // Tokenizer (try to use local tokenizer library if installed; fallback inside service)
 builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_base"));
@@ -84,10 +80,6 @@ builder.Services.AddSingleton<IMemoryEmbeddingGenerator, OllamaEmbeddingGenerato
 builder.Services.AddSingleton<MemoryEmbeddingBackfillService>();
 builder.Services.AddSingleton<IMemoryEmbeddingBackfillScheduler>(sp => sp.GetRequiredService<MemoryEmbeddingBackfillService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MemoryEmbeddingBackfillService>());
-// Progress tracking for live UI updates (will broadcast over SignalR)
-builder.Services.AddSingleton<ProgressService>();
-// Notification service (broadcast to clients via SignalR)
-builder.Services.AddSingleton<NotificationService>();
 // Command dispatcher (background command queue with configurable parallelism)
 builder.Services.Configure<CommandDispatcherOptions>(builder.Configuration.GetSection("CommandDispatcher"));
 builder.Services.AddSingleton<CommandDispatcher>(sp =>
@@ -105,7 +97,6 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetRequiredService<TtsService>(),
     sp.GetService<ILangChainKernelFactory>(),
     sp.GetService<ICustomLogger>(),
-    sp.GetService<ProgressService>(),
     sp.GetService<ILogger<StoriesService>>(),
     sp.GetService<ICommandDispatcher>(),
     sp.GetService<MultiStepOrchestrationService>()));
@@ -120,7 +111,7 @@ builder.Services.AddSingleton<LangChainToolFactory>(sp => new LangChainToolFacto
     sp.GetRequiredService<PersistentMemoryService>(),
     sp.GetRequiredService<DatabaseService>(),
     sp.GetService<ICustomLogger>(),
-    sp.GetRequiredService<HttpClient>(),
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient("default"),
     () => sp.GetRequiredService<StoriesService>(),
     sp.GetRequiredService<TtsService>(),
     sp.GetService<IMemoryEmbeddingGenerator>(),
@@ -133,8 +124,7 @@ builder.Services.AddSingleton<LangChainKernelFactory>(sp =>
         builder.Configuration,
         sp.GetRequiredService<DatabaseService>(),
         sp.GetService<ICustomLogger>(),
-        sp.GetRequiredService<LangChainToolFactory>(),
-        sp.GetService<ProgressService>());
+        sp.GetRequiredService<LangChainToolFactory>());
     return factory;
 });
 
@@ -147,7 +137,6 @@ builder.Services.AddSingleton<LangChainAgentService>(sp => new LangChainAgentSer
     sp.GetService<ICustomLogger>()));
 
 // LangChain test service (new testing framework using HybridLangChainOrchestrator)
-builder.Services.AddTransient<LangChainTestService>();
 
 // Multi-step task orchestration services (Sequential Multi-Step Prompting with Response Checker)
 builder.Services.AddSingleton<ResponseCheckerService>();
@@ -157,8 +146,11 @@ builder.Services.AddSingleton<MultiStepOrchestrationService>();
 // Configure custom logger options from configuration (section: AppLog)
 builder.Services.Configure<CustomLoggerOptions>(builder.Configuration.GetSection("AppLog"));
 // Register the async database-backed logger (ensure DatabaseService is available)
-builder.Services.AddSingleton<ICustomLogger>(sp => new CustomLogger(sp.GetRequiredService<DatabaseService>(), sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CustomLoggerOptions>>().Value, sp.GetService<ProgressService>()));
-// Register the CustomLoggerProvider and inject NotificationService so logs can be broadcast as notifications
+builder.Services.AddSingleton<ICustomLogger>(sp => new CustomLogger(
+    sp.GetRequiredService<DatabaseService>(),
+    sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<CustomLoggerOptions>>().Value,
+    sp.GetService<IHubContext<TinyGenerator.Hubs.ProgressHub>>()));
+// Register the CustomLoggerProvider (notifications are emitted through ICustomLogger)
 // Register logger provider without resolving ICustomLogger immediately to avoid startup cycles.
 builder.Services.AddSingleton<ILoggerProvider>(sp => new CustomLoggerProvider(sp));
 // TTS service configuration: read HOST/PORT from environment with defaults
@@ -178,10 +170,7 @@ builder.Services.AddHttpClient<TtsService>(client =>
     client.Timeout = TimeSpan.FromSeconds(ttsOptions.TimeoutSeconds);
 });
 
-builder.Services.AddSingleton<CostController>(sp =>
-    new CostController(
-        sp.GetRequiredService<DatabaseService>(),
-        sp.GetService<ITokenizer>()));
+// CostController removed - call tracking/cost controller disabled
 
 // Ollama management service
 builder.Services.AddSingleton<IOllamaManagementService, OllamaManagementService>();
@@ -212,17 +201,16 @@ StartupTasks.InitializeDatabaseIfNeeded(dbInit, logger);
 // (the "Test function-calling" button) or by calling the Models test API endpoint.
 // Populate local Ollama models (best-effort) ONLY if the models table is empty to avoid
 // overwriting or duplicating an already-populated models table on fresh startup.
-var cost = app.Services.GetService<TinyGenerator.Services.CostController>();
 var dbForModels = app.Services.GetService<TinyGenerator.Services.DatabaseService>();
 try
 {
     var modelCount = dbForModels?.ListModels().Count ?? 0;
-    if (modelCount == 0)
-    {
-        logger?.LogInformation("[Startup] Models table empty — attempting to populate local Ollama models...");
-        var ollamaMonitor = app.Services.GetService<TinyGenerator.Services.IOllamaMonitorService>();
-        StartupTasks.PopulateLocalOllamaModelsIfNeededAsync(cost, builder.Configuration, logger, ollamaMonitor).GetAwaiter().GetResult();
-    }
+        if (modelCount == 0)
+        {
+            logger?.LogInformation("[Startup] Models table empty — attempting to populate local Ollama models...");
+            var ollamaMonitor = app.Services.GetService<TinyGenerator.Services.IOllamaMonitorService>();
+            StartupTasks.PopulateLocalOllamaModelsIfNeededAsync(dbForModels, builder.Configuration, logger, ollamaMonitor).GetAwaiter().GetResult();
+        }
     else
     {
         logger?.LogInformation("[Startup] Models table already contains {count} entries — skipping local model discovery.", modelCount);
@@ -236,10 +224,10 @@ catch (Exception ex)
 // Notify clients that the app is ready (best-effort: clients might not yet be connected)
 try
 {
-    var notifier = app.Services.GetService<TinyGenerator.Services.NotificationService>();
-    if (notifier != null)
+    var eventLogger = app.Services.GetService<ICustomLogger>();
+    if (eventLogger != null)
     {
-        _ = Task.Run(async () => { try { await notifier.NotifyAllAsync("App ready", "TinyGenerator is ready"); } catch { } });
+        _ = Task.Run(async () => { try { await eventLogger.NotifyAllAsync("App ready", "TinyGenerator is ready"); } catch { } });
     }
 }
 catch { }
@@ -286,6 +274,6 @@ app.MapControllers();
 
 // Minimal API endpoint for story evaluations (convenience for AJAX/UI)
 app.MapGet("/api/v1/stories/{id:int}/evaluations", (int id, TinyGenerator.Services.StoriesService s) => Results.Json(s.GetEvaluationsForStory(id)));
-app.MapGet("/api/v1/models/busy", (ProgressService progress) => Results.Json(progress.GetBusyModelsSnapshot()));
+app.MapGet("/api/v1/models/busy", (ICustomLogger eventLogger) => Results.Json(eventLogger.GetBusyModelsSnapshot()));
 
 app.Run();

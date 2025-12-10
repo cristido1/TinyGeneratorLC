@@ -171,6 +171,44 @@ namespace TinyGenerator.Tests
             public void LogResponse(string modelName, string response) { }
             public void LogRequestJson(string modelName, string requestJson) { }
             public void LogResponseJson(string modelName, string responseJson) { }
+            public void Start(string runId) { }
+            public System.Threading.Tasks.Task AppendAsync(string runId, string message, string? extraClass = null) => System.Threading.Tasks.Task.CompletedTask;
+            public void Append(string runId, string message, string? extraClass = null) { }
+            public System.Threading.Tasks.Task MarkCompletedAsync(string runId, string? finalResult = null) => System.Threading.Tasks.Task.CompletedTask;
+            public void MarkCompleted(string runId, string? finalResult = null) { }
+            public List<string> Get(string runId) => new();
+            public bool IsCompleted(string runId) => false;
+            public string? GetResult(string runId) => null;
+            public void Clear(string runId) { }
+
+            public System.Threading.Tasks.Task ShowAgentActivityAsync(string agentName, string status, string? agentId = null, string testType = "question")
+                => System.Threading.Tasks.Task.CompletedTask;
+            public void ShowAgentActivity(string agentName, string status, string? agentId = null, string testType = "question") { }
+            public System.Threading.Tasks.Task HideAgentActivityAsync(string agentId) => System.Threading.Tasks.Task.CompletedTask;
+            public void HideAgentActivity(string agentId) { }
+
+            public System.Threading.Tasks.Task BroadcastLogsAsync(IEnumerable<TinyGenerator.Models.LogEntry> entries) => System.Threading.Tasks.Task.CompletedTask;
+
+            public System.Threading.Tasks.Task ModelRequestStartedAsync(string modelName) => System.Threading.Tasks.Task.CompletedTask;
+            public void ModelRequestStarted(string modelName) { }
+            public System.Threading.Tasks.Task ModelRequestFinishedAsync(string modelName) => System.Threading.Tasks.Task.CompletedTask;
+            public void ModelRequestFinished(string modelName) { }
+            public IReadOnlyList<string> GetBusyModelsSnapshot() => Array.Empty<string>();
+
+            public System.Threading.Tasks.Task NotifyAllAsync(string title, string message, string level = "info") => System.Threading.Tasks.Task.CompletedTask;
+            public System.Threading.Tasks.Task NotifyGroupAsync(string group, string title, string message, string level = "info") => System.Threading.Tasks.Task.CompletedTask;
+
+            public System.Threading.Tasks.Task PublishEventAsync(string eventType, string title, string message, string level = "information", string? group = null)
+                => System.Threading.Tasks.Task.CompletedTask;
+
+            public System.Threading.Tasks.Task BroadcastStepProgress(Guid generationId, int current, int max, string stepDescription)
+                => System.Threading.Tasks.Task.CompletedTask;
+            public System.Threading.Tasks.Task BroadcastStepRetry(Guid generationId, int retryCount, string reason)
+                => System.Threading.Tasks.Task.CompletedTask;
+            public System.Threading.Tasks.Task BroadcastStepComplete(Guid generationId, int stepNumber)
+                => System.Threading.Tasks.Task.CompletedTask;
+            public System.Threading.Tasks.Task BroadcastTaskComplete(Guid generationId, string status)
+                => System.Threading.Tasks.Task.CompletedTask;
         }
     }
 }

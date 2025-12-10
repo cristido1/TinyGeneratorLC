@@ -312,7 +312,7 @@ namespace TinyGenerator.Services
                 .ToList();
             
             // Replace placeholders in stepInstruction
-            stepInstruction = await ReplaceStepPlaceholdersAsync(stepInstruction, completedPreviousSteps, threadId, ct);
+            stepInstruction = await ReplaceStepPlaceholdersAsync(stepInstruction, completedPreviousSteps, execution.InitialContext, threadId, ct);
             
             var context = string.Empty;
             List<ConversationMessage>? extraMessages = null;
@@ -528,7 +528,6 @@ Correggi l'output tenendo conto del feedback ricevuto.
                     orchestrator,
                     _logger,
                     maxIterations: 100,
-                    progress: null,
                     runId: null,
                     modelBridge: bridge,
                     systemMessage: systemMessage,
@@ -1148,9 +1147,16 @@ Correggi l'output tenendo conto del feedback ricevuto.
         private async Task<string> ReplaceStepPlaceholdersAsync(
             string instruction,
             List<TaskExecutionStep> previousSteps,
+            string? initialContext,
             int threadId,
             CancellationToken ct)
         {
+            // First, replace {{PROMPT}} with initialContext if present
+            if (instruction.Contains("{{PROMPT}}") && !string.IsNullOrWhiteSpace(initialContext))
+            {
+                instruction = instruction.Replace("{{PROMPT}}", initialContext);
+            }
+
             // Parse placeholders: {{STEP_N}}, {{STEP_N_SUMMARY}}, {{STEP_N_EXTRACT:filter}}, {{STEPS_N-M_SUMMARY}}
             var placeholderPattern = @"\{\{STEP(?:S)?_(\d+)(?:-(\d+))?(?:_(SUMMARY|EXTRACT):(.+?))?\}\}";
             var matches = Regex.Matches(instruction, placeholderPattern);

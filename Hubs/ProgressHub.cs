@@ -6,20 +6,20 @@ namespace TinyGenerator.Hubs
 {
     public class ProgressHub : Hub
     {
-        private readonly ProgressService? _progressService;
+        private readonly ICustomLogger? _customLogger;
         private readonly ICommandDispatcher? _dispatcher;
 
-        public ProgressHub(ProgressService? progressService = null, ICommandDispatcher? dispatcher = null)
+        public ProgressHub(ICustomLogger? customLogger = null, ICommandDispatcher? dispatcher = null)
         {
-            _progressService = progressService;
+            _customLogger = customLogger;
             _dispatcher = dispatcher;
         }
 
         public override async Task OnConnectedAsync()
         {
-            if (_progressService != null)
+            if (_customLogger != null)
             {
-                var snapshot = _progressService.GetBusyModelsSnapshot();
+                var snapshot = _customLogger.GetBusyModelsSnapshot();
                 if (snapshot.Count > 0)
                 {
                     await Clients.Caller.SendAsync("BusyModelsUpdated", snapshot);

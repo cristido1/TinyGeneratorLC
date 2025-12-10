@@ -15,7 +15,6 @@ namespace TinyGenerator.Pages
     {
         private readonly DatabaseService _database;
         private readonly LangChainTestService _testService;
-        private readonly CostController _costController;
         private readonly IOllamaManagementService _ollamaService;
         private readonly ICommandDispatcher _commandDispatcher;
         private readonly ILogger<ModelsModel>? _logger;
@@ -46,7 +45,7 @@ namespace TinyGenerator.Pages
         public ModelsModel(
             DatabaseService database,
             LangChainTestService testService,
-            CostController costController,
+            // CostController removed
             IOllamaManagementService ollamaService,
             ICommandDispatcher commandDispatcher,
             ILogger<ModelsModel>? logger = null,
@@ -54,7 +53,7 @@ namespace TinyGenerator.Pages
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _testService = testService ?? throw new ArgumentNullException(nameof(testService));
-            _costController = costController ?? throw new ArgumentNullException(nameof(costController));
+
             _ollamaService = ollamaService ?? throw new ArgumentNullException(nameof(ollamaService));
             _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
             _logger = logger;
@@ -126,8 +125,8 @@ namespace TinyGenerator.Pages
         {
             try
             {
-                var added = await _costController.PopulateLocalOllamaModelsAsync();
-                TempData["TestResultMessage"] = $"Discovered and upserted {added} local Ollama model(s).";
+                    var added = await _database.AddLocalOllamaModelsAsync();
+                    TempData["TestResultMessage"] = $"Discovered and upserted {added} local Ollama model(s).";
                 return RedirectToPage();
             }
             catch (Exception ex)

@@ -1,0 +1,186 @@
+@page
+@model TinyGenerator.Pages.TaskTypes.IndexModel
+@{
+    ViewData["Title"] = "Task Types";
+    ViewData["PageDescription"] = "Gestisci i tipi di task (task_types) usati dall'orchestratore multi-step";
+}
+
+<div class="mb-3 d-flex justify-content-between align-items-center">
+    <div>
+        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#modalEdit" onclick="openCreateModal()">Create Task Type</button>
+    </div>
+</div>
+
+<table id="tabTaskTypes" class="table table-bordered table-sm table-pastel table-compact datatable">
+    <thead>
+        <tr>
+            <th>Code</th>
+            <th>Description</th>
+            <th>Executor Role</th>
+            <th>Checker Role</th>
+            <th>Merge Strategy</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    @if (Model.TaskTypes != null && Model.TaskTypes.Any())
+    {
+        foreach (var t in Model.TaskTypes)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(t);
+            <tr data-item='@Html.Raw(json.Replace("'", "&#39;"))'>
+                <td class="code">@t.Code</td>
+                <td class="description">@(string.IsNullOrWhiteSpace(t.Description) ? "" : t.Description)</td>
+                <td class="exec">@t.DefaultExecutorRole</td>
+                <td class="check">@t.DefaultCheckerRole</td>
+                <td class="merge">@t.OutputMergeStrategy</td>
+                <td>
+                    <button type="button" class="btn btn-sm btn-outline-secondary dt-expand me-1" title="Show details">+</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary me-1" onclick="openEditModal(this)">Edit</button>
+                    <form method="post" asp-page-handler="Delete" asp-route-code="@t.Code" style="display:inline;" onsubmit="return confirm('Delete task type @t.Code?');">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+        }
+    }
+    else
+    {
+        <tr><td colspan="6">No task types found.</td></tr>
+    }
+    </tbody>
+</table>
+
+<!-- Modal -->
+<div class="modal fade" id="modalEdit" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="post" asp-page-handler="Save">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalTitle">Create Task Type</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="ttCode" name="Code" />
+
+                    <div class="mb-3">
+                        <label for="codeInput" class="form-label">Code <span class="text-danger">*</span></label>
+                        <input type="text" id="codeInput" name="Code" class="form-control" required maxlength="100" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="descInput" class="form-label">Description</label>
+                        <textarea id="descInput" name="Description" class="form-control" rows="2" maxlength="500"></textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="execRole" class="form-label">Default Executor Role</label>
+                            <input id="execRole" name="DefaultExecutorRole" class="form-control" maxlength="100" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="checkRole" class="form-label">Default Checker Role</label>
+                            <input id="checkRole" name="DefaultCheckerRole" class="form-control" maxlength="100" />
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="mergeStrategy" class="form-label">Output Merge Strategy</label>
+                        <input id="mergeStrategy" name="OutputMergeStrategy" class="form-control" maxlength="100" />
+                        <div class="form-text">Examples: <code>accumulate_chapters</code>, <code>last_only</code></div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="validationCriteria" class="form-label">Validation Criteria (JSON)</label>
+                        <textarea id="validationCriteria" name="ValidationCriteria" class="form-control font-monospace" rows="6" placeholder='{"min_length_check":true}'></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
+}
+
+@section Scripts {
+    <script>
+        $(document).ready(function() {
+            var table = $('#tabTaskTypes').DataTable({
+                paging: true,
+                searching: true,
+                ordering: true,
+                pageLength: 25,
+                responsive: true,
+                autoWidth: false,
+                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" + "rt" + "<'row'<'col-sm-6'i><'col-sm-6'p>>",
+                buttons: [ { extend: 'colvis', text: 'Columns', className: 'btn btn-light btn-sm' } ],
+                stateSave: true,
+                stateSaveName: 'DataTables_tasktypes',
+                columns: [ { data: 'code' }, { data: 'description' }, { data: 'exec' }, { data: 'check' }, { data: 'merge' }, { data: 'actions', orderable: false } ]
+            });
+
+            $('#tabTaskTypes tbody').on('click', '.dt-expand', function() {
+                var tr = $(this).closest('tr');
+                var row = table.row(tr);
+                if (row.child.isShown()) { row.child.hide(); $(this).text('+'); }
+                else {
+                    var json = tr.attr('data-item');
+                    if (!json) return;
+                    try {
+                        var item = JSON.parse(json);
+                        var html = '<div class="p-3">';
+                        html += '<dl class="row mb-0">';
+                        html += '<dt class="col-sm-4">Code</dt><dd class="col-sm-8">' + escapeHtml(item.Code) + '</dd>';
+                        html += '<dt class="col-sm-4">Description</dt><dd class="col-sm-8">' + escapeHtml(item.Description || '') + '</dd>';
+                        html += '<dt class="col-sm-4">Executor Role</dt><dd class="col-sm-8">' + escapeHtml(item.DefaultExecutorRole || '') + '</dd>';
+                        html += '<dt class="col-sm-4">Checker Role</dt><dd class="col-sm-8">' + escapeHtml(item.DefaultCheckerRole || '') + '</dd>';
+                        html += '<dt class="col-sm-4">Merge Strategy</dt><dd class="col-sm-8">' + escapeHtml(item.OutputMergeStrategy || '') + '</dd>';
+                        html += '</dl>';
+                        if (item.ValidationCriteria) {
+                            html += '<hr/><strong>Validation Criteria:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow:auto;">' + escapeHtml(item.ValidationCriteria) + '</pre>';
+                        }
+                        html += '</div>';
+                        row.child(html).show();
+                        $(this).text('-');
+                    } catch(e) { console.error(e); }
+                }
+            });
+        });
+
+        function openCreateModal() {
+            $('#modalTitle').text('Create Task Type');
+            $('#codeInput').val('');
+            $('#descInput').val('');
+            $('#execRole').val('');
+            $('#checkRole').val('');
+            $('#mergeStrategy').val('');
+            $('#validationCriteria').val('');
+        }
+
+        function openEditModal(btn) {
+            var tr = $(btn).closest('tr');
+            var json = tr.attr('data-item');
+            if (!json) return;
+            try {
+                var item = JSON.parse(json);
+                $('#modalTitle').text('Edit Task Type: ' + item.Code);
+                $('#codeInput').val(item.Code);
+                $('#descInput').val(item.Description || '');
+                $('#execRole').val(item.DefaultExecutorRole || '');
+                $('#checkRole').val(item.DefaultCheckerRole || '');
+                $('#mergeStrategy').val(item.OutputMergeStrategy || '');
+                $('#validationCriteria').val(item.ValidationCriteria || '');
+                var modal = new bootstrap.Modal(document.getElementById('modalEdit'));
+                modal.show();
+            } catch(e) { alert('Failed to load item'); }
+        }
+
+        function escapeHtml(text) { if (!text) return ''; return String(text).replace(/[&<>"']/g, function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"}[m];}); }
+    </script>
+}

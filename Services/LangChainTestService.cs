@@ -32,7 +32,6 @@ namespace TinyGenerator.Services
     public class LangChainTestService
     {
         private readonly DatabaseService _database;
-        private readonly ProgressService _progress;
         private readonly StoriesService _stories;
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly LangChainAgentService _agentService;
@@ -74,7 +73,6 @@ namespace TinyGenerator.Services
 
         public LangChainTestService(
             DatabaseService database,
-            ProgressService progress,
             StoriesService stories,
             ILangChainKernelFactory kernelFactory,
             LangChainAgentService agentService,
@@ -83,7 +81,6 @@ namespace TinyGenerator.Services
             ICommandDispatcher commandDispatcher)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
-            _progress = progress ?? throw new ArgumentNullException(nameof(progress));
             _stories = stories ?? throw new ArgumentNullException(nameof(stories));
             _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
             _agentService = agentService ?? throw new ArgumentNullException(nameof(agentService));
@@ -165,7 +162,7 @@ namespace TinyGenerator.Services
                 "Started from LangChainTestService.RunGroupAsync",
                 testFolder);
 
-            _progress?.Start(runId.ToString());
+            _customLogger?.Start(runId.ToString());
             LogTestMessage(runId.ToString(), $"[{modelInfo.Name}] Starting test group: {group}");
 
             return new TestGroupRunContext
@@ -233,7 +230,7 @@ namespace TinyGenerator.Services
                 var originalScore = score;
                 score = Math.Max(0, score - penaltyCount);
                 var penaltyMessage = $"[{model}] Penalità TTS: -{penaltyCount} punti per emozioni tutte 'neutral' (score {originalScore} -> {score})";
-                _progress?.Append(runId.ToString(), penaltyMessage);
+                _customLogger?.Append(runId.ToString(), penaltyMessage);
                 LogTestMessage(runId.ToString(), penaltyMessage, "Warning");
             }
             var passedFlag = steps > 0 && passedCount == steps;
@@ -439,7 +436,7 @@ namespace TinyGenerator.Services
                 try
                 {
                     var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _service._customLogger, progress: _service._progress, runId: runId.ToString(), modelBridge: chatBridge);
+                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _service._customLogger, runId: runId.ToString(), modelBridge: chatBridge);
                     var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
                     sw.Stop();
 
@@ -460,7 +457,7 @@ namespace TinyGenerator.Services
                         passed ? null : failReason,
                         (long?)sw.ElapsedMilliseconds);
 
-                    _service._progress?.Append(runId.ToString(),
+                    _service._customLogger?.Append(runId.ToString(),
                         $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: {test.FunctionName ?? $"id_{test.Id}"} ({sw.ElapsedMilliseconds}ms)");
                 }
                 catch (OperationCanceledException)
@@ -472,7 +469,7 @@ namespace TinyGenerator.Services
                         null,
                         $"Timeout after {timeout}s",
                         (long?)sw.ElapsedMilliseconds);
-                    _service._progress?.Append(runId.ToString(), $"[{model}] Step {idx} TIMEOUT");
+                    _service._customLogger?.Append(runId.ToString(), $"[{model}] Step {idx} TIMEOUT");
                 }
                 catch (Exception ex)
                 {
@@ -483,7 +480,7 @@ namespace TinyGenerator.Services
                         null,
                         $"Error: {ex.Message}",
                         (long?)sw.ElapsedMilliseconds);
-                    _service._progress?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}");
+                    _service._customLogger?.Append(runId.ToString(), $"[{model}] Step {idx} ERROR: {ex.Message}");
                 }
             }
         }
@@ -516,7 +513,7 @@ namespace TinyGenerator.Services
                 try
                 {
                     var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _service._customLogger, progress: _service._progress, runId: runId.ToString(), modelBridge: chatBridge);
+                    var reactLoop = new ReActLoopOrchestrator(orchestrator, _service._customLogger, runId: runId.ToString(), modelBridge: chatBridge);
                     var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
                     sw.Stop();
 
@@ -539,7 +536,7 @@ namespace TinyGenerator.Services
                         passed ? null : (failReason ?? reactResult.Error),
                         (long?)sw.ElapsedMilliseconds);
 
-                    _service._progress?.Append(runId.ToString(),
+                    _service._customLogger?.Append(runId.ToString(),
                         $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: {test.FunctionName ?? $"id_{test.Id}"} ({sw.ElapsedMilliseconds}ms) - {reactResult.ExecutedTools.Count} tools called");
                 }
                 catch (OperationCanceledException)
@@ -557,7 +554,7 @@ namespace TinyGenerator.Services
                     sw.Stop();
                     context.ModelInfo.NoTools = true;
                     _service._database.UpsertModel(context.ModelInfo);
-                    _service._progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                    _service._customLogger?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
                     
                     _service._database.UpdateTestStepResult(
                         stepId,
@@ -573,7 +570,7 @@ namespace TinyGenerator.Services
                     {
                         context.ModelInfo.NoTools = true;
                         _service._database.UpsertModel(context.ModelInfo);
-                        _service._progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                        _service._customLogger?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
                     }
 
                     _service._database.UpdateTestStepResult(
@@ -631,13 +628,13 @@ namespace TinyGenerator.Services
                         var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeout));
                         // recreate orchestrator for each attempt to ensure a fresh tool state
                         var attemptOrchestrator = _service._kernelFactory.CreateOrchestrator(model, _service.ParseAllowedPlugins(test), null);
-                        var reactLoop = new ReActLoopOrchestrator(attemptOrchestrator, _service._customLogger, progress: _service._progress, runId: runId.ToString(), modelBridge: chatBridge);
+                        var reactLoop = new ReActLoopOrchestrator(attemptOrchestrator, _service._customLogger, runId: runId.ToString(), modelBridge: chatBridge);
 
                         var promptAttempt = fullPrompt;
                         if (attempt > 1)
                         {
                             promptAttempt += $"\n\n[RETRY {attempt}/{MaxAttempts}] The previous story was too short (<{MinStoryLength} chars). Rewrite the story from scratch, make it significantly longer and more detailed. Produce at least {MinStoryLength * 2} characters. Do not reuse the previous text. Why are you producing so short stories?";
-                            _service._progress?.Append(runId.ToString(), $"[{model}] Retry {attempt}/{MaxAttempts}: requesting a longer rewrite.");
+                            _service._customLogger?.Append(runId.ToString(), $"[{model}] Retry {attempt}/{MaxAttempts}: requesting a longer rewrite.");
                         }
 
                         var reactResult = await reactLoop.ExecuteAsync(promptAttempt, cts.Token);
@@ -645,7 +642,7 @@ namespace TinyGenerator.Services
                         var storyText = reactResult.FinalResponse ?? string.Empty;
                         if (string.IsNullOrWhiteSpace(storyText))
                         {
-                            _service._progress?.Append(runId.ToString(), $"[{model}] Attempt {attempt} returned empty story.");
+                            _service._customLogger?.Append(runId.ToString(), $"[{model}] Attempt {attempt} returned empty story.");
                             if (attempt == MaxAttempts)
                             {
                                 sw.Stop();
@@ -662,7 +659,7 @@ namespace TinyGenerator.Services
                         cleanStoryText = _service.ExtractJsonContent(storyText) ?? storyText;
                         if (cleanStoryText.Length < MinStoryLength)
                         {
-                            _service._progress?.Append(runId.ToString(), $"[{model}] Attempt {attempt} produced too short story ({cleanStoryText.Length} chars).");
+                            _service._customLogger?.Append(runId.ToString(), $"[{model}] Attempt {attempt} produced too short story ({cleanStoryText.Length} chars).");
                             if (attempt == MaxAttempts)
                             {
                                 sw.Stop();
@@ -711,7 +708,7 @@ namespace TinyGenerator.Services
                             passed ? null : $"Evaluation score too low: {evaluationScore:F1}/10",
                             (long?)sw.ElapsedMilliseconds);
 
-                        _service._progress?.Append(runId.ToString(), $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: story ID {storyId}, score {evaluationScore:F1}/10");
+                        _service._customLogger?.Append(runId.ToString(), $"[{model}] Step {idx} {(passed ? "PASSED" : "FAILED")}: story ID {storyId}, score {evaluationScore:F1}/10");
 
                         ok = true;
                         break;
@@ -743,7 +740,7 @@ namespace TinyGenerator.Services
                     sw.Stop();
                     context.ModelInfo.NoTools = true;
                     _service._database.UpsertModel(context.ModelInfo);
-                    _service._progress?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
+                    _service._customLogger?.Append(runId.ToString(), $"[{model}] Model does not support tools - marked NoTools=true");
                     
                     _service._database.UpdateTestStepResult(
                         stepId,
@@ -796,7 +793,7 @@ namespace TinyGenerator.Services
             string prompt,
             string? testFolder)
         {
-            _progress?.Append(runId.ToString(), $"[{model}] === TTS TEST ===");
+            _customLogger?.Append(runId.ToString(), $"[{model}] === TTS TEST ===");
             
             // Use the real TTS agent configuration but override only the model under test.
             var ttsAgent = _database.ListAgents()
@@ -810,7 +807,7 @@ namespace TinyGenerator.Services
 
             if (!string.IsNullOrWhiteSpace(ttsStoryText))
             {
-                _progress?.Append(runId.ToString(), $"[{model}] Using story 23 for TTS test ({ttsStoryText.Length} chars)");
+                _customLogger?.Append(runId.ToString(), $"[{model}] Using story 23 for TTS test ({ttsStoryText.Length} chars)");
             }
 
             const int maxRetries = 3;
@@ -848,18 +845,18 @@ namespace TinyGenerator.Services
                         
                         // Create ReAct loop to execute TTS schema generation
                         // Pass execution plan as system message instead of concatenating to user prompt
-                        var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, progress: _progress, runId: runId.ToString(), modelBridge: chatBridge, systemMessage: systemMessage);
+                        var reactLoop = new ReActLoopOrchestrator(orchestrator, _customLogger, runId: runId.ToString(), modelBridge: chatBridge, systemMessage: systemMessage);
                         var reactResult = await reactLoop.ExecuteAsync(fullPrompt, cts.Token);
                         sw.Stop();
                         
                         var response = reactResult.FinalResponse;
                         var responsePreview = string.IsNullOrEmpty(response) ? "empty" : response;
-                        _progress?.Append(runId.ToString(), $"[{model}] Model Response (attempt {attempt}): {responsePreview}");
+                        _customLogger?.Append(runId.ToString(), $"[{model}] Model Response (attempt {attempt}): {responsePreview}");
 
                         var generatedFile = FindLatestJson(testFolder);
                         if (!string.IsNullOrWhiteSpace(generatedFile))
                         {
-                            _progress?.Append(runId.ToString(), $"[{model}] Found generated file: {Path.GetFileName(generatedFile)}");
+                            _customLogger?.Append(runId.ToString(), $"[{model}] Found generated file: {Path.GetFileName(generatedFile)}");
                         }
 
                         if (!string.IsNullOrWhiteSpace(generatedFile))
@@ -867,7 +864,7 @@ namespace TinyGenerator.Services
                             if (!TryComputeTtsCoverage(ttsStoryText, generatedFile, out var coverage))
                             {
                                 var warn = $"[{model}] Unable to verify TTS coverage for {Path.GetFileName(generatedFile)}. Retrying.";
-                                _progress?.Append(runId.ToString(), warn, "Warning");
+                                _customLogger?.Append(runId.ToString(), warn, "Warning");
                                 LogTestMessage(runId.ToString(), warn, "Warning");
                                 continue;
                             }
@@ -875,7 +872,7 @@ namespace TinyGenerator.Services
                             if (coverage < TtsCoverageThreshold)
                             {
                                 var warn = $"[{model}] Coverage {coverage:P1} below required {TtsCoverageThreshold:P0}. Retrying.";
-                                _progress?.Append(runId.ToString(), warn, "Warning");
+                                _customLogger?.Append(runId.ToString(), warn, "Warning");
                                 LogTestMessage(runId.ToString(), warn, "Warning");
                                 continue;
                             }
@@ -895,14 +892,14 @@ namespace TinyGenerator.Services
                                 (long?)sw.ElapsedMilliseconds);
 
                             var successMessage = $"[{model}] Step {idx} PASSED: {stepLabel} ({sw.ElapsedMilliseconds}ms) - saved {Path.GetFileName(generatedFile)} (coverage {coverage:P1})";
-                            _progress?.Append(runId.ToString(), successMessage);
+                            _customLogger?.Append(runId.ToString(), successMessage);
                             LogTestMessage(runId.ToString(), successMessage);
 
                             if (IsAllNeutralEmotion(generatedFile))
                             {
                                 AddTtsNeutralPenalty(runId);
                                 var penaltyMsg = $"[{model}] TTS schema contiene solo emozioni 'neutral' ({Path.GetFileName(generatedFile)}): penalità applicata";
-                                _progress?.Append(runId.ToString(), penaltyMsg);
+                                _customLogger?.Append(runId.ToString(), penaltyMsg);
                                 LogTestMessage(runId.ToString(), penaltyMsg, "Warning");
                             }
 
@@ -910,7 +907,7 @@ namespace TinyGenerator.Services
                         }
                         else if (attempt < maxRetries)
                         {
-                            _progress?.Append(runId.ToString(), $"[{model}] No file generated, retrying... ({attempt}/{maxRetries})");
+                            _customLogger?.Append(runId.ToString(), $"[{model}] No file generated, retrying... ({attempt}/{maxRetries})");
                             continue;
                         }
                         else
@@ -918,7 +915,7 @@ namespace TinyGenerator.Services
                             const string errorReason = "No JSON file generated after retries";
                             _database.UpdateTestStepResult(stepId, false, response, errorReason, (int)sw.ElapsedMilliseconds);
                             var failMessage = $"[{model}] Step {idx} FAILED: {stepLabel} - {errorReason}";
-                            _progress?.Append(runId.ToString(), failMessage);
+                            _customLogger?.Append(runId.ToString(), failMessage);
                             LogTestMessage(runId.ToString(), failMessage, "Error");
                             return;
                         }
@@ -928,7 +925,7 @@ namespace TinyGenerator.Services
                         sw.Stop();
                         if (attempt < maxRetries)
                         {
-                            _progress?.Append(runId.ToString(), $"[{model}] Timeout on attempt {attempt}, retrying...");
+                            _customLogger?.Append(runId.ToString(), $"[{model}] Timeout on attempt {attempt}, retrying...");
                             continue;
                         }
                         else
@@ -936,7 +933,7 @@ namespace TinyGenerator.Services
                             var errorReason = $"Timeout after {timeout}s on all {maxRetries} attempts";
                             _database.UpdateTestStepResult(stepId, false, null, errorReason, (int)sw.ElapsedMilliseconds);
                             var timeoutMessage = $"[{model}] Step {idx} FAILED: {stepLabel} - {errorReason}";
-                            _progress?.Append(runId.ToString(), timeoutMessage);
+                            _customLogger?.Append(runId.ToString(), timeoutMessage);
                             LogTestMessage(runId.ToString(), timeoutMessage, "Error");
                             return;
                         }
@@ -946,7 +943,7 @@ namespace TinyGenerator.Services
                         sw.Stop();
                         if (attempt < maxRetries)
                         {
-                            _progress?.Append(runId.ToString(), $"[{model}] Error on attempt {attempt}: {ex.Message}, retrying...");
+                            _customLogger?.Append(runId.ToString(), $"[{model}] Error on attempt {attempt}: {ex.Message}, retrying...");
                             continue;
                         }
                         else
@@ -954,7 +951,7 @@ namespace TinyGenerator.Services
                             var errorReason = $"{ex.Message} after {maxRetries} attempts";
                             _database.UpdateTestStepResult(stepId, false, null, errorReason, (int)sw.ElapsedMilliseconds);
                             var errorMessage = $"[{model}] Step {idx} FAILED: {stepLabel} - {ex.Message}";
-                            _progress?.Append(runId.ToString(), errorMessage);
+                            _customLogger?.Append(runId.ToString(), errorMessage);
                             LogTestMessage(runId.ToString(), errorMessage, "Error");
                             return;
                         }
@@ -1125,7 +1122,7 @@ namespace TinyGenerator.Services
                 {
                     if (ttsTool.TrySaveSnapshot(out var savedPath) && !string.IsNullOrWhiteSpace(savedPath))
                     {
-                        _progress?.Append(runId.ToString(), $"[{model}] Schema TTS salvata ({Path.GetFileName(savedPath)})");
+                        _customLogger?.Append(runId.ToString(), $"[{model}] Schema TTS salvata ({Path.GetFileName(savedPath)})");
                     }
                     return;
                 }
@@ -1134,7 +1131,7 @@ namespace TinyGenerator.Services
             }
             catch (Exception ex)
             {
-                _progress?.Append(runId.ToString(), $"[{model}] Errore finalizzazione TTS: {ex.Message}");
+                _customLogger?.Append(runId.ToString(), $"[{model}] Errore finalizzazione TTS: {ex.Message}");
             }
         }
 
@@ -1146,11 +1143,11 @@ namespace TinyGenerator.Services
             try
             {
                 Directory.Delete(testFolder, true);
-                _progress?.Append(runId.ToString(), $"[{model}] Cartella test rimossa (nessuna generazione TTS) ");
+                _customLogger?.Append(runId.ToString(), $"[{model}] Cartella test rimossa (nessuna generazione TTS) ");
             }
             catch (Exception ex)
             {
-                _progress?.Append(runId.ToString(), $"[{model}] Impossibile cancellare cartella test: {ex.Message}");
+                _customLogger?.Append(runId.ToString(), $"[{model}] Impossibile cancellare cartella test: {ex.Message}");
             }
 
             return Task.CompletedTask;
@@ -1406,7 +1403,7 @@ namespace TinyGenerator.Services
 
             if (evaluators.Count == 0)
             {
-                _progress?.Append(runId.ToString(), $"[{writerModel}] No evaluators found, using default score");
+                _customLogger?.Append(runId.ToString(), $"[{writerModel}] No evaluators found, using default score");
                 return 10.0;
             }
 
@@ -1417,19 +1414,19 @@ namespace TinyGenerator.Services
             {
                 try
                 {
-                    _progress?.Append(runId.ToString(), $"[{writerModel}] Evaluating with {evaluator.Name}...");
+                    _customLogger?.Append(runId.ToString(), $"[{writerModel}] Evaluating with {evaluator.Name}...");
                     var result = await _stories.EvaluateStoryWithAgentAsync(storyId, evaluator.Id);
 
                     if (result.success)
                     {
                         totalScoreSum += (int)result.score;
                         evaluatorCount++;
-                        _progress?.Append(runId.ToString(), $"[{writerModel}] Evaluator score: {result.score}/100");
+                        _customLogger?.Append(runId.ToString(), $"[{writerModel}] Evaluator score: {result.score}/100");
                     }
                 }
                 catch (Exception ex)
                 {
-                    _progress?.Append(runId.ToString(), $"[{writerModel}] Evaluator error: {ex.Message}", "Warning");
+                    _customLogger?.Append(runId.ToString(), $"[{writerModel}] Evaluator error: {ex.Message}", "Warning");
                 }
             }
 
@@ -1439,14 +1436,14 @@ namespace TinyGenerator.Services
             var maxPossible = evaluatorCount * 100;
             var finalScore = (double)totalScoreSum / maxPossible * 10.0;
 
-            _progress?.Append(runId.ToString(), $"[{writerModel}] Final score: {finalScore:F2}/10");
+            _customLogger?.Append(runId.ToString(), $"[{writerModel}] Final score: {finalScore:F2}/10");
 
             return finalScore;
         }
 
         private void LogTestMessage(string runId, string message, string level = "Information")
         {
-            _progress?.Append(runId, message);
+            _customLogger?.Append(runId, message);
             
             try
             {

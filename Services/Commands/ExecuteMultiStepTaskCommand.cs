@@ -9,7 +9,6 @@ namespace TinyGenerator.Services.Commands
         private readonly MultiStepOrchestrationService _orchestrator;
         private readonly DatabaseService _database;
         private readonly ICustomLogger _logger;
-        private readonly ProgressService? _progressService;
         private readonly ICommandDispatcher? _dispatcher;
 
         public ExecuteMultiStepTaskCommand(
@@ -18,7 +17,6 @@ namespace TinyGenerator.Services.Commands
             MultiStepOrchestrationService orchestrator,
             DatabaseService database,
             ICustomLogger logger,
-            ProgressService? progressService = null,
             ICommandDispatcher? dispatcher = null)
         {
             _executionId = executionId;
@@ -26,7 +24,6 @@ namespace TinyGenerator.Services.Commands
             _orchestrator = orchestrator;
             _database = database;
             _logger = logger;
-            _progressService = progressService;
             _dispatcher = dispatcher;
         }
 
@@ -57,7 +54,7 @@ namespace TinyGenerator.Services.Commands
                 void ReportProgress(int current, int max, string stepDesc)
                 {
                     _logger.Log("Information", "MultiStep", $"Step {current}/{max}: {stepDesc}");
-                    _progressService?.BroadcastStepProgress(_generationId, current, max, stepDesc);
+                    _ = _logger.BroadcastStepProgress(_generationId, current, max, stepDesc);
                     _dispatcher?.UpdateStep(_generationId.ToString(), current, max);
                 }
                 
@@ -82,7 +79,7 @@ namespace TinyGenerator.Services.Commands
                 Console.WriteLine($"[DEBUG] ExecuteMultiStepTaskCommand - ExecuteAllStepsAsync completed successfully");
 
                 _logger.Log("Information", "MultiStep", $"Task execution {_executionId} completed successfully");
-                    _progressService?.BroadcastTaskComplete(_generationId, "completed");
+                    _ = _logger.BroadcastTaskComplete(_generationId, "completed");
             }
             catch (OperationCanceledException ex)
             {
@@ -98,7 +95,7 @@ namespace TinyGenerator.Services.Commands
                     // No need to delete story - it's not created yet if execution fails
                 }
 
-                _progressService?.BroadcastTaskComplete(_generationId, "cancelled");
+                _ = _logger.BroadcastTaskComplete(_generationId, "cancelled");
             }
             catch (Exception ex)
             {
@@ -119,7 +116,7 @@ namespace TinyGenerator.Services.Commands
                     // No need to delete story - it's not created yet if execution fails
                 }
 
-                _progressService?.BroadcastTaskComplete(_generationId, "failed");
+                _ = _logger.BroadcastTaskComplete(_generationId, "failed");
             }
         }
     }

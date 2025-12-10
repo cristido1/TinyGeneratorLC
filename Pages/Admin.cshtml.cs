@@ -6,23 +6,20 @@ namespace TinyGenerator.Pages
 {
     public class AdminModel : PageModel
     {
-        private readonly CostController _cost;
+        private readonly DatabaseService _database;
 
-        public AdminModel(CostController cost)
+        public AdminModel(DatabaseService database)
         {
-            _cost = cost;
+            _database = database;
         }
 
     public long TokensThisMonth { get; private set; }
     public double CostThisMonth { get; private set; }
-    public IEnumerable<CallRecord> Calls { get; private set; } = Enumerable.Empty<CallRecord>();
-
         public void OnGet()
         {
-            var usage = _cost.GetMonthUsage();
+            var usage = _database.GetMonthUsage(DateTime.UtcNow.ToString("yyyy-MM"));
             TokensThisMonth = usage.tokensThisMonth;
             CostThisMonth = usage.costThisMonth;
-            Calls = _cost.GetRecentCalls(50);
         }
     }
 }

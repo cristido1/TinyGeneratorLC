@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.SignalR;
+using TinyGenerator.Hubs;
 using TinyGenerator.Models;
 
 namespace TinyGenerator.Services
@@ -13,7 +16,12 @@ namespace TinyGenerator.Services
     public class CustomLogger : ICustomLogger, IDisposable
     {
         private readonly DatabaseService _db;
-        private readonly ProgressService? _progress;
+        private readonly ConcurrentDictionary<string, List<string>> _store = new();
+        private readonly ConcurrentDictionary<string, bool> _completed = new();
+        private readonly ConcurrentDictionary<string, string?> _result = new();
+        private readonly ConcurrentDictionary<string, int> _busyModels = new(StringComparer.OrdinalIgnoreCase);
+        private readonly IHubContext<ProgressHub>? _hubContext;
+        private readonly ConcurrentDictionary<string, AppEventDefinition> _eventDefinitions = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<LogEntry> _buffer = new();
         private readonly object _lock = new();
         private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -25,16 +33,17 @@ namespace TinyGenerator.Services
         private readonly bool _otherLogs;
         private bool _disposed;
 
-        public CustomLogger(DatabaseService databaseService, CustomLoggerOptions options, ProgressService? progressService = null)
+        public CustomLogger(DatabaseService databaseService, CustomLoggerOptions options, IHubContext<ProgressHub>? hubContext = null)
         {
             _db = databaseService ?? throw new ArgumentNullException(nameof(databaseService));
-            _progress = progressService;
+            _hubContext = hubContext;
             if (options == null) options = new CustomLoggerOptions();
             _batchSize = Math.Max(1, options.BatchSize);
             _flushInterval = TimeSpan.FromMilliseconds(Math.Max(100, options.FlushIntervalMs));
             _logRequestResponse = options.LogRequestResponse;
             _logToolResponses = options.LogToolResponses;
             _otherLogs = options.OtherLogs;
+            LoadEventDefinitions();
 
             // Timer triggers periodic flush (best-effort)
             _timer = new Timer(async _ => await OnTimerAsync().ConfigureAwait(false), null, _flushInterval, _flushInterval);
@@ -267,10 +276,7 @@ namespace TinyGenerator.Services
                 // Write via DatabaseService in a single batch
                 await _db.InsertLogsAsync(toWrite).ConfigureAwait(false);
 
-                if (_progress != null)
-                {
-                    await _progress.BroadcastLogsAsync(toWrite).ConfigureAwait(false);
-                }
+                await BroadcastLogsAsync(toWrite).ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -317,8 +323,6 @@ namespace TinyGenerator.Services
 
         private void BroadcastLiveLog(string? level, string? category, string? message)
         {
-            if (_progress == null) return;
-
             // Only forward categories that are useful to follow in real-time
             if (category != "PromptRendering" && category != "FunctionInvocation" && category != "ModelCompletion")
                 return;
@@ -329,7 +333,7 @@ namespace TinyGenerator.Services
 
             try
             {
-                _progress.Append("live-logs", $"[{safeLevel}][{safeCategory}] {safeMessage}");
+                Append("live-logs", $"[{safeLevel}][{safeCategory}] {safeMessage}");
             }
             catch
             {
@@ -355,6 +359,318 @@ namespace TinyGenerator.Services
             }
 
             return _otherLogs;
+        }
+
+        private void LoadEventDefinitions()
+        {
+            try
+            {
+                var defs = _db.GetAppEventDefinitions();
+                _eventDefinitions.Clear();
+                foreach (var kvp in defs)
+                {
+                    _eventDefinitions[kvp.Key] = kvp.Value;
+                }
+            }
+            catch
+            {
+                _eventDefinitions.Clear();
+            }
+        }
+
+        private AppEventDefinition GetEventDefinition(string eventType)
+        {
+            if (string.IsNullOrWhiteSpace(eventType))
+            {
+                return new AppEventDefinition { Enabled = true, Logged = true, Notified = true, EventType = eventType ?? string.Empty };
+            }
+
+            if (_eventDefinitions.TryGetValue(eventType, out var definition))
+            {
+                return definition;
+            }
+
+            return new AppEventDefinition
+            {
+                EventType = eventType,
+                Enabled = true,
+                Logged = true,
+                Notified = true,
+                CreatedAt = DateTime.UtcNow.ToString("o"),
+                UpdatedAt = DateTime.UtcNow.ToString("o")
+            };
+        }
+
+        public Task PublishEventAsync(string eventType, string title, string message, string level = "information", string? group = null)
+        {
+            if (string.IsNullOrWhiteSpace(eventType)) return Task.CompletedTask;
+            var definition = GetEventDefinition(eventType);
+            if (!definition.Enabled) return Task.CompletedTask;
+
+            if (definition.Logged)
+            {
+                Log(level, eventType, message);
+            }
+
+            if (definition.Notified)
+            {
+                if (string.IsNullOrWhiteSpace(group))
+                {
+                    return NotifyAllAsync(title, message, level);
+                }
+                return NotifyGroupAsync(group, title, message, level);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task NotifyAllAsync(string title, string message, string level = "info")
+        {
+            if (_hubContext == null) return Task.CompletedTask;
+            try
+            {
+                var ts = DateTime.UtcNow.ToString("o");
+                return _hubContext.Clients.All.SendAsync("AppNotification", new { title, message, level, ts });
+            }
+            catch
+            {
+                return Task.CompletedTask;
+            }
+        }
+
+        public Task NotifyGroupAsync(string group, string title, string message, string level = "info")
+        {
+            if (_hubContext == null || string.IsNullOrWhiteSpace(group)) return Task.CompletedTask;
+            try
+            {
+                var ts = DateTime.UtcNow.ToString("o");
+                return _hubContext.Clients.Group(group).SendAsync("AppNotification", new { title, message, level, ts });
+            }
+            catch
+            {
+                return Task.CompletedTask;
+            }
+        }
+
+        public void Start(string runId)
+        {
+            if (string.IsNullOrWhiteSpace(runId)) return;
+            _store[runId] = new List<string>();
+            _completed[runId] = false;
+            _result[runId] = null;
+        }
+
+        public async Task AppendAsync(string runId, string message, string? extraClass = null)
+        {
+            if (string.IsNullOrWhiteSpace(runId)) return;
+            if (!_store.ContainsKey(runId)) Start(runId);
+            _store.TryGetValue(runId, out var list);
+            list?.Add(message);
+            try
+            {
+                Console.WriteLine($"[Progress] {runId}: {message}");
+            }
+            catch { }
+
+            if (_hubContext != null)
+            {
+                try
+                {
+                    await _hubContext.Clients.All.SendAsync("ProgressAppended", runId, message, extraClass).ConfigureAwait(false);
+                }
+                catch { }
+            }
+        }
+
+        public void Append(string runId, string message, string? extraClass = null)
+        {
+            AppendAsync(runId, message, extraClass).ConfigureAwait(false).GetAwaiter().GetResult();
+        }
+
+        public List<string> Get(string runId)
+        {
+            if (string.IsNullOrWhiteSpace(runId)) return new List<string>();
+            if (_store.TryGetValue(runId, out var list))
+            {
+                return new List<string>(list);
+            }
+            return new List<string>();
+        }
+
+        public async Task MarkCompletedAsync(string runId, string? finalResult = null)
+        {
+            if (string.IsNullOrWhiteSpace(runId)) return;
+            _completed[runId] = true;
+            _result[runId] = finalResult;
+
+            try
+            {
+                Console.WriteLine($"[Progress] Completed {runId}: {finalResult}");
+            }
+            catch { }
+
+            if (_hubContext != null)
+            {
+                try
+                {
+                    await _hubContext.Clients.All.SendAsync("ProgressCompleted", runId, finalResult).ConfigureAwait(false);
+                }
+                catch { }
+            }
+        }
+
+        public void MarkCompleted(string runId, string? finalResult = null)
+            => MarkCompletedAsync(runId, finalResult).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public bool IsCompleted(string runId)
+        {
+            if (string.IsNullOrWhiteSpace(runId)) return false;
+            return _completed.TryGetValue(runId, out var completed) && completed;
+        }
+
+        public string? GetResult(string runId)
+        {
+            if (string.IsNullOrWhiteSpace(runId)) return null;
+            return _result.TryGetValue(runId, out var value) ? value : null;
+        }
+
+        public void Clear(string runId)
+        {
+            if (string.IsNullOrWhiteSpace(runId)) return;
+            _store.TryRemove(runId, out _);
+            _completed.TryRemove(runId, out _);
+            _result.TryRemove(runId, out _);
+        }
+
+        public async Task ShowAgentActivityAsync(string agentName, string status, string? agentId = null, string testType = "question")
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                var id = agentId ?? $"agent_{agentName}_{DateTime.UtcNow.Ticks}";
+                await _hubContext.Clients.All.SendAsync("AgentActivityStarted", id, agentName, status, testType).ConfigureAwait(false);
+            }
+            catch { }
+        }
+
+        public void ShowAgentActivity(string agentName, string status, string? agentId = null, string testType = "question")
+            => ShowAgentActivityAsync(agentName, status, agentId, testType).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public async Task HideAgentActivityAsync(string agentId)
+        {
+            if (_hubContext == null || string.IsNullOrWhiteSpace(agentId)) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("AgentActivityEnded", agentId).ConfigureAwait(false);
+            }
+            catch { }
+        }
+
+        public void HideAgentActivity(string agentId)
+            => HideAgentActivityAsync(agentId).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public async Task BroadcastLogsAsync(IEnumerable<LogEntry> entries)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("LogEntriesAppended", entries).ConfigureAwait(false);
+            }
+            catch { }
+        }
+
+        public async Task BroadcastStepProgress(Guid generationId, int current, int max, string stepDescription)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("StepProgress", generationId.ToString(), current, max, stepDescription).ConfigureAwait(false);
+            }
+            catch { }
+        }
+
+        public async Task BroadcastStepRetry(Guid generationId, int retryCount, string reason)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("StepRetry", generationId.ToString(), retryCount, reason).ConfigureAwait(false);
+            }
+            catch { }
+        }
+
+        public async Task BroadcastStepComplete(Guid generationId, int stepNumber)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("StepComplete", generationId.ToString(), stepNumber).ConfigureAwait(false);
+            }
+            catch { }
+        }
+
+        public async Task BroadcastTaskComplete(Guid generationId, string status)
+        {
+            if (_hubContext == null) return;
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("TaskComplete", generationId.ToString(), status).ConfigureAwait(false);
+            }
+            catch { }
+        }
+
+        public async Task ModelRequestStartedAsync(string modelName)
+        {
+            if (string.IsNullOrWhiteSpace(modelName)) return;
+            _busyModels.AddOrUpdate(modelName, 1, (_, current) => current + 1);
+            await BroadcastBusyModelsAsync().ConfigureAwait(false);
+        }
+
+        public void ModelRequestStarted(string modelName)
+            => ModelRequestStartedAsync(modelName).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public async Task ModelRequestFinishedAsync(string modelName)
+        {
+            if (string.IsNullOrWhiteSpace(modelName)) return;
+
+            _busyModels.AddOrUpdate(modelName, 0, (_, current) =>
+            {
+                var next = current - 1;
+                return next < 0 ? 0 : next;
+            });
+
+            if (_busyModels.TryGetValue(modelName, out var remaining) && remaining <= 0)
+            {
+                _busyModels.TryRemove(modelName, out _);
+            }
+
+            await BroadcastBusyModelsAsync().ConfigureAwait(false);
+        }
+
+        public void ModelRequestFinished(string modelName)
+            => ModelRequestFinishedAsync(modelName).ConfigureAwait(false).GetAwaiter().GetResult();
+
+        public IReadOnlyList<string> GetBusyModelsSnapshot()
+        {
+            return _busyModels
+                .Where(kvp => kvp.Value > 0)
+                .Select(kvp => kvp.Key)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private Task BroadcastBusyModelsAsync()
+        {
+            if (_hubContext == null) return Task.CompletedTask;
+            var snapshot = GetBusyModelsSnapshot();
+            try
+            {
+                return _hubContext.Clients.All.SendAsync("BusyModelsUpdated", snapshot);
+            }
+            catch
+            {
+                return Task.CompletedTask;
+            }
         }
     }
 }

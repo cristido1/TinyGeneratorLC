@@ -19,23 +19,20 @@ namespace TinyGenerator.Pages.Stories
     {
         private readonly StoriesService _stories;
         private readonly DatabaseService _database;
-        private readonly ProgressService? _progress;
-        private readonly NotificationService? _notifications;
+        private readonly ICustomLogger? _customLogger;
         private readonly ILogger<IndexModel>? _logger;
         private readonly ICommandDispatcher _commandDispatcher;
 
         public IndexModel(
             StoriesService stories,
             DatabaseService database,
-            ProgressService? progress = null,
-            NotificationService? notifications = null,
+            ICustomLogger? customLogger = null,
             ICommandDispatcher? commandDispatcher = null,
             ILogger<IndexModel>? logger = null)
         {
             _stories = stories;
             _database = database;
-            _progress = progress;
-            _notifications = notifications;
+            _customLogger = customLogger;
             _logger = logger;
             _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
         }
@@ -116,8 +113,8 @@ namespace TinyGenerator.Pages.Stories
             }
 
             var runId = $"bulk_eval_{agentId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-            _progress?.Start(runId);
-            _progress?.Append(runId, $"Avvio valutazione batch di {pending.Count} storie con {agent.Name} ({agent.Role})");
+            _customLogger?.Start(runId);
+            _customLogger?.Append(runId, $"Avvio valutazione batch di {pending.Count} storie con {agent.Name} ({agent.Role})");
 
             _commandDispatcher.Enqueue(
                 "bulk_evaluate",
@@ -141,7 +138,7 @@ namespace TinyGenerator.Pages.Stories
                     }
 
                     var msg = $"Completate {ok} valutazioni, fallite {ko}.";
-                    _progress?.Append(runId, msg);
+                    _customLogger?.Append(runId, msg);
                     return new CommandResult(ko == 0, msg);
                 },
                 runId: runId,
@@ -390,9 +387,9 @@ namespace TinyGenerator.Pages.Stories
 
             try
             {
-                _progress?.Start(runId);
+                _customLogger?.Start(runId);
                 var startLog = startMessage ?? $"[{storyId}] Avvio operazione {operationCode}";
-                _progress?.Append(runId, startLog);
+                _customLogger?.Append(runId, startLog);
             }
             catch (Exception ex)
             {
@@ -409,12 +406,12 @@ namespace TinyGenerator.Pages.Stories
                     {
                         var result = await operation(ctx);
                         var finalMessage = result.Message ?? (result.Success ? "Operazione completata" : "Operazione non riuscita");
-                        _progress?.Append(runId, $"[{storyId}] {finalMessage}");
-                        await (_progress?.MarkCompletedAsync(runId, finalMessage) ?? Task.CompletedTask);
+                        _customLogger?.Append(runId, $"[{storyId}] {finalMessage}");
+                        await (_customLogger?.MarkCompletedAsync(runId, finalMessage) ?? Task.CompletedTask);
                         try
                         {
                             var level = result.Success ? "success" : "error";
-                            await (_notifications?.NotifyAllAsync(
+                            await (_customLogger?.NotifyAllAsync(
                                 result.Success ? "Operazione completata" : "Operazione fallita",
                                 $"[{storyId}] {operationCode}: {finalMessage}",
                                 level) ?? Task.CompletedTask);
@@ -430,11 +427,11 @@ namespace TinyGenerator.Pages.Stories
                     {
                         var errorMessage = $"Errore inatteso: {ex.Message}";
                         _logger?.LogError(ex, "Operazione {OperationCode} per storia {StoryId} fallita", operationCode, storyId);
-                        _progress?.Append(runId, $"[{storyId}] {errorMessage}");
-                        await (_progress?.MarkCompletedAsync(runId, errorMessage) ?? Task.CompletedTask);
+                        _customLogger?.Append(runId, $"[{storyId}] {errorMessage}");
+                        await (_customLogger?.MarkCompletedAsync(runId, errorMessage) ?? Task.CompletedTask);
                         try
                         {
-                            await (_notifications?.NotifyAllAsync("Operazione fallita", $"[{storyId}] {operationCode}: {errorMessage}", "error") ?? Task.CompletedTask);
+                        await (_customLogger?.NotifyAllAsync("Operazione fallita", $"[{storyId}] {operationCode}: {errorMessage}", "error") ?? Task.CompletedTask);
                         }
                         catch (Exception notifyEx)
                         {

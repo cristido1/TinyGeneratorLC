@@ -25,7 +25,6 @@ public sealed class StoriesService
     private readonly TtsService _ttsService;
     private readonly ILangChainKernelFactory? _kernelFactory;
     private readonly ICustomLogger? _customLogger;
-    private readonly ProgressService? _progress;
     private readonly ICommandDispatcher? _commandDispatcher;
     private readonly MultiStepOrchestrationService? _multiStepOrchestrator;
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
@@ -39,7 +38,6 @@ public sealed class StoriesService
         TtsService ttsService,
         ILangChainKernelFactory? kernelFactory = null,
         ICustomLogger? customLogger = null,
-        ProgressService? progress = null,
         ILogger<StoriesService>? logger = null,
         ICommandDispatcher? commandDispatcher = null,
         MultiStepOrchestrationService? multiStepOrchestrator = null)
@@ -48,7 +46,6 @@ public sealed class StoriesService
         _ttsService = ttsService ?? throw new ArgumentNullException(nameof(ttsService));
         _kernelFactory = kernelFactory;
         _customLogger = customLogger;
-        _progress = progress;
         _logger = logger;
         _commandDispatcher = commandDispatcher;
         _multiStepOrchestrator = multiStepOrchestrator;
@@ -249,7 +246,7 @@ public sealed class StoriesService
             return (false, 0, "L'agente valutatore non ha strumenti abilitati");
 
         var runId = $"storyeval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-        _progress?.Start(runId);
+        _customLogger?.Start(runId);
         var evaluationOpId = LogScope.GenerateOperationId();
         using var scope = LogScope.Push($"story_evaluation_{story.Id}", evaluationOpId);
 
@@ -292,7 +289,6 @@ public sealed class StoriesService
             var reactLoop = new ReActLoopOrchestrator(
                 orchestrator,
                 _customLogger,
-                progress: _progress,
                 runId: runId,
                 modelBridge: chatBridge,
                 systemMessage: systemMessage,
@@ -302,7 +298,7 @@ public sealed class StoriesService
             if (!reactResult.Success)
             {
                 var error = reactResult.Error ?? "Valutazione fallita";
-                _progress?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
+                _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
                 return (false, 0, error);
             }
 
@@ -314,13 +310,13 @@ public sealed class StoriesService
                 if (globalCoherence == null)
                 {
                     var msg = "L'agente non ha salvato la coerenza globale.";
-                    _progress?.Append(runId, $"[{storyId}] {msg}", "Warn");
+                    _customLogger?.Append(runId, $"[{storyId}] {msg}", "Warn");
                     TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
                     return (false, 0, msg);
                 }
 
                 var score = globalCoherence.GlobalCoherenceValue * 10; // Convert 0-1 to 0-10 scale
-                _progress?.Append(runId, $"[{storyId}] Valutazione di coerenza completata. Score: {score:F2}");
+                _customLogger?.Append(runId, $"[{storyId}] Valutazione di coerenza completata. Score: {score:F2}");
                 TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione di coerenza completata. Score: {score:F2}");
                 return (true, score, null);
             }
@@ -335,13 +331,13 @@ public sealed class StoriesService
                 if (afterEvaluations.Count == 0)
                 {
                     var msg = "L'agente non ha salvato alcuna valutazione.";
-                    _progress?.Append(runId, $"[{storyId}] {msg}", "Warn");
+                    _customLogger?.Append(runId, $"[{storyId}] {msg}", "Warn");
                     TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
                     return (false, 0, msg);
                 }
 
                 var avgScore = afterEvaluations.Average(e => e.TotalScore);
-                _progress?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
+                _customLogger?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
                 TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
                 return (true, avgScore, null);
             }
@@ -354,7 +350,7 @@ public sealed class StoriesService
         }
         finally
         {
-            _progress?.MarkCompleted(runId);
+            _customLogger?.MarkCompleted(runId);
         }
 
     }
@@ -405,7 +401,7 @@ public sealed class StoriesService
             return (false, 0, "L'agente valutatore non ha strumenti abilitati");
 
         var runId = $"actioneval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-        _progress?.Start(runId);
+        _customLogger?.Start(runId);
         var evaluationOpId = LogScope.GenerateOperationId();
         using var scope = LogScope.Push($"action_evaluation_{story.Id}", evaluationOpId);
 
@@ -424,7 +420,6 @@ public sealed class StoriesService
             var reactLoop = new ReActLoopOrchestrator(
                 orchestrator,
                 _customLogger,
-                progress: _progress,
                 runId: runId,
                 modelBridge: chatBridge,
                 systemMessage: systemMessage,
@@ -434,11 +429,11 @@ public sealed class StoriesService
             if (!reactResult.Success)
             {
                 var error = reactResult.Error ?? "Valutazione azione/ritmo fallita";
-                _progress?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
+                _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
                 return (false, 0, error);
             }
 
-            _progress?.Append(runId, $"[{storyId}] Valutazione azione/ritmo completata");
+            _customLogger?.Append(runId, $"[{storyId}] Valutazione azione/ritmo completata");
             return (true, 0, null);
         }
         catch (Exception ex)
@@ -448,7 +443,7 @@ public sealed class StoriesService
         }
         finally
         {
-            _progress?.MarkCompleted(runId);
+            _customLogger?.MarkCompleted(runId);
         }
     }
 
@@ -1046,14 +1041,13 @@ public sealed class StoriesService
             }
 
             var runId = $"ttsjson_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-            _service._progress?.Start(runId);
+            _service._customLogger?.Start(runId);
 
             try
             {
                 var reactLoop = new ReActLoopOrchestrator(
                     orchestrator,
                     _service._customLogger,
-                    progress: _service._progress,
                     runId: runId,
                     modelBridge: chatBridge,
                     systemMessage: systemMessage,
@@ -1084,7 +1078,7 @@ public sealed class StoriesService
             }
             finally
             {
-                _service._progress?.MarkCompleted(runId);
+                _service._customLogger?.MarkCompleted(runId);
             }
         }
 
@@ -1129,7 +1123,7 @@ public sealed class StoriesService
 
             var threadId = unchecked((int)(story.Id % int.MaxValue));
             var runId = $"ttsjson_multistep_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-            _service._progress?.Start(runId);
+            _service._customLogger?.Start(runId);
 
             try
             {
@@ -1162,7 +1156,7 @@ public sealed class StoriesService
             }
             finally
             {
-                _service._progress?.MarkCompleted(runId);
+                _service._customLogger?.MarkCompleted(runId);
             }
         }
     }
@@ -1214,7 +1208,7 @@ public sealed class StoriesService
                 ? voiceAgent.Instructions
                 : "You are a specialist that assigns gender and TTS voices using the available tools.";
             var runId = $"ttsvoice_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-            _service._progress?.Start(runId);
+            _service._customLogger?.Start(runId);
 
             var voiceCatalog = await _service._ttsService.GetVoicesAsync();
             var knownVoiceIds = new HashSet<string>(
@@ -1265,7 +1259,6 @@ public sealed class StoriesService
                     var reactLoop = new ReActLoopOrchestrator(
                         orchestrator,
                         _service._customLogger,
-                        progress: _service._progress,
                         runId: runId,
                         modelBridge: chatBridge,
                         systemMessage: systemMessage,
@@ -1281,7 +1274,7 @@ public sealed class StoriesService
                     var fallbackApplied = await _service.ApplyVoiceAssignmentFallbacksAsync(schemaPath);
                     if (fallbackApplied)
                     {
-                        _service._progress?.Append(runId, $"[{story.Id}] Applicate voci di fallback dal catalogo tts_voices.");
+                        _service._customLogger?.Append(runId, $"[{story.Id}] Applicate voci di fallback dal catalogo tts_voices.");
                     }
 
                     var (valid, validationError) = await ValidateAssignedVoicesAsync(schemaPath, knownVoiceIds);
@@ -1304,7 +1297,7 @@ public sealed class StoriesService
             }
             finally
             {
-                _service._progress?.MarkCompleted(runId);
+                _service._customLogger?.MarkCompleted(runId);
             }
         }
 
@@ -1614,8 +1607,8 @@ public sealed class StoriesService
     {
         var storyId = context.Story.Id;
         var runId = $"ttsaudio_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
-        _progress?.Start(runId);
-        _progress?.Append(runId, $"[{storyId}] Avvio generazione tracce audio nella cartella {context.FolderPath}");
+        _customLogger?.Start(runId);
+        _customLogger?.Append(runId, $"[{storyId}] Avvio generazione tracce audio nella cartella {context.FolderPath}");
 
         _ = Task.Run(async () =>
         {
@@ -1628,23 +1621,23 @@ public sealed class StoriesService
                     try
                     {
                         _database.UpdateStoryById(storyId, statusId: context.TargetStatus.Id, updateStatus: true);
-                        _progress?.Append(runId, $"[{storyId}] Stato aggiornato a {context.TargetStatus.Code ?? context.TargetStatus.Id.ToString()}");
+                        _customLogger?.Append(runId, $"[{storyId}] Stato aggiornato a {context.TargetStatus.Code ?? context.TargetStatus.Id.ToString()}");
                     }
                     catch (Exception ex)
                     {
                         _logger?.LogError(ex, "Impossibile aggiornare lo stato della storia {Id}", storyId);
-                        _progress?.Append(runId, $"[{storyId}] Aggiornamento stato fallito: {ex.Message}");
+                        _customLogger?.Append(runId, $"[{storyId}] Aggiornamento stato fallito: {ex.Message}");
                     }
                 }
 
-                await (_progress?.MarkCompletedAsync(runId, message ?? (success ? "Generazione audio completata" : "Errore generazione audio"))
+                await (_customLogger?.MarkCompletedAsync(runId, message ?? (success ? "Generazione audio completata" : "Errore generazione audio"))
                     ?? Task.CompletedTask);
             }
             catch (Exception ex)
             {
                 _logger?.LogError(ex, "Errore non gestito durante la generazione audio TTS per la storia {Id}", storyId);
-                _progress?.Append(runId, $"[{storyId}] Errore inatteso: {ex.Message}");
-                await (_progress?.MarkCompletedAsync(runId, $"Errore: {ex.Message}") ?? Task.CompletedTask);
+                _customLogger?.Append(runId, $"[{storyId}] Errore inatteso: {ex.Message}");
+                await (_customLogger?.MarkCompletedAsync(runId, $"Errore: {ex.Message}") ?? Task.CompletedTask);
             }
         });
 
@@ -1660,7 +1653,7 @@ public sealed class StoriesService
         if (!File.Exists(schemaPath))
         {
             var err = "File tts_schema.json non trovato: genera prima lo schema";
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
@@ -1673,28 +1666,28 @@ public sealed class StoriesService
         catch (Exception ex)
         {
             var err = $"Impossibile leggere tts_schema.json: {ex.Message}";
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
         if (rootNode == null)
         {
             var err = "Formato tts_schema.json non valido";
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
         if (!rootNode.TryGetPropertyValue("Characters", out var charactersNode) || charactersNode is not JsonArray charactersArray)
         {
             var err = "Lista di personaggi mancante nello schema TTS";
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
         if (!rootNode.TryGetPropertyValue("Timeline", out var timelineNode) || timelineNode is not JsonArray timelineArray)
         {
             var err = "Timeline mancante nello schema TTS";
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
@@ -1702,14 +1695,14 @@ public sealed class StoriesService
         if (characters.Count == 0)
         {
             var err = "Nessun personaggio definito nello schema TTS";
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
         if (characters.Values.All(c => string.IsNullOrWhiteSpace(c.VoiceId)))
         {
             var err = "Nessun personaggio ha una voce assegnata: eseguire prima l'assegnazione delle voci";
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
@@ -1717,7 +1710,7 @@ public sealed class StoriesService
         if (phraseEntries.Count == 0)
         {
             var err = "La timeline non contiene frasi da sintetizzare";
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
@@ -1744,14 +1737,14 @@ public sealed class StoriesService
             if (!characters.TryGetValue(characterName, out var character) || string.IsNullOrWhiteSpace(character.VoiceId))
             {
                 var err = $"Il personaggio '{characterName}' non ha una voce assegnata";
-                _progress?.Append(runId, $"[{story.Id}] {err}");
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
                 return (false, err);
             }
 
             var fileName = BuildAudioFileName(fileCounter++, characterName, usedFiles);
             var filePath = Path.Combine(folderPath, fileName);
 
-            _progress?.Append(runId, $"[{story.Id}] Generazione frase {phraseCounter}/{phraseEntries.Count} ({characterName}) -> {fileName}");
+            _customLogger?.Append(runId, $"[{story.Id}] Generazione frase {phraseCounter}/{phraseEntries.Count} ({characterName}) -> {fileName}");
 
             byte[] audioBytes;
             int? durationFromResult;
@@ -1760,7 +1753,7 @@ public sealed class StoriesService
                 var cleanText = CleanTtsText(text);
                 if (string.IsNullOrWhiteSpace(cleanText))
                 {
-                    _progress?.Append(runId, $"[{story.Id}] Salto frase vuota dopo pulizia (character={characterName})");
+                    _customLogger?.Append(runId, $"[{story.Id}] Salto frase vuota dopo pulizia (character={characterName})");
                     continue;
                 }
 
@@ -1770,7 +1763,7 @@ public sealed class StoriesService
             {
                 var err = $"Errore durante la sintesi della frase '{characterName}': {ex.Message}";
                 _logger?.LogError(ex, "Errore TTS per la storia {Id}", story.Id);
-                _progress?.Append(runId, $"[{story.Id}] {err}");
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
                 return (false, err);
             }
 
@@ -1782,7 +1775,7 @@ public sealed class StoriesService
             {
                 var err = $"Impossibile salvare il file {fileName}: {ex.Message}";
                 _logger?.LogError(ex, "Impossibile salvare il file {File} per la storia {Id}", fileName, story.Id);
-                _progress?.Append(runId, $"[{story.Id}] {err}");
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
                 return (false, err);
             }
 
@@ -1796,7 +1789,7 @@ public sealed class StoriesService
             entry["EndMs"] = endMs;
 
             currentMs = endMs + DefaultPhraseGapMs;
-            _progress?.Append(runId, $"[{story.Id}] Frase completata: {fileName} ({durationMs} ms)");
+            _customLogger?.Append(runId, $"[{story.Id}] Frase completata: {fileName} ({durationMs} ms)");
         }
 
         try
@@ -1808,12 +1801,12 @@ public sealed class StoriesService
         {
             var err = $"Impossibile aggiornare tts_schema.json: {ex.Message}";
             _logger?.LogError(ex, "Errore salvataggio schema TTS per la storia {Id}", story.Id);
-            _progress?.Append(runId, $"[{story.Id}] {err}");
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
             return (false, err);
         }
 
         var successMsg = $"Generazione audio completata ({phraseCounter} frasi)";
-        _progress?.Append(runId, $"[{story.Id}] {successMsg}");
+        _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
     }
 

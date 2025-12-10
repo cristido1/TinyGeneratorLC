@@ -102,7 +102,6 @@ namespace TinyGenerator.Services.Commands
                             _orchestrator,
                             _database,
                             _logger,
-                            progressService: null,
                             dispatcher: _dispatcher
                         );
                         await executeCmd.ExecuteAsync(ctx.CancellationToken);

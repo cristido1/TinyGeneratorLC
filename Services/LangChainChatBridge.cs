@@ -26,7 +26,6 @@ namespace TinyGenerator.Services
         private readonly string _apiKey;
         private readonly HttpClient _httpClient;
         private readonly ICustomLogger? _logger;
-        private readonly ProgressService? _progressService;
         public double Temperature { get; set; } = 0.7;
         public double TopP { get; set; } = 1.0;
         public int MaxResponseTokens { get; set; } = 8000;
@@ -36,8 +35,7 @@ namespace TinyGenerator.Services
             string modelId,
             string apiKey,
             HttpClient? httpClient = null,
-            ICustomLogger? logger = null,
-            ProgressService? progressService = null)
+            ICustomLogger? logger = null)
         {
             // Normalize endpoint - don't add /v1 suffix, just use endpoint as-is
             _modelEndpoint = new Uri(modelEndpoint.TrimEnd('/'));
@@ -45,7 +43,6 @@ namespace TinyGenerator.Services
             _apiKey = apiKey;
             _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             _logger = logger;
-            _progressService = progressService;
         }
 
         /// <summary>
@@ -58,9 +55,9 @@ namespace TinyGenerator.Services
             List<Dictionary<string, object>> tools,
             CancellationToken ct = default)
         {
-            if (_progressService != null)
+            if (_logger != null)
             {
-                await _progressService.ModelRequestStartedAsync(_modelId);
+                await _logger.ModelRequestStartedAsync(_modelId).ConfigureAwait(false);
             }
 
             try
@@ -221,9 +218,9 @@ namespace TinyGenerator.Services
             }
             finally
             {
-                if (_progressService != null)
+                if (_logger != null)
                 {
-                    await _progressService.ModelRequestFinishedAsync(_modelId);
+                    await _logger.ModelRequestFinishedAsync(_modelId).ConfigureAwait(false);
                 }
             }
         }

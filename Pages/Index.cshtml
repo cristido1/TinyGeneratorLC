@@ -11,12 +11,6 @@
     </div>
 
     <div class="keep-container mt-2">
-        <a class="note-card" asp-page="/Chat">
-            <i class="note-card-icon bi bi-chat-dots" aria-hidden="true"></i>
-            <div class="note-title">Chat</div>
-            <div class="note-body">Apri una conversazione interattiva con un modello a tua scelta.</div>
-        </a>
-
         <a class="note-card" asp-page="/Genera">
             <i class="note-card-icon bi bi-pencil-square" aria-hidden="true"></i>
             <div class="note-title">Genera storia</div>
@@ -27,12 +21,6 @@
             <i class="note-card-icon bi bi-journal-text" aria-hidden="true"></i>
             <div class="note-title">Storie salvate</div>
             <div class="note-body">Visualizza, cancella o esporta le generazioni salvate in precedenza.</div>
-        </a>
-
-        <a class="note-card" asp-page="/Admin">
-            <i class="note-card-icon bi bi-graph-up" aria-hidden="true"></i>
-            <div class="note-title">Pannello Admin</div>
-            <div class="note-body">Controllo costi, limiti token e configurazioni amministrative.</div>
         </a>
 
         <a class="note-card" asp-page="/Logs/Index">
@@ -71,22 +59,34 @@
             <div class="note-body">Gestisci i template multi-step per la generazione sequenziale di storie.</div>
         </a>
 
+        <a class="note-card" asp-page="/StoriesStatus/Index">
+            <i class="note-card-icon bi bi-flag" aria-hidden="true"></i>
+            <div class="note-title">Stories Status</div>
+            <div class="note-body">Gestisci gli stati e i progressi delle generazioni delle storie.</div>
+        </a>
+
         <a class="note-card" asp-page="/TtsVoices/Index">
             <i class="note-card-icon bi bi-megaphone" aria-hidden="true"></i>
             <div class="note-title">TTS Voices</div>
             <div class="note-body">Visualizza e sincronizza le voci TTS disponibili dal servizio.</div>
         </a>
 
+        <a class="note-card" asp-page="/Admin">
+            <i class="note-card-icon bi bi-graph-up" aria-hidden="true"></i>
+            <div class="note-title">Pannello Admin</div>
+            <div class="note-body">Controllo costi, limiti token e configurazioni amministrative.</div>
+        </a>
+
+        <a class="note-card" asp-page="/Chat">
+            <i class="note-card-icon bi bi-chat-dots" aria-hidden="true"></i>
+            <div class="note-title">Chat</div>
+            <div class="note-body">Apri una conversazione interattiva con un modello a tua scelta.</div>
+        </a>
+
         <a class="note-card" asp-page="/TestDefinitions/Index">
             <i class="note-card-icon bi bi-list-ul" aria-hidden="true"></i>
             <div class="note-title">Test Definitions</div>
             <div class="note-body">Gestisci i casi di test: prompt, comportamento atteso e plugin consentiti.</div>
-        </a>
-
-        <a class="note-card" asp-page="/StoriesStatus/Index">
-            <i class="note-card-icon bi bi-flag" aria-hidden="true"></i>
-            <div class="note-title">Stories Status</div>
-            <div class="note-body">Gestisci gli stati e i progressi delle generazioni delle storie.</div>
         </a>
     </div>
 </div>

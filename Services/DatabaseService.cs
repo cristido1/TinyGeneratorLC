@@ -10,7 +10,7 @@ using TinyGenerator.Models;
 using System.Text.Json;
 using System.Threading.Tasks;
 using ModelInfo = TinyGenerator.Models.ModelInfo;
-using CallRecord = TinyGenerator.Models.CallRecord;
+// CallRecord model removed - no alias kept
 using TestDefinition = TinyGenerator.Models.TestDefinition;
 
 namespace TinyGenerator.Services;
@@ -471,54 +471,8 @@ public sealed class DatabaseService
         return row;
     }
 
-    public void RecordCall(string model, int inputTokens, int outputTokens, double cost, string request, string response)
-    {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"INSERT INTO calls(ts, model, provider, input_tokens, output_tokens, tokens, cost, request, response) VALUES(@ts,@model,@provider,@in,@out,@t,@c,@req,@res)";
-        var provider = model?.Split(':')[0] ?? string.Empty;
-        var total = inputTokens + outputTokens;
-        conn.Execute(sql, new { ts = DateTime.UtcNow.ToString("o"), model, provider, @in = inputTokens, @out = outputTokens, t = total, c = cost, req = request ?? string.Empty, res = response ?? string.Empty });
-    }
-
-    public List<CallRecord> GetRecentCalls(int limit = 50)
-    {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, ts AS Timestamp, model AS Model, provider AS Provider, input_tokens AS InputTokens, input_tokens AS InputTokens, output_tokens AS OutputTokens, tokens AS Tokens, cost AS Cost, request AS Request, response AS Response FROM calls ORDER BY id DESC LIMIT @Limit";
-        try
-        {
-            var results = conn.Query<CallRecord>(sql, new { Limit = limit });
-            return results.ToList();
-        }
-        catch (Exception ex)
-        {
-            // Fallback: attempt dynamic mapping if typed mapping fails
-            try
-            {
-                var dynSql = @"SELECT id, ts, model, provider, input_tokens, output_tokens, tokens, cost, request, response FROM calls ORDER BY id DESC LIMIT @Limit";
-                var dyn = conn.Query<dynamic>(dynSql, new { Limit = limit });
-                return dyn.Select(r => new CallRecord
-                {
-                    Id = Convert.ToInt64((object?)r.id ?? 0L),
-                    Timestamp = (string?)(r.ts ?? string.Empty) ?? string.Empty,
-                    Model = (string?)(r.model ?? string.Empty) ?? string.Empty,
-                    Provider = (string?)(r.provider ?? string.Empty) ?? string.Empty,
-                    InputTokens = Convert.ToInt32((object?)r.input_tokens ?? 0),
-                    OutputTokens = Convert.ToInt32((object?)r.output_tokens ?? 0),
-                    Tokens = Convert.ToInt32((object?)r.tokens ?? 0),
-                    Cost = Convert.ToDouble((object?)r.cost ?? 0.0),
-                    Request = (string?)(r.request ?? string.Empty) ?? string.Empty,
-                    Response = (string?)(r.response ?? string.Empty) ?? string.Empty
-                }).ToList();
-            }
-            catch (Exception inner)
-            {
-                Console.WriteLine($"[DB] GetRecentCalls failed: {ex.Message}; fallback also failed: {inner.Message}");
-                return new List<CallRecord>();
-            }
-        }
-    }
+    // calls table and CallRecord model removed; call tracking disabled.
+    // If you need to re-enable tracking later, reintroduce the `calls` table and corresponding methods.
 
     // Agents CRUD
     public List<TinyGenerator.Models.Agent> ListAgents()
@@ -1947,6 +1901,53 @@ SET TotalScore = (
             Console.WriteLine($"[DB] Warning: unable to add Result column to Log: {ex.Message}");
         }
 
+        // Migration: create app_events table and seed default event types
+        var hasAppEventsTable = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_events'");
+        if (hasAppEventsTable == 0)
+        {
+            conn.Execute(@"
+CREATE TABLE app_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT UNIQUE NOT NULL,
+    description TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    logged INTEGER NOT NULL DEFAULT 1,
+    notified INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)");
+            Console.WriteLine("[DB] Created app_events table");
+        }
+
+        var defaultAppEvents = new (string EventType, string Description)[]
+        {
+            ("CommandEnqueued", "Dispatcher received a command"),
+            ("CommandDequeued", "Dispatcher claimed a command for execution"),
+            ("CommandStarted", "Command execution began"),
+            ("CommandProgress", "Progress update or heartbeat"),
+            ("CommandCompleted", "Command finished successfully"),
+            ("CommandFailed", "Command failed with an error"),
+            ("CommandCancelled", "Command removed from queue"),
+            ("QueueSnapshot", "Overall queue/dispatcher status"),
+            ("AgentAssigned", "Agent picked up a command"),
+            ("AgentIdle", "Agent finished work and is free"),
+            ("ModelBusy", "Model request started"),
+            ("ModelFree", "Model released from busy state"),
+            ("TestRunEnqueued", "Test command enqueued"),
+            ("TestStepProgress", "Intermediate test step update"),
+            ("TestRunResult", "Final test outcome"),
+            ("UserNotification", "User-facing notification"),
+            ("SystemAlert", "System-level alert")
+        };
+
+        foreach (var appEvent in defaultAppEvents)
+        {
+            conn.Execute(@"
+INSERT OR IGNORE INTO app_events (event_type, description, enabled, logged, notified, created_at, updated_at)
+VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
+                new { event_type = appEvent.EventType, description = appEvent.Description });
+        }
+
         // Migration: Consolidate legacy lowercase 'logs' table into canonical 'Log'
         try
         {
@@ -2481,6 +2482,30 @@ Regole:
         parameters.Add("Offset", offset);
 
         return conn.Query<TinyGenerator.Models.LogEntry>(sql, parameters).ToList();
+    }
+
+    public IReadOnlyDictionary<string, AppEventDefinition> GetAppEventDefinitions()
+    {
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            var events = conn.Query<AppEventDefinition>(@"
+SELECT id AS Id,
+       event_type AS EventType,
+       description AS Description,
+       enabled AS Enabled,
+       logged AS Logged,
+       notified AS Notified,
+       created_at AS CreatedAt,
+       updated_at AS UpdatedAt
+FROM app_events");
+            return events.ToDictionary(ev => ev.EventType, StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return new Dictionary<string, AppEventDefinition>(StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     // Alias for compatibility
@@ -3162,6 +3187,34 @@ SELECT last_insert_rowid();";
         conn.Open();
         var sql = @"SELECT id AS Id, code AS Code, description AS Description, default_executor_role AS DefaultExecutorRole, default_checker_role AS DefaultCheckerRole, output_merge_strategy AS OutputMergeStrategy, validation_criteria AS ValidationCriteria FROM task_types WHERE code = @code LIMIT 1";
         return conn.QueryFirstOrDefault<TinyGenerator.Models.TaskTypeInfo>(sql, new { code });
+    }
+
+    // List all task types
+    public List<TinyGenerator.Models.TaskTypeInfo> ListTaskTypes()
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"SELECT id AS Id, code AS Code, description AS Description, default_executor_role AS DefaultExecutorRole, default_checker_role AS DefaultCheckerRole, output_merge_strategy AS OutputMergeStrategy, validation_criteria AS ValidationCriteria FROM task_types ORDER BY code";
+        return conn.Query<TinyGenerator.Models.TaskTypeInfo>(sql).ToList();
+    }
+
+    // Upsert a task type by code
+    public void UpsertTaskType(TinyGenerator.Models.TaskTypeInfo tt)
+    {
+        if (tt == null || string.IsNullOrWhiteSpace(tt.Code)) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        var now = DateTime.UtcNow.ToString("o");
+        var sql = @"INSERT INTO task_types(code, description, default_executor_role, default_checker_role, output_merge_strategy, validation_criteria) VALUES(@Code,@Description,@DefaultExecutorRole,@DefaultCheckerRole,@OutputMergeStrategy,@ValidationCriteria) ON CONFLICT(code) DO UPDATE SET description=@Description, default_executor_role=@DefaultExecutorRole, default_checker_role=@DefaultCheckerRole, output_merge_strategy=@OutputMergeStrategy, validation_criteria=@ValidationCriteria;";
+        conn.Execute(sql, new { tt.Code, tt.Description, tt.DefaultExecutorRole, tt.DefaultCheckerRole, tt.OutputMergeStrategy, tt.ValidationCriteria });
+    }
+
+    public void DeleteTaskTypeByCode(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("DELETE FROM task_types WHERE code = @code", new { code });
     }
 
     public TinyGenerator.Models.StepTemplate? GetStepTemplateById(long id)

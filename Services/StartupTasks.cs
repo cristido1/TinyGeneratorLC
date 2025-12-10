@@ -87,9 +87,9 @@ namespace TinyGenerator
             }
         }
 
-        public static async Task PopulateLocalOllamaModelsIfNeededAsync(CostController? cost, IConfiguration? config = null, ILogger? logger = null, IOllamaMonitorService? monitor = null)
+        public static async Task PopulateLocalOllamaModelsIfNeededAsync(DatabaseService? db, IConfiguration? config = null, ILogger? logger = null, IOllamaMonitorService? monitor = null)
         {
-            if (cost == null) return;
+            if (db == null) return;
             try
             {
                 // Imposta l'endpoint Ollama da configurazione se disponibile
@@ -102,14 +102,14 @@ namespace TinyGenerator
                         monitor?.SetOllamaEndpoint(ollamaEndpoint);
                     }
                 }
-                
+
                 logger?.LogInformation("[Startup] Populating local Ollama models...");
-                var added = await cost.PopulateLocalOllamaModelsAsync();
+                var added = await db.AddLocalOllamaModelsAsync();
                 logger?.LogInformation("[Startup] Populated {count} local ollama models into models", added);
             }
             catch (Exception ex)
             {
-                logger?.LogWarning(ex, "[Startup] PopulateLocalOllamaModelsAsync failed: {msg}", ex.Message);
+                logger?.LogWarning(ex, "[Startup] PopulateLocalOllamaModelsIfNeededAsync failed: {msg}", ex.Message);
             }
         }
 

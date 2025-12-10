@@ -104,9 +104,8 @@ TinyGenerator permette di creare storie complete attraverso un processo struttur
 
 - **Persistence & Monitoring**:
   - `DatabaseService`: Gestione database SQLite
-  - `CustomLogger`: Logging configurabile con batching
-  - `ProgressService`: Aggiornamenti real-time via SignalR
-  - `NotificationService`: Sistema notifiche
+- `CustomLogger`: Logging configurabile con batching che ora gestisce anche progressi, agenti, modelli occupati e notifiche via SignalR seguendo le regole di `app_events`.
+- `app_events`: Tabella di configurazione degli eventi (`event_type`, `enabled`, `logged`, `notified`) che governa quali eventi vengono salvati e notificati in tempo reale.
 
 - **External Services**:
   - `OllamaManagementService`: Gestione modelli Ollama

@@ -102,7 +102,7 @@
             } catch(e) { console.warn('Error handling AppNotification', e); }
         });
 
-        // Also listen to ProgressService events if available
+        // Also listen to progress events if available
         // Keep a simple runtime map for runId -> modelName (registered by the client)
         const runIdToModel = {};
         // No throttling: show all progress messages as requested

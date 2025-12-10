@@ -7,35 +7,18 @@
 
 <section>
     <h2>Utilizzo mese corrente</h2>
-    <p>Token usati: @Model.TokensThisMonth</p>
-    <p>Costo stimato: @Model.CostThisMonth €</p>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <div>
+            <p class="mb-0">Token usati: @Model.TokensThisMonth</p>
+            <p class="mb-0">Costo stimato: @Model.CostThisMonth €</p>
+        </div>
+        <div>
+            <a class="btn btn-sm btn-outline-primary" href="/TaskTypes">Manage Task Types</a>
+        </div>
+    </div>
 </section>
 
-<section>
-    <h2>Ultime chiamate</h2>
-    <table class="datatable" style="width:100%; border-collapse: collapse;">
-        <thead>
-            <tr>
-                <th style="border-bottom:1px solid #ccc; text-align:left;">Id</th>
-                <th style="border-bottom:1px solid #ccc; text-align:left;">Timestamp</th>
-                <th style="border-bottom:1px solid #ccc; text-align:left;">Model</th>
-                <th style="border-bottom:1px solid #ccc; text-align:right;">Tokens</th>
-                <th style="border-bottom:1px solid #ccc; text-align:right;">Cost</th>
-            </tr>
-        </thead>
-        <tbody>
-@foreach(var c in Model.Calls) {
-            <tr>
-                <td style="padding:6px 4px; border-bottom:1px solid #eee;">@c.Id</td>
-                <td style="padding:6px 4px; border-bottom:1px solid #eee;">@c.Timestamp</td>
-                <td style="padding:6px 4px; border-bottom:1px solid #eee;">@c.Model</td>
-                <td style="padding:6px 4px; border-bottom:1px solid #eee; text-align:right;">@c.Tokens</td>
-                <td style="padding:6px 4px; border-bottom:1px solid #eee; text-align:right;">@c.Cost</td>
-            </tr>
-}
-        </tbody>
-    </table>
-</section>
+<!-- Call tracking removed: 'Ultime chiamate' table omitted -->
 
 <section>
     <h2>Dettaglio chiamata</h2>

@@ -6,14 +6,12 @@ namespace TinyGenerator.Services
     public class CustomLoggerProvider : ILoggerProvider
     {
         private readonly ICustomLogger? _customLogger;
-        private readonly NotificationService? _notifications;
         private readonly IServiceProvider? _serviceProvider;
 
         // Existing constructor preserved for backward compatibility (direct injection)
-        public CustomLoggerProvider(ICustomLogger customLogger, NotificationService? notifications = null)
+        public CustomLoggerProvider(ICustomLogger customLogger)
         {
             _customLogger = customLogger ?? throw new ArgumentNullException(nameof(customLogger));
-            _notifications = notifications;
             try { System.Console.WriteLine("[Startup] CustomLoggerProvider constructed with direct ICustomLogger"); } catch { }
         }
 
@@ -28,15 +26,14 @@ namespace TinyGenerator.Services
         {
             // Resolve dependencies lazily to avoid cycles during startup validation
             ICustomLogger? custom = _customLogger;
-            NotificationService? notifications = _notifications;
             
             // DO NOT attempt to resolve ICustomLogger from _serviceProvider here!
             // This causes infinite loops during DI setup because CustomLogger creation
             // may trigger logger creation, leading to circular dependencies.
             // If custom is null, we simply fall back to console logging in AdapterLogger.
 
-            try { System.Console.WriteLine($"[Startup] CustomLoggerProvider.CreateLogger(category={categoryName}) customPresent={custom != null} notificationsPresent={notifications != null}"); } catch { }
-            return new AdapterLogger(categoryName, custom, notifications);
+            try { System.Console.WriteLine($"[Startup] CustomLoggerProvider.CreateLogger(category={categoryName}) customPresent={custom != null}"); } catch { }
+            return new AdapterLogger(categoryName, custom);
         }
 
         public void Dispose()
@@ -48,13 +45,11 @@ namespace TinyGenerator.Services
         {
             private readonly string _category;
             private readonly ICustomLogger? _custom;
-            private readonly NotificationService? _notifications;
 
-            public AdapterLogger(string category, ICustomLogger? custom, NotificationService? notifications)
+            public AdapterLogger(string category, ICustomLogger? custom)
             {
                 _category = category;
                 _custom = custom;
-                _notifications = notifications;
             }
 
             IDisposable ILogger.BeginScope<TState>(TState state) => NullScope.Instance;
@@ -80,17 +75,18 @@ namespace TinyGenerator.Services
                     }
                     // Broadcast log entry to all clients as a notification (fire-and-forget)
                     // Only forward information/warning/error/critical (ignore Trace/Debug spam)
-                    // Skip ProgressService category because it already broadcasts via ProgressHub to avoid duplicate AppNotification
-                    if (logLevel >= LogLevel.Information && !_category?.Contains("ProgressService", StringComparison.OrdinalIgnoreCase) == true)
-                    try
+                    // Skip progress-related categories because the hub already broadcasts updates to avoid duplicate AppNotification
+                    if (logLevel >= LogLevel.Information && !_category?.Contains("Progress", StringComparison.OrdinalIgnoreCase) == true)
                     {
-                        var toplevel = "info";
-                        if (logLevel == LogLevel.Warning) toplevel = "warning";
-                        if (logLevel == LogLevel.Error || logLevel == LogLevel.Critical) toplevel = "error";
-                        _ = _notifications?.NotifyAllAsync(level + " - " + _category, message, toplevel);
+                        try
+                        {
+                            var toplevel = "info";
+                            if (logLevel == LogLevel.Warning) toplevel = "warning";
+                            if (logLevel == LogLevel.Error || logLevel == LogLevel.Critical) toplevel = "error";
+                            _ = _custom?.NotifyAllAsync(level + " - " + _category, message, toplevel);
+                        }
+                        catch { }
                     }
-                    // else ignore Trace/Debug
-                    catch { }
                 }
                 catch
                 {

@@ -97,7 +97,14 @@
                         dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
                              "rt" +
                              "<'row'<'col-sm-6'i><'col-sm-6'p>>",
-                        buttons: [ { extend: 'colvis', columns: [1,2,3,4,5,6,7,8,9,10,11,12,13] } ], // exclude Created/Updated from colvis (actions is column 0)
+                        buttons: [
+                            {
+                                extend: 'colvis',
+                                text: 'Columns',
+                                className: 'btn btn-light btn-sm',
+                                columns: [1,2,3,4,5,6,7,8,9,10,11,12,13]
+                            }
+                        ], // exclude Created/Updated from colvis (actions is column 0)
                         stateSave: true,
                         stateSaveName: 'DataTables_ttsvoices',
                         stateDuration: -1,

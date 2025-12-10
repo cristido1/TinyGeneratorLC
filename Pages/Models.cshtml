@@ -62,17 +62,6 @@
         <span class="form-check-label">Mostra anche disabilitati</span>
     </label>
 
-    <div class="ms-auto d-flex align-items-center gap-2">
-        <div class="dropdown">
-            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" id="columnToggle" data-bs-toggle="dropdown" aria-expanded="false">
-                <i class="bi bi-eye"></i> Colonne
-            </button>
-            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="columnToggle" id="columnToggleMenu">
-                <!-- Populated by JavaScript -->
-            </ul>
-        </div>
-        
-    </div>
 </div>
 
 <div class="models-table-wrapper">
@@ -317,6 +306,16 @@
                 info: true,
                 searching: true,
                 ordering: true,
+                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
+                     "rt" +
+                     "<'row'<'col-sm-6'i><'col-sm-6'p>>",
+                buttons: [
+                    {
+                        extend: 'colvis',
+                        text: 'Columns',
+                        className: 'btn btn-light btn-sm'
+                    }
+                ],
                 stateSave: true,
                 stateSaveName: 'DataTables_models',
                 stateDuration: -1,
@@ -327,56 +326,37 @@
                 ]
             });
 
-                // Ripristina esplicitamente la visibilità delle colonne salvata in localStorage
-                (function() {
-                    try {
-                        var savedCols = localStorage.getItem('DataTables_models_columns');
-                        if (savedCols) {
-                            var cols = JSON.parse(savedCols);
-                            if (Array.isArray(cols)) {
-                                table.columns().every(function(idx) {
-                                    var colState = cols[idx];
-                                    if (colState && typeof colState.visible !== 'undefined') {
-                                        // Forza lo stato di visibilità (coerente sia con saved object completo che con array di {visible:bool})
-                                        this.visible(!!colState.visible);
-                                    }
-                                });
-                            }
+            // Ripristina esplicitamente la visibilità delle colonne salvata in localStorage
+            (function() {
+                try {
+                    var savedCols = localStorage.getItem('DataTables_models_columns');
+                    if (savedCols) {
+                        var cols = JSON.parse(savedCols);
+                        if (Array.isArray(cols)) {
+                            table.columns().every(function(idx) {
+                                var colState = cols[idx];
+                                if (colState && typeof colState.visible !== 'undefined') {
+                                    // Forza lo stato di visibilità (coerente sia con saved object completo che con array di {visible:bool})
+                                    this.visible(!!colState.visible);
+                                }
+                            });
                         }
-                    } catch(e) {
-                        console.error('Error restoring column visibility:', e);
                     }
-                })();
-
-            // Populate column visibility toggle menu
-            var columnToggleMenu = $('#columnToggleMenu');
-            table.columns().every(function(index) {
-                var column = this;
-                var header = $(column.header());
-                var title = header.text().trim();
-                
-                // Skip first column (expand control) and actions column
-                if (index === 0 || title === '' || header.parent().children().last()[0] === header[0]) {
-                    return;
+                } catch(e) {
+                    console.error('Error restoring column visibility:', e);
                 }
-                
-                var li = $('<li>');
-                var label = $('<label class="dropdown-item">');
-                var checkbox = $('<input type="checkbox" class="form-check-input me-2">')
-                    .prop('checked', column.visible()) // Sincronizza con stato salvato
-                    .on('change', function() {
-                        column.visible(this.checked);
-                        // Save state after column visibility change
-                        var state = { columns: [] };
-                        table.columns().every(function() {
-                            state.columns.push({ visible: this.visible() });
-                        });
+            })();
+
+            // Aggiorna il vecchio storage ad ogni modifica così resta compatibile e persistente
+            table.on('column-visibility.dt', function () {
+                try {
+                    var state = table.state();
+                    if (state && state.columns) {
                         localStorage.setItem('DataTables_models_columns', JSON.stringify(state.columns));
-                    });
-                
-                label.append(checkbox).append(title);
-                li.append(label);
-                columnToggleMenu.append(li);
+                    }
+                } catch (err) {
+                    console.warn('Unable to persist column visibility', err);
+                }
             });
 
             // Handle click on td.dt-control to expand/collapse child row

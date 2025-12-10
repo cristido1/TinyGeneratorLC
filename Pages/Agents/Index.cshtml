@@ -122,7 +122,11 @@
                         colReorder: true,
                         dom: 'Bfrtip',
                         buttons: [
-                            'colvis'
+                            {
+                                extend: 'colvis',
+                                text: 'Columns',
+                                className: 'btn btn-light btn-sm'
+                            }
                         ],
                         columnDefs: [ { orderable: false, targets: -1 } ],
                         order: [[0, 'asc']],

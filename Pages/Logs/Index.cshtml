@@ -197,7 +197,13 @@
                 dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
                      "rt" +
                      "<'row'<'col-sm-6'i><'col-sm-6'p>>",
-                buttons: [ 'colvis' ],
+                buttons: [
+                    {
+                        extend: 'colvis',
+                        text: 'Columns',
+                        className: 'btn btn-light btn-sm'
+                    }
+                ],
                 stateSave: true,
                 stateSaveName: 'DataTables_logs',
                 stateDuration: -1

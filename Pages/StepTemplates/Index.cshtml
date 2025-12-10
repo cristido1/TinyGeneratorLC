@@ -123,6 +123,19 @@
                 pageLength: 25,
                 responsive: true,
                 autoWidth: false,
+                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
+                     "rt" +
+                     "<'row'<'col-sm-6'i><'col-sm-6'p>>",
+                buttons: [
+                    {
+                        extend: 'colvis',
+                        text: 'Columns',
+                        className: 'btn btn-light btn-sm'
+                    }
+                ],
+                stateSave: true,
+                stateSaveName: 'DataTables_steptemplates',
+                stateDuration: -1,
                 columns: [
                     { data: 'name', width: '20%' },
                     { data: 'tasktype', width: '10%' },

@@ -6,7 +6,9 @@ using System.IO;
 using System.Linq;
 using Dapper;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using TinyGenerator.Models;
+using TinyGenerator.Data;
 using System.Text.Json;
 using System.Threading.Tasks;
 using ModelInfo = TinyGenerator.Models.ModelInfo;
@@ -22,10 +24,10 @@ public sealed class DatabaseService
     private const int EvaluatedStatusId = 2;
     private const int InitialStoryStatusId = 1;
 
-
     private readonly string _connectionString;
+    private readonly IServiceProvider _serviceProvider;
 
-    public DatabaseService(string dbPath = "data/storage.db", IOllamaMonitorService? ollamaMonitor = null)
+    public DatabaseService(string dbPath = "data/storage.db", IOllamaMonitorService? ollamaMonitor = null, IServiceProvider? serviceProvider = null)
     {
         Console.WriteLine($"[DB] DatabaseService ctor start (dbPath={dbPath})");
         var ctorSw = Stopwatch.StartNew();
@@ -42,8 +44,16 @@ public sealed class DatabaseService
         // Defer heavy initialization to the explicit Initialize() method so the
         // service can be registered without blocking `builder.Build()`.
         _ollamaMonitor = ollamaMonitor;
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         ctorSw.Stop();
         Console.WriteLine($"[DB] DatabaseService ctor completed in {ctorSw.ElapsedMilliseconds}ms");
+    }
+
+    // Helper method to create a scoped DbContext
+    private TinyGeneratorDbContext CreateDbContext()
+    {
+        var scope = _serviceProvider.CreateScope();
+        return scope.ServiceProvider.GetRequiredService<TinyGeneratorDbContext>();
     }
 
     public void SaveChapter(string memoryKey, int chapterNumber, string content)
@@ -295,14 +305,13 @@ public sealed class DatabaseService
     public ModelInfo? GetModelInfo(string modelOrProvider)
     {
         if (string.IsNullOrWhiteSpace(modelOrProvider)) return null;
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = $"SELECT {SelectModelColumns()} FROM models WHERE Name = @Name LIMIT 1";
-        var byName = conn.QueryFirstOrDefault<ModelInfo>(sql, new { Name = modelOrProvider });
+        using var context = CreateDbContext();
+        
+        var byName = context.Models.FirstOrDefault(m => m.Name == modelOrProvider);
         if (byName != null) return byName;
+        
         var provider = modelOrProvider.Split(':')[0];
-        sql = $"SELECT {SelectModelColumns()} FROM models WHERE Provider = @Provider LIMIT 1";
-        return conn.QueryFirstOrDefault<ModelInfo>(sql, new { Provider = provider });
+        return context.Models.FirstOrDefault(m => m.Provider == provider);
     }
 
     /// <summary>
@@ -310,12 +319,10 @@ public sealed class DatabaseService
     /// </summary>
     public ModelInfo? GetModelInfoById(int modelId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         try
         {
-            var sql = $"SELECT {SelectModelColumns()} FROM models WHERE Id = @Id LIMIT 1";
-            return conn.QueryFirstOrDefault<ModelInfo>(sql, new { Id = modelId });
+            return context.Models.Find(modelId);
         }
         catch
         {
@@ -326,15 +333,12 @@ public sealed class DatabaseService
     public void UpsertModel(ModelInfo model)
     {
         if (model == null || string.IsNullOrWhiteSpace(model.Name)) return;
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
+        
         var now = DateTime.UtcNow.ToString("o");
-        // Ensure CreatedAt/UpdatedAt
-        var existing = GetModelInfo(model.Name);
+        var existing = context.Models.FirstOrDefault(m => m.Name == model.Name);
+        
         // Preserve an existing non-zero FunctionCallingScore if the caller didn't set a meaningful score.
-        // ModelInfo.FunctionCallingScore is an int (default 0). Many callers create ModelInfo instances
-        // for discovery/upsert and leave the score at 0 which would overwrite a previously computed score.
-        // If an existing model has a non-zero score and the provided model has 0, keep the existing score.
         if (existing != null && existing.FunctionCallingScore != 0 && model.FunctionCallingScore == 0)
         {
             model.FunctionCallingScore = existing.FunctionCallingScore;
@@ -342,28 +346,41 @@ public sealed class DatabaseService
         model.CreatedAt ??= existing?.CreatedAt ?? now;
         model.UpdatedAt = now;
 
-        var sql = @"INSERT INTO models(Name, Provider, Endpoint, IsLocal, MaxContext, ContextToUse, FunctionCallingScore, CostInPerToken, CostOutPerToken, LimitTokensDay, LimitTokensWeek, LimitTokensMonth, Metadata, Note, Enabled, CreatedAt, UpdatedAt, NoTools)
-    VALUES(@Name,@Provider,@Endpoint,@IsLocal,@MaxContext,@ContextToUse,@FunctionCallingScore,@CostInPerToken,@CostOutPerToken,@LimitTokensDay,@LimitTokensWeek,@LimitTokensMonth,@Metadata,@Note,@Enabled,@CreatedAt,@UpdatedAt,@NoTools)
-    ON CONFLICT(Name) DO UPDATE SET Provider=@Provider, Endpoint=@Endpoint, IsLocal=@IsLocal, MaxContext=@MaxContext, ContextToUse=@ContextToUse, FunctionCallingScore=@FunctionCallingScore, CostInPerToken=@CostInPerToken, CostOutPerToken=@CostOutPerToken, LimitTokensDay=@LimitTokensDay, LimitTokensWeek=@LimitTokensWeek, LimitTokensMonth=@LimitTokensMonth, Metadata=@Metadata, Note=@Note, Enabled=@Enabled, UpdatedAt=@UpdatedAt, NoTools=@NoTools;";
-
-        conn.Execute(sql, model);
+        if (existing != null)
+        {
+            // Update existing
+            model.Id = existing.Id;
+            context.Entry(existing).CurrentValues.SetValues(model);
+        }
+        else
+        {
+            // Insert new
+            context.Models.Add(model);
+        }
+        context.SaveChanges();
     }
 
     // Delete a model by name from the models table (best-effort). Also deletes related model_test_runs entries.
     public void DeleteModel(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return;
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         try
         {
-            // Resolve model id first
-            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = name });
-            if (modelId.HasValue)
+            var model = context.Models.FirstOrDefault(m => m.Name == name);
+            if (model != null)
             {
-                conn.Execute("DELETE FROM model_test_runs WHERE model_id = @id", new { id = modelId.Value });
+                // Note: model_test_runs deletion handled via Dapper for now
+                using var conn = CreateConnection();
+                conn.Open();
+                if (model.Id.HasValue)
+                {
+                    conn.Execute("DELETE FROM model_test_runs WHERE model_id = @id", new { id = model.Id.Value });
+                }
+                
+                context.Models.Remove(model);
+                context.SaveChanges();
             }
-            conn.Execute("DELETE FROM models WHERE Name = @Name", new { Name = name });
         }
         catch { }
     }
@@ -474,33 +491,27 @@ public sealed class DatabaseService
     // calls table and CallRecord model removed; call tracking disabled.
     // If you need to re-enable tracking later, reintroduce the `calls` table and corresponding methods.
 
-    // Agents CRUD
+    // Agents CRUD (EF Core)
     public List<TinyGenerator.Models.Agent> ListAgents()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.multi_step_template_id AS MultiStepTemplateId, st.name AS MultiStepTemplateName, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id LEFT JOIN step_templates st ON a.multi_step_template_id = st.id ORDER BY a.name";
-        return conn.Query<TinyGenerator.Models.Agent>(sql).ToList();
+        using var context = CreateDbContext();
+        // Include related data if needed (VoiceName, MultiStepTemplateName are non-persistent)
+        return context.Agents.OrderBy(a => a.Name).ToList();
     }
 
     public TinyGenerator.Models.Agent? GetAgentById(int id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.multi_step_template_id AS MultiStepTemplateId, st.name AS MultiStepTemplateName, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes FROM agents a LEFT JOIN tts_voices t ON a.voice_rowid = t.id LEFT JOIN step_templates st ON a.multi_step_template_id = st.id WHERE a.id = @id LIMIT 1";
-        return conn.QueryFirstOrDefault<TinyGenerator.Models.Agent>(sql, new { id });
+        using var context = CreateDbContext();
+        return context.Agents.Find(id);
     }
 
     public int? GetAgentIdByName(string name)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         try
         {
-            var sql = "SELECT id FROM agents WHERE name = @name LIMIT 1";
-            var id = conn.ExecuteScalar<long?>(sql, new { name });
-            if (id == null || id == 0) return null;
-            return (int)id;
+            var agent = context.Agents.FirstOrDefault(a => a.Name == name);
+            return agent?.Id;
         }
         catch { return null; }
     }
@@ -508,45 +519,43 @@ public sealed class DatabaseService
     public TinyGenerator.Models.Agent? GetAgentByRole(string role)
     {
         if (string.IsNullOrWhiteSpace(role)) return null;
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT a.id AS Id, a.voice_rowid AS VoiceId, t.name AS VoiceName, a.name AS Name, a.role AS Role, a.model_id AS ModelId, a.skills AS Skills, a.config AS Config, a.json_response_format AS JsonResponseFormat, a.prompt AS Prompt, a.instructions AS Instructions, a.temperature AS Temperature, a.top_p AS TopP, a.execution_plan AS ExecutionPlan, a.is_active AS IsActive, a.multi_step_template_id AS MultiStepTemplateId, st.name AS MultiStepTemplateName, a.created_at AS CreatedAt, a.updated_at AS UpdatedAt, a.notes AS Notes
-                FROM agents a
-                LEFT JOIN tts_voices t ON a.voice_rowid = t.id
-                LEFT JOIN step_templates st ON a.multi_step_template_id = st.id
-                WHERE LOWER(a.role) = LOWER(@role)
-                ORDER BY a.is_active DESC, a.id ASC
-                LIMIT 1";
-        return conn.QueryFirstOrDefault<TinyGenerator.Models.Agent>(sql, new { role });
+        using var context = CreateDbContext();
+        return context.Agents
+            .Where(a => a.Role.ToLower() == role.ToLower())
+            .OrderByDescending(a => a.IsActive)
+            .ThenBy(a => a.Id)
+            .FirstOrDefault();
     }
 
     public int InsertAgent(TinyGenerator.Models.Agent a)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         var now = DateTime.UtcNow.ToString("o");
         a.CreatedAt ??= now;
         a.UpdatedAt = now;
-        var sql = @"INSERT INTO agents(voice_rowid, name, role, model_id, skills, config, json_response_format, prompt, instructions, temperature, top_p, execution_plan, is_active, multi_step_template_id, created_at, updated_at, notes) VALUES(@VoiceId,@Name,@Role,@ModelId,@Skills,@Config,@JsonResponseFormat,@Prompt,@Instructions,@Temperature,@TopP,@ExecutionPlan,@IsActive,@MultiStepTemplateId,@CreatedAt,@UpdatedAt,@Notes); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, a);
-        return (int)id;
+        context.Agents.Add(a);
+        context.SaveChanges();
+        return a.Id;
     }
 
     public void UpdateAgent(TinyGenerator.Models.Agent a)
     {
         if (a == null) return;
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         a.UpdatedAt = DateTime.UtcNow.ToString("o");
-        var sql = @"UPDATE agents SET voice_rowid=@VoiceId, name=@Name, role=@Role, model_id=@ModelId, skills=@Skills, config=@Config, json_response_format=@JsonResponseFormat, prompt=@Prompt, instructions=@Instructions, temperature=@Temperature, top_p=@TopP, execution_plan=@ExecutionPlan, is_active=@IsActive, multi_step_template_id=@MultiStepTemplateId, updated_at=@UpdatedAt, notes=@Notes WHERE id = @Id";
-        conn.Execute(sql, a);
+        context.Agents.Update(a);
+        context.SaveChanges();
     }
 
     public void DeleteAgent(int id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("DELETE FROM agents WHERE id = @id", new { id });
+        using var context = CreateDbContext();
+        var agent = context.Agents.Find(id);
+        if (agent != null)
+        {
+            context.Agents.Remove(agent);
+            context.SaveChanges();
+        }
     }
 
     public void UpdateModelTestResults(string modelName, int functionCallingScore, IReadOnlyDictionary<string, bool?> skillFlags, double? testDurationSeconds = null)
@@ -1279,7 +1288,7 @@ SET TotalScore = (
                         AgentId = null,
                         AgentName = "coherence",
                         AgentModel = string.Empty,
-                        Ts = global.Ts ?? string.Empty
+                        Timestamp = global.Ts ?? string.Empty
                     };
                     list.Add(synthetic);
                 }

@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel.DataAnnotations;
 
 namespace TinyGenerator.Models
 {
@@ -22,5 +23,9 @@ namespace TinyGenerator.Models
         // metadata and sample_path were removed from DB schema; template_wav now holds the sample filename
         public string? CreatedAt { get; set; }
         public string? UpdatedAt { get; set; }
+        
+        // Concurrency token for optimistic locking
+        [Timestamp]
+        public byte[]? RowVersion { get; set; }
     }
 }

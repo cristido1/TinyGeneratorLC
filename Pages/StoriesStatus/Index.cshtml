@@ -5,13 +5,11 @@
     ViewData["PageDescription"] = "Gestisci gli stati delle storie";
 }
 
-<div class="mb-3 d-flex justify-content-between align-items-center">
-    <div class="d-flex">
-        <a class="btn btn-sm btn-primary" asp-page="./Create">Create Story Status</a>
-    </div>
-</div>
+<div class="mb-3"></div>
 
-<table id="tabStatuses" class="table table-bordered table-sm table-pastel table-compact datatable">
+<table id="tabStatuses" class="table table-bordered table-sm table-pastel table-compact datatable"
+       data-create-label="Create Story Status"
+       data-create-url="@Url.Page("./Create")">
     <thead>
         <tr>
             <th>Code</th>

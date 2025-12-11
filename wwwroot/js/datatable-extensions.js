@@ -13,7 +13,51 @@
         }
     }
 
+    function ensureTopRow(wrapper) {
+        var top = wrapper.find('.dt-top');
+        if (!top.length) {
+            top = $('<div class="dt-top"></div>');
+            wrapper.prepend(top);
+        }
+        return top;
+    }
+
+    function getCreateConfig($table) {
+        var label = $table.data('createLabel') || $table.attr('data-create-label');
+        if (!label) return null;
+        return {
+            label: label,
+            handler: $table.data('createHandler') || $table.attr('data-create-handler'),
+            url: $table.data('createUrl') || $table.attr('data-create-url'),
+            target: $table.data('createTarget') || $table.attr('data-create-target')
+        };
+    }
+
+    function performCreateAction($table, config) {
+        if (!config) return;
+        if (config.handler && typeof window[config.handler] === 'function') {
+            try { window[config.handler]($table); } catch (e) { console.error('Create handler failed', e); }
+            return;
+        }
+        if (config.url) {
+            if (config.target && config.target !== '_self') {
+                window.open(config.url, config.target);
+            } else {
+                window.location.href = config.url;
+            }
+            return;
+        }
+        console.warn('[DataTable] create button clicked but no handler/url configured');
+    }
+
+    function appendFilterToTop(filter, top) {
+        if (filter && filter.length && top && top.length) {
+            filter.appendTo(top);
+        }
+    }
+
     function enhanceButtonsForInstance(dt, $table) {
+        var createConfig = getCreateConfig($table);
         try {
             var refreshSvg = '<svg class="dt-btn-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0114.13-3.36L23 10"></path><path d="M20.49 15a9 9 0 01-14.13 3.36L1 14"></path></svg>';
             var columnsSvg = '<svg class="dt-btn-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect></svg>';
@@ -21,44 +65,60 @@
             // If buttons already exist, avoid duplicating; but ensure a refresh button is present
             var existing = dt.buttons ? dt.buttons().count() : 0;
             if (existing && existing > 0) {
+                var wrapper = $table.closest('.dataTables_wrapper');
+                var top = ensureTopRow(wrapper);
+                var container = null;
                 try {
-                    var container = dt.buttons().container();
+                    container = dt.buttons().container();
                     if (container && container.length) {
-                        // if refresh button missing, inject a simple button element into the container
                         if ($(container).find('.dt-btn-refresh').length === 0) {
                             $(container).prepend('<button type="button" class="dt-action-btn dt-btn-refresh" title="Refresh">' + refreshSvg + '</button>');
                         }
+                        if (createConfig && !$(container).find('.dt-btn-create').length) {
+                            var createBtn = $('<button type="button" class="dt-action-btn dt-btn-create" title="' + createConfig.label + '">' + createConfig.label + '</button>');
+                            createBtn.on('click', function () { performCreateAction($table, createConfig); });
+                            $(container).prepend(createBtn);
+                        }
                     }
                 } catch (e) { /* ignore */ }
+                if (container && container.length) {
+                    $(container).appendTo(top);
+                }
+                var filter = wrapper.find('.dataTables_filter');
+                appendFilterToTop(filter, top);
 
                 // attach refresh handler if not present
                 $table.closest('.dataTables_wrapper').off('click', '.dt-btn-refresh').on('click', '.dt-btn-refresh', function () { tryReloadTable(dt); });
                 return;
             }
 
-            var btns = [
-                {
-                    text: '<button type="button" class="dt-action-btn dt-btn-refresh" title="Refresh">' + refreshSvg + '</button>',
-                    className: 'dt-btn-refresh',
-                    action: function (e, dtLocal, node, config) { tryReloadTable(dtLocal); }
-                },
-                {
-                    extend: 'colvis',
-                    text: '<button type="button" class="dt-action-btn dt-btn-colvis" title="Columns">' + columnsSvg + '</button>',
-                    className: 'dt-btn-colvis'
-                }
-            ];
+            var btns = [];
+            if (createConfig) {
+                btns.push({
+                    text: '<button type="button" class="dt-action-btn dt-btn-create" title="' + createConfig.label + '">' + createConfig.label + '</button>',
+                    className: 'dt-btn-create',
+                    action: function () { performCreateAction($table, createConfig); }
+                });
+            }
+            btns.push({
+                text: '<button type="button" class="dt-action-btn dt-btn-refresh" title="Refresh">' + refreshSvg + '</button>',
+                className: 'dt-btn-refresh',
+                action: function (e, dtLocal, node, config) { tryReloadTable(dtLocal); }
+            });
+            btns.push({
+                extend: 'colvis',
+                text: '<button type="button" class="dt-action-btn dt-btn-colvis" title="Columns">' + columnsSvg + '</button>',
+                className: 'dt-btn-colvis'
+            });
 
             new $.fn.dataTable.Buttons(dt, { buttons: btns });
             var container = dt.buttons().container();
             if (container && container.length) {
-                // Move buttons into the wrapper top area if present
-                var wrapper = $table.closest('.dataTables_wrapper').find('.dt-top');
-                if (wrapper && wrapper.length) {
-                    $(container).prependTo(wrapper);
-                } else {
-                    $(container).prependTo($table.closest('.dataTables_wrapper'));
-                }
+                var wrapper = $table.closest('.dataTables_wrapper');
+                var top = ensureTopRow(wrapper);
+                $(container).appendTo(top);
+                var filter = wrapper.find('.dataTables_filter');
+                appendFilterToTop(filter, top);
             }
 
             // ensure refresh click handled

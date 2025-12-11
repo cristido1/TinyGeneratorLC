@@ -4,19 +4,9 @@
     ViewData["Title"] = "Logs";
     ViewData["PageDescription"] = "Visualizza e gestisci i log dell'applicazione";
 }
-
-<div class="d-flex align-items-center justify-content-between mb-3">
-    <h1 class="mb-0">Logs</h1>
-    <div>
-        <a class="btn btn-sm btn-outline-info me-2" asp-page="/ChatLog/Index"><i class="bi bi-chat-left-text"></i> Chat Log</a>
-        <button type="button" class="btn btn-sm btn-outline-success me-2" id="btnExportSelected" disabled>Export ThreadId selezionato</button>
-        <a class="btn btn-sm btn-outline-success me-2" asp-page-handler="Export">Export tutti</a>
-        <button type="button" class="btn btn-sm btn-outline-danger me-2" id="btnClearAllLogs">Cancella tutti i log</button>
-        <form method="post" asp-page-handler="AnalyzeMissing" class="d-inline">
-            <button type="submit" class="btn btn-sm btn-outline-primary">Analizza log</button>
-        </form>
-    </div>
-</div>
+<!-- Hidden buttons for JS handlers -->
+<button type="button" id="btnExportSelected" style="display:none;" disabled></button>
+<button type="button" id="btnClearAllLogs" style="display:none;"></button>
 
 <div id="selectedThreadInfo" class="alert alert-info d-none">
     Selezionato: <strong>ThreadId <span id="selectedThreadIdDisplay"></span></strong>
@@ -193,11 +183,48 @@
                     { responsivePriority: 8, targets: 8 }, // Source
                     { orderable: false, targets: 9 }       // Actions
                 ],
-                // show column visibility control
                 dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
                      "rt" +
                      "<'row'<'col-sm-6'i><'col-sm-6'p>>",
                 buttons: [
+                    {
+                        text: 'Chat Log',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            window.location.href = '/ChatLog/Index';
+                        }
+                    },
+                    {
+                        text: 'Export Selected',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            $('#btnExportSelected').click();
+                        },
+                        init: function(dt, node, config) {
+                            $(node).prop('disabled', !selectedThreadId);
+                        }
+                    },
+                    {
+                        text: 'Export All',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            window.location.href = '?handler=Export';
+                        }
+                    },
+                    {
+                        text: 'Clear All',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            $('#btnClearAllLogs').click();
+                        }
+                    },
+                    {
+                        text: 'Analyze',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            $('<form method="post" action="?handler=AnalyzeMissing"><input type="hidden" name="__RequestVerificationToken" value="' + $('input[name=__RequestVerificationToken]').val() + '" /></form>').appendTo('body').submit();
+                        }
+                    },
                     {
                         extend: 'colvis',
                         text: 'Columns',

@@ -14,79 +14,100 @@
         <a class="note-card" asp-page="/Genera">
             <i class="note-card-icon bi bi-pencil-square" aria-hidden="true"></i>
             <div class="note-title">Genera storia</div>
+            <div class="note-brief">Crea una nuova storia</div>
             <div class="note-body">Avvia il processo guidato per creare una storia completa (trama, personaggi, capitoli).</div>
         </a>
 
         <a class="note-card" asp-page="/Stories/Index">
             <i class="note-card-icon bi bi-journal-text" aria-hidden="true"></i>
             <div class="note-title">Storie salvate</div>
+            <div class="note-brief">Visualizza generazioni</div>
             <div class="note-body">Visualizza, cancella o esporta le generazioni salvate in precedenza.</div>
         </a>
 
         <a class="note-card" asp-page="/Logs/Index">
             <i class="note-card-icon bi bi-list-check" aria-hidden="true"></i>
             <div class="note-title">Logs</div>
+            <div class="note-brief">Vedi i log</div>
             <div class="note-body">Visualizza i log dell'applicazione e svuota la tabella di log.</div>
         </a>
 
         <a class="note-card" asp-page="/ChatLog/Index">
             <i class="note-card-icon bi bi-chat-left-text" aria-hidden="true"></i>
             <div class="note-title">Chat Log</div>
+            <div class="note-brief">Cronologia chat</div>
             <div class="note-body">Visualizza le conversazioni tra sistema e agenti AI in formato chat.</div>
         </a>
 
         <a class="note-card" asp-page="/OllamaMonitor">
             <i class="note-card-icon bi bi-cpu" aria-hidden="true"></i>
             <div class="note-title">Ollama Monitor</div>
+            <div class="note-brief">Stato modelli locali</div>
             <div class="note-body">Visualizza lo stato dei modelli Ollama in esecuzione e l'ultimo prompt inviato ad ogni modello.</div>
         </a>
 
         <a class="note-card" asp-page="/Models">
             <i class="note-card-icon bi bi-diagram-3" aria-hidden="true"></i>
             <div class="note-title">Modelli</div>
+            <div class="note-brief">Elenco modelli</div>
             <div class="note-body">Visualizza, testa e valuta la compatibilità dei modelli AI disponibili.</div>
         </a>
 
         <a class="note-card agent-card" asp-page="/Agents/Index">
             <i class="note-card-icon bi bi-people" aria-hidden="true"></i>
             <div class="note-title">Agents</div>
+            <div class="note-brief">Gestisci agenti</div>
             <div class="note-body">Crea e gestisci agenti riutilizzabili (coordinator, writer, musician, tts, ecc.).</div>
         </a>
 
-        <a class="note-card" asp-page="/StepTemplates/Index">
-            <i class="note-card-icon bi bi-list-ol" aria-hidden="true"></i>
-            <div class="note-title">Step Templates</div>
-            <div class="note-body">Gestisci i template multi-step per la generazione sequenziale di storie.</div>
-        </a>
-
-        <a class="note-card" asp-page="/StoriesStatus/Index">
-            <i class="note-card-icon bi bi-flag" aria-hidden="true"></i>
-            <div class="note-title">Stories Status</div>
-            <div class="note-body">Gestisci gli stati e i progressi delle generazioni delle storie.</div>
-        </a>
-
-        <a class="note-card" asp-page="/TtsVoices/Index">
-            <i class="note-card-icon bi bi-megaphone" aria-hidden="true"></i>
-            <div class="note-title">TTS Voices</div>
-            <div class="note-body">Visualizza e sincronizza le voci TTS disponibili dal servizio.</div>
+        <a class="note-card half-height" asp-page="/TaskTypes/Index">
+            <i class="note-card-icon bi bi-tags" aria-hidden="true"></i>
+            <div class="note-title">Task Types</div>
+            <div class="note-brief">Configura i tipi di task.</div>
+            <div class="note-body">Configura i tipi di task usati dall'orchestratore multi-step.</div>
         </a>
 
         <a class="note-card" asp-page="/Admin">
             <i class="note-card-icon bi bi-graph-up" aria-hidden="true"></i>
             <div class="note-title">Pannello Admin</div>
+            <div class="note-brief">Impostazioni admin</div>
             <div class="note-body">Controllo costi, limiti token e configurazioni amministrative.</div>
         </a>
 
-        <a class="note-card" asp-page="/Chat">
-            <i class="note-card-icon bi bi-chat-dots" aria-hidden="true"></i>
-            <div class="note-title">Chat</div>
-            <div class="note-body">Apri una conversazione interattiva con un modello a tua scelta.</div>
+        <!-- Special compact cards moved to the end and displayed as half-height -->
+        <!-- Order: Stories Status, Test Definitions, TTS Voices, Step Templates, Chat -->
+        <a class="note-card half-height" asp-page="/StoriesStatus/Index">
+            <i class="note-card-icon bi bi-flag" aria-hidden="true"></i>
+            <div class="note-title">Stories Status</div>
+            <div class="note-brief">Stati e progressi</div>
+            <div class="note-body">Gestisci gli stati e i progressi delle generazioni delle storie.</div>
         </a>
 
-        <a class="note-card" asp-page="/TestDefinitions/Index">
+        <a class="note-card half-height" asp-page="/TestDefinitions/Index">
             <i class="note-card-icon bi bi-list-ul" aria-hidden="true"></i>
             <div class="note-title">Test Definitions</div>
+            <div class="note-brief">Casi di test</div>
             <div class="note-body">Gestisci i casi di test: prompt, comportamento atteso e plugin consentiti.</div>
         </a>
+
+        <a class="note-card half-height" asp-page="/TtsVoices/Index">
+            <i class="note-card-icon bi bi-megaphone" aria-hidden="true"></i>
+            <div class="note-title">TTS Voices</div>
+            <div class="note-brief">Voci TTS</div>
+            <div class="note-body">Visualizza e sincronizza le voci TTS disponibili dal servizio.</div>
+        </a>
+
+        <a class="note-card half-height" asp-page="/StepTemplates/Index">
+            <i class="note-card-icon bi bi-list-ol" aria-hidden="true"></i>
+            <div class="note-title">Step Templates</div>
+            <div class="note-brief">Template passi</div>
+            <div class="note-body">Gestisci i template multi-step per la generazione sequenziale di storie.</div>
+        </a>
+
+        <a class="note-card half-height" asp-page="/Chat">
+            <i class="note-card-icon bi bi-chat-dots" aria-hidden="true"></i>
+            <div class="note-title">Chat</div>
+            <div class="note-brief">Chat interattiva</div>
+            <div class="note-body">Apri una conversazione interattiva con un modello a tua scelta.</div>
+        </a>
     </div>
-</div>

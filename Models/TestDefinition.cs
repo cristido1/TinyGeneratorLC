@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace TinyGenerator.Models;
 
 public sealed class TestDefinition

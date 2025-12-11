@@ -7,24 +7,12 @@
 }
 
 <div class="mb-3 d-flex justify-content-between align-items-center">
-    <form method="get" class="d-flex align-items-center gap-2" asp-page="./Index" id="agentFilterForm">
-        <input type="hidden" name="Page" value="1" />
-        <input type="search" name="Search" id="searchBox" value="@Model.Search" class="form-control" placeholder="Search agents..." />
-        <select name="ModelFilter" id="modelFilterSelect" class="form-select" style="width: 220px">
-            <option value="" selected="@(string.IsNullOrWhiteSpace(Model.ModelFilter) ? "selected" : null)">All models</option>
-            <option value="__none__" selected="@(Model.ModelFilter == "__none__" ? "selected" : null)">No model assigned</option>
-            @foreach (var m in Model.Models)
-            {
-                var isSelected = !string.IsNullOrWhiteSpace(Model.ModelFilter) && string.Equals(Model.ModelFilter, m.Name, StringComparison.OrdinalIgnoreCase);
-                <option value="@m.Name" selected="@(isSelected ? "selected" : null)">@m.Name @((!string.IsNullOrWhiteSpace(m.Provider)) ? "(" + m.Provider + ")" : "")</option>
-            }
-        </select>
-        <button type="submit" class="btn btn-outline-primary">Search</button>
-    </form>
-    <a class="btn btn-primary" asp-page="./Create">Create Agent</a>
+    <div></div>
 </div>
 
-<table id="tabAgents" class="table table-bordered datatable">
+<table id="tabAgents" class="table table-bordered datatable"
+       data-create-label="Create Agent"
+       data-create-url="@Url.Page("./Create")">
     <thead>
         <tr>
             <th>Name</th>
@@ -77,36 +65,6 @@
     </tbody>
 </table>
 
-@if (Model.TotalPages > 1)
-{
-    <nav>
-        <ul class="pagination">
-        @{
-            var current = Model.Page;
-            var total = Model.TotalPages;
-            if (current > 1)
-            {
-                <li class="page-item">
-                    <a class="page-link" asp-route-Page="@(current-1)" asp-route-Search="@Model.Search">Previous</a>
-                </li>
-            }
-            for (int i = 1; i <= total; i++)
-            {
-                <li class="page-item @(i == current ? "active" : "")">
-                    <a class="page-link" asp-route-Page="@i" asp-route-Search="@Model.Search">@i</a>
-                </li>
-            }
-            if (current < total)
-            {
-                <li class="page-item">
-                    <a class="page-link" asp-route-Page="@(current+1)" asp-route-Search="@Model.Search">Next</a>
-                </li>
-            }
-        }
-        </ul>
-    </nav>
-}
-
 @section Styles {
     <link rel="stylesheet" href="~/css/site.css" />
 }
@@ -120,7 +78,7 @@
                     var table = $('#tabAgents').DataTable({
                         responsive: true,
                         colReorder: true,
-                        dom: 'Bfrtip',
+                        dom: "<'dt-top'Bf>rt<'dt-bottom'lip>",
                         buttons: [
                             {
                                 extend: 'colvis',
@@ -136,13 +94,6 @@
                         stateDuration: -1
                     });
 
-                    // If server-side pagination controls exist, hide them when DataTables is active
-                    $('nav.pagination').hide();
-
-                    // Wire existing search box to DataTables search
-                    $('#searchBox').on('input', function(){ table.search(this.value).draw(); });
-                    
-                    // Handle delete buttons with SweetAlert2
                     document.querySelectorAll('.agent-delete-btn').forEach(btn => {
                         btn.addEventListener('click', async (e) => {
                             e.preventDefault();
@@ -154,9 +105,7 @@
                         });
                     });
 
-                    // Handle Generate Story buttons
                     const storyModalEl = document.getElementById('storyModal');
-                    // Move modal to document.body to avoid stacking-context issues
                     try {
                         if (storyModalEl && storyModalEl.parentElement !== document.body) {
                             document.body.appendChild(storyModalEl);
@@ -173,18 +122,15 @@
                     const modalAgentId = document.getElementById('modalAgentId');
                     const STORAGE_KEY = 'lastStoryTheme';
 
-                    // Ensure backdrop and modal z-index are above app overlay once shown
                     storyModalEl.addEventListener('shown.bs.modal', function() {
                         const backdrop = document.querySelector('.modal-backdrop');
                         if (backdrop) {
                             backdrop.style.zIndex = '10550';
                         }
                         storyModalEl.style.zIndex = '10600';
-                        // focus textarea
                         if (storyThemeInput) storyThemeInput.focus();
                     });
 
-                    // Load last theme from localStorage
                     const lastTheme = localStorage.getItem(STORAGE_KEY);
                     if (lastTheme && storyThemeInput) {
                         storyThemeInput.value = lastTheme;
@@ -202,7 +148,6 @@
                         });
                     });
 
-                    // Save theme to localStorage on form submit
                     const storyForm = document.getElementById('storyForm');
                     if (storyForm) {
                         storyForm.addEventListener('submit', () => {
@@ -210,13 +155,6 @@
                             if (theme) {
                                 localStorage.setItem(STORAGE_KEY, theme);
                             }
-                        });
-                    }
-
-                    const modelSelect = document.getElementById('modelFilterSelect');
-                    if (modelSelect && modelSelect.form) {
-                        modelSelect.addEventListener('change', () => {
-                            modelSelect.form.submit();
                         });
                     }
                 } catch (e) {

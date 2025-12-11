@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel.DataAnnotations;
 
 namespace TinyGenerator.Models
 {
@@ -30,5 +31,9 @@ namespace TinyGenerator.Models
         public int? MultiStepTemplateId { get; set; }
         // Non-persistent helper
         public string? MultiStepTemplateName { get; set; }
+        
+        // Concurrency token for optimistic locking
+        [Timestamp]
+        public byte[]? RowVersion { get; set; }
     }
 }

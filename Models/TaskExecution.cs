@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.ComponentModel.DataAnnotations;
 
 namespace TinyGenerator.Models
 {
@@ -107,6 +108,10 @@ namespace TinyGenerator.Models
                 }
             }
         }
+        
+        // Concurrency token for optimistic locking
+        [Timestamp]
+        public byte[]? RowVersion { get; set; }
     }
 
     public class StepTemplate
@@ -119,5 +124,9 @@ namespace TinyGenerator.Models
         public string? Description { get; set; }
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
         public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");
+        
+        // Concurrency token for optimistic locking
+        [Timestamp]
+        public byte[]? RowVersion { get; set; }
     }
 }

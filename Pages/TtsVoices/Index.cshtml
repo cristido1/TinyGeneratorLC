@@ -6,20 +6,10 @@
     ViewData["PageDescription"] = "Elenco delle voci TTS disponibili e operazioni di sincronizzazione";
 }
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <div>
-        <h2 class="m-0">TTS Voices</h2>
-        <small class="text-muted">Lista delle voci disponibili nel servizio TTS e in DB</small>
-    </div>
-    <div class="d-flex align-items-center gap-2">
-        <button id="refreshVoicesBtn" class="btn btn-primary">Aggiorna voci dal servizio TTS</button>
-        <a class="btn btn-outline-secondary ms-2" asp-page="/Agents/Create">Create Voice</a>
-        <div class="small text-muted ms-3 align-self-center">Visibilità colonne sempre persistente</div>
-    </div>
-</div>
 <form id="ttsRefreshForm" method="post" class="d-none">
     @Html.AntiForgeryToken()
 </form>
+<button id="refreshVoicesBtn" style="display:none;"></button>
 
 <!-- Toast for update feedback -->
 <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1055;">
@@ -98,6 +88,20 @@
                              "rt" +
                              "<'row'<'col-sm-6'i><'col-sm-6'p>>",
                         buttons: [
+                            {
+                                text: 'Refresh',
+                                className: 'btn btn-light btn-sm',
+                                action: function(e, dt, node, config) {
+                                    $('#refreshVoicesBtn').click();
+                                }
+                            },
+                            {
+                                text: 'Create',
+                                className: 'btn btn-light btn-sm',
+                                action: function(e, dt, node, config) {
+                                    window.location.href = '/Agents/Create';
+                                }
+                            },
                             {
                                 extend: 'colvis',
                                 text: 'Columns',

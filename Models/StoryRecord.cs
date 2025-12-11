@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 
 namespace TinyGenerator.Models
 {
@@ -44,5 +45,9 @@ namespace TinyGenerator.Models
         public string EvalA { get => Eval; set => Eval = value; }
         [Obsolete("Use Score property instead")]
         public double ScoreA { get => Score; set => Score = value; }
+        
+        // Concurrency token for optimistic locking
+        [Timestamp]
+        public byte[]? RowVersion { get; set; }
     }
 }

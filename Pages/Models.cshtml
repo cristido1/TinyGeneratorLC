@@ -39,8 +39,6 @@
 </style>
 
 <div class="mb-3 d-flex gap-2 align-items-center">
-    <a class="btn btn-sm btn-primary" href="/Models/Edit">Nuovo modello</a>
-
     <div class="input-group input-group-sm" style="width:260px">
         <select id="groupSelect" class="form-select">
             @foreach(var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
@@ -48,24 +46,24 @@
                 <option value="@g">@g</option>
             }
         </select>
-        <button id="runGroupBtn" class="btn btn-outline-secondary">Run Group</button>
     </div>
-
-    <button id="runAllBtn" class="btn btn-sm btn-outline-success">Run All</button>
-    <button id="purgeOllamaBtn" class="btn btn-sm btn-outline-danger">Purge disabled Ollama</button>
-    <button id="refreshContextsBtn" class="btn btn-sm btn-outline-secondary">Refresh contexts</button>
-    <button id="discoverOllamaBtn" class="btn btn-sm btn-outline-secondary">Discover Ollama models</button>
-    <button id="recalculateScoresBtn" class="btn btn-sm btn-outline-info"><i class="bi bi-calculator"></i> Ricalcola punteggi</button>
-
     <label class="form-check form-check-inline ms-2">
         <input id="showDisabledCheckbox" class="form-check-input" type="checkbox" @(Model.ShowDisabled ? "checked" : "") />
-        <span class="form-check-label">Mostra anche disabilitati</span>
+        <span class="form-check-label">Mostra disabilitati</span>
     </label>
-
 </div>
+<!-- Hidden buttons for JS handlers -->
+<button id="runGroupBtn" style="display:none;"></button>
+<button id="runAllBtn" style="display:none;"></button>
+<button id="purgeOllamaBtn" style="display:none;"></button>
+<button id="refreshContextsBtn" style="display:none;"></button>
+<button id="discoverOllamaBtn" style="display:none;"></button>
+<button id="recalculateScoresBtn" style="display:none;"></button>
 
 <div class="models-table-wrapper">
-    <table id="modelsTable" class="table table-sm table-striped resizable-table datatable">
+    <table id="modelsTable" class="table table-sm table-striped resizable-table datatable"
+           data-create-label="Nuovo modello"
+           data-create-url="@Url.Page("/Models/Edit")">
         <thead>
             <tr>
                 <th></th>
@@ -310,6 +308,64 @@
                      "rt" +
                      "<'row'<'col-sm-6'i><'col-sm-6'p>>",
                 buttons: [
+                    {
+                        text: 'Run Group',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            var grp = $('#groupSelect').val();
+                            if (!grp) { alert('Seleziona un gruppo'); return; }
+                            $.post('?handler=RunGroup', { groupName: grp, __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
+                                .done(function(){ location.reload(); })
+                                .fail(function(){ alert('Errore run group'); });
+                        }
+                    },
+                    {
+                        text: 'Run All',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            if (!confirm('Run all tests?')) return;
+                            $.post('?handler=RunAll', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
+                                .done(function(){ location.reload(); })
+                                .fail(function(){ alert('Errore run all'); });
+                        }
+                    },
+                    {
+                        text: 'Purge',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            if (!confirm('Purge disabled Ollama models?')) return;
+                            $.post('?handler=PurgeDisabledOllama', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
+                                .done(function(){ location.reload(); })
+                                .fail(function(){ alert('Errore purge'); });
+                        }
+                    },
+                    {
+                        text: 'Refresh Ctx',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            $.post('?handler=RefreshContexts', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
+                                .done(function(){ location.reload(); })
+                                .fail(function(){ alert('Errore refresh'); });
+                        }
+                    },
+                    {
+                        text: 'Discover',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            $.post('?handler=DiscoverOllama', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
+                                .done(function(){ location.reload(); })
+                                .fail(function(){ alert('Errore discover'); });
+                        }
+                    },
+                    {
+                        text: 'Recalc',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            $.post('?handler=RecalculateScores', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
+                                .done(function(){ location.reload(); })
+                                .fail(function(){ alert('Errore recalc'); });
+                        }
+                    },
                     {
                         extend: 'colvis',
                         text: 'Columns',

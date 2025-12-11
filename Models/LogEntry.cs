@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel.DataAnnotations;
 
 namespace TinyGenerator.Models
 {
@@ -42,5 +43,9 @@ namespace TinyGenerator.Models
         public bool Analized { get; set; }
         public string? ChatText { get; set; } // Chat-style formatted text for UI
         public string? Result { get; set; } // Optional outcome: SUCCESS / FAILED / null
+        
+        // Concurrency token for optimistic locking
+        [Timestamp]
+        public byte[]? RowVersion { get; set; }
     }
 }

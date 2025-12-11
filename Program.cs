@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.SignalR;
 using TinyGenerator.Hubs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.EntityFrameworkCore;
 
 // Attempt to restart local Ollama with higher priority before app startup (best-effort).
 // Small helper methods and more complex startup logic are extracted into Services/StartupTasks.cs
@@ -66,7 +67,19 @@ builder.Services.AddSingleton<IOllamaMonitorService>(sp => new OllamaMonitorServ
 // Database access service + cost controller (sqlite) - register early so other services can depend on it
 builder.Services.AddSingleton(sp => new TinyGenerator.Services.DatabaseService(
     "data/storage.db",
-    sp.GetService<IOllamaMonitorService>()));
+    sp.GetService<IOllamaMonitorService>(),
+    sp));
+
+// === Entity Framework Core DbContext ===
+// Register EF Core DbContext with SQLite (same database as Dapper)
+builder.Services.AddDbContext<TinyGenerator.Data.TinyGeneratorDbContext>(options =>
+    options.UseSqlite("Data Source=data/storage.db"));
+
+// Register generic repository pattern
+builder.Services.AddScoped(typeof(TinyGenerator.Data.IRepository<>), typeof(TinyGenerator.Data.Repository<>));
+
+// Register specific repositories
+builder.Services.AddScoped<TinyGenerator.Data.Repositories.IStoryRepository, TinyGenerator.Data.Repositories.StoryRepository>();
 
 // Persistent memory service (sqlite) using consolidated storage DB
 builder.Services.AddSingleton<PersistentMemoryService>(sp =>

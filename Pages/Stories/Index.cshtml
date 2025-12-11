@@ -9,40 +9,20 @@
     @Html.AntiForgeryToken()
 </form>
 
-<div class="d-flex justify-content-between mb-3">
-    <h3>Storie salvate</h3>
-    <div class="d-flex gap-2">
-        <form method="post" asp-page-handler="TestTtsSchema" class="d-inline d-flex align-items-center gap-2">
-            <div class="input-group input-group-sm" style="width: 150px;">
-                <span class="input-group-text">StoryId</span>
-                <input type="number" class="form-control" name="storyId" value="32" min="1" />
-            </div>
-            <button type="submit" class="btn btn-outline-secondary btn-sm">Test tts_schema (tutti i modelli)</button>
-        </form>
-        <div class="btn-group">
-            <button type="button" class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                Valuta tutti
-            </button>
-            <ul class="dropdown-menu dropdown-menu-end">
-                @if (Model.Evaluators != null && Model.Evaluators.Any())
-                {
-                    foreach (var ev in Model.Evaluators)
-                    {
-                        <li>
-                            <button class="dropdown-item" type="submit" form="bulkEvaluateForm" name="agentId" value="@ev.Id">
-                                @ev.Name (@ev.Role)
-                            </button>
-                        </li>
-                    }
-                }
-                else
-                {
-                    <li><span class="dropdown-item text-muted">Nessun evaluator attivo</span></li>
-                }
-            </ul>
-        </div>
-        <a class="btn btn-primary" asp-page="/Stories/Create">Nuova storia</a>
-    </div>
+<!-- Hidden form for TestTtsSchema handler -->
+<form id="testTtsSchemaForm" method="post" asp-page-handler="TestTtsSchema" style="display:none;">
+    <input type="number" id="testTtsStoryIdInput" name="storyId" value="32" min="1" />
+</form>
+
+<!-- Hidden dropdown for bulk evaluate (will be controlled via JS) -->
+<div id="bulkEvaluatorDropdown" class="d-none">
+    @if (Model.Evaluators != null && Model.Evaluators.Any())
+    {
+        foreach (var ev in Model.Evaluators)
+        {
+            <button class="bulk-eval-item" data-agent-id="@ev.Id" data-agent-name="@ev.Name" data-agent-role="@ev.Role"></button>
+        }
+    }
 </div>
 
 @if (TempData["ErrorMessage"] != null)
@@ -426,7 +406,7 @@
                     if (eval.AgentModel) {
                         html += ' <small class="text-muted">(' + eval.AgentModel + ')</small>';
                     }
-                    html += '<div><small class="text-muted">' + (eval.Ts || '') + '</small></div>';
+                    html += '<div><small class="text-muted">' + (eval.Timestamp || '') + '</small></div>';
                     html += '</div>';
                     html += '<div class="text-end">Totale: <span class="badge bg-primary">' + eval.TotalScore + '/40</span></div>';
                     html += '</div>';
@@ -516,6 +496,40 @@
                 responsive: true,
                 dom: 'Bfrtip',
                 buttons: [
+                    {
+                        text: 'Test TTS Schema',
+                        className: 'btn btn-light btn-sm',
+                        action: function(e, dt, node, config) {
+                            var sid = prompt('Story ID:', '32');
+                            if (sid && sid.trim()) {
+                                $('#testTtsStoryIdInput').val(sid.trim());
+                                $('#testTtsSchemaForm').submit();
+                            }
+                        }
+                    },
+                    {
+                        text: 'Valuta tutti',
+                        className: 'btn btn-light btn-sm dropdown-toggle',
+                        attr: { 'data-bs-toggle': 'dropdown' },
+                        init: function(dt, node, config) {
+                            var $btn = $(node);
+                            var $ul = $('<ul class="dropdown-menu dropdown-menu-end"></ul>');
+                            $('#bulkEvaluatorDropdown .bulk-eval-item').each(function() {
+                                var agentId = $(this).data('agent-id');
+                                var agentName = $(this).data('agent-name');
+                                var agentRole = $(this).data('agent-role');
+                                var $li = $('<li><button class="dropdown-item" type="button">' + agentName + ' (' + agentRole + ')</button></li>');
+                                $li.find('button').on('click', function() {
+                                    $('<form method="post" action="?handler=EvaluateAll"><input type="hidden" name="agentId" value="' + agentId + '" /><input type="hidden" name="__RequestVerificationToken" value="' + $('input[name=__RequestVerificationToken]').val() + '" /></form>').appendTo('body').submit();
+                                });
+                                $ul.append($li);
+                            });
+                            if ($ul.children().length === 0) {
+                                $ul.append('<li><span class="dropdown-item text-muted">Nessun evaluator attivo</span></li>');
+                            }
+                            $btn.after($ul);
+                        }
+                    },
                     {
                         extend: 'colvis',
                         text: 'Columns',

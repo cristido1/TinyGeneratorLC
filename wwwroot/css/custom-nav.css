@@ -1,0 +1,61 @@
+/* Custom navigation tweaks for Task Types link */
+.app-nav {
+    margin-bottom: 12px;
+}
+
+.app-nav .nav-link {
+    padding: 0.5rem 0.75rem;
+    color: #e6ffed;
+    font-weight: 600;
+}
+
+/* Make the Task Types item visually shorter (~half padding) */
+.app-nav .nav-item.task-type .nav-link {
+    padding-top: 0.18rem;
+    padding-bottom: 0.18rem;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Keep responsive behavior: restore normal spacing on small screens */
+@media (max-width: 767px) {
+    .app-nav .nav-item.task-type .nav-link {
+        padding-top: 0.45rem;
+        padding-bottom: 0.45rem;
+    }
+}
+
+/* Home card variant: make a note-card visually half-height */
+.note-card.half-height {
+    min-height: 56px !important; /* roughly half of the usual ~110px */
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+}
+.note-card.half-height .note-title { font-size: 0.9rem; }
+.note-card.half-height .note-body { display: none; } /* hide full body to keep compact */
+.note-card.half-height .note-brief { display: block; color: #455a64; font-size: 0.85rem; margin-top: 2px; max-width: calc(100% - 48px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.note-card.half-height .note-card-icon { font-size: 36px !important; right: 8px; bottom: 6px; opacity: 0.18 !important; }
+
+@media (max-width: 767px) {
+    .note-card.half-height { min-height: 86px !important; }
+    .note-card.half-height .note-body { display: block; font-size: .85rem; }
+    .note-card.half-height .note-brief { display: none; }
+}
+
+/* === Apply compact style globally to all home cards inside .keep-container === */
+.keep-container .note-card {
+    min-height: 56px !important;
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+    overflow: hidden;
+}
+.keep-container .note-card .note-title { font-size: 0.95rem; margin-bottom: 2px; }
+.keep-container .note-card .note-body { display: none; }
+.keep-container .note-card .note-card-icon { font-size: 40px !important; opacity: 0.18 !important; }
+
+@media (max-width: 767px) {
+    .keep-container .note-card { min-height: 86px !important; padding-top: 8px !important; padding-bottom: 8px !important; }
+    .keep-container .note-card .note-body { display: block; font-size: .85rem; }
+    .keep-container .note-card .note-card-icon { font-size: 56px !important; opacity: 0.3 !important; }
+}

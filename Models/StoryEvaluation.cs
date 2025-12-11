@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel.DataAnnotations;
 
 namespace TinyGenerator.Models
 {
@@ -29,6 +30,10 @@ namespace TinyGenerator.Models
         public int? AgentId { get; set; }
         public string AgentName { get; set; } = string.Empty;
         public string AgentModel { get; set; } = string.Empty;
-        public string Ts { get; set; } = string.Empty;
+        public string Timestamp { get; set; } = string.Empty;
+        
+        // Concurrency token for optimistic locking
+        [Timestamp]
+        public byte[]? RowVersion { get; set; }
     }
 }

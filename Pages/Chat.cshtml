@@ -5,382 +5,185 @@
 }
 
 <style>
-    /* Animated gradient background */
-    body {
-        font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    .chat-compact-container {
+        padding: 12px 0;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
     }
 
-    .chat-page-container {
-        min-height: 100vh;
-        background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
-        background-size: 400% 400%;
-        animation: gradient 15s ease infinite;
-        padding: 2rem 0;
+    .chat-compact-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 8px;
     }
 
-    @@keyframes gradient {
-        0% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
-    }
-
-    /* Inner container with clean white background */
-    .chat-inner {
-        background: rgba(255, 255, 255, 0.98);
-        border-radius: 16px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
-        padding: 2rem;
-        max-width: 1400px;
-        margin: 0 auto;
-    }
-
-    /* Modern typography */
-    .chat-title {
-        font-size: 2rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        margin-bottom: 1.5rem;
-    }
-
-    /* Info sidebar */
-    .info-sidebar {
-        background: #f8f9fa;
-        border: 1px solid #e9ecef;
-        border-radius: 12px;
-        padding: 1.5rem;
-        height: fit-content;
-    }
-
-    .info-sidebar h5 {
-        color: #495057;
-        font-weight: 600;
-        font-size: 1.1rem;
-        margin-bottom: 1rem;
-    }
-
-    .info-item {
-        background: white;
+    .chat-card-compact {
+        background: #fff;
         border: 1px solid #e9ecef;
         border-radius: 8px;
-        padding: 0.75rem;
-        margin-bottom: 0.75rem;
+        overflow: hidden;
+        box-shadow: 0 1px 6px rgba(0,0,0,0.04);
+    }
+
+    .chat-messages-compact {
+        height: 60vh;
+        min-height: 300px;
+        max-height: 70vh;
+        overflow-y: auto;
+        padding: 12px;
+        background: #fafafa;
+    }
+
+    .msg {
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        max-width: 75%;
+        line-height: 1.35;
+        font-size: 0.95rem;
+        word-wrap: break-word;
+    }
+
+    .msg.user {
+        background: #3b82f6;
+        color: #fff;
+        margin-left: auto;
+    }
+
+    .msg.assistant {
+        background: #fff;
+        border: 1px solid #e6e6e6;
+        color: #222;
+        margin-right: auto;
+    }
+
+    .msg.tool {
+        background: #fff7ed;
+        color: #57421a;
+        border-left: 3px solid #f59e0b;
+    }
+
+    .msg-role {
+        font-weight: 600;
+        font-size: 0.75rem;
+        opacity: 0.8;
+        margin-bottom: 6px;
+    }
+
+    .chat-footer-compact {
+        border-top: 1px solid #eee;
+        padding: 8px;
+        background: #fff;
+    }
+
+    .form-control.compact {
+        padding: 6px 8px;
+        font-size: 0.95rem;
+    }
+
+    .btn-sm-compact {
+        padding: 6px 10px;
         font-size: 0.9rem;
     }
 
-    .info-item strong {
-        color: #667eea;
-        display: block;
-        margin-bottom: 0.25rem;
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-
-    /* Model selector */
-    .form-select {
-        border: 2px solid #e9ecef;
-        border-radius: 8px;
-        padding: 0.75rem;
-        font-size: 1rem;
-        transition: border-color 0.2s;
-        background: white;
-    }
-
-    .form-select:focus {
-        border-color: #667eea;
-        box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.15);
-    }
-
-    /* Chat messages area */
-    .chat-card {
-        background: white;
-        border: 1px solid #e9ecef;
-        border-radius: 12px;
-        overflow: hidden;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-    }
-
-    .chat-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1rem 1.5rem;
-        font-weight: 600;
-        font-size: 1.1rem;
-    }
-
-    .chat-messages {
-        background: #fafafa;
-        padding: 1.5rem;
-        height: 500px;
-        overflow-y: auto;
-    }
-
-    .message {
-        margin-bottom: 1rem;
-        padding: 1rem;
-        border-radius: 12px;
-        max-width: 75%;
-        word-wrap: break-word;
-        line-height: 1.5;
-    }
-
-    .message.user {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
+    .model-select-inline {
         margin-left: auto;
-        text-align: left;
-        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
     }
 
-    .message.assistant {
-        background: white;
-        color: #212529;
-        margin-right: auto;
-        border: 1px solid #e9ecef;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-    }
-
-    .message.tool {
-        background: #fff3cd;
-        color: #856404;
+    .small-info {
         font-size: 0.85rem;
-        border-left: 4px solid #ffc107;
-        margin: 0.5rem auto;
-        max-width: 85%;
-    }
-
-    .message-role {
-        font-weight: 600;
-        font-size: 0.75rem;
-        margin-bottom: 0.5rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        opacity: 0.8;
-    }
-
-    /* Input area */
-    .chat-footer {
-        background: white;
-        border-top: 1px solid #e9ecef;
-        padding: 1rem 1.5rem;
-    }
-
-    .chat-input-group {
-        display: flex;
-        gap: 0.5rem;
-    }
-
-    .form-control {
-        border: 2px solid #e9ecef;
-        border-radius: 8px;
-        padding: 0.75rem 1rem;
-        font-size: 1rem;
-        transition: border-color 0.2s;
-    }
-
-    .form-control:focus {
-        border-color: #667eea;
-        box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.15);
-    }
-
-    .btn-primary {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border: none;
-        border-radius: 8px;
-        padding: 0.75rem 2rem;
-        font-weight: 600;
-        transition: transform 0.2s, box-shadow 0.2s;
-    }
-
-    .btn-primary:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-    }
-
-    .btn-danger {
-        border-radius: 8px;
-        padding: 0.75rem 1.5rem;
-        font-weight: 600;
-    }
-
-    /* Scrollbar styling */
-    .chat-messages::-webkit-scrollbar {
-        width: 8px;
-    }
-
-    .chat-messages::-webkit-scrollbar-track {
-        background: #f1f3f5;
-        border-radius: 4px;
-    }
-
-    .chat-messages::-webkit-scrollbar-thumb {
-        background: #dee2e6;
-        border-radius: 4px;
-    }
-
-    .chat-messages::-webkit-scrollbar-thumb:hover {
-        background: #adb5bd;
-    }
-
-    .empty-state {
-        text-align: center;
-        padding: 3rem 1rem;
         color: #6c757d;
+        margin-left: 8px;
     }
 
-    .empty-state svg {
-        width: 64px;
-        height: 64px;
-        margin-bottom: 1rem;
-        opacity: 0.5;
+    @@media (max-width: 767px) {
+        .chat-messages-compact { height: 50vh; }
     }
 </style>
 
-<div class="chat-page-container">
+<div class="chat-compact-container">
     <div class="container">
-        <div class="chat-inner">
-            <div class="row">
-                <!-- Sidebar -->
-                <div class="col-md-3">
-                    <div class="info-sidebar">
-                        <h5>🔧 Selezione Modello</h5>
-                        <form method="get" id="modelForm">
-                            <div class="mb-3">
-                                <select class="form-select" id="modelSelect" name="model" onchange="document.getElementById('modelForm').submit();">
-                                    <option value="">-- Seleziona Modello --</option>
-                                    @if (Model?.AvailableModels != null)
-                                    {
-                                        @foreach (var m in Model.AvailableModels)
-                                        {
-                                            if (m.Name == Model.SelectedModel)
-                                            {
-                                                <option value="@m.Name" selected>@m.Name</option>
-                                            }
-                                            else
-                                            {
-                                                <option value="@m.Name">@m.Name</option>
-                                            }
-                                        }
-                                    }
-                                </select>
-                            </div>
-                        </form>
+        <div class="chat-compact-header">
+            <h5 class="mb-0">💬 Chat AI</h5>
 
-                        @if (!string.IsNullOrEmpty(Model?.SelectedModel) && Model?.SelectedModelInfo != null)
+            <form method="get" id="modelForm" class="model-select-inline d-flex align-items-center">
+                <select class="form-select form-select-sm me-2" id="modelSelect" name="model" onchange="document.getElementById('modelForm').submit();">
+                    <option value="">-- Seleziona Modello --</option>
+                    @if (Model?.AvailableModels != null)
+                    {
+                        @foreach (var m in Model.AvailableModels)
                         {
-                            <h5 class="mt-4">ℹ️ Informazioni</h5>
-                            <div class="info-item">
-                                <strong>Provider</strong>
-                                @Model.SelectedModelInfo.Provider
-                            </div>
-                            <div class="info-item">
-                                <strong>Endpoint</strong>
-                                @(string.IsNullOrEmpty(Model.SelectedModelInfo.Endpoint) ? "Default" : Model.SelectedModelInfo.Endpoint)
-                            </div>
-                            <div class="info-item">
-                                <strong>Context</strong>
-                                @Model.SelectedModelInfo.MaxContext tokens
-                            </div>
-                            <div class="info-item">
-                                <strong>Messaggi</strong>
-                                <span id="messageCount">@(Model.ConversationHistory?.Count ?? 0)</span>
-                            </div>
-                            
-                            <button type="button" class="btn btn-danger btn-sm w-100 mt-3" id="clearChatBtn">
-                                🗑️ Cancella Storia
-                            </button>
-                        }
-                    </div>
-                </div>
-
-                <!-- Chat Area -->
-                <div class="col-md-9">
-                    <div class="chat-card">
-                        <div class="chat-header">
-                            @if (string.IsNullOrEmpty(Model?.SelectedModel))
+                            if (m.Name == Model.SelectedModel)
                             {
-                                <span>⏳ In attesa della selezione del modello</span>
+                                <option value="@m.Name" selected>@m.Name</option>
                             }
                             else
                             {
-                                <span>💬 Chat con @Model.SelectedModel</span>
+                                <option value="@m.Name">@m.Name</option>
                             }
-                        </div>
-
-                        <div class="chat-messages" id="chatMessages">
-                            @if (Model?.ConversationHistory != null && Model.ConversationHistory.Any())
-                            {
-                                @foreach (var msg in Model.ConversationHistory)
-                                {
-                                    <div class="d-flex @(msg.Role == "user" ? "justify-content-end" : "justify-content-start")">
-                                        <div class="message @msg.Role.ToLower()">
-                                            <div class="message-role">
-                                                @if (msg.Role == "user")
-                                                {
-                                                    <span>👤 Tu</span>
-                                                }
-                                                else if (msg.Role == "assistant")
-                                                {
-                                                    <span>🤖 @Model.SelectedModel</span>
-                                                }
-                                                else if (msg.Role == "tool")
-                                                {
-                                                    <span>🔧 Tool</span>
-                                                }
-                                            </div>
-                                            <div style="white-space: pre-wrap;">@msg.Content</div>
-                                        </div>
-                                    </div>
-                                }
-                            }
-                            else if (!string.IsNullOrEmpty(Model?.SelectedModel))
-                            {
-                                <div class="empty-state">
-                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                                    </svg>
-                                    <p>Nessun messaggio. Inizia la conversazione!</p>
-                                </div>
-                            }
-                        </div>
-
-                        @if (!string.IsNullOrEmpty(Model?.SelectedModel))
-                        {
-                            <div class="chat-footer">
-                                <form method="post" asp-page-handler="SendMessage" asp-route-model="@Model.SelectedModel">
-                                    @Html.AntiForgeryToken()
-                                    <div class="chat-input-group">
-                                        <input type="text" class="form-control" name="message" 
-                                               placeholder="Scrivi un messaggio..." required autocomplete="off" />
-                                        <button class="btn btn-primary" type="submit">
-                                            Invia
-                                        </button>
-                                    </div>
-                                </form>
-                                @if (TempData["Error"] != null)
-                                {
-                                    <div class="alert alert-danger mt-2 mb-0">
-                                        <strong>❌ Errore:</strong> @TempData["Error"]
-                                    </div>
-                                }
-                            </div>
                         }
-                    </div>
-                </div>
+                    }
+                </select>
+                @if (!string.IsNullOrEmpty(Model?.SelectedModel) && Model?.SelectedModelInfo != null)
+                {
+                    <div class="small-info">@Model.SelectedModelInfo.Provider • @Model.SelectedModelInfo.MaxContext tokens</div>
+                }
+            </form>
+        </div>
+
+        <div class="chat-card-compact">
+            <div class="chat-messages-compact" id="chatMessages">
+                @if (Model?.ConversationHistory != null && Model.ConversationHistory.Any())
+                {
+                    @foreach (var msg in Model.ConversationHistory)
+                    {
+                        <div class="d-flex @(msg.Role == "user" ? "justify-content-end" : "justify-content-start")">
+                            <div class="msg @msg.Role.ToLower()">
+                                <div class="msg-role">
+                                    @if (msg.Role == "user") { <span>👤 Tu</span> }
+                                    else if (msg.Role == "assistant") { <span>🤖 @Model.SelectedModel</span> }
+                                    else if (msg.Role == "tool") { <span>🔧 Tool</span> }
+                                </div>
+                                <div style="white-space: pre-wrap;">@msg.Content</div>
+                            </div>
+                        </div>
+                    }
+                }
+                else if (!string.IsNullOrEmpty(Model?.SelectedModel))
+                {
+                    <div class="text-center py-4 text-muted">Nessun messaggio. Inizia la conversazione!</div>
+                }
+                else
+                {
+                    <div class="text-center py-4 text-muted">Seleziona un modello per iniziare.</div>
+                }
             </div>
+
+            @if (!string.IsNullOrEmpty(Model?.SelectedModel))
+            {
+                <div class="chat-footer-compact d-flex align-items-center">
+                    <form method="post" asp-page-handler="SendMessage" asp-route-model="@Model.SelectedModel" class="w-100 d-flex gap-2">
+                        @Html.AntiForgeryToken()
+                        <input type="text" class="form-control compact" name="message" placeholder="Scrivi un messaggio..." required autocomplete="off" />
+                        <button class="btn btn-primary btn-sm-compact" type="submit">Invia</button>
+                        <button type="button" id="clearChatBtn" class="btn btn-outline-danger btn-sm-compact">🗑️</button>
+                    </form>
+                    @if (TempData["Error"] != null)
+                    {
+                        <div class="alert alert-danger ms-2 mb-0">
+                            <strong>❌</strong> @TempData["Error"]
+                        </div>
+                    }
+                </div>
+            }
         </div>
     </div>
 </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Auto-scroll to bottom on page load
     scrollToBottom();
 
-    // Clear chat button
     const clearBtn = document.getElementById('clearChatBtn');
     if (clearBtn) {
         clearBtn.addEventListener('click', function() {
@@ -390,8 +193,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
-    // Update message count
+
     updateMessageCount();
 });
 
@@ -403,10 +205,9 @@ function scrollToBottom() {
 }
 
 function updateMessageCount() {
-    const messages = document.querySelectorAll('.message');
+    const messages = document.querySelectorAll('.msg');
     const countEl = document.getElementById('messageCount');
-    if (countEl) {
-        countEl.textContent = messages.length;
-    }
+    if (countEl) { countEl.textContent = messages.length; }
 }
 </script>
+

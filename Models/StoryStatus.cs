@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace TinyGenerator.Models;
 
 public sealed class StoryStatus
@@ -11,4 +13,8 @@ public sealed class StoryStatus
     public string? AgentType { get; set; } // evaluator | writer | tts | music | fx | ambient | none
     public string? FunctionName { get; set; } // only for function_call
     public string? CaptionToExecute { get; set; } // caption to execute for this status
+    
+    // Concurrency token for optimistic locking
+    [Timestamp]
+    public byte[]? RowVersion { get; set; }
 }

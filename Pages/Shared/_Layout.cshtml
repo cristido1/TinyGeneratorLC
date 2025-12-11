@@ -27,6 +27,7 @@
     <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/space-background.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/custom-nav.css" asp-append-version="true" />
     
     <style>
         body {
@@ -251,10 +252,16 @@
             display: flex;
             align-items: center;
             gap: .5rem;
+            flex-wrap: wrap;
+            width: 100%;
         }
 
         .dataTables_wrapper .dt-top .dataTables_filter {
             margin-left: auto; /* push search to the right */
+        }
+
+        .dt-create-btn {
+            margin-left: .5rem;
         }
 
         .dt-action-btn {

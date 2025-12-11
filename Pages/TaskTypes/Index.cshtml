@@ -5,13 +5,11 @@
     ViewData["PageDescription"] = "Gestisci i tipi di task (task_types) usati dall'orchestratore multi-step";
 }
 
-<div class="mb-3 d-flex justify-content-between align-items-center">
-    <div>
-        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#modalEdit" onclick="openCreateModal()">Create Task Type</button>
-    </div>
-</div>
+<div class="mb-3"></div>
 
-<table id="tabTaskTypes" class="table table-bordered table-sm table-pastel table-compact datatable">
+<table id="tabTaskTypes" class="table table-bordered table-sm table-pastel table-compact datatable"
+       data-create-label="Create Task Type"
+       data-create-handler="openCreateModal">
     <thead>
         <tr>
             <th>Code</th>

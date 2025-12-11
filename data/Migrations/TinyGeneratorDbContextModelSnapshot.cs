@@ -24,46 +24,55 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnName("id");
 
                     b.Property<string>("Config")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("config");
 
                     b.Property<string>("CreatedAt")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
 
                     b.Property<string>("ExecutionPlan")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("execution_plan");
 
                     b.Property<string>("Instructions")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("instructions");
 
                     b.Property<bool>("IsActive")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("is_active");
 
                     b.Property<string>("JsonResponseFormat")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("json_response_format");
 
                     b.Property<int?>("ModelId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ModelName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("model_id");
 
                     b.Property<int?>("MultiStepTemplateId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("multi_step_template_id");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("name");
 
                     b.Property<string>("Notes")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("notes");
 
                     b.Property<string>("Prompt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("prompt");
 
                     b.Property<string>("Role")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("role");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -71,19 +80,24 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("BLOB");
 
                     b.Property<string>("Skills")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("skills");
 
                     b.Property<double?>("Temperature")
-                        .HasColumnType("REAL");
+                        .HasColumnType("REAL")
+                        .HasColumnName("temperature");
 
                     b.Property<double?>("TopP")
-                        .HasColumnType("REAL");
+                        .HasColumnType("REAL")
+                        .HasColumnName("top_p");
 
                     b.Property<string>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
 
                     b.Property<int?>("VoiceId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("voice_rowid");
 
                     b.HasKey("Id");
 
@@ -94,37 +108,47 @@ namespace TinyGenerator.Data.Migrations
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("Id");
 
                     b.Property<string>("AgentName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("AgentName");
 
                     b.Property<bool>("Analized")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("analized");
 
                     b.Property<string>("Category")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("Category");
 
                     b.Property<string>("ChatText")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("chat_text");
 
                     b.Property<string>("Context")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("Context");
 
                     b.Property<string>("Exception")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("Exception");
 
                     b.Property<string>("Level")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("Level");
 
                     b.Property<string>("Message")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("Message");
 
                     b.Property<string>("Result")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("Result");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -132,17 +156,21 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("BLOB");
 
                     b.Property<string>("State")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("State");
 
                     b.Property<int>("ThreadId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("ThreadId");
 
                     b.Property<string>("ThreadScope")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ThreadScope");
 
                     b.Property<string>("Ts")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("Ts");
 
                     b.HasKey("Id");
 
@@ -294,17 +322,21 @@ namespace TinyGenerator.Data.Migrations
 
                     b.Property<string>("CreatedAt")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
 
                     b.Property<string>("Description")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("description");
 
                     b.Property<string>("Instructions")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("instructions");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("name");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -313,15 +345,18 @@ namespace TinyGenerator.Data.Migrations
 
                     b.Property<string>("StepPrompt")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("step_prompt");
 
                     b.Property<string>("TaskType")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("task_type");
 
                     b.Property<string>("UpdatedAt")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
 
                     b.HasKey("Id");
 
@@ -332,57 +367,57 @@ namespace TinyGenerator.Data.Migrations
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
 
                     b.Property<string>("ActionDefects")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("action_defects");
 
                     b.Property<int>("ActionScore")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("action_score");
 
                     b.Property<int?>("AgentId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("AgentModel")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AgentName")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("agent_id");
 
                     b.Property<string>("EmotionalImpactDefects")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("emotional_impact_defects");
 
                     b.Property<int>("EmotionalImpactScore")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Model")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("emotional_impact_score");
 
                     b.Property<long?>("ModelId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("model_id");
 
                     b.Property<string>("NarrativeCoherenceDefects")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("narrative_coherence_defects");
 
                     b.Property<int>("NarrativeCoherenceScore")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("narrative_coherence_score");
 
                     b.Property<string>("OriginalityDefects")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("originality_defects");
 
                     b.Property<int>("OriginalityScore")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("originality_score");
 
                     b.Property<string>("RawJson")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("raw_json");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -390,61 +425,69 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("BLOB");
 
                     b.Property<long>("StoryId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("story_id");
 
                     b.Property<string>("Timestamp")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ts");
 
                     b.Property<double>("TotalScore")
-                        .HasColumnType("REAL");
+                        .HasColumnType("REAL")
+                        .HasColumnName("total_score");
 
                     b.HasKey("Id");
 
-                    b.ToTable("evaluations");
+                    b.ToTable("stories_evaluations");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.StoryRecord", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
 
-                    b.Property<string>("Agent")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
+                    b.Property<int?>("AgentId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("agent_id");
 
                     b.Property<bool>("Approved")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("approved");
 
                     b.Property<int>("CharCount")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("char_count");
 
                     b.Property<string>("Eval")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("eval");
 
                     b.Property<string>("Folder")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("folder");
 
                     b.Property<string>("GenerationId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("HasVoiceSource")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("generation_id");
 
                     b.Property<string>("MemoryKey")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("memory_key");
 
-                    b.Property<string>("Model")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
+                    b.Property<int?>("ModelId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("model_id");
 
                     b.Property<string>("Prompt")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("prompt");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -452,46 +495,22 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("BLOB");
 
                     b.Property<double>("Score")
-                        .HasColumnType("REAL");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("StatusAgentType")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("StatusColor")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("StatusDescription")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("StatusFunctionName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("REAL")
+                        .HasColumnName("score");
 
                     b.Property<int?>("StatusId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("StatusOperationType")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int?>("StatusStep")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("status_id");
 
                     b.Property<string>("Story")
                         .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<int?>("TestRunId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int?>("TestStepId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("story");
 
                     b.Property<string>("Timestamp")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("ts");
 
                     b.HasKey("Id");
 
@@ -502,28 +521,36 @@ namespace TinyGenerator.Data.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
 
                     b.Property<string>("AgentType")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("agent_type");
 
                     b.Property<string>("CaptionToExecute")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("caption_to_execute");
 
                     b.Property<string>("Code")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("code");
 
                     b.Property<string>("Color")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("color");
 
                     b.Property<string>("Description")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("description");
 
                     b.Property<string>("FunctionName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("function_name");
 
                     b.Property<string>("OperationType")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("operation_type");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -531,7 +558,8 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("BLOB");
 
                     b.Property<int>("Step")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("step");
 
                     b.HasKey("Id");
 
@@ -547,22 +575,27 @@ namespace TinyGenerator.Data.Migrations
 
                     b.Property<string>("Code")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("code");
 
                     b.Property<string>("DefaultCheckerRole")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("default_checker_role");
 
                     b.Property<string>("DefaultExecutorRole")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("default_executor_role");
 
                     b.Property<string>("Description")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("description");
 
                     b.Property<string>("OutputMergeStrategy")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("output_merge_strategy");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -570,7 +603,8 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("BLOB");
 
                     b.Property<string>("ValidationCriteria")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("validation_criteria");
 
                     b.HasKey("Id");
 
@@ -581,64 +615,80 @@ namespace TinyGenerator.Data.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
 
                     b.Property<bool>("Active")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("active");
 
                     b.Property<string>("AllowedPlugins")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Description")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("allowed_plugins");
 
                     b.Property<string>("ExecutionPlan")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("execution_plan");
 
                     b.Property<string>("ExpectedAsset")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expected_asset");
 
                     b.Property<string>("ExpectedBehavior")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expected_behavior");
 
                     b.Property<string>("ExpectedPromptValue")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expected_prompt_value");
 
                     b.Property<string>("FilesToCopy")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("files_to_copy");
 
                     b.Property<string>("FunctionName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("function_name");
 
                     b.Property<string>("GroupName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("test_group");
 
                     b.Property<string>("JsonResponseFormat")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("json_response_format");
 
                     b.Property<string>("Library")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("library");
 
                     b.Property<int>("Priority")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("priority");
 
                     b.Property<string>("Prompt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("prompt");
 
                     b.Property<double?>("Temperature")
-                        .HasColumnType("REAL");
+                        .HasColumnType("REAL")
+                        .HasColumnName("temperature");
 
                     b.Property<string>("TestType")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("test_type");
 
                     b.Property<int>("TimeoutSecs")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("timeout_secs");
 
                     b.Property<double?>("TopP")
-                        .HasColumnType("REAL");
+                        .HasColumnType("REAL")
+                        .HasColumnName("top_p");
 
                     b.Property<string>("ValidScoreRange")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("valid_score_range");
 
                     b.HasKey("Id");
 
@@ -649,35 +699,45 @@ namespace TinyGenerator.Data.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
 
                     b.Property<string>("Age")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("age");
 
                     b.Property<string>("Archetype")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("archetype");
 
                     b.Property<double?>("Confidence")
-                        .HasColumnType("REAL");
+                        .HasColumnType("REAL")
+                        .HasColumnName("confidence");
 
                     b.Property<string>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
 
                     b.Property<string>("Gender")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("gender");
 
                     b.Property<string>("Language")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("language");
 
                     b.Property<string>("Model")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("model");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("name");
 
                     b.Property<string>("Notes")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("notes");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -685,20 +745,25 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("BLOB");
 
                     b.Property<double?>("Score")
-                        .HasColumnType("REAL");
+                        .HasColumnType("REAL")
+                        .HasColumnName("score");
 
                     b.Property<string>("Tags")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("tags");
 
                     b.Property<string>("TemplateWav")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("template_wav");
 
                     b.Property<string>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
 
                     b.Property<string>("VoiceId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("voice_id");
 
                     b.HasKey("Id");
 

@@ -8,32 +8,84 @@ namespace TinyGenerator.Models
     [Table("stories")]
     public class StoryRecord
     {
+        [Column("id")]
         public long Id { get; set; }
+        
+        [Column("generation_id")]
         public string GenerationId { get; set; } = string.Empty;
+        
+        [Column("memory_key")]
         public string MemoryKey { get; set; } = string.Empty;
+        
+        [Column("ts")]
         public string Timestamp { get; set; } = string.Empty;
+        
+        [Column("prompt")]
         public string Prompt { get; set; } = string.Empty;
+        
+        [Column("story")]
         public string Story { get; set; } = string.Empty;
+        
+        [Column("char_count")]
         public int CharCount { get; set; }
+        
+        [NotMapped]
         public string Model { get; set; } = string.Empty;
+        
+        [NotMapped]
         public string Agent { get; set; } = string.Empty;
+        
+        [Column("eval")]
         public string Eval { get; set; } = string.Empty;
+        
+        [Column("score")]
         public double Score { get; set; }
+        
+        [Column("approved")]
         public bool Approved { get; set; }
+        
+        [NotMapped]
         public string Status { get; set; } = string.Empty;
+        
+        [Column("status_id")]
         public int? StatusId { get; set; }
+        
+        [NotMapped]
         public string? StatusDescription { get; set; }
+        
+        [NotMapped]
         public string? StatusColor { get; set; }
+        
+        [NotMapped]
         public string? StatusOperationType { get; set; }
+        
+        [NotMapped]
         public string? StatusAgentType { get; set; }
+        
+        [NotMapped]
         public string? StatusFunctionName { get; set; }
+        
+        [NotMapped]
         public int? StatusStep { get; set; }
+        
+        [Column("folder")]
         public string? Folder { get; set; }
+        
+        [NotMapped]
         public bool HasVoiceSource { get; set; }
 
         // Test information (if story was generated from a test)
+        [NotMapped]
         public int? TestRunId { get; set; }
+        
+        [NotMapped]
         public int? TestStepId { get; set; }
+        
+        [Column("model_id")]
+        public int? ModelId { get; set; }
+        
+        [Column("agent_id")]
+        public int? AgentId { get; set; }
 
         // Evaluations attached to the story (one for each saved evaluation)
         [NotMapped]

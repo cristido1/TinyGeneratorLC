@@ -8,19 +8,46 @@ namespace TinyGenerator.Models
 {
     public class TaskExecution
     {
+        [Column("id")]
         public long Id { get; set; }
+        
+        [Column("task_type")]
         public string TaskType { get; set; } = string.Empty;
+        
+        [Column("entity_id")]
         public long? EntityId { get; set; }
+        
+        [Column("step_prompt")]
         public string StepPrompt { get; set; } = string.Empty;
+        
+        [Column("initial_context")]
         public string? InitialContext { get; set; } // User theme/context for the task
+        
+        [Column("current_step")]
         public int CurrentStep { get; set; } = 1;
+        
+        [Column("max_step")]
         public int MaxStep { get; set; }
+        
+        [Column("retry_count")]
         public int RetryCount { get; set; } = 0;
+        
+        [Column("status")]
         public string Status { get; set; } = "pending"; // pending, in_progress, completed, failed, paused
+        
+        [Column("executor_agent_id")]
         public int? ExecutorAgentId { get; set; }
+        
+        [Column("checker_agent_id")]
         public int? CheckerAgentId { get; set; }
+        
+        [Column("config")]
         public string? Config { get; set; }
+        
+        [Column("created_at")]
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
+        
+        [Column("updated_at")]
         public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");
 
         // Non-persistent properties
@@ -39,14 +66,31 @@ namespace TinyGenerator.Models
 
     public class TaskExecutionStep
     {
+        [Column("id")]
         public long Id { get; set; }
+        
+        [Column("execution_id")]
         public long ExecutionId { get; set; }
+        
+        [Column("step_number")]
         public int StepNumber { get; set; }
+        
+        [Column("step_instruction")]
         public string StepInstruction { get; set; } = string.Empty;
+        
+        [Column("step_output")]
         public string? StepOutput { get; set; }
+        
+        [Column("validation_result")]
         public string? ValidationResultJson { get; set; }
+        
+        [Column("attempt_count")]
         public int AttemptCount { get; set; } = 1;
+        
+        [Column("started_at")]
         public string? StartedAt { get; set; }
+        
+        [Column("completed_at")]
         public string? CompletedAt { get; set; }
 
         // Non-persistent property - deserialize from ValidationResultJson
@@ -96,11 +140,23 @@ namespace TinyGenerator.Models
     {
         [Column("id")]
         public long Id { get; set; }
+        
+        [Column("code")]
         public string Code { get; set; } = string.Empty;
+        
+        [Column("description")]
         public string? Description { get; set; }
+        
+        [Column("default_executor_role")]
         public string DefaultExecutorRole { get; set; } = string.Empty;
+        
+        [Column("default_checker_role")]
         public string DefaultCheckerRole { get; set; } = string.Empty;
+        
+        [Column("output_merge_strategy")]
         public string OutputMergeStrategy { get; set; } = string.Empty;
+        
+        [Column("validation_criteria")]
         public string? ValidationCriteria { get; set; }
 
         // Non-persistent property - deserialize from ValidationCriteria JSON
@@ -131,12 +187,26 @@ namespace TinyGenerator.Models
     {
         [Column("id")]
         public long Id { get; set; }
+        
+        [Column("name")]
         public string Name { get; set; } = string.Empty;
+        
+        [Column("task_type")]
         public string TaskType { get; set; } = string.Empty;
+        
+        [Column("step_prompt")]
         public string StepPrompt { get; set; } = string.Empty;
+        
+        [Column("instructions")]
         public string? Instructions { get; set; }
+        
+        [Column("description")]
         public string? Description { get; set; }
+        
+        [Column("created_at")]
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
+        
+        [Column("updated_at")]
         public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");
         
         // Concurrency token for optimistic locking

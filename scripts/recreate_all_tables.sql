@@ -175,7 +175,8 @@ CREATE TABLE test_definitions (
     json_response_format TEXT NULL,
     files_to_copy TEXT NULL,
     temperature REAL NULL,
-    top_p REAL NULL
+    top_p REAL NULL,
+    RowVersion BLOB NULL
 );
 
 -- tts_voices

@@ -1,10 +1,13 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
+    [Table("agents")]
     public class Agent
     {
+        [Column("id")]
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public string Role { get; set; } = string.Empty; // coordinator, writer, story_evaluator, musician, sfx, tts, ambient, mixer
@@ -24,12 +27,14 @@ namespace TinyGenerator.Models
         public string? UpdatedAt { get; set; }
         public string? Notes { get; set; }
         // Non-persistent friendly name for the assigned TTS voice
+        [NotMapped]
         public string? VoiceName { get; set; }
         public double? Temperature { get; set; } // Sampling temperature for model calls (0.0-2.0)
         public double? TopP { get; set; } // Nucleus sampling probability (0.0-1.0)
         // Multi-step template association
         public int? MultiStepTemplateId { get; set; }
         // Non-persistent helper
+        [NotMapped]
         public string? MultiStepTemplateName { get; set; }
         
         // Concurrency token for optimistic locking

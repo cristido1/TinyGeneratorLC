@@ -1,7 +1,9 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
+[Table("stories_status")]
 public sealed class StoryStatus
 {
     public int Id { get; set; }

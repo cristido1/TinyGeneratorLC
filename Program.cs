@@ -192,6 +192,25 @@ Console.WriteLine($"[Startup] About to call builder.Build() at {DateTime.UtcNow:
 var app = builder.Build();
 Console.WriteLine($"[Startup] builder.Build() completed at {DateTime.UtcNow:o}");
 
+// Get logger early for startup operations
+var logger = app.Services.GetService<ILoggerFactory>()?.CreateLogger("Startup");
+
+// Apply EF Core migrations automatically at startup
+try
+{
+    logger?.LogInformation("[Startup] Applying EF Core migrations...");
+    using (var scope = app.Services.CreateScope())
+    {
+        var dbContext = scope.ServiceProvider.GetRequiredService<TinyGenerator.Data.TinyGeneratorDbContext>();
+        dbContext.Database.Migrate();
+        logger?.LogInformation("[Startup] EF Core migrations applied successfully");
+    }
+}
+catch (Exception ex)
+{
+    logger?.LogError(ex, "[Startup] Failed to apply EF Core migrations: {msg}", ex.Message);
+}
+
 // Ensure the global ServiceLocator points to the DI DatabaseService so legacy/static code
 // can route database access through the centralized semaphore-protected helpers.
 // ServiceLocator removed: DatabaseService is now available via DI (IOllamaMonitorService, DatabaseService, etc.)
@@ -201,7 +220,6 @@ Console.WriteLine($"[Startup] builder.Build() completed at {DateTime.UtcNow:o}")
 // singletons/providers during build time). This helps reduce perceived startup time.
 // Perform database initialization via helper
 var dbInit = app.Services.GetService<TinyGenerator.Services.DatabaseService>();
-var logger = app.Services.GetService<ILoggerFactory>()?.CreateLogger("Startup");
 StartupTasks.InitializeDatabaseIfNeeded(dbInit, logger);
 
 // Startup model actions

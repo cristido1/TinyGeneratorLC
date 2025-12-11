@@ -1,7 +1,9 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
+[Table("test_definitions")]
 public sealed class TestDefinition
 {
     public int Id { get; set; }

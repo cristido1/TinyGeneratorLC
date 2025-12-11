@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
@@ -23,9 +24,16 @@ namespace TinyGenerator.Models
         public string UpdatedAt { get; set; } = DateTime.UtcNow.ToString("o");
 
         // Non-persistent properties
+        [NotMapped]
         public List<TaskExecutionStep> Steps { get; set; } = new List<TaskExecutionStep>();
+        
+        [NotMapped]
         public TaskTypeInfo? TypeInfo { get; set; }
+        
+        [NotMapped]
         public string? ExecutorAgentName { get; set; }
+        
+        [NotMapped]
         public string? CheckerAgentName { get; set; }
     }
 
@@ -42,6 +50,7 @@ namespace TinyGenerator.Models
         public string? CompletedAt { get; set; }
 
         // Non-persistent property - deserialize from ValidationResultJson
+        [NotMapped]
         public ValidationResult? ParsedValidation
         {
             get
@@ -82,8 +91,10 @@ namespace TinyGenerator.Models
         public string? SystemMessageOverride { get; set; }
     }
 
+    [Table("task_types")]
     public class TaskTypeInfo
     {
+        [Column("id")]
         public long Id { get; set; }
         public string Code { get; set; } = string.Empty;
         public string? Description { get; set; }
@@ -93,6 +104,7 @@ namespace TinyGenerator.Models
         public string? ValidationCriteria { get; set; }
 
         // Non-persistent property - deserialize from ValidationCriteria JSON
+        [NotMapped]
         public Dictionary<string, object>? ParsedValidationCriteria
         {
             get
@@ -114,8 +126,10 @@ namespace TinyGenerator.Models
         public byte[]? RowVersion { get; set; }
     }
 
+    [Table("step_templates")]
     public class StepTemplate
     {
+        [Column("id")]
         public long Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public string TaskType { get; set; } = string.Empty;

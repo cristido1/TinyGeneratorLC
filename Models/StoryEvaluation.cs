@@ -1,8 +1,10 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
+    [Table("evaluations")]
     public class StoryEvaluation
     {
         public long Id { get; set; }
@@ -22,6 +24,7 @@ namespace TinyGenerator.Models
 
         public double TotalScore { get; set; }
         // Backwards-compatible property for UI views (summary score)
+        [NotMapped]
         public double Score { get => TotalScore; set => TotalScore = value; }
         public string Model { get; set; } = string.Empty;
         public string RawJson { get; set; } = string.Empty;

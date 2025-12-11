@@ -1,8 +1,10 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
+    [Table("tts_voices")]
     public class TtsVoice
     {
         public int Id { get; set; }

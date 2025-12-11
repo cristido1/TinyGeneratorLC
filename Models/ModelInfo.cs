@@ -1,8 +1,10 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
+[Table("models")]
 public class ModelInfo
 {
     public int? Id { get; set; }
@@ -56,6 +58,13 @@ public class ModelInfo
 
     // Flexible per-group maps for dynamic UI (group name -> score / json)
     // Populated at page render time by the PageModel.
+    [NotMapped]
     public System.Collections.Generic.Dictionary<string, int?>? LastGroupScores { get; set; }
+    
+    [NotMapped]
     public System.Collections.Generic.Dictionary<string, string?>? LastGroupResultsJson { get; set; }
+    
+    // Concurrency token for optimistic locking
+    [Timestamp]
+    public byte[]? RowVersion { get; set; }
 }

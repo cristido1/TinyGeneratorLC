@@ -1,8 +1,10 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
+    [Table("Log")]
     public class LogEntry
     {
         public long? Id { get; set; }
@@ -10,6 +12,7 @@ namespace TinyGenerator.Models
         public string Ts { get; set; } = string.Empty; // ISO 8601 with millis
 
         // Exposed convenience property used by the UI
+        [NotMapped]
         public DateTime Timestamp
         {
             get
@@ -26,6 +29,8 @@ namespace TinyGenerator.Models
         public string Level { get; set; } = string.Empty;
         // Category/source of the log (alias Source for UI)
         public string Category { get; set; } = string.Empty;
+        
+        [NotMapped]
         public string Source
         {
             get => Category;

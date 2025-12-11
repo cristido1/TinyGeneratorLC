@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
+    [Table("stories")]
     public class StoryRecord
     {
         public long Id { get; set; }
@@ -34,16 +36,21 @@ namespace TinyGenerator.Models
         public int? TestStepId { get; set; }
 
         // Evaluations attached to the story (one for each saved evaluation)
+        [NotMapped]
         public List<StoryEvaluation> Evaluations { get; set; } = new List<StoryEvaluation>();
         
         // Legacy properties for backward compatibility (mapped to Story field)
         [Obsolete("Use Story property instead")]
+        [NotMapped]
         public string StoryA { get => Story; set => Story = value; }
         [Obsolete("Use Model property instead")]
+        [NotMapped]
         public string ModelA { get => Model; set => Model = value; }
         [Obsolete("Use Eval property instead")]
+        [NotMapped]
         public string EvalA { get => Eval; set => Eval = value; }
         [Obsolete("Use Score property instead")]
+        [NotMapped]
         public double ScoreA { get => Score; set => Score = value; }
         
         // Concurrency token for optimistic locking

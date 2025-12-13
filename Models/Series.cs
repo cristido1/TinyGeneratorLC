@@ -1,0 +1,86 @@
+using System;
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace TinyGenerator.Models;
+
+/// <summary>
+/// Serie TV / Racconti: struttura separata tra campi di filtraggio/catalogo e campi per generazione episodi.
+/// Personaggi ed eventi specifici NON vanno qui ma negli Episodi.
+/// </summary>
+[Table("series")]
+public sealed class Series
+{
+    // ==========================================
+    // CAMPI DI FILTRAGGIO / CATALOGO
+    // ==========================================
+    
+    [Column("id")]
+    [Key]
+    public int Id { get; set; }
+    
+    [Column("titolo")]
+    [Required]
+    [MaxLength(200)]
+    public string Titolo { get; set; } = string.Empty;
+    
+    [Column("genere")]
+    [MaxLength(100)]
+    public string? Genere { get; set; }
+    
+    [Column("sottogenere")]
+    [MaxLength(100)]
+    public string? Sottogenere { get; set; }
+    
+    [Column("periodo_narrativo")]
+    [MaxLength(100)]
+    public string? PeriodoNarrativo { get; set; }
+    
+    [Column("tono_base")]
+    [MaxLength(100)]
+    public string? TonoBase { get; set; }
+    
+    [Column("target")]
+    [MaxLength(50)]
+    public string? Target { get; set; }
+    
+    [Column("lingua")]
+    [MaxLength(50)]
+    public string? Lingua { get; set; } = "Italiano";
+    
+    // ==========================================
+    // CAMPI PER GENERAZIONE EPISODI (PROMPT WRITER)
+    // ==========================================
+    
+    [Column("ambientazione_base")]
+    public string? AmbientazioneBase { get; set; }
+    
+    [Column("premessa_serie")]
+    public string? PremessaSerie { get; set; }
+    
+    [Column("arco_narrativo_serie")]
+    public string? ArcoNarrativoSerie { get; set; }
+    
+    [Column("stile_scrittura")]
+    public string? StileScrittura { get; set; }
+    
+    [Column("regole_narrative")]
+    public string? RegoleNarrative { get; set; }
+    
+    [Column("note_ai")]
+    public string? NoteAI { get; set; }
+    
+    // ==========================================
+    // METADATI
+    // ==========================================
+    
+    [Column("episodi_generati")]
+    public int EpisodiGenerati { get; set; } = 0;
+    
+    [Column("data_inserimento")]
+    public DateTime DataInserimento { get; set; } = DateTime.UtcNow;
+    
+    [Column("timestamp")]
+    [Timestamp]
+    public byte[]? Timestamp { get; set; }
+}

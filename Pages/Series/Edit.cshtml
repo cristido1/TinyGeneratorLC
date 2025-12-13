@@ -1,0 +1,187 @@
+@page
+@model TinyGenerator.Pages.Series.EditModel
+@{
+    ViewData["Title"] = Model.IsEditMode ? "Modifica Serie" : "Crea Serie";
+}
+
+<div class="alert alert-info">
+    <strong>Struttura Serie:</strong> I campi sono divisi in due categorie:
+    <ul class="mb-0 mt-2">
+        <li><strong>Filtraggio/Catalogo:</strong> brevi, per cercare e classificare (Titolo, Genere, Periodo, Tono, Target, Lingua)</li>
+        <li><strong>Generazione Episodi:</strong> testuali e strutturati, passati al writer AI (Ambientazione Base, Premessa, Arco Narrativo, Stile, Regole, Note AI)</li>
+    </ul>
+    <p class="mt-2 mb-0"><em>Personaggi ed eventi specifici vanno negli Episodi, non nella Serie.</em></p>
+</div>
+
+<form method="post">
+    <input type="hidden" asp-for="SeriesItem.Id" />
+    
+    <!-- SEZIONE 1: CAMPI DI FILTRAGGIO / CATALOGO -->
+    <h4 class="mt-4 mb-3 text-primary">📋 Campi di Filtraggio / Catalogo</h4>
+    
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <label asp-for="SeriesItem.Titolo" class="form-label">
+                Titolo <span class="text-danger">*</span>
+                <small class="text-muted">(es. "Frontiera di Cenere", "Il Sale e il Ferro")</small>
+            </label>
+            <input asp-for="SeriesItem.Titolo" class="form-control" maxlength="200" required />
+            <span asp-validation-for="SeriesItem.Titolo" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-4">
+            <label asp-for="SeriesItem.Genere" class="form-label">
+                Genere
+                <small class="text-muted">(es. Fantascienza, Storico, Fantasy)</small>
+            </label>
+            <input asp-for="SeriesItem.Genere" class="form-control" maxlength="100" />
+            <span asp-validation-for="SeriesItem.Genere" class="text-danger"></span>
+        </div>
+        <div class="col-md-4">
+            <label asp-for="SeriesItem.Sottogenere" class="form-label">
+                Sottogenere
+                <small class="text-muted">(es. Militare, Dramma, Space Opera)</small>
+            </label>
+            <input asp-for="SeriesItem.Sottogenere" class="form-control" maxlength="100" />
+            <span asp-validation-for="SeriesItem.Sottogenere" class="text-danger"></span>
+        </div>
+        <div class="col-md-4">
+            <label asp-for="SeriesItem.PeriodoNarrativo" class="form-label">
+                Periodo Narrativo
+                <small class="text-muted">(es. Futuro lontano, Medioevo, Età moderna)</small>
+            </label>
+            <input asp-for="SeriesItem.PeriodoNarrativo" class="form-control" maxlength="100" />
+            <span asp-validation-for="SeriesItem.PeriodoNarrativo" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-4">
+            <label asp-for="SeriesItem.TonoBase" class="form-label">
+                Tono Base
+                <small class="text-muted">(es. Cupo, Realistico, Avventuroso)</small>
+            </label>
+            <input asp-for="SeriesItem.TonoBase" class="form-control" maxlength="100" />
+            <span asp-validation-for="SeriesItem.TonoBase" class="text-danger"></span>
+        </div>
+        <div class="col-md-4">
+            <label asp-for="SeriesItem.Target" class="form-label">
+                Target
+                <small class="text-muted">(es. Adulto, Young Adult)</small>
+            </label>
+            <input asp-for="SeriesItem.Target" class="form-control" maxlength="50" />
+            <span asp-validation-for="SeriesItem.Target" class="text-danger"></span>
+        </div>
+        <div class="col-md-4">
+            <label asp-for="SeriesItem.Lingua" class="form-label">
+                Lingua
+                <small class="text-muted">(es. Italiano, English)</small>
+            </label>
+            <input asp-for="SeriesItem.Lingua" class="form-control" maxlength="50" value="Italiano" />
+            <span asp-validation-for="SeriesItem.Lingua" class="text-danger"></span>
+        </div>
+    </div>
+
+    <!-- SEZIONE 2: CAMPI PER GENERAZIONE EPISODI -->
+    <h4 class="mt-5 mb-3 text-success">🤖 Campi per Generazione Episodi (Prompt Writer)</h4>
+    <p class="text-muted mb-3">Questi campi vengono passati al writer AI per generare ogni episodio. Devono essere stabili e non cambiare tra episodi.</p>
+
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <label asp-for="SeriesItem.AmbientazioneBase" class="form-label">
+                Ambientazione Base
+                <small class="text-muted d-block">Contiene SOLO elementi stabili del mondo (periodo, tecnologia, società, politica). NON inserire personaggi o eventi specifici.</small>
+            </label>
+            <textarea asp-for="SeriesItem.AmbientazioneBase" class="form-control font-monospace" rows="8" 
+                      placeholder="Esempio:&#10;Periodo: anno 3050&#10;Umanità:&#10;- Civiltà interstellare attiva&#10;- Motore FTL disponibile da circa 100 anni&#10;Tecnologia:&#10;- Viaggi FTL affidabili ma costosi&#10;- Armi avanzate con limiti fisici credibili"></textarea>
+            <span asp-validation-for="SeriesItem.AmbientazioneBase" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <label asp-for="SeriesItem.PremessaSerie" class="form-label">
+                Premessa Serie
+                <small class="text-muted d-block">Il concetto centrale della serie, la sua "filosofia" di base.</small>
+            </label>
+            <textarea asp-for="SeriesItem.PremessaSerie" class="form-control" rows="3"
+                      placeholder="Esempio: L'umanità ha conquistato le stelle ma ha perso l'illusione di essere invincibile. Ogni espansione porta nuovi conflitti e dilemmi morali."></textarea>
+            <span asp-validation-for="SeriesItem.PremessaSerie" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <label asp-for="SeriesItem.ArcoNarrativoSerie" class="form-label">
+                Arco Narrativo Serie
+                <small class="text-muted d-block">La direzione complessiva della storia attraverso tutti gli episodi.</small>
+            </label>
+            <textarea asp-for="SeriesItem.ArcoNarrativoSerie" class="form-control" rows="3"
+                      placeholder="Esempio: Dal periodo di espansione fiduciosa alla scoperta di una minaccia sistemica che mette in crisi la sopravvivenza della civiltà umana."></textarea>
+            <span asp-validation-for="SeriesItem.ArcoNarrativoSerie" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <label asp-for="SeriesItem.StileScrittura" class="form-label">
+                Stile Scrittura
+                <small class="text-muted d-block">Indicazioni su tono narrativo, ritmo, dialoghi, descrizioni.</small>
+            </label>
+            <textarea asp-for="SeriesItem.StileScrittura" class="form-control" rows="3"
+                      placeholder="Esempio: Tecnico ma leggibile, dialoghi asciutti, attenzione alla vita di bordo, niente eroismi gratuiti."></textarea>
+            <span asp-validation-for="SeriesItem.StileScrittura" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <label asp-for="SeriesItem.RegoleNarrative" class="form-label">
+                Regole Narrative
+                <small class="text-muted d-block">Vincoli e limiti per mantenere coerenza (es. "niente tecnologia magica", "ogni decisione ha conseguenze").</small>
+            </label>
+            <textarea asp-for="SeriesItem.RegoleNarrative" class="form-control" rows="4"
+                      placeholder="Esempio:&#10;- Niente tecnologia magica&#10;- Ogni decisione ha conseguenze&#10;- Niente distruzione gratuita di pianeti abitati"></textarea>
+            <span asp-validation-for="SeriesItem.RegoleNarrative" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <label asp-for="SeriesItem.NoteAI" class="form-label">
+                Note AI (Campo Jolly)
+                <small class="text-muted d-block">Istruzioni temporanee o sperimentali per il writer AI.</small>
+            </label>
+            <textarea asp-for="SeriesItem.NoteAI" class="form-control" rows="2"
+                      placeholder="Esempio: Privilegiare tensione psicologica rispetto all'azione continua."></textarea>
+            <span asp-validation-for="SeriesItem.NoteAI" class="text-danger"></span>
+        </div>
+    </div>
+
+    <!-- SEZIONE 3: METADATI -->
+    <h4 class="mt-5 mb-3 text-secondary">📊 Metadati</h4>
+    
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label asp-for="SeriesItem.EpisodiGenerati" class="form-label">Episodi Generati</label>
+            <input asp-for="SeriesItem.EpisodiGenerati" type="number" class="form-control" min="0" />
+            <span asp-validation-for="SeriesItem.EpisodiGenerati" class="text-danger"></span>
+        </div>
+        <div class="col-md-6">
+            <label asp-for="SeriesItem.DataInserimento" class="form-label">Data Inserimento</label>
+            <input asp-for="SeriesItem.DataInserimento" type="datetime-local" class="form-control" />
+            <span asp-validation-for="SeriesItem.DataInserimento" class="text-danger"></span>
+        </div>
+    </div>
+
+    <div class="mb-3">
+        <button type="submit" class="btn btn-primary btn-lg">💾 Salva Serie</button>
+        <a class="btn btn-secondary btn-lg" asp-page="./Index">Annulla</a>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

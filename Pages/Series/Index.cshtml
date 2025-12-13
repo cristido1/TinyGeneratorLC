@@ -1,0 +1,131 @@
+@page
+@model TinyGenerator.Pages.Series.IndexModel
+@{
+    ViewData["Title"] = "Serie TV / Racconti";
+    ViewData["PageDescription"] = "Gestisci le serie e i racconti generati";
+}
+
+<table id="tabSeries" class="table table-bordered table-sm table-pastel table-compact datatable">
+    <thead>
+        <tr>
+            <th>Titolo</th>
+            <th>Genere</th>
+            @section Scripts {
+                <script>
+                    $(document).ready(function() {
+                        var table = $('#tabSeries').DataTable({
+                            paging: true,
+                            pageLength: 25,
+                            searching: true,
+                            ordering: true,
+                            order: [[6, 'desc']], // Data Inserimento
+                            info: true,
+                            autoWidth: false,
+                            responsive: true,
+                            columnDefs: [
+                                { targets: [7, 8, 9, 10, 11], visible: false, searchable: false }
+                            ],
+                            dom: '<"row mb-2"<"col-sm-12 col-md-6"B><"col-sm-12 col-md-6"f>>rt<"row"<"col-sm-12 col-md-5"i><"col-sm-12 col-md-7"p>>',
+                            buttons: [
+                                {
+                                    text: '<i class="bi bi-plus-circle me-1"></i>Crea Serie',
+                                    className: 'btn btn-success btn-sm',
+                                    action: function (e, dt, node, config) {
+                                        window.location.href = '@Url.Page("./Edit")';
+                                    }
+                                }
+                            ],
+                            language: {
+                                search: "Cerca:",
+                                lengthMenu: "Mostra _MENU_ record",
+                                info: "Mostra da _START_ a _END_ di _TOTAL_ record",
+                                infoEmpty: "Mostra 0 di 0 record",
+                                infoFiltered: "(filtrato da _MAX_ record totali)",
+                                paginate: {
+                                    first: "Primo",
+                                    last: "Ultimo",
+                                    next: "Prossimo",
+                                    previous: "Precedente"
+                                }
+                            }
+                        });
+
+                        // Expand row functionality
+                        $('#tabSeries tbody').on('click', 'button.dt-expand', function() {
+                            var tr = $(this).closest('tr');
+                            var row = table.row(tr);
+                            if (row.child.isShown()) {
+                                row.child.hide();
+                                $(this).text('+');
+                            } else {
+                                var ambientazione = tr.find('td.ambientazione-base').text();
+                                var premessa = tr.find('td.premessa').text();
+                                var arco = tr.find('td.arco').text();
+                                var stile = tr.find('td.stile').text();
+                                var regole = tr.find('td.regole').text();
+                                var details = '<div class="p-3 bg-light border rounded">';
+                                if (ambientazione) details += '<p><strong>Ambientazione Base:</strong><br/><pre style="white-space: pre-wrap; font-size: 0.85em;">' + ambientazione + '</pre></p>';
+                                if (premessa) details += '<p><strong>Premessa Serie:</strong><br/>' + premessa + '</p>';
+                                if (arco) details += '<p><strong>Arco Narrativo:</strong><br/>' + arco + '</p>';
+                                if (stile) details += '<p><strong>Stile Scrittura:</strong><br/>' + stile + '</p>';
+                                if (regole) details += '<p><strong>Regole Narrative:</strong><br/>' + regole + '</p>';
+                                details += '</div>';
+                                row.child(details).show();
+                                $(this).text('-');
+                            }
+                        });
+
+                    });
+                </script>
+            }
+                                    {
+                                        text: '<i class="bi bi-plus-circle me-1"></i>Crea Serie',
+                                        className: 'btn btn-success btn-sm',
+                                        action: function (e, dt, node, config) {
+                                            window.location.href = '@Url.Page("./Edit")';
+                                        }
+                                    }
+                                ],
+                                language: {
+                                    search: "Cerca:",
+                                    lengthMenu: "Mostra _MENU_ record",
+                                    info: "Mostra da _START_ a _END_ di _TOTAL_ record",
+                                    infoEmpty: "Mostra 0 di 0 record",
+                                    infoFiltered: "(filtrato da _MAX_ record totali)",
+                                    paginate: {
+                                        first: "Primo",
+                                        last: "Ultimo",
+                                        next: "Prossimo",
+                                        previous: "Precedente"
+                                    }
+                                }
+                            });
+
+                            // Expand row functionality
+                            $('#tabSeries tbody').on('click', 'button.dt-expand', function() {
+                                var tr = $(this).closest('tr');
+                                var row = table.row(tr);
+                                if (row.child.isShown()) {
+                                    row.child.hide();
+                                    $(this).text('+');
+                                } else {
+                                    var ambientazione = tr.find('td.ambientazione-base').text();
+                                    var premessa = tr.find('td.premessa').text();
+                                    var arco = tr.find('td.arco').text();
+                                    var stile = tr.find('td.stile').text();
+                                    var regole = tr.find('td.regole').text();
+                                    var details = '<div class="p-3 bg-light border rounded">';
+                                    if (ambientazione) details += '<p><strong>Ambientazione Base:</strong><br/><pre style="white-space: pre-wrap; font-size: 0.85em;">' + ambientazione + '</pre></p>';
+                                    if (premessa) details += '<p><strong>Premessa Serie:</strong><br/>' + premessa + '</p>';
+                                    if (arco) details += '<p><strong>Arco Narrativo:</strong><br/>' + arco + '</p>';
+                                    if (stile) details += '<p><strong>Stile Scrittura:</strong><br/>' + stile + '</p>';
+                                    if (regole) details += '<p><strong>Regole Narrative:</strong><br/>' + regole + '</p>';
+                                    details += '</div>';
+                                    row.child(details).show();
+                                    $(this).text('-');
+                                }
+                            });
+
+                        });
+                    </script>
+                }

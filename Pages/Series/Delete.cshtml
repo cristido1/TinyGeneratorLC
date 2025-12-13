@@ -1,0 +1,70 @@
+@page
+@model TinyGenerator.Pages.Series.DeleteModel
+@{
+    ViewData["Title"] = "Elimina Serie";
+}
+
+<h2>@ViewData["Title"]</h2>
+
+<div class="alert alert-warning" role="alert">
+    <strong>Attenzione!</strong> Stai per eliminare questa serie. L'operazione non può essere annullata.
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5>@Model.SeriesItem.Titolo</h5>
+    </div>
+    <div class="card-body">
+        <dl class="row">
+            <dt class="col-sm-3">Genere</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.Genere) ? "-" : Model.SeriesItem.Genere)</dd>
+
+            <dt class="col-sm-3">Sottogenere</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.Sottogenere) ? "-" : Model.SeriesItem.Sottogenere)</dd>
+
+            <dt class="col-sm-3">Periodo Narrativo</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.PeriodoNarrativo) ? "-" : Model.SeriesItem.PeriodoNarrativo)</dd>
+
+            <dt class="col-sm-3">Tono Base</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.TonoBase) ? "-" : Model.SeriesItem.TonoBase)</dd>
+
+            <dt class="col-sm-3">Target</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.Target) ? "-" : Model.SeriesItem.Target)</dd>
+
+            <dt class="col-sm-3">Lingua</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.Lingua) ? "-" : Model.SeriesItem.Lingua)</dd>
+
+            <dt class="col-sm-3">Ambientazione Base</dt>
+            <dd class="col-sm-9"><pre style="white-space: pre-wrap; font-size: 0.85em;">@(string.IsNullOrWhiteSpace(Model.SeriesItem.AmbientazioneBase) ? "-" : Model.SeriesItem.AmbientazioneBase)</pre></dd>
+
+            <dt class="col-sm-3">Premessa Serie</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.PremessaSerie) ? "-" : Model.SeriesItem.PremessaSerie)</dd>
+
+            <dt class="col-sm-3">Arco Narrativo</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.ArcoNarrativoSerie) ? "-" : Model.SeriesItem.ArcoNarrativoSerie)</dd>
+
+            <dt class="col-sm-3">Stile Scrittura</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.StileScrittura) ? "-" : Model.SeriesItem.StileScrittura)</dd>
+
+            <dt class="col-sm-3">Regole Narrative</dt>
+            <dd class="col-sm-9"><pre style="white-space: pre-wrap; font-size: 0.85em;">@(string.IsNullOrWhiteSpace(Model.SeriesItem.RegoleNarrative) ? "-" : Model.SeriesItem.RegoleNarrative)</pre></dd>
+
+            <dt class="col-sm-3">Note AI</dt>
+            <dd class="col-sm-9">@(string.IsNullOrWhiteSpace(Model.SeriesItem.NoteAI) ? "-" : Model.SeriesItem.NoteAI)</dd>
+
+            <dt class="col-sm-3">Episodi Generati</dt>
+            <dd class="col-sm-9">@Model.SeriesItem.EpisodiGenerati</dd>
+
+            <dt class="col-sm-3">Data Inserimento</dt>
+            <dd class="col-sm-9">@Model.SeriesItem.DataInserimento.ToString("dd/MM/yyyy HH:mm")</dd>
+        </dl>
+    </div>
+</div>
+
+<form method="post">
+    <input type="hidden" name="id" value="@Model.SeriesItem.Id" />
+    <div class="mt-3">
+        <button type="submit" class="btn btn-danger">Elimina</button>
+        <a class="btn btn-secondary" asp-page="./Index">Annulla</a>
+    </div>
+</form>

@@ -21,6 +21,7 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<TaskTypeInfo> TaskTypes => Set<TaskTypeInfo>();
     public DbSet<TtsVoice> TtsVoices => Set<TtsVoice>();
     public DbSet<LogEntry> Logs => Set<LogEntry>();
+    public DbSet<Series> Series => Set<Series>();
     // Note: Memory table excluded - using Dapper for embedding queries
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

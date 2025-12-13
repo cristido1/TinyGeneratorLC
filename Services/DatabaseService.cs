@@ -56,12 +56,94 @@ public sealed class DatabaseService
         return scope.ServiceProvider.GetRequiredService<TinyGeneratorDbContext>();
     }
 
+    // NOTE: Dapper is retained only for a small set of low-level operations
+    // (for example embedding storage/lookup) that are not yet modeled with
+    // EF entities. Prefer `CreateDbContext()` and EF Core for all higher-
+    // level data access. Use `CreateDapperConnection()` when a raw SQLite
+    // connection is required.
+    private IDbConnection CreateDapperConnection() => new SqliteConnection(_connectionString);
+
+    // Dapper-only helpers for embedding management
+    /// <summary>
+    /// Save embedding vector for a row into the specified table.
+    /// Embedding is serialized as JSON text into the specified column.
+    /// This is intentionally implemented with Dapper/raw connection for
+    /// performance and small binary/blob handling; keep all other SQL
+    /// access routed through EF Core objects.
+    /// </summary>
+    public void SaveEmbedding(string tableName, string idColumn, long id, string embeddingColumn, float[] embedding)
+    {
+        if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException(nameof(tableName));
+        if (string.IsNullOrWhiteSpace(idColumn)) throw new ArgumentNullException(nameof(idColumn));
+        if (string.IsNullOrWhiteSpace(embeddingColumn)) throw new ArgumentNullException(nameof(embeddingColumn));
+
+        var embJson = JsonSerializer.Serialize(embedding ?? Array.Empty<float>());
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        // Use parameterized update to avoid SQL injection; table/column names are interpolated
+        // but should be controlled by the caller (trusted/internal).
+        var sql = $"UPDATE \"{tableName}\" SET \"{embeddingColumn}\" = @emb WHERE \"{idColumn}\" = @id";
+        conn.Execute(sql, new { emb = embJson, id });
+    }
+
+    /// <summary>
+    /// Find nearest rows by embedding using an in-memory similarity scan.
+    /// Reads the embedding column (assumed JSON array of floats) for all rows
+    /// in the given table and returns the top K nearest by cosine similarity.
+    /// Implemented with Dapper to read raw embedding blobs but performs the
+    /// numeric search in-process (no vector index required).
+    /// </summary>
+    public List<(long Id, double Score)> SearchByEmbedding(string tableName, string idColumn, string embeddingColumn, float[] queryEmbedding, int topK = 10)
+    {
+        if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentNullException(nameof(tableName));
+        if (queryEmbedding == null) throw new ArgumentNullException(nameof(queryEmbedding));
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        var sql = $"SELECT \"{idColumn}\" AS Id, \"{embeddingColumn}\" AS EmbJson FROM \"{tableName}\" WHERE \"{embeddingColumn}\" IS NOT NULL";
+        var rows = conn.Query(sql).ToList();
+
+        var results = new List<(long Id, double Score)>();
+        foreach (var r in rows)
+        {
+            try
+            {
+                long id = Convert.ToInt64(r.Id);
+                string embJson = r.EmbJson as string ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(embJson)) continue;
+                var emb = JsonSerializer.Deserialize<float[]>(embJson);
+                if (emb == null || emb.Length != queryEmbedding.Length) continue;
+                // cosine similarity
+                double dot = 0, nq = 0, ne = 0;
+                for (int i = 0; i < emb.Length; i++)
+                {
+                    dot += emb[i] * queryEmbedding[i];
+                    nq += queryEmbedding[i] * queryEmbedding[i];
+                    ne += emb[i] * emb[i];
+                }
+                if (nq == 0 || ne == 0) continue;
+                var score = dot / (Math.Sqrt(nq) * Math.Sqrt(ne));
+                results.Add((id, score));
+            }
+            catch { /* best-effort: skip malformed rows */ }
+        }
+
+        return results.OrderByDescending(x => x.Score).Take(topK).ToList();
+    }
+
     public void SaveChapter(string memoryKey, int chapterNumber, string content)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = "INSERT INTO chapters(memory_key, chapter_number, content, ts) VALUES(@mk, @cn, @c, @ts);";
-        conn.Execute(sql, new { mk = memoryKey ?? string.Empty, cn = chapterNumber, c = content ?? string.Empty, ts = DateTime.UtcNow.ToString("o") });
+        using var context = CreateDbContext();
+        var ch = new Chapter
+        {
+            MemoryKey = memoryKey ?? string.Empty,
+            ChapterNumber = chapterNumber,
+            Content = content ?? string.Empty,
+            Ts = DateTime.UtcNow.ToString("o")
+        };
+        context.Chapters.Add(ch);
+        context.SaveChanges();
     }
 
     // Public method to initialize schema and run migrations - call after
@@ -197,11 +279,21 @@ public sealed class DatabaseService
 
     public List<ModelInfo> ListModels()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var cols = SelectModelColumns();
-        var sql = $"SELECT {cols} FROM models";
-        return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
+        // Use EF Core to list models (preferable to raw SQL/Dapper)
+        using var context = CreateDbContext();
+        try
+        {
+            return context.Models.AsNoTracking().OrderBy(m => m.Name).ToList();
+        }
+        catch (Exception)
+        {
+            // Fallback to Dapper in case EF cannot read (legacy DB schema)
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var cols = SelectModelColumns();
+            var sql = $"SELECT {cols} FROM models";
+            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
+        }
     }
 
     /// <summary>
@@ -209,19 +301,12 @@ public sealed class DatabaseService
     /// </summary>
     public (int runId, string testCode, bool passed, long? durationMs, string? runDate)? GetLatestTestRunSummaryById(int modelId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
         try
         {
-            var sql = @"SELECT id AS RunId, test_group AS TestCode, passed AS Passed, duration_ms AS DurationMs, run_date AS RunDate FROM model_test_runs WHERE model_id = @mid ORDER BY id DESC LIMIT 1";
-            var row = conn.QueryFirstOrDefault(sql, new { mid = modelId });
-            if (row == null) return null;
-            int runId = (int)row.RunId;
-            string testCode = row.TestCode ?? string.Empty;
-            bool passed = Convert.ToInt32(row.Passed) != 0;
-            long? duration = row.DurationMs == null ? (long?)null : Convert.ToInt64(row.DurationMs);
-            string? runDate = row.RunDate;
-            return (runId, testCode, passed, duration, runDate);
+            using var context = CreateDbContext();
+            var run = context.ModelTestRuns.Where(r => r.ModelId == modelId).OrderByDescending(r => r.Id).FirstOrDefault();
+            if (run == null) return null;
+            return (run.Id, run.TestGroup ?? string.Empty, run.Passed, run.DurationMs, run.RunDate);
         }
         catch
         {
@@ -234,22 +319,15 @@ public sealed class DatabaseService
     /// </summary>
     public (int runId, string testCode, bool passed, long? durationMs, string? runDate)? GetLatestTestRunSummary(string modelName)
     {
-        using var conn = CreateConnection();
-        conn.Open();
         try
         {
-            // Resolve model id from name and query by model_id (model_name column was removed)
-            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
-            if (!modelId.HasValue) return null;
-            var sql = @"SELECT id AS RunId, test_group AS TestCode, passed AS Passed, duration_ms AS DurationMs, run_date AS RunDate FROM model_test_runs WHERE model_id = @mid ORDER BY id DESC LIMIT 1";
-            var row = conn.QueryFirstOrDefault(sql, new { mid = modelId.Value });
-            if (row == null) return null;
-            int runId = (int)row.RunId;
-            string testCode = row.TestCode ?? string.Empty;
-            bool passed = Convert.ToInt32(row.Passed) != 0;
-            long? duration = row.DurationMs == null ? (long?)null : Convert.ToInt64(row.DurationMs);
-            string? runDate = row.RunDate;
-            return (runId, testCode, passed, duration, runDate);
+            using var context = CreateDbContext();
+            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+            if (model == null || !model.Id.HasValue) return null;
+            var modelId = model.Id.Value;
+            var run = context.ModelTestRuns.Where(r => r.ModelId == modelId).OrderByDescending(r => r.Id).FirstOrDefault();
+            if (run == null) return null;
+            return (run.Id, run.TestGroup ?? string.Empty, run.Passed, run.DurationMs, run.RunDate);
         }
         catch
         {
@@ -262,15 +340,11 @@ public sealed class DatabaseService
     /// </summary>
     public long? GetGroupTestDurationById(int modelId, string groupName)
     {
-        using var conn = CreateConnection();
-        conn.Open();
         try
         {
-            var sql = @"SELECT duration_ms FROM model_test_runs 
-                        WHERE model_id = @mid AND test_group = @group 
-                        ORDER BY id DESC LIMIT 1";
-            var duration = conn.ExecuteScalar<long?>(sql, new { mid = modelId, group = groupName });
-            return duration;
+            using var context = CreateDbContext();
+            var run = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == groupName).OrderByDescending(r => r.Id).FirstOrDefault();
+            return run?.DurationMs;
         }
         catch
         {
@@ -283,18 +357,14 @@ public sealed class DatabaseService
     /// </summary>
     public long? GetGroupTestDuration(string modelName, string groupName)
     {
-        using var conn = CreateConnection();
-        conn.Open();
         try
         {
-            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
-            if (!modelId.HasValue) return null;
-            
-            var sql = @"SELECT duration_ms FROM model_test_runs 
-                        WHERE model_id = @mid AND test_group = @group 
-                        ORDER BY id DESC LIMIT 1";
-            var duration = conn.ExecuteScalar<long?>(sql, new { mid = modelId.Value, group = groupName });
-            return duration;
+            using var context = CreateDbContext();
+            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+            if (model == null || !model.Id.HasValue) return null;
+            var modelId = model.Id.Value;
+            var run = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == groupName).OrderByDescending(r => r.Id).FirstOrDefault();
+            return run?.DurationMs;
         }
         catch
         {
@@ -370,14 +440,16 @@ public sealed class DatabaseService
             var model = context.Models.FirstOrDefault(m => m.Name == name);
             if (model != null)
             {
-                // Note: model_test_runs deletion handled via Dapper for now
-                using var conn = CreateConnection();
-                conn.Open();
+                // Delete related model_test_runs via EF
                 if (model.Id.HasValue)
                 {
-                    conn.Execute("DELETE FROM model_test_runs WHERE model_id = @id", new { id = model.Id.Value });
+                    var runs = context.ModelTestRuns.Where(r => r.ModelId == model.Id.Value).ToList();
+                    if (runs.Any())
+                    {
+                        context.ModelTestRuns.RemoveRange(runs);
+                    }
                 }
-                
+
                 context.Models.Remove(model);
                 context.SaveChanges();
             }
@@ -387,28 +459,35 @@ public sealed class DatabaseService
 
     public bool TryReserveUsage(string monthKey, long tokensToAdd, double costToAdd, long maxTokensPerRun, double maxCostPerMonth)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        EnsureUsageRow(conn, monthKey);
+        using var context = CreateDbContext();
+        EnsureUsageRow(context, monthKey);
 
-        var row = conn.QueryFirstOrDefault<(long tokensThisRun, long tokensThisMonth, double costThisMonth)>("SELECT tokens_this_run AS tokensThisRun, tokens_this_month AS tokensThisMonth, cost_this_month AS costThisMonth FROM usage_state WHERE month = @m", new { m = monthKey });
-        var tokensThisRun = row.tokensThisRun;
-        var tokensThisMonth = row.tokensThisMonth;
-        var costThisMonth = row.costThisMonth;
+        var state = context.UsageStates.FirstOrDefault(u => u.Month == monthKey);
+        if (state == null) return false;
+        var tokensThisRun = state.TokensThisRun;
+        var tokensThisMonth = state.TokensThisMonth;
+        var costThisMonth = state.CostThisMonth;
 
         if (tokensThisRun + tokensToAdd > maxTokensPerRun) return false;
         if (costThisMonth + costToAdd > maxCostPerMonth) return false;
 
-        conn.Execute("UPDATE usage_state SET tokens_this_run = tokens_this_run + @tokens, tokens_this_month = tokens_this_month + @tokens, cost_this_month = cost_this_month + @cost WHERE month = @m", new { tokens = tokensToAdd, cost = costToAdd, m = monthKey });
+        state.TokensThisRun += tokensToAdd;
+        state.TokensThisMonth += tokensToAdd;
+        state.CostThisMonth += costToAdd;
+        context.SaveChanges();
         return true;
     }
 
     public void ResetRunCounters(string monthKey)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        EnsureUsageRow(conn, monthKey);
-        conn.Execute("UPDATE usage_state SET tokens_this_run = 0 WHERE month = @m", new { m = monthKey });
+        using var context = CreateDbContext();
+        EnsureUsageRow(context, monthKey);
+        var state = context.UsageStates.FirstOrDefault(u => u.Month == monthKey);
+        if (state != null)
+        {
+            state.TokensThisRun = 0;
+            context.SaveChanges();
+        }
     }
 
     /// <summary>
@@ -481,11 +560,11 @@ public sealed class DatabaseService
 
     public (long tokensThisMonth, double costThisMonth) GetMonthUsage(string monthKey)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        EnsureUsageRow(conn, monthKey);
-        var row = conn.QueryFirstOrDefault<(long tokensThisMonth, double costThisMonth)>("SELECT tokens_this_month AS tokensThisMonth, cost_this_month AS costThisMonth FROM usage_state WHERE month = @m", new { m = monthKey });
-        return row;
+        using var context = CreateDbContext();
+        EnsureUsageRow(context, monthKey);
+        var row = context.UsageStates.FirstOrDefault(u => u.Month == monthKey);
+        if (row == null) return (0L, 0.0);
+        return (row.TokensThisMonth, row.CostThisMonth);
     }
 
     // calls table and CallRecord model removed; call tracking disabled.
@@ -561,44 +640,29 @@ public sealed class DatabaseService
     public void UpdateModelTestResults(string modelName, int functionCallingScore, IReadOnlyDictionary<string, bool?> skillFlags, double? testDurationSeconds = null)
     {
         if (string.IsNullOrWhiteSpace(modelName)) return;
-        using var conn = CreateConnection();
-        conn.Open();
-
-        // Update only core model metadata in the models table. Skill* and Last* columns have been removed.
-        var setList = new List<string> { "FunctionCallingScore = @FunctionCallingScore", "UpdatedAt = @UpdatedAt" };
-        var parameters = new DynamicParameters();
-        parameters.Add("FunctionCallingScore", functionCallingScore);
-        parameters.Add("UpdatedAt", DateTime.UtcNow.ToString("o"));
-        if (testDurationSeconds.HasValue)
+        using var context = CreateDbContext();
+        var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+        if (model == null) return;
+        model.FunctionCallingScore = functionCallingScore;
+        model.UpdatedAt = DateTime.UtcNow.ToString("o");
+        if (testDurationSeconds.HasValue) model.TestDurationSeconds = testDurationSeconds;
+        if (skillFlags != null && skillFlags.TryGetValue("__NoToolsMarker", out var noTools) && noTools.HasValue)
         {
-            setList.Add("TestDurationSeconds = @TestDurationSeconds");
-            parameters.Add("TestDurationSeconds", testDurationSeconds.Value);
+            model.NoTools = noTools.Value;
         }
-        // Allow callers to optionally mark a model as not supporting tools
-        // (backwards-compatible: method overload accepts parameter noTools if provided via DynamicParameters)
-        if (skillFlags != null && skillFlags.TryGetValue("__NoToolsMarker", out var nt) && nt.HasValue)
-        {
-            setList.Add("NoTools = @NoTools");
-            parameters.Add("NoTools", nt.Value ? 1 : 0);
-        }
-        parameters.Add("Name", modelName);
-        var sql = $"UPDATE models SET {string.Join(", ", setList)} WHERE Name = @Name";
-        conn.Execute(sql, parameters);
+        context.SaveChanges();
     }
 
     public void UpdateModelTtsScore(string modelName, double score)
     {
         if (string.IsNullOrWhiteSpace(modelName)) return;
-        using var conn = CreateConnection();
-        conn.Open();
-        var now = DateTime.UtcNow.ToString("o");
-        var sql = @"
-UPDATE models
-SET TtsScore = @Score,
-    TotalScore = WriterScore + BaseScore + TextEvalScore + @Score + MusicScore + FxScore + AmbientScore,
-    UpdatedAt = @UpdatedAt
-WHERE Name = @Name";
-        conn.Execute(sql, new { Score = score, UpdatedAt = now, Name = modelName });
+        using var context = CreateDbContext();
+        var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+        if (model == null) return;
+        model.TtsScore = score;
+        model.TotalScore = model.WriterScore + model.BaseScore + model.TextEvalScore + score + model.MusicScore + model.FxScore + model.AmbientScore;
+        model.UpdatedAt = DateTime.UtcNow.ToString("o");
+        context.SaveChanges();
     }
 
     /// <summary>
@@ -606,30 +670,42 @@ WHERE Name = @Name";
     /// </summary>
     public List<string> GetTestGroups()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        // Prefer test_prompts table if present (newer schema), otherwise fall back to test_definitions
+        using var context = CreateDbContext();
         try
         {
-            using var check = conn.CreateCommand();
-            check.CommandText = "PRAGMA table_info('test_prompts');";
-            using var rdr = check.ExecuteReader();
-            if (rdr.Read())
+            // Prefer test_prompts if present (DB may not have migrated table)
+            try
             {
-                var sql = "SELECT DISTINCT group_name FROM test_prompts WHERE active = 1 ORDER BY group_name";
-                return conn.Query<string>(sql).ToList();
+                if (context.TestPrompts.Any())
+                {
+                    return context.TestPrompts.Where(t => t.Active).Select(t => t.GroupName ?? string.Empty).Distinct().OrderBy(x => x).ToList();
+                }
             }
-        }
-        catch { }
+            catch { /* table might not exist yet */ }
 
-        try
-        {
-            var sql = "SELECT DISTINCT test_group FROM test_definitions WHERE active = 1 ORDER BY test_group";
-            return conn.Query<string>(sql).ToList();
+            return context.TestDefinitions.Where(t => t.Active).Select(t => t.GroupName ?? string.Empty).Distinct().OrderBy(x => x).ToList();
         }
         catch
         {
             return new List<string>();
+        }
+    }
+
+    private static void EnsureUsageRow(TinyGeneratorDbContext context, string monthKey)
+    {
+        if (context == null) return;
+        try
+        {
+            var exists = context.UsageStates.Any(u => u.Month == monthKey);
+            if (!exists)
+            {
+                context.UsageStates.Add(new UsageState { Month = monthKey, TokensThisRun = 0, TokensThisMonth = 0, CostThisMonth = 0 });
+                context.SaveChanges();
+            }
+        }
+        catch
+        {
+            // best-effort
         }
     }
 
@@ -638,12 +714,8 @@ WHERE Name = @Name";
     /// </summary>
     public List<TestDefinition> GetTestsByGroup(string groupName)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-
-        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, temperature AS Temperature, top_p AS TopP
-            FROM test_definitions WHERE test_group = @g AND active = 1 ORDER BY priority, id";
-        return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
+        using var context = CreateDbContext();
+        return context.TestDefinitions.Where(t => t.GroupName == groupName && t.Active).OrderBy(t => t.Priority).ThenBy(t => t.Id).ToList();
     }
 
     /// <summary>
@@ -652,24 +724,28 @@ WHERE Name = @Name";
     /// </summary>
     public List<TestDefinition> GetPromptsByGroup(string groupName)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         try
         {
-            using var check = conn.CreateCommand();
-            check.CommandText = "PRAGMA table_info('test_prompts');";
-            using var rdr = check.ExecuteReader();
-            if (rdr.Read())
+            try
             {
-                var sql = @"SELECT id AS Id, group_name AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, json_response_format AS JsonResponseFormat, active AS Active
-FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
-                return conn.Query<TestDefinition>(sql, new { g = groupName }).ToList();
+                if (context.TestPrompts.Any())
+                {
+                    return context.TestPrompts.Where(p => p.GroupName == groupName && p.Active)
+                        .OrderBy(p => p.Priority)
+                        .Select(p => new TestDefinition { Id = p.Id, GroupName = p.GroupName, Library = p.Library, Prompt = p.Prompt, Priority = p.Priority, Active = p.Active })
+                        .ToList();
+                }
             }
-        }
-        catch { }
+            catch { }
 
-        // fallback to legacy table
-        return GetTestsByGroup(groupName);
+            // fallback to legacy table
+            return GetTestsByGroup(groupName);
+        }
+        catch
+        {
+            return new List<TestDefinition>();
+        }
     }
 
     /// <summary>
@@ -677,69 +753,66 @@ FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
     /// </summary>
     public List<TestDefinition> ListAllTestDefinitions(string? search = null, string? sortBy = null, bool ascending = true)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
+        IQueryable<TestDefinition> query = context.TestDefinitions.Where(t => t.Active);
 
-        var where = new List<string> { "active = 1" };
-        var parameters = new DynamicParameters();
         if (!string.IsNullOrWhiteSpace(search))
         {
-            where.Add("(test_group LIKE @q OR library LIKE @q OR function_name LIKE @q OR prompt LIKE @q)");
-            parameters.Add("q", "%" + search + "%");
+            var q = search.ToLower();
+            query = query.Where(t => 
+                (t.GroupName != null && t.GroupName.ToLower().Contains(q)) ||
+                (t.Library != null && t.Library.ToLower().Contains(q)) ||
+                (t.FunctionName != null && t.FunctionName.ToLower().Contains(q)) ||
+                (t.Prompt != null && t.Prompt.ToLower().Contains(q)));
         }
 
-        var order = "id ASC";
-        if (!string.IsNullOrWhiteSpace(sortBy))
+        // Sort
+        var col = (sortBy ?? "id").ToLowerInvariant();
+        query = col switch
         {
-            // Whitelist allowed sort columns
-            var col = sortBy.ToLowerInvariant();
-            if (col == "group" || col == "groupname") col = "test_group";
-            else if (col == "library") col = "library";
-            else if (col == "function" || col == "functionname") col = "function_name";
-            else if (col == "priority") col = "priority";
-            else col = "id";
-            order = col + (ascending ? " ASC" : " DESC");
-        }
+            "group" or "groupname" => ascending ? query.OrderBy(t => t.GroupName) : query.OrderByDescending(t => t.GroupName),
+            "library" => ascending ? query.OrderBy(t => t.Library) : query.OrderByDescending(t => t.Library),
+            "function" or "functionname" => ascending ? query.OrderBy(t => t.FunctionName) : query.OrderByDescending(t => t.FunctionName),
+            "priority" => ascending ? query.OrderBy(t => t.Priority) : query.OrderByDescending(t => t.Priority),
+            _ => ascending ? query.OrderBy(t => t.Id) : query.OrderByDescending(t => t.Id)
+        };
 
-        var sql = $@"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, temperature AS Temperature, top_p AS TopP, active AS Active
-    FROM test_definitions WHERE {string.Join(" AND ", where)} ORDER BY {order}";
-
-        return conn.Query<TestDefinition>(sql, parameters).ToList();
+        return query.ToList();
     }
 
     public TestDefinition? GetTestDefinitionById(int id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, test_group AS GroupName, library AS Library, function_name AS FunctionName, expected_behavior AS ExpectedBehavior, expected_asset AS ExpectedAsset, prompt AS Prompt, timeout_secs AS TimeoutSecs, priority AS Priority, valid_score_range AS ValidScoreRange, test_type AS TestType, expected_prompt_value AS ExpectedPromptValue, allowed_plugins AS AllowedPlugins, execution_plan AS ExecutionPlan, json_response_format AS JsonResponseFormat, files_to_copy AS FilesToCopy, temperature AS Temperature, top_p AS TopP, active AS Active
-    FROM test_definitions WHERE id = @id LIMIT 1";
-        return conn.QueryFirstOrDefault<TestDefinition>(sql, new { id });
+        using var context = CreateDbContext();
+        return context.TestDefinitions.FirstOrDefault(t => t.Id == id);
     }
 
     public int InsertTestDefinition(TestDefinition td)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"INSERT INTO test_definitions(test_group, library, function_name, expected_behavior, expected_asset, prompt, timeout_secs, priority, valid_score_range, test_type, expected_prompt_value, allowed_plugins, execution_plan, json_response_format, files_to_copy, temperature, top_p, active)
-    VALUES(@GroupName,@Library,@FunctionName,@ExpectedBehavior,@ExpectedAsset,@Prompt,@TimeoutSecs,@Priority,@ValidScoreRange,@TestType,@ExpectedPromptValue,@AllowedPlugins,@ExecutionPlan,@JsonResponseFormat,@FilesToCopy,@Temperature,@TopP,@Active); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, td);
-        return (int)id;
+        using var context = CreateDbContext();
+        context.TestDefinitions.Add(td);
+        context.SaveChanges();
+        return td.Id;
     }
 
     public void UpdateTestDefinition(TestDefinition td)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"UPDATE test_definitions SET test_group=@GroupName, library=@Library, function_name=@FunctionName, expected_behavior=@ExpectedBehavior, expected_asset=@ExpectedAsset, prompt=@Prompt, timeout_secs=@TimeoutSecs, priority=@Priority, valid_score_range=@ValidScoreRange, test_type=@TestType, expected_prompt_value=@ExpectedPromptValue, allowed_plugins=@AllowedPlugins, execution_plan=@ExecutionPlan, json_response_format=@JsonResponseFormat, files_to_copy=@FilesToCopy, temperature=@Temperature, top_p=@TopP, active=@Active WHERE id = @Id";
-        conn.Execute(sql, td);
+        using var context = CreateDbContext();
+        var existing = context.TestDefinitions.Find(td.Id);
+        if (existing == null) return;
+        context.Entry(existing).CurrentValues.SetValues(td);
+        context.SaveChanges();
     }
 
     public void DeleteTestDefinition(int id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        // Soft delete: mark active = 0
-        conn.Execute("UPDATE test_definitions SET active = 0 WHERE id = @id", new { id });
+        using var context = CreateDbContext();
+        var td = context.TestDefinitions.Find(id);
+        if (td != null)
+        {
+            // Soft delete: mark active = 0
+            td.Active = false;
+            context.SaveChanges();
+        }
     }
 
     /// <summary>
@@ -747,10 +820,9 @@ FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
     /// </summary>
     public (int passed, int total) GetRunStepCounts(int runId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var total = conn.ExecuteScalar<int>("SELECT COUNT(*) FROM model_test_steps WHERE run_id = @r", new { r = runId });
-        var passed = conn.ExecuteScalar<int>("SELECT COUNT(*) FROM model_test_steps WHERE run_id = @r AND passed = 1", new { r = runId });
+        using var context = CreateDbContext();
+        var total = context.ModelTestSteps.Count(s => s.RunId == runId);
+        var passed = context.ModelTestSteps.Count(s => s.RunId == runId && s.Passed);
         return (passed, total);
     }
 
@@ -760,15 +832,15 @@ FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
     /// </summary>
     public int? GetLatestGroupScore(string modelName, string groupName)
     {
-        using var conn = CreateConnection();
-        conn.Open();
         try
         {
-            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
-            if (!modelId.HasValue) return null;
-            var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = groupName });
-            if (!runId.HasValue) return null;
-            var counts = GetRunStepCounts(runId.Value);
+            using var context = CreateDbContext();
+            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+            if (model == null || !model.Id.HasValue) return null;
+            var modelId = model.Id.Value;
+            var run = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == groupName).OrderByDescending(r => r.Id).FirstOrDefault();
+            if (run == null) return null;
+            var counts = GetRunStepCounts(run.Id);
             if (counts.total == 0) return 0;
             var score = (int)Math.Round((double)counts.passed / counts.total * 10);
             return score;
@@ -786,33 +858,31 @@ FROM test_prompts WHERE group_name = @g AND active = 1 ORDER BY priority, id";
     /// </summary>
     public string? GetLatestRunStepsJson(string modelName, string groupName)
     {
-        using var conn = CreateConnection();
-        conn.Open();
         try
         {
-            var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
-            if (!modelId.HasValue) return null;
-            var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = groupName });
-            if (!runId.HasValue) return null;
+            using var context = CreateDbContext();
+            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+            if (model == null || !model.Id.HasValue) return null;
+            var modelId = model.Id.Value;
+            var run = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == groupName).OrderByDescending(r => r.Id).FirstOrDefault();
+            if (run == null) return null;
 
-            var rows = conn.Query(@"SELECT step_number AS StepNumber, step_name AS StepName, passed AS Passed, input_json AS InputJson, output_json AS OutputJson, error AS Error, duration_ms AS DurationMs
-FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.Value });
+            var rows = context.ModelTestSteps.Where(s => s.RunId == run.Id).OrderBy(s => s.StepNumber).ToList();
 
             var list = new List<object>();
             foreach (var r in rows)
             {
-                bool passed = Convert.ToInt32(r.Passed) != 0;
+                bool passed = r.Passed;
                 string stepName = r.StepName ?? string.Empty;
                 string? inputJson = r.InputJson;
                 string? outputJson = r.OutputJson;
                 string? error = r.Error;
-                long? dur = r.DurationMs == null ? (long?)null : Convert.ToInt64(r.DurationMs);
+                long? dur = r.DurationMs;
                 object? inputElem = null;
                 try { if (!string.IsNullOrWhiteSpace(inputJson)) inputElem = System.Text.Json.JsonDocument.Parse(inputJson).RootElement; } catch { inputElem = inputJson; }
                 list.Add(new { name = stepName, ok = passed, message = !string.IsNullOrWhiteSpace(error) ? error : (object?)null, durationMs = dur, input = inputElem, output = !string.IsNullOrWhiteSpace(outputJson) ? System.Text.Json.JsonDocument.Parse(outputJson).RootElement : (System.Text.Json.JsonElement?)null });
             }
 
-            // Serialize with System.Text.Json; if any element contains a JsonElement as 'output' it's fine.
             var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = false };
             return System.Text.Json.JsonSerializer.Serialize(list, opts);
         }
@@ -828,30 +898,40 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
     /// </summary>
     public int CreateTestRun(string modelName, string testCode, string? description = null, bool passed = false, long? durationMs = null, string? notes = null, string? testFolder = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        
-        // Clean old test runs for this model+group BEFORE creating new one
-        // Keep only the most recent run, delete older ones
-        // Note: Stories are preserved via story_id in model_test_assets (not CASCADE deleted)
-        var cleanupSql = @"
-            DELETE FROM model_test_runs 
-            WHERE model_id = (SELECT Id FROM models WHERE Name = @model_name LIMIT 1)
-              AND test_group = @test_group
-              AND id NOT IN (
-                  SELECT id FROM model_test_runs
-                  WHERE model_id = (SELECT Id FROM models WHERE Name = @model_name LIMIT 1)
-                    AND test_group = @test_group
-                  ORDER BY run_date DESC
-                  LIMIT 1
-              )";
-        
-        conn.Execute(cleanupSql, new { model_name = modelName, test_group = testCode });
-        
-        // Insert new run
-        var sql = @"INSERT INTO model_test_runs(model_id, test_group, description, passed, duration_ms, notes, test_folder) VALUES((SELECT Id FROM models WHERE Name = @model_name LIMIT 1), @test_group, @description, @passed, @duration_ms, @notes, @test_folder); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, new { model_name = modelName, test_group = testCode, description, passed = passed ? 1 : 0, duration_ms = durationMs, notes, test_folder = testFolder });
-        return (int)id;
+        using var context = CreateDbContext();
+
+        // Resolve model
+        var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+        if (model == null || !model.Id.HasValue) return 0;
+        var modelId = model.Id.Value;
+
+        // Cleanup older runs for this model+group, keep only the most recent one
+        var runs = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == testCode).OrderByDescending(r => r.Id).ToList();
+        if (runs.Count > 1)
+        {
+            var toDelete = runs.Skip(1).ToList();
+            if (toDelete.Any())
+            {
+                context.ModelTestRuns.RemoveRange(toDelete);
+                context.SaveChanges();
+            }
+        }
+
+        var newRun = new ModelTestRun
+        {
+            ModelId = modelId,
+            TestGroup = testCode,
+            Passed = passed,
+            DurationMs = durationMs,
+            RunDate = DateTime.UtcNow.ToString("o"),
+            Description = description,
+            Notes = notes,
+            TestFolder = testFolder
+        };
+
+        context.ModelTestRuns.Add(newRun);
+        context.SaveChanges();
+        return newRun.Id;
     }
 
     /// <summary>
@@ -859,52 +939,49 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
     /// </summary>
     public void UpdateTestRunResult(int runId, bool? passed = null, long? durationMs = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var set = new List<string>();
-        var parameters = new DynamicParameters();
-        if (passed.HasValue)
-        {
-            set.Add("passed = @passed");
-            parameters.Add("passed", passed.Value ? 1 : 0);
-        }
-        if (durationMs.HasValue)
-        {
-            set.Add("duration_ms = @duration_ms");
-            parameters.Add("duration_ms", durationMs.Value);
-        }
-        if (set.Count == 0) return;
-        parameters.Add("id", runId);
-        var sql = $"UPDATE model_test_runs SET {string.Join(", ", set)} WHERE id = @id";
-        conn.Execute(sql, parameters);
+        using var context = CreateDbContext();
+        var run = context.ModelTestRuns.Find(runId);
+        if (run == null) return;
+        if (passed.HasValue) run.Passed = passed.Value;
+        if (durationMs.HasValue) run.DurationMs = durationMs.Value;
+        context.SaveChanges();
     }
 
     public void UpdateTestRunNotes(int runId, string? notes)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("UPDATE model_test_runs SET notes = @notes WHERE id = @id", new { id = runId, notes });
+        using var context = CreateDbContext();
+        var run = context.ModelTestRuns.Find(runId);
+        if (run == null) return;
+        run.Notes = notes;
+        context.SaveChanges();
     }
 
     public int AddTestStep(int runId, int stepNumber, string stepName, string? inputJson = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"INSERT INTO model_test_steps(run_id, step_number, step_name, input_json) VALUES(@run_id, @step_number, @step_name, @input_json); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, new { run_id = runId, step_number = stepNumber, step_name = stepName, input_json = inputJson });
-        return (int)id;
+        using var context = CreateDbContext();
+        var step = new ModelTestStep
+        {
+            RunId = runId,
+            StepNumber = stepNumber,
+            StepName = stepName,
+            InputJson = inputJson,
+            Passed = false
+        };
+        context.ModelTestSteps.Add(step);
+        context.SaveChanges();
+        return step.Id;
     }
 
     public void UpdateTestStepResult(int stepId, bool passed, string? outputJson = null, string? error = null, long? durationMs = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var set = new List<string> { "passed = @passed" };
-        if (!string.IsNullOrWhiteSpace(outputJson)) set.Add("output_json = @output_json");
-        if (!string.IsNullOrWhiteSpace(error)) set.Add("error = @error");
-        if (durationMs.HasValue) set.Add("duration_ms = @duration_ms");
-        var sql = $"UPDATE model_test_steps SET {string.Join(", ", set)} WHERE id = @id";
-        conn.Execute(sql, new { id = stepId, passed = passed ? 1 : 0, output_json = outputJson, error, duration_ms = durationMs });
+        using var context = CreateDbContext();
+        var step = context.ModelTestSteps.Find(stepId);
+        if (step == null) return;
+        step.Passed = passed;
+        if (!string.IsNullOrWhiteSpace(outputJson)) step.OutputJson = outputJson;
+        if (!string.IsNullOrWhiteSpace(error)) step.Error = error;
+        if (durationMs.HasValue) step.DurationMs = durationMs.Value;
+        context.SaveChanges();
     }
 
     /// <summary>
@@ -969,11 +1046,20 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
 
     public int AddTestAsset(int stepId, string fileType, string filePath, string? description = null, double? durationSec = null, long? sizeBytes = null, long? storyId = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"INSERT INTO model_test_assets(step_id, file_type, file_path, description, duration_sec, size_bytes, story_id) VALUES(@step_id, @file_type, @file_path, @description, @duration_sec, @size_bytes, @story_id); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, new { step_id = stepId, file_type = fileType, file_path = filePath, description, duration_sec = durationSec, size_bytes = sizeBytes, story_id = storyId });
-        return (int)id;
+        using var context = CreateDbContext();
+        var asset = new ModelTestAsset
+        {
+            StepId = stepId,
+            FileType = fileType,
+            FilePath = filePath,
+            Description = description,
+            DurationSec = durationSec,
+            SizeBytes = sizeBytes,
+            StoryId = storyId
+        };
+        context.ModelTestAssets.Add(asset);
+        context.SaveChanges();
+        return asset.Id;
     }
 
     // Overload with all evaluation fields parsed directly
@@ -988,75 +1074,62 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
         int? modelId = null,
         int? agentId = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-
-        var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, raw_json, model_id, agent_id, ts) 
-                    VALUES(@story_id, @ncs, @ncd, @org, @orgdef, @em, @emdef, @action, @actiondef, @total, @raw, @model_id, @agent_id, @ts); 
-                    SELECT last_insert_rowid();";
-        
-        var id = conn.ExecuteScalar<long>(sql, new
+        using var context = CreateDbContext();
+        var eval = new StoryEvaluation
         {
-            story_id = storyId,
-            ncs = narrativeScore,
-            ncd = narrativeDefects,
-            org = originalityScore,
-            orgdef = originalityDefects,
-            em = emotionalScore,
-            emdef = emotionalDefects,
-            action = actionScore,
-            actiondef = actionDefects,
-            total = totalScore,
-            raw = rawJson,
-            model_id = modelId,
-            agent_id = agentId,
-            ts = DateTime.UtcNow.ToString("o")
-        });
-        
-        // Recalculate writer score for the model
+            StoryId = storyId,
+            NarrativeCoherenceScore = narrativeScore,
+            NarrativeCoherenceDefects = narrativeDefects ?? string.Empty,
+            OriginalityScore = originalityScore,
+            OriginalityDefects = originalityDefects ?? string.Empty,
+            EmotionalImpactScore = emotionalScore,
+            EmotionalImpactDefects = emotionalDefects ?? string.Empty,
+            ActionScore = actionScore,
+            ActionDefects = actionDefects ?? string.Empty,
+            TotalScore = totalScore,
+            RawJson = rawJson ?? string.Empty,
+            ModelId = modelId.HasValue ? (long?)modelId.Value : null,
+            AgentId = agentId,
+            Timestamp = DateTime.UtcNow.ToString("o")
+        };
+        context.StoryEvaluations.Add(eval);
+        context.SaveChanges();
+
         if (modelId.HasValue)
         {
             RecalculateWriterScore(modelId.Value);
         }
 
-        UpdateStoryStatusAfterEvaluation(conn, storyId, agentId);
-        
-        return id;
+        UpdateStoryStatusAfterEvaluation(context, storyId, agentId);
+        return eval.Id;
     }
 
     public long AddStoryEvaluation(long storyId, string rawJson, double totalScore, int? modelId = null, int? agentId = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         // Deduplicate: avoid inserting identical evaluation (same story, same agent, same raw JSON)
         try
         {
             if (!string.IsNullOrWhiteSpace(rawJson) && agentId.HasValue)
             {
-                var existingId = conn.ExecuteScalar<long?>("SELECT id FROM stories_evaluations WHERE story_id = @sid AND agent_id = @aid AND raw_json = @raw LIMIT 1", new { sid = storyId, aid = agentId.Value, raw = rawJson });
-                if (existingId.HasValue && existingId.Value > 0)
-                {
-                    return existingId.Value;
-                }
+                var existing = context.StoryEvaluations.FirstOrDefault(se => se.StoryId == storyId && se.AgentId == agentId && se.RawJson == rawJson);
+                if (existing != null) return existing.Id;
             }
         }
         catch { /* best-effort dedupe, ignore on error */ }
-        // Try parse JSON to extract category fields - best effort
-        // Parsing helper logic inline below
 
+        // Try parse JSON to extract category fields - best effort
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(rawJson);
+            using var doc = System.Text.Json.JsonDocument.Parse(rawJson ?? string.Empty);
             var root = doc.RootElement;
-            // try to extract fields (e.g. root.narrative_coherence.score or root.narrative_coherence)
             int GetScoreFromCategory(string cat)
             {
                 try
                 {
-                    if (root.TryGetProperty(cat, out var catEl) && catEl.ValueKind == System.Text.Json.JsonValueKind.Object && catEl.TryGetProperty("score", out var s) && s.ValueKind == System.Text.Json.JsonValueKind.Number) return s.GetInt32();
-                    // Also try root[cat + "_score"]
+                    if (root.ValueKind == System.Text.Json.JsonValueKind.Object && root.TryGetProperty(cat, out var catEl) && catEl.ValueKind == System.Text.Json.JsonValueKind.Object && catEl.TryGetProperty("score", out var s) && s.ValueKind == System.Text.Json.JsonValueKind.Number) return s.GetInt32();
                     var alt = cat + "_score";
-                    if (root.TryGetProperty(alt, out var altEl) && altEl.ValueKind == System.Text.Json.JsonValueKind.Number) return altEl.GetInt32();
+                    if (root.ValueKind == System.Text.Json.JsonValueKind.Object && root.TryGetProperty(alt, out var altEl) && altEl.ValueKind == System.Text.Json.JsonValueKind.Number) return altEl.GetInt32();
                 }
                 catch { }
                 return 0;
@@ -1065,13 +1138,14 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
             {
                 try
                 {
-                    if (root.TryGetProperty(cat, out var catEl) && catEl.ValueKind == System.Text.Json.JsonValueKind.Object && catEl.TryGetProperty("defects", out var d) && d.ValueKind == System.Text.Json.JsonValueKind.String) return d.GetString() ?? string.Empty;
+                    if (root.ValueKind == System.Text.Json.JsonValueKind.Object && root.TryGetProperty(cat, out var catEl) && catEl.ValueKind == System.Text.Json.JsonValueKind.Object && catEl.TryGetProperty("defects", out var d) && d.ValueKind == System.Text.Json.JsonValueKind.String) return d.GetString() ?? string.Empty;
                     var alt = cat + "_defects";
-                    if (root.TryGetProperty(alt, out var altEl) && altEl.ValueKind == System.Text.Json.JsonValueKind.String) return altEl.GetString() ?? string.Empty;
+                    if (root.ValueKind == System.Text.Json.JsonValueKind.Object && root.TryGetProperty(alt, out var altEl) && altEl.ValueKind == System.Text.Json.JsonValueKind.String) return altEl.GetString() ?? string.Empty;
                 }
                 catch { }
                 return string.Empty;
             }
+
             var nc = GetScoreFromCategory("narrative_coherence");
             var ncdef = GetDefectsFromCategory("narrative_coherence");
             var org = GetScoreFromCategory("originality");
@@ -1090,59 +1164,105 @@ FROM model_test_steps WHERE run_id = @r ORDER BY step_number", new { r = runId.V
                 actionDef = GetDefectsFromCategory("pacing");
             }
 
-            var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, raw_json, model_id, agent_id, ts) 
-                        VALUES(@story_id, @ncs, @ncd, @org, @orgdef, @em, @emdef, @action, @actiondef, @total, @raw, @model_id, @agent_id, @ts); 
-                        SELECT last_insert_rowid();";
-            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, ncs = nc, ncd = ncdef, org = org, orgdef = orgdef, em = em, emdef = emdef, action = action, actiondef = actionDef, total = totalScore, raw = rawJson, model_id = modelId ?? (int?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
-            
-            // Recalculate writer score for the model
-        if (modelId.HasValue)
-        {
-            RecalculateWriterScore(modelId.Value);
-        }
+            var eval = new StoryEvaluation
+            {
+                StoryId = storyId,
+                NarrativeCoherenceScore = nc,
+                NarrativeCoherenceDefects = ncdef ?? string.Empty,
+                OriginalityScore = org,
+                OriginalityDefects = orgdef ?? string.Empty,
+                EmotionalImpactScore = em,
+                EmotionalImpactDefects = emdef ?? string.Empty,
+                ActionScore = action,
+                ActionDefects = actionDef ?? string.Empty,
+                TotalScore = totalScore,
+                RawJson = rawJson ?? string.Empty,
+                ModelId = modelId.HasValue ? (long?)modelId.Value : null,
+                AgentId = agentId,
+                Timestamp = DateTime.UtcNow.ToString("o")
+            };
+            context.StoryEvaluations.Add(eval);
+            context.SaveChanges();
 
-        UpdateStoryStatusAfterEvaluation(conn, storyId, agentId);
-        
-        return id;
-    }
-        catch (Exception)
-        {
-            var sql = @"INSERT INTO stories_evaluations(story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, raw_json, model_id, agent_id, ts) 
-                        VALUES(@story_id, 0, '', 0, '', 0, '', 0, '', @total, @raw, @model_id, @agent_id, @ts); 
-                        SELECT last_insert_rowid();";
-            var id = conn.ExecuteScalar<long>(sql, new { story_id = storyId, total = totalScore, raw = rawJson, model_id = modelId ?? (int?)null, agent_id = agentId ?? (int?)null, ts = DateTime.UtcNow.ToString("o") });
-            
-            // Recalculate writer score for the model
             if (modelId.HasValue)
             {
                 RecalculateWriterScore(modelId.Value);
             }
 
-            UpdateStoryStatusAfterEvaluation(conn, storyId, agentId);
+            UpdateStoryStatusAfterEvaluation(context, storyId, agentId);
 
-            return id;
+            return eval.Id;
+        }
+        catch (Exception)
+        {
+            // Best-effort fallback: insert minimal evaluation with defaulted category fields
+            try
+            {
+                var eval = new StoryEvaluation
+                {
+                    StoryId = storyId,
+                    NarrativeCoherenceScore = 0,
+                    NarrativeCoherenceDefects = string.Empty,
+                    OriginalityScore = 0,
+                    OriginalityDefects = string.Empty,
+                    EmotionalImpactScore = 0,
+                    EmotionalImpactDefects = string.Empty,
+                    ActionScore = 0,
+                    ActionDefects = string.Empty,
+                    TotalScore = totalScore,
+                    RawJson = rawJson ?? string.Empty,
+                    ModelId = modelId.HasValue ? (long?)modelId.Value : null,
+                    AgentId = agentId,
+                    Timestamp = DateTime.UtcNow.ToString("o")
+                };
+                context.StoryEvaluations.Add(eval);
+                context.SaveChanges();
+
+                if (modelId.HasValue)
+                {
+                    RecalculateWriterScore(modelId.Value);
+                }
+
+                UpdateStoryStatusAfterEvaluation(context, storyId, agentId);
+
+                return eval.Id;
+            }
+            catch
+            {
+                // give up after fallback failure
+                return 0;
+            }
         }
     }
 
     public void RecalculateWriterScore(int modelId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        
-        var sql = @"
-UPDATE models
-SET WriterScore = (
-    SELECT CASE 
-        WHEN COUNT(*) = 0 THEN 0
-        ELSE (COALESCE(SUM(se.total_score), 0) * 10.0) / (COUNT(*) * 100.0)
-    END
-    FROM stories_evaluations se
-    INNER JOIN stories s ON s.id = se.story_id
-    WHERE s.model_id = models.Id
-)
-WHERE models.Id = @modelId;";
-        
-        conn.Execute(sql, new { modelId });
+        using var context = CreateDbContext();
+        try
+        {
+            var model = context.Models.FirstOrDefault(m => m.Id == modelId);
+            if (model == null) return;
+
+            var query = from se in context.StoryEvaluations
+                        join s in context.Stories on se.StoryId equals s.Id
+                        where s.ModelId == modelId
+                        select se.TotalScore;
+
+            var count = query.Count();
+            double writerScore = 0;
+            if (count > 0)
+            {
+                var sum = query.Sum();
+                writerScore = (sum * 10.0) / (count * 100.0);
+            }
+
+            model.WriterScore = writerScore;
+            context.SaveChanges();
+        }
+        catch
+        {
+            // best-effort; don't throw on score recalculation failure
+        }
     }
 
     /// <summary>
@@ -1304,132 +1424,220 @@ SET TotalScore = (
 
     public void DeleteStoryEvaluationById(long evaluationId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        try
+        using var context = CreateDbContext();
+        var eval = context.StoryEvaluations.Find(evaluationId);
+        if (eval != null)
         {
-            conn.Execute("DELETE FROM stories_evaluations WHERE id = @id", new { id = evaluationId });
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DB] Failed to delete story evaluation {evaluationId}: {ex.Message}");
-            throw;
+            context.StoryEvaluations.Remove(eval);
+            context.SaveChanges();
         }
     }
 
     // Stories CRUD operations
     public long SaveGeneration(string prompt, TinyGenerator.Models.StoryGenerationResult r, string? memoryKey = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         var genId = Guid.NewGuid().ToString();
+        var ts = DateTime.UtcNow.ToString("o");
 
-        var midA = (long?)null;
-        var aidA = (int?)null;
-        try { aidA = GetAgentIdByName("WriterA"); } catch { }
+        int? aidA = GetAgentIdByName("WriterA");
         var charCountA = (r.StoryA ?? string.Empty).Length;
-        var defaultStatusId = InitialStoryStatusId;
-        var sqlA = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@mid,@aid);";
-        conn.Execute(sqlA, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryA ?? string.Empty, cc = charCountA, e = r.EvalA ?? string.Empty, s = r.ScoreA, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, stid = defaultStatusId, mid = midA, aid = aidA });
+        var storyA = new StoryRecord
+        {
+            GenerationId = genId,
+            MemoryKey = memoryKey ?? genId,
+            Timestamp = ts,
+            Prompt = prompt ?? string.Empty,
+            Story = r.StoryA ?? string.Empty,
+            CharCount = charCountA,
+            Eval = r.EvalA ?? string.Empty,
+            Score = r.ScoreA,
+            Approved = !string.IsNullOrEmpty(r.Approved),
+            StatusId = InitialStoryStatusId,
+            AgentId = aidA
+        };
+        context.Stories.Add(storyA);
 
-        var midB = (long?)null;
-        var aidB = (int?)null;
-        try { aidB = GetAgentIdByName("WriterB"); } catch { }
+        int? aidB = GetAgentIdByName("WriterB");
         var charCountB = (r.StoryB ?? string.Empty).Length;
-        var sqlB = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@mid,@aid); SELECT last_insert_rowid();";
-        var idRowB = conn.ExecuteScalar<long>(sqlB, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryB ?? string.Empty, cc = charCountB, e = r.EvalB ?? string.Empty, s = r.ScoreB, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, stid = defaultStatusId, mid = midB, aid = aidB });
+        var storyB = new StoryRecord
+        {
+            GenerationId = genId,
+            MemoryKey = memoryKey ?? genId,
+            Timestamp = ts,
+            Prompt = prompt ?? string.Empty,
+            Story = r.StoryB ?? string.Empty,
+            CharCount = charCountB,
+            Eval = r.EvalB ?? string.Empty,
+            Score = r.ScoreB,
+            Approved = !string.IsNullOrEmpty(r.Approved),
+            StatusId = InitialStoryStatusId,
+            AgentId = aidB
+        };
+        context.Stories.Add(storyB);
 
-        var midC = (long?)null;
-        var aidC = (int?)null;
-        try { aidC = GetAgentIdByName("WriterC"); } catch { }
+        int? aidC = GetAgentIdByName("WriterC");
         var charCountC = (r.StoryC ?? string.Empty).Length;
-        var sqlC = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@mid,@aid); SELECT last_insert_rowid();";
-        var idRowC = conn.ExecuteScalar<long>(sqlC, new { gid = genId, mk = memoryKey ?? genId, ts = DateTime.UtcNow.ToString("o"), p = prompt ?? string.Empty, c = r.StoryC ?? string.Empty, cc = charCountC, e = r.EvalC ?? string.Empty, s = r.ScoreC, ap = string.IsNullOrEmpty(r.Approved) ? 0 : 1, stid = defaultStatusId, mid = midC, aid = aidC });
-        var finalId = idRowC == 0 ? idRowB : idRowC;
-        return finalId;
+        var storyC = new StoryRecord
+        {
+            GenerationId = genId,
+            MemoryKey = memoryKey ?? genId,
+            Timestamp = ts,
+            Prompt = prompt ?? string.Empty,
+            Story = r.StoryC ?? string.Empty,
+            CharCount = charCountC,
+            Eval = r.EvalC ?? string.Empty,
+            Score = r.ScoreC,
+            Approved = !string.IsNullOrEmpty(r.Approved),
+            StatusId = InitialStoryStatusId,
+            AgentId = aidC
+        };
+        context.Stories.Add(storyC);
+
+        context.SaveChanges();
+        return storyC.Id != 0 ? storyC.Id : storyB.Id;
     }
 
     public List<TinyGenerator.Models.StoryRecord> GetAllStories()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Timestamp, s.prompt AS Prompt, s.story AS Story, s.char_count AS CharCount, m.name AS Model, a.name AS Agent, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status_id AS StatusId, COALESCE(ss.code, '') AS Status, ss.description AS StatusDescription, ss.color AS StatusColor, ss.step AS StatusStep, ss.operation_type AS StatusOperationType, ss.agent_type AS StatusAgentType, ss.function_name AS StatusFunctionName, s.folder AS Folder 
-                    FROM stories s 
-                    LEFT JOIN stories_status ss ON s.status_id = ss.id
-                    LEFT JOIN models m ON s.model_id = m.id 
-                    LEFT JOIN agents a ON s.agent_id = a.id 
-                    ORDER BY s.id DESC";
-        return conn.Query<TinyGenerator.Models.StoryRecord>(sql).ToList();
+        using var context = CreateDbContext();
+        var stories = context.Stories.OrderByDescending(s => s.Id).ToList();
+        // Populate navigation properties
+        foreach (var s in stories)
+        {
+            if (s.StatusId.HasValue)
+            {
+                var status = context.StoriesStatus.Find(s.StatusId.Value);
+                if (status != null)
+                {
+                    s.Status = status.Code ?? string.Empty;
+                    s.StatusDescription = status.Description;
+                    s.StatusColor = status.Color;
+                    s.StatusStep = status.Step;
+                    s.StatusOperationType = status.OperationType;
+                    s.StatusAgentType = status.AgentType;
+                    s.StatusFunctionName = status.FunctionName;
+                }
+            }
+            if (s.ModelId.HasValue)
+            {
+                var model = context.Models.Find(s.ModelId.Value);
+                s.Model = model?.Name ?? string.Empty;
+            }
+            if (s.AgentId.HasValue)
+            {
+                var agent = context.Agents.Find(s.AgentId.Value);
+                s.Agent = agent?.Name ?? string.Empty;
+            }
+        }
+        return stories;
     }
 
     public TinyGenerator.Models.StoryRecord? GetStoryById(long id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT s.id AS Id, s.generation_id AS GenerationId, s.memory_key AS MemoryKey, s.ts AS Timestamp, s.prompt AS Prompt, s.story AS Story, s.char_count AS CharCount, m.name AS Model, a.name AS Agent, s.eval AS Eval, s.score AS Score, s.approved AS Approved, s.status_id AS StatusId, COALESCE(ss.code, '') AS Status, ss.description AS StatusDescription, ss.color AS StatusColor, ss.step AS StatusStep, ss.operation_type AS StatusOperationType, ss.agent_type AS StatusAgentType, ss.function_name AS StatusFunctionName, s.folder AS Folder FROM stories s LEFT JOIN stories_status ss ON s.status_id = ss.id LEFT JOIN models m ON s.model_id = m.id LEFT JOIN agents a ON s.agent_id = a.id WHERE s.id = @id LIMIT 1";
-        var row = conn.QueryFirstOrDefault<TinyGenerator.Models.StoryRecord>(sql, new { id = id });
-        if (row == null) return null;
-        if (row.Approved) row.Approved = true; // Ensure boolean conversion
-        return row;
+        using var context = CreateDbContext();
+        var s = context.Stories.FirstOrDefault(st => st.Id == id);
+        if (s == null) return null;
+        // Populate navigation properties
+        if (s.StatusId.HasValue)
+        {
+            var status = context.StoriesStatus.Find(s.StatusId.Value);
+            if (status != null)
+            {
+                s.Status = status.Code ?? string.Empty;
+                s.StatusDescription = status.Description;
+                s.StatusColor = status.Color;
+                s.StatusStep = status.Step;
+                s.StatusOperationType = status.OperationType;
+                s.StatusAgentType = status.AgentType;
+                s.StatusFunctionName = status.FunctionName;
+            }
+        }
+        if (s.ModelId.HasValue)
+        {
+            var model = context.Models.Find(s.ModelId.Value);
+            s.Model = model?.Name ?? string.Empty;
+        }
+        if (s.AgentId.HasValue)
+        {
+            var agent = context.Agents.Find(s.AgentId.Value);
+            s.Agent = agent?.Name ?? string.Empty;
+        }
+        return s;
     }
 
     public void DeleteStoryById(long id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var genId = conn.QueryFirstOrDefault<string>("SELECT generation_id FROM stories WHERE id = @id LIMIT 1", new { id });
-        if (!string.IsNullOrEmpty(genId)) conn.Execute("DELETE FROM stories WHERE generation_id = @gid", new { gid = genId });
+        using var context = CreateDbContext();
+        var story = context.Stories.Find(id);
+        if (story == null) return;
+        var genId = story.GenerationId;
+        if (!string.IsNullOrEmpty(genId))
+        {
+            var related = context.Stories.Where(s => s.GenerationId == genId).ToList();
+            context.Stories.RemoveRange(related);
+        }
+        else
+        {
+            context.Stories.Remove(story);
+        }
+        context.SaveChanges();
     }
 
     public (int? runId, int? stepId) GetTestInfoForStory(long storyId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT mts.run_id AS RunId, mta.step_id AS StepId 
-                    FROM model_test_assets mta 
-                    JOIN model_test_steps mts ON mta.step_id = mts.id 
-                    WHERE mta.story_id = @sid 
-                    LIMIT 1";
-        var result = conn.QueryFirstOrDefault<(int RunId, int StepId)?>(sql, new { sid = storyId });
-        if (result.HasValue)
-            return ((int?)result.Value.RunId, (int?)result.Value.StepId);
-        return (null, null);
+        using var context = CreateDbContext();
+        var asset = context.ModelTestAssets.FirstOrDefault(a => a.StoryId == storyId);
+        if (asset == null) return (null, null);
+        var step = context.ModelTestSteps.Find(asset.StepId);
+        if (step == null) return (null, asset.StepId);
+        return (step.RunId, asset.StepId);
     }
 
     public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         var ts = DateTime.UtcNow.ToString("o");
         var genId = Guid.NewGuid().ToString();
         
-        // Generate folder name: <agent_name>_<yyyyMMdd_HHmmss> or <agent_id>_<yyyyMMdd_HHmmss> if name not available
+        // Generate folder name
         string? folder = null;
         if (agentId.HasValue)
         {
-            var agentName = conn.ExecuteScalar<string>("SELECT name FROM agents WHERE id = @aid LIMIT 1", new { aid = agentId.Value });
-            var sanitizedAgentName = SanitizeFolderName(agentName ?? $"agent{agentId.Value}");
+            var agent = context.Agents.Find(agentId.Value);
+            var sanitizedAgentName = SanitizeFolderName(agent?.Name ?? $"agent{agentId.Value}");
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
             folder = $"{sanitizedAgentName}_{timestamp}";
         }
         
         var charCount = (story ?? string.Empty).Length;
-        var sql = @"INSERT INTO stories(generation_id, memory_key, ts, prompt, story, char_count, eval, score, approved, status_id, folder, model_id, agent_id) VALUES(@gid,@mk,@ts,@p,@c,@cc,@e,@s,@ap,@stid,@folder,@mid,@aid); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, new { gid = genId, mk = memoryKey ?? genId, ts = ts, p = prompt ?? string.Empty, c = story ?? string.Empty, cc = charCount, mid = modelId, aid = agentId, e = eval ?? string.Empty, s = score, ap = approved, stid = statusId ?? InitialStoryStatusId, folder = folder });
-        return id;
+        var storyRecord = new StoryRecord
+        {
+            GenerationId = genId,
+            MemoryKey = memoryKey ?? genId,
+            Timestamp = ts,
+            Prompt = prompt ?? string.Empty,
+            Story = story ?? string.Empty,
+            CharCount = charCount,
+            Eval = eval ?? string.Empty,
+            Score = score,
+            Approved = approved != 0,
+            StatusId = statusId ?? InitialStoryStatusId,
+            Folder = folder,
+            ModelId = modelId,
+            AgentId = agentId
+        };
+        context.Stories.Add(storyRecord);
+        context.SaveChanges();
+        return storyRecord.Id;
     }
 
-    private int? ResolveStoryStatusId(IDbConnection conn, string? statusCode)
+    private int? ResolveStoryStatusId(string? statusCode)
     {
-        if (conn == null || string.IsNullOrWhiteSpace(statusCode)) return null;
-        try
-        {
-            return conn.ExecuteScalar<int?>("SELECT id FROM stories_status WHERE code = @code LIMIT 1", new { code = statusCode });
-        }
-        catch
-        {
-            return null;
-        }
+        if (string.IsNullOrWhiteSpace(statusCode)) return null;
+        using var context = CreateDbContext();
+        var status = context.StoriesStatus.FirstOrDefault(s => s.Code == statusCode);
+        return status?.Id;
     }
 
     private string SanitizeFolderName(string name)
@@ -1445,74 +1653,49 @@ SET TotalScore = (
 
     public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var updates = new List<string>();
-        var parms = new Dictionary<string, object?>();
-        if (story != null) 
-        { 
-            updates.Add("story = @story"); 
-            parms["story"] = story; 
-            updates.Add("char_count = @char_count"); 
-            parms["char_count"] = story.Length; 
-        }
-        if (modelId.HasValue) { updates.Add("model_id = @model_id"); parms["model_id"] = modelId.Value; }
-        if (agentId.HasValue) { updates.Add("agent_id = @agent_id"); parms["agent_id"] = agentId.Value; }
-        if (updateStatus)
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(id);
+        if (storyRecord == null) return false;
+        if (story != null)
         {
-            updates.Add("status_id = @status_id");
-            parms["status_id"] = statusId;
+            storyRecord.Story = story;
+            storyRecord.CharCount = story.Length;
         }
-        if (updates.Count == 0) return false;
-        parms["id"] = id;
-        var sql = $"UPDATE stories SET {string.Join(", ", updates)} WHERE id = @id";
-        var rows = conn.Execute(sql, parms);
-        return rows > 0;
+        if (modelId.HasValue) storyRecord.ModelId = modelId.Value;
+        if (agentId.HasValue) storyRecord.AgentId = agentId.Value;
+        if (updateStatus) storyRecord.StatusId = statusId;
+        context.SaveChanges();
+        return true;
     }
 
     // TTS voices: list and upsert
     public List<TinyGenerator.Models.TtsVoice> ListTtsVoices()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, score AS Score, tags AS Tags, template_wav AS TemplateWav, archetype AS Archetype, notes AS Notes, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices ORDER BY name";
-        var voices = conn.Query<TinyGenerator.Models.TtsVoice>(sql).ToList();
+        using var context = CreateDbContext();
+        var voices = context.TtsVoices.OrderBy(v => v.Name).ToList();
         EnsureVoiceDerivedFields(voices);
         return voices;
     }
 
     public int GetTtsVoiceCount()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        try
-        {
-            var c = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM tts_voices");
-            return (int)c;
-        }
-        catch
-        {
-            return 0;
-        }
+        using var context = CreateDbContext();
+        return context.TtsVoices.Count();
     }
 
     public TinyGenerator.Models.TtsVoice? GetTtsVoiceByVoiceId(string voiceId)
     {
         if (string.IsNullOrWhiteSpace(voiceId)) return null;
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, score AS Score, tags AS Tags, template_wav AS TemplateWav, archetype AS Archetype, notes AS Notes, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices WHERE voice_id = @vid LIMIT 1";
-        var voice = conn.QueryFirstOrDefault<TinyGenerator.Models.TtsVoice>(sql, new { vid = voiceId });
+        using var context = CreateDbContext();
+        var voice = context.TtsVoices.FirstOrDefault(v => v.VoiceId == voiceId);
         if (voice != null) EnsureVoiceDerivedFields(new List<TinyGenerator.Models.TtsVoice> { voice });
         return voice;
     }
 
     public TinyGenerator.Models.TtsVoice? GetTtsVoiceById(int id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, score AS Score, tags AS Tags, template_wav AS TemplateWav, archetype AS Archetype, notes AS Notes, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices WHERE id = @id LIMIT 1";
-        var voice = conn.QueryFirstOrDefault<TinyGenerator.Models.TtsVoice>(sql, new { id });
+        using var context = CreateDbContext();
+        var voice = context.TtsVoices.Find(id);
         if (voice != null) EnsureVoiceDerivedFields(new List<TinyGenerator.Models.TtsVoice> { voice });
         return voice;
     }
@@ -1520,10 +1703,8 @@ SET TotalScore = (
     public TinyGenerator.Models.TtsVoice? GetTtsVoiceByName(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = "SELECT id AS Id, voice_id AS VoiceId, name AS Name, model AS Model, language AS Language, gender AS Gender, age AS Age, confidence AS Confidence, score AS Score, tags AS Tags, template_wav AS TemplateWav, archetype AS Archetype, notes AS Notes, created_at AS CreatedAt, updated_at AS UpdatedAt FROM tts_voices WHERE LOWER(name) = LOWER(@name) LIMIT 1";
-        var voice = conn.QueryFirstOrDefault<TinyGenerator.Models.TtsVoice>(sql, new { name });
+        using var context = CreateDbContext();
+        var voice = context.TtsVoices.FirstOrDefault(v => v.Name.ToLower() == name.ToLower());
         if (voice != null) EnsureVoiceDerivedFields(new List<TinyGenerator.Models.TtsVoice> { voice });
         return voice;
     }
@@ -1531,77 +1712,93 @@ SET TotalScore = (
     public void UpdateTtsVoiceTemplateWavById(int id, string templateWav)
     {
         if (string.IsNullOrWhiteSpace(templateWav)) return;
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("UPDATE tts_voices SET template_wav = @p, updated_at = @u WHERE id = @id", new { p = templateWav, u = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"), id });
+        using var context = CreateDbContext();
+        var voice = context.TtsVoices.Find(id);
+        if (voice == null) return;
+        voice.TemplateWav = templateWav;
+        voice.UpdatedAt = DateTime.UtcNow.ToString("o");
+        context.SaveChanges();
     }
 
     public void UpdateTtsVoiceScoreById(int id, double? score)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("UPDATE tts_voices SET score = @s, updated_at = @u WHERE id = @id", new { s = score, u = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"), id });
+        using var context = CreateDbContext();
+        var voice = context.TtsVoices.Find(id);
+        if (voice == null) return;
+        voice.Score = score;
+        voice.UpdatedAt = DateTime.UtcNow.ToString("o");
+        context.SaveChanges();
     }
 
     public void DeleteTtsVoiceById(int id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("DELETE FROM tts_voices WHERE id = @id", new { id });
+        using var context = CreateDbContext();
+        var voice = context.TtsVoices.Find(id);
+        if (voice != null)
+        {
+            context.TtsVoices.Remove(voice);
+            context.SaveChanges();
+        }
     }
 
     public void UpdateTtsVoice(TinyGenerator.Models.TtsVoice v)
     {
         if (v == null || v.Id <= 0) return;
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"UPDATE tts_voices SET name=@Name, model=@Model, language=@Language, gender=@Gender, age=@Age, confidence=@Confidence, score=@Score, tags=@Tags, template_wav=@TemplateWav, archetype=@Archetype, notes=@Notes, updated_at=@UpdatedAt WHERE id = @Id";
+        using var context = CreateDbContext();
+        var existing = context.TtsVoices.Find(v.Id);
+        if (existing == null) return;
         v.UpdatedAt = DateTime.UtcNow.ToString("o");
-        conn.Execute(sql, v);
+        context.Entry(existing).CurrentValues.SetValues(v);
+        context.SaveChanges();
     }
 
     public void UpsertTtsVoice(TinyGenerator.Services.VoiceInfo v, string? model = null)
     {
         if (v == null || string.IsNullOrWhiteSpace(v.Id)) return;
-        using var conn = CreateConnection();
-        if (conn is not SqliteConnection sqliteConn)
-        {
-            throw new InvalidOperationException("Database connection is not SqliteConnection");
-        }
-        sqliteConn.Open();
-        UpsertTtsVoice(sqliteConn, null, v, model);
-    }
-
-    private static void UpsertTtsVoice(SqliteConnection conn, SqliteTransaction? tx, TinyGenerator.Services.VoiceInfo v, string? model)
-    {
-        if (conn == null) throw new ArgumentNullException(nameof(conn));
-        if (v == null || string.IsNullOrWhiteSpace(v.Id)) return;
+        using var context = CreateDbContext();
         var now = DateTime.UtcNow.ToString("o");
-        // metadata not stored anymore; template_wav is used for sample filename
         string? tagsJson;
         try { tagsJson = v.Tags != null ? JsonSerializer.Serialize(v.Tags) : null; } catch { tagsJson = null; }
         var (archetype, notes) = ExtractArchetypeNotesFromVoiceInfo(v);
-        var sql = @"INSERT INTO tts_voices(voice_id, name, model, language, gender, age, confidence, score, tags, template_wav, archetype, notes, created_at, updated_at)
-    VALUES(@VoiceId,@Name,@Model,@Language,@Gender,@Age,@Confidence,@Score,@Tags,@TemplateWav,@Archetype,@Notes,@CreatedAt,@UpdatedAt)
-    ON CONFLICT(voice_id) DO UPDATE SET name=@Name, model=@Model, language=@Language, gender=@Gender, age=@Age, confidence=@Confidence, score=@Score, tags=@Tags, template_wav=@TemplateWav, archetype=@Archetype, notes=@Notes, updated_at=@UpdatedAt;";
 
-        conn.Execute(sql, new
+        var existing = context.TtsVoices.FirstOrDefault(tv => tv.VoiceId == v.Id);
+        if (existing != null)
         {
-            VoiceId = v.Id,
-            Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name,
-            Model = model,
-            Language = v.Language,
-            Gender = v.Gender,
-            Age = v.Age,
-            Confidence = v.Confidence,
-            Tags = tagsJson,
-            TemplateWav = v.Tags != null && v.Tags.ContainsKey("template_wav") ? v.Tags["template_wav"] : null,
-            Score = GetScoreFromTags(v.Tags, v.Confidence),
-            Archetype = archetype,
-            Notes = notes,
-            CreatedAt = now,
-            UpdatedAt = now
-        }, transaction: tx);
+            existing.Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name;
+            existing.Model = model;
+            existing.Language = v.Language;
+            existing.Gender = v.Gender;
+            existing.Age = v.Age;
+            existing.Confidence = v.Confidence;
+            existing.Score = GetScoreFromTags(v.Tags, v.Confidence);
+            existing.Tags = tagsJson;
+            existing.TemplateWav = v.Tags != null && v.Tags.ContainsKey("template_wav") ? v.Tags["template_wav"] : null;
+            existing.Archetype = archetype;
+            existing.Notes = notes;
+            existing.UpdatedAt = now;
+        }
+        else
+        {
+            var voice = new TtsVoice
+            {
+                VoiceId = v.Id,
+                Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name,
+                Model = model,
+                Language = v.Language,
+                Gender = v.Gender,
+                Age = v.Age,
+                Confidence = v.Confidence,
+                Score = GetScoreFromTags(v.Tags, v.Confidence),
+                Tags = tagsJson,
+                TemplateWav = v.Tags != null && v.Tags.ContainsKey("template_wav") ? v.Tags["template_wav"] : null,
+                Archetype = archetype,
+                Notes = notes,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            context.TtsVoices.Add(voice);
+        }
+        context.SaveChanges();
     }
 
     /// <summary>
@@ -1623,31 +1820,53 @@ SET TotalScore = (
             var list = await ttsService.GetVoicesAsync();
             if (list == null || list.Count == 0) return result;
 
-            using var conn = CreateConnection();
-            if (conn is not SqliteConnection sqliteConn)
-            {
-                throw new InvalidOperationException("Database connection is not SqliteConnection");
-            }
-
-            sqliteConn.Open();
-            using var tx = sqliteConn.BeginTransaction();
+            using var context = CreateDbContext();
             foreach (var v in list)
             {
                 if (v == null || string.IsNullOrWhiteSpace(v.Id)) continue;
                 try
                 {
-                    var existing = sqliteConn.ExecuteScalar<string?>(
-                        "SELECT voice_id FROM tts_voices WHERE voice_id = @vid LIMIT 1",
-                        new { vid = v.Id },
-                        transaction: tx);
-                    UpsertTtsVoice(sqliteConn, tx, v, null);
-                    if (string.IsNullOrWhiteSpace(existing))
+                    var existing = context.TtsVoices.FirstOrDefault(tv => tv.VoiceId == v.Id);
+                    var now = DateTime.UtcNow.ToString("o");
+                    string? tagsJson;
+                    try { tagsJson = v.Tags != null ? JsonSerializer.Serialize(v.Tags) : null; } catch { tagsJson = null; }
+                    var (archetype, notes) = ExtractArchetypeNotesFromVoiceInfo(v);
+
+                    if (existing != null)
                     {
-                        result.AddedIds.Add(v.Id);
+                        existing.Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name;
+                        existing.Language = v.Language;
+                        existing.Gender = v.Gender;
+                        existing.Age = v.Age;
+                        existing.Confidence = v.Confidence;
+                        existing.Score = GetScoreFromTags(v.Tags, v.Confidence);
+                        existing.Tags = tagsJson;
+                        existing.TemplateWav = v.Tags != null && v.Tags.ContainsKey("template_wav") ? v.Tags["template_wav"] : null;
+                        existing.Archetype = archetype;
+                        existing.Notes = notes;
+                        existing.UpdatedAt = now;
+                        result.UpdatedIds.Add(v.Id);
                     }
                     else
                     {
-                        result.UpdatedIds.Add(v.Id);
+                        var voice = new TtsVoice
+                        {
+                            VoiceId = v.Id,
+                            Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name,
+                            Language = v.Language,
+                            Gender = v.Gender,
+                            Age = v.Age,
+                            Confidence = v.Confidence,
+                            Score = GetScoreFromTags(v.Tags, v.Confidence),
+                            Tags = tagsJson,
+                            TemplateWav = v.Tags != null && v.Tags.ContainsKey("template_wav") ? v.Tags["template_wav"] : null,
+                            Archetype = archetype,
+                            Notes = notes,
+                            CreatedAt = now,
+                            UpdatedAt = now
+                        };
+                        context.TtsVoices.Add(voice);
+                        result.AddedIds.Add(v.Id);
                     }
                 }
                 catch (Exception ex)
@@ -1655,15 +1874,7 @@ SET TotalScore = (
                     result.Errors.Add($"Voice {v?.Id}: {ex.Message}");
                 }
             }
-            try
-            {
-                tx.Commit();
-            }
-            catch (Exception ex)
-            {
-                result.Errors.Add($"Commit failed: {ex.Message}");
-                tx.Rollback();
-            }
+            context.SaveChanges();
             return result;
         }
         catch
@@ -1720,14 +1931,17 @@ SET TotalScore = (
             if (changed) toUpdate.Add(voice);
         }
         if (toUpdate.Count == 0) return;
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
         foreach (var voice in toUpdate)
         {
-            conn.Execute(
-                "UPDATE tts_voices SET archetype = @Archetype, notes = @Notes WHERE id = @Id",
-                new { voice.Archetype, voice.Notes, voice.Id });
+            var existing = context.TtsVoices.Find(voice.Id);
+            if (existing != null)
+            {
+                existing.Archetype = voice.Archetype;
+                existing.Notes = voice.Notes;
+            }
         }
+        context.SaveChanges();
     }
 
     private static (string? archetype, string? notes) ExtractArchetypeNotesFromTags(string? tagsJson)
@@ -2476,39 +2690,23 @@ Regole:
     // Retrieve recent log entries with optional filtering by level or category and support offset for pagination.
     public List<TinyGenerator.Models.LogEntry> GetRecentLogs(int limit = 200, int offset = 0, string? level = null, string? category = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
+        using var context = CreateDbContext();
+        IQueryable<LogEntry> query = context.Logs;
 
-        var where = new List<string>();
-        var parameters = new DynamicParameters();
-        if (!string.IsNullOrWhiteSpace(level)) { where.Add("Level = @Level"); parameters.Add("Level", level); }
-        if (!string.IsNullOrWhiteSpace(category)) { where.Add("Category LIKE @Category"); parameters.Add("Category", "%" + category + "%"); }
+        if (!string.IsNullOrWhiteSpace(level))
+            query = query.Where(l => l.Level == level);
+        if (!string.IsNullOrWhiteSpace(category))
+            query = query.Where(l => l.Category != null && l.Category.Contains(category));
 
-        var sql = "SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized, chat_text AS ChatText, Result FROM Log";
-        if (where.Count > 0) sql += " WHERE " + string.Join(" AND ", where);
-        sql += " ORDER BY Id DESC LIMIT @Limit OFFSET @Offset";
-        parameters.Add("Limit", limit);
-        parameters.Add("Offset", offset);
-
-        return conn.Query<TinyGenerator.Models.LogEntry>(sql, parameters).ToList();
+        return query.OrderByDescending(l => l.Id).Skip(offset).Take(limit).ToList();
     }
 
     public IReadOnlyDictionary<string, AppEventDefinition> GetAppEventDefinitions()
     {
         try
         {
-            using var conn = CreateConnection();
-            conn.Open();
-            var events = conn.Query<AppEventDefinition>(@"
-SELECT id AS Id,
-       event_type AS EventType,
-       description AS Description,
-       enabled AS Enabled,
-       logged AS Logged,
-       notified AS Notified,
-       created_at AS CreatedAt,
-       updated_at AS UpdatedAt
-FROM app_events");
+            using var context = CreateDbContext();
+            var events = context.AppEvents.ToList();
             return events.ToDictionary(ev => ev.EventType, StringComparer.OrdinalIgnoreCase);
         }
         catch
@@ -2531,14 +2729,8 @@ FROM app_events");
         if (!int.TryParse(threadId, out var threadNumericId))
             return new List<TinyGenerator.Models.LogEntry>();
 
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT Ts, Level, Category, Message, Exception, State, ThreadId, ThreadScope, AgentName, Context, analized AS Analized, Result
-                    FROM Log
-                    WHERE ThreadId = @ThreadId
-                    ORDER BY Id ASC
-                    LIMIT @Limit";
-        return conn.Query<TinyGenerator.Models.LogEntry>(sql, new { ThreadId = threadNumericId, Limit = limit }).ToList();
+        using var context = CreateDbContext();
+        return context.Logs.Where(l => l.ThreadId == threadNumericId).OrderBy(l => l.Id).Take(limit).ToList();
     }
 
     public void SetLogAnalyzed(string threadId, bool analyzed)
@@ -2546,17 +2738,25 @@ FROM app_events");
         if (string.IsNullOrWhiteSpace(threadId)) return;
         if (!int.TryParse(threadId, out var threadNumericId)) return;
 
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("UPDATE Log SET analized = @val WHERE ThreadId = @tid", new { val = analyzed ? 1 : 0, tid = threadNumericId });
+        using var context = CreateDbContext();
+        var logs = context.Logs.Where(l => l.ThreadId == threadNumericId).ToList();
+        foreach (var log in logs)
+        {
+            log.Analized = analyzed;
+        }
+        context.SaveChanges();
     }
 
     public void DeleteLogAnalysesByThread(string threadId)
     {
         if (string.IsNullOrWhiteSpace(threadId)) return;
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("DELETE FROM Log_analysis WHERE threadId = @tid", new { tid = threadId });
+        using var context = CreateDbContext();
+        var analyses = context.LogAnalyses.Where(la => la.ThreadId == threadId).ToList();
+        if (analyses.Count > 0)
+        {
+            context.LogAnalyses.RemoveRange(analyses);
+            context.SaveChanges();
+        }
     }
 
     /// <summary>
@@ -2564,46 +2764,30 @@ FROM app_events");
     /// </summary>
     public List<int> ListThreadsPendingAnalysis(int max = 200)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"
-SELECT DISTINCT l.ThreadId
-FROM Log l
-WHERE l.ThreadId IS NOT NULL
-  AND l.ThreadId > 0
-  AND (l.analized IS NULL OR l.analized = 0)
-  AND NOT EXISTS (SELECT 1 FROM Log_analysis la WHERE la.threadId = l.ThreadId)
-ORDER BY l.ThreadId DESC
-LIMIT @max";
-        return conn.Query<int>(sql, new { max }).ToList();
+        using var context = CreateDbContext();
+        // Get distinct thread IDs from logs that are not analyzed
+        var pendingThreads = context.Logs
+            .Where(l => l.ThreadId > 0 && !l.Analized)
+            .Select(l => l.ThreadId)
+            .Distinct()
+            .OrderByDescending(t => t)
+            .Take(max)
+            .ToList();
+        return pendingThreads;
     }
 
     public void InsertLogAnalysis(TinyGenerator.Models.LogAnalysis analysis)
     {
         if (analysis == null) return;
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute(
-            "INSERT INTO Log_analysis (threadId, model_id, run_scope, description, succeeded) VALUES (@threadId, @modelId, @scope, @description, @succeeded)",
-            new
-            {
-                threadId = analysis.ThreadId ?? string.Empty,
-                modelId = analysis.ModelId ?? string.Empty,
-                scope = analysis.RunScope ?? string.Empty,
-                description = analysis.Description ?? string.Empty,
-                succeeded = analysis.Succeeded ? 1 : 0
-            });
+        using var context = CreateDbContext();
+        context.LogAnalyses.Add(analysis);
+        context.SaveChanges();
     }
 
     public List<TinyGenerator.Models.LogAnalysis> GetLogAnalyses(int limit = 200)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, threadId AS ThreadId, model_id AS ModelId, run_scope AS RunScope, description AS Description, succeeded AS Succeeded
-                    FROM Log_analysis
-                    ORDER BY id DESC
-                    LIMIT @Limit";
-        return conn.Query<TinyGenerator.Models.LogAnalysis>(sql, new { Limit = limit }).ToList();
+        using var context = CreateDbContext();
+        return context.LogAnalyses.OrderByDescending(la => la.Id).Take(limit).ToList();
     }
 
     public List<TinyGenerator.Models.LogAnalysis> GetLogAnalysesByThread(string threadId)
@@ -2611,49 +2795,32 @@ LIMIT @max";
         if (string.IsNullOrWhiteSpace(threadId))
             return new List<TinyGenerator.Models.LogAnalysis>();
 
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, threadId AS ThreadId, model_id AS ModelId, run_scope AS RunScope, description AS Description, succeeded AS Succeeded
-                    FROM Log_analysis
-                    WHERE threadId = @tid
-                    ORDER BY id DESC";
-        return conn.Query<TinyGenerator.Models.LogAnalysis>(sql, new { tid = threadId }).ToList();
+        using var context = CreateDbContext();
+        return context.LogAnalyses.Where(la => la.ThreadId == threadId).OrderByDescending(la => la.Id).ToList();
     }
 
     public int GetLogCount(string? level = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var where = new List<string>();
-        var parameters = new DynamicParameters();
-        if (!string.IsNullOrWhiteSpace(level)) { where.Add("Level = @Level"); parameters.Add("Level", level); }
-        var sql = "SELECT COUNT(*) FROM Log";
-        if (where.Count > 0) sql += " WHERE " + string.Join(" AND ", where);
-        var cnt = conn.ExecuteScalar<long>(sql, parameters);
-        return (int)cnt;
+        using var context = CreateDbContext();
+        IQueryable<LogEntry> query = context.Logs;
+        if (!string.IsNullOrWhiteSpace(level))
+            query = query.Where(l => l.Level == level);
+        return query.Count();
     }
 
     public void ClearLogs()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        // Delete related log_analysis entries first (foreign key constraint)
-        conn.Execute("DELETE FROM log_analysis");
-        // Then delete all logs
-        conn.Execute("DELETE FROM Log");
+        using var context = CreateDbContext();
+        // EF Core doesn't support efficient bulk delete, but for log cleanup this is acceptable
+        var logs = context.Logs.ToList();
+        context.Logs.RemoveRange(logs);
+        context.SaveChanges();
     }
 
     public List<LogEntry> GetLogsByThreadId(int threadId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"
-            SELECT id, ts, level, operation, thread_id AS ThreadId, thread_scope AS ThreadScope, 
-                   agent_name AS AgentName, message, source, state, context, exception, analized
-            FROM log
-            WHERE thread_id = @threadId
-            ORDER BY ts DESC";
-        return conn.Query<LogEntry>(sql, new { threadId }).AsList();
+        using var context = CreateDbContext();
+        return context.Logs.Where(l => l.ThreadId == threadId).OrderByDescending(l => l.Id).ToList();
     }
 
     /// <summary>
@@ -2663,32 +2830,25 @@ LIMIT @max";
     {
         try
         {
-            using var conn = CreateConnection();
-            conn.Open();
-
-            // Check current log count
-            var count = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM Log");
+            using var context = CreateDbContext();
+            var count = context.Logs.Count();
             if (count <= countThreshold) return;
 
-            // Calculate cutoff date (older than daysOld)
             var cutoffDate = DateTime.UtcNow.AddDays(-daysOld);
+            var cutoffStr = cutoffDate.ToString("o");
             
-            // Delete logs older than cutoff date
-            var deleted = conn.Execute(
-                "DELETE FROM Log WHERE Ts < @CutoffDate",
-                new { CutoffDate = cutoffDate }
-            );
-            
-            if (deleted > 0)
+            // Filter logs by comparing timestamp strings (ISO 8601 format is sortable)
+            var oldLogs = context.Logs.Where(l => string.Compare(l.Ts, cutoffStr) < 0).ToList();
+            if (oldLogs.Count > 0)
             {
-                var newCount = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM Log");
-                System.Diagnostics.Debug.WriteLine($"[DB] Log cleanup: Deleted {deleted} log entries older than {daysOld} days. New count: {newCount}");
+                context.Logs.RemoveRange(oldLogs);
+                context.SaveChanges();
+                System.Diagnostics.Debug.WriteLine($"[DB] Log cleanup: Deleted {oldLogs.Count} log entries older than {daysOld} days.");
             }
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[DB] Log cleanup failed: {ex.Message}");
-            // Best-effort: don't throw on cleanup failure
         }
     }
 
@@ -2989,37 +3149,58 @@ WHERE Id = @modelId;";
     // Story Status CRUD operations
     public List<StoryStatus> ListAllStoryStatuses()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName, caption_to_execute AS CaptionToExecute FROM stories_status ORDER BY step, code";
-        return conn.Query<StoryStatus>(sql).ToList();
+        using var context = CreateDbContext();
+        return context.StoriesStatus.OrderBy(s => s.Step).ThenBy(s => s.Code).ToList();
     }
 
     public StoryStatus? GetStoryStatusById(int id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName, caption_to_execute AS CaptionToExecute FROM stories_status WHERE id = @id LIMIT 1";
-        return conn.QueryFirstOrDefault<StoryStatus>(sql, new { id });
+        using var context = CreateDbContext();
+        return context.StoriesStatus.Find(id);
     }
 
     public StoryStatus? GetStoryStatusByCode(string? code)
     {
         if (string.IsNullOrWhiteSpace(code)) return null;
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, code AS Code, description AS Description, step AS Step, color AS Color, operation_type AS OperationType, agent_type AS AgentType, function_name AS FunctionName, caption_to_execute AS CaptionToExecute FROM stories_status WHERE code = @code LIMIT 1";
-        return conn.QueryFirstOrDefault<StoryStatus>(sql, new { code });
+        using var context = CreateDbContext();
+        return context.StoriesStatus.FirstOrDefault(s => s.Code == code);
     }
 
     public void UpdateStoryFolder(long storyId, string folder)
     {
         if (storyId <= 0 || string.IsNullOrWhiteSpace(folder)) return;
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("UPDATE stories SET folder = @folder WHERE id = @id", new { folder, id = storyId });
+        using var context = CreateDbContext();
+        var story = context.Stories.Find(storyId);
+        if (story != null)
+        {
+            story.Folder = folder;
+            context.SaveChanges();
+        }
     }
 
+    private void UpdateStoryStatusAfterEvaluation(TinyGeneratorDbContext? context, long storyId, int? agentId)
+    {
+        if (context == null || !agentId.HasValue) return;
+        try
+        {
+            var totalEvaluations = context.StoryEvaluations.Count(se => se.StoryId == storyId);
+            if (totalEvaluations >= 2)
+            {
+                var story = context.Stories.Find(storyId);
+                if (story != null)
+                {
+                    story.StatusId = EvaluatedStatusId;
+                    context.SaveChanges();
+                }
+            }
+        }
+        catch
+        {
+            // ignore best-effort status updates
+        }
+    }
+
+    // Backwards-compatible overload for callers that still use a raw DB connection
     private void UpdateStoryStatusAfterEvaluation(IDbConnection conn, long storyId, int? agentId)
     {
         if (conn == null || !agentId.HasValue) return;
@@ -3043,63 +3224,74 @@ WHERE Id = @modelId;";
 
     public int InsertStoryStatus(StoryStatus status)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"INSERT INTO stories_status(code, description, step, color, operation_type, agent_type, function_name, caption_to_execute) VALUES(@Code, @Description, @Step, @Color, @OperationType, @AgentType, @FunctionName, @CaptionToExecute); SELECT last_insert_rowid();";
-        var id = conn.ExecuteScalar<long>(sql, status);
-        return (int)id;
+        using var context = CreateDbContext();
+        context.StoriesStatus.Add(status);
+        context.SaveChanges();
+        return status.Id;
     }
 
     public void UpdateStoryStatus(StoryStatus status)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"UPDATE stories_status SET code=@Code, description=@Description, step=@Step, color=@Color, operation_type=@OperationType, agent_type=@AgentType, function_name=@FunctionName, caption_to_execute=@CaptionToExecute WHERE id = @Id";
-        conn.Execute(sql, status);
+        using var context = CreateDbContext();
+        var existing = context.StoriesStatus.Find(status.Id);
+        if (existing != null)
+        {
+            existing.Code = status.Code;
+            existing.Description = status.Description;
+            existing.Step = status.Step;
+            existing.Color = status.Color;
+            existing.OperationType = status.OperationType;
+            existing.AgentType = status.AgentType;
+            existing.FunctionName = status.FunctionName;
+            existing.CaptionToExecute = status.CaptionToExecute;
+            context.SaveChanges();
+        }
     }
 
     public void DeleteStoryStatus(int id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("DELETE FROM stories_status WHERE id = @id", new { id });
+        using var context = CreateDbContext();
+        var status = context.StoriesStatus.Find(id);
+        if (status != null)
+        {
+            context.StoriesStatus.Remove(status);
+            context.SaveChanges();
+        }
     }
 
     // ========== Multi-Step Task Execution Methods ==========
 
     public long CreateTaskExecution(TinyGenerator.Models.TaskExecution execution)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"
-INSERT INTO task_executions (task_type, entity_id, step_prompt, initial_context, current_step, max_step, retry_count, status, executor_agent_id, checker_agent_id, config, created_at, updated_at)
-VALUES (@TaskType, @EntityId, @StepPrompt, @InitialContext, @CurrentStep, @MaxStep, @RetryCount, @Status, @ExecutorAgentId, @CheckerAgentId, @Config, @CreatedAt, @UpdatedAt);
-SELECT last_insert_rowid();";
-        return conn.ExecuteScalar<long>(sql, execution);
+        using var context = CreateDbContext();
+        context.TaskExecutions.Add(execution);
+        context.SaveChanges();
+        return execution.Id;
     }
 
     public TinyGenerator.Models.TaskExecution? GetTaskExecutionById(long id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, task_type AS TaskType, entity_id AS EntityId, step_prompt AS StepPrompt, initial_context AS InitialContext, current_step AS CurrentStep, max_step AS MaxStep, retry_count AS RetryCount, status AS Status, executor_agent_id AS ExecutorAgentId, checker_agent_id AS CheckerAgentId, config AS Config, created_at AS CreatedAt, updated_at AS UpdatedAt FROM task_executions WHERE id = @id LIMIT 1";
-        return conn.QueryFirstOrDefault<TinyGenerator.Models.TaskExecution>(sql, new { id });
+        using var context = CreateDbContext();
+        return context.TaskExecutions.Find(id);
     }
 
     public void DeleteTaskExecution(long executionId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        using var tx = conn.BeginTransaction();
+        using var context = CreateDbContext();
+        using var transaction = context.Database.BeginTransaction();
         try
         {
-            conn.Execute("DELETE FROM task_execution_steps WHERE execution_id = @eid", new { eid = executionId }, tx);
-            conn.Execute("DELETE FROM task_executions WHERE id = @id", new { id = executionId }, tx);
-            tx.Commit();
+            var steps = context.TaskExecutionSteps.Where(s => s.ExecutionId == executionId).ToList();
+            context.TaskExecutionSteps.RemoveRange(steps);
+            var execution = context.TaskExecutions.Find(executionId);
+            if (execution != null)
+                context.TaskExecutions.Remove(execution);
+            context.SaveChanges();
+            transaction.Commit();
         }
         catch
         {
-            try { tx.Rollback(); } catch { }
+            transaction.Rollback();
             throw;
         }
     }
@@ -3110,193 +3302,208 @@ SELECT last_insert_rowid();";
     /// </summary>
     public int DeleteActiveExecutions(long? entityId = null, string? taskType = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        using var tx = conn.BeginTransaction();
+        using var context = CreateDbContext();
+        using var transaction = context.Database.BeginTransaction();
         try
         {
-            var whereClauses = new List<string> { "status IN ('pending','in_progress')" };
-            var parameters = new DynamicParameters();
+            IQueryable<TinyGenerator.Models.TaskExecution> query = context.TaskExecutions
+                .Where(e => e.Status == "pending" || e.Status == "in_progress");
+            
             if (entityId.HasValue)
-            {
-                whereClauses.Add("entity_id = @eid");
-                parameters.Add("@eid", entityId.Value);
-            }
+                query = query.Where(e => e.EntityId == entityId.Value);
             if (!string.IsNullOrWhiteSpace(taskType))
+                query = query.Where(e => e.TaskType == taskType);
+            
+            var executions = query.ToList();
+            foreach (var exec in executions)
             {
-                whereClauses.Add("task_type = @tt");
-                parameters.Add("@tt", taskType);
+                var steps = context.TaskExecutionSteps.Where(s => s.ExecutionId == exec.Id).ToList();
+                context.TaskExecutionSteps.RemoveRange(steps);
+                context.TaskExecutions.Remove(exec);
             }
-
-            var where = string.Join(" AND ", whereClauses);
-
-            // Find matching execution ids
-            var selectSql = $"SELECT id FROM task_executions WHERE {where}";
-            var ids = conn.Query<long>(selectSql, parameters).ToList();
-            foreach (var id in ids)
-            {
-                conn.Execute("DELETE FROM task_execution_steps WHERE execution_id = @eid", new { eid = id }, tx);
-                conn.Execute("DELETE FROM task_executions WHERE id = @id", new { id }, tx);
-            }
-
-            tx.Commit();
-            return ids.Count;
+            context.SaveChanges();
+            transaction.Commit();
+            return executions.Count;
         }
         catch
         {
-            try { tx.Rollback(); } catch { }
+            transaction.Rollback();
             throw;
         }
     }
 
     public void UpdateTaskExecution(TinyGenerator.Models.TaskExecution execution)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"
-UPDATE task_executions 
-SET task_type=@TaskType, entity_id=@EntityId, step_prompt=@StepPrompt, initial_context=@InitialContext, current_step=@CurrentStep, max_step=@MaxStep, 
-    retry_count=@RetryCount, status=@Status, executor_agent_id=@ExecutorAgentId, checker_agent_id=@CheckerAgentId, 
-    config=@Config, updated_at=@UpdatedAt
-WHERE id=@Id";
-        conn.Execute(sql, execution);
+        using var context = CreateDbContext();
+        var existing = context.TaskExecutions.Find(execution.Id);
+        if (existing != null)
+        {
+            existing.TaskType = execution.TaskType;
+            existing.EntityId = execution.EntityId;
+            existing.StepPrompt = execution.StepPrompt;
+            existing.InitialContext = execution.InitialContext;
+            existing.CurrentStep = execution.CurrentStep;
+            existing.MaxStep = execution.MaxStep;
+            existing.RetryCount = execution.RetryCount;
+            existing.Status = execution.Status;
+            existing.ExecutorAgentId = execution.ExecutorAgentId;
+            existing.CheckerAgentId = execution.CheckerAgentId;
+            existing.Config = execution.Config;
+            existing.UpdatedAt = execution.UpdatedAt;
+            context.SaveChanges();
+        }
     }
 
     public TinyGenerator.Models.TaskExecution? GetActiveExecutionForEntity(long? entityId, string taskType)
     {
         if (!entityId.HasValue) return null;
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, task_type AS TaskType, entity_id AS EntityId, step_prompt AS StepPrompt, initial_context AS InitialContext, current_step AS CurrentStep, max_step AS MaxStep, retry_count AS RetryCount, status AS Status, executor_agent_id AS ExecutorAgentId, checker_agent_id AS CheckerAgentId, config AS Config, created_at AS CreatedAt, updated_at AS UpdatedAt FROM task_executions WHERE entity_id = @eid AND task_type = @tt AND status IN ('pending','in_progress') LIMIT 1";
-        return conn.QueryFirstOrDefault<TinyGenerator.Models.TaskExecution>(sql, new { eid = entityId.Value, tt = taskType });
+        using var context = CreateDbContext();
+        return context.TaskExecutions
+            .FirstOrDefault(e => e.EntityId == entityId.Value && e.TaskType == taskType && (e.Status == "pending" || e.Status == "in_progress"));
     }
 
     public long CreateTaskExecutionStep(TinyGenerator.Models.TaskExecutionStep step)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"
-INSERT INTO task_execution_steps (execution_id, step_number, step_instruction, step_output, validation_result, attempt_count, started_at, completed_at)
-VALUES (@ExecutionId, @StepNumber, @StepInstruction, @StepOutput, @ValidationResultJson, @AttemptCount, @StartedAt, @CompletedAt);
-SELECT last_insert_rowid();";
-        return conn.ExecuteScalar<long>(sql, step);
+        using var context = CreateDbContext();
+        context.TaskExecutionSteps.Add(step);
+        context.SaveChanges();
+        return step.Id;
     }
 
     public List<TinyGenerator.Models.TaskExecutionStep> GetTaskExecutionSteps(long executionId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, execution_id AS ExecutionId, step_number AS StepNumber, step_instruction AS StepInstruction, step_output AS StepOutput, validation_result AS ValidationResultJson, attempt_count AS AttemptCount, started_at AS StartedAt, completed_at AS CompletedAt FROM task_execution_steps WHERE execution_id = @eid ORDER BY step_number";
-        return conn.Query<TinyGenerator.Models.TaskExecutionStep>(sql, new { eid = executionId }).ToList();
+        using var context = CreateDbContext();
+        return context.TaskExecutionSteps
+            .Where(s => s.ExecutionId == executionId)
+            .OrderBy(s => s.StepNumber)
+            .ToList();
     }
 
     public TinyGenerator.Models.TaskTypeInfo? GetTaskTypeByCode(string code)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, code AS Code, description AS Description, default_executor_role AS DefaultExecutorRole, default_checker_role AS DefaultCheckerRole, output_merge_strategy AS OutputMergeStrategy, validation_criteria AS ValidationCriteria FROM task_types WHERE code = @code LIMIT 1";
-        return conn.QueryFirstOrDefault<TinyGenerator.Models.TaskTypeInfo>(sql, new { code });
+        using var context = CreateDbContext();
+        return context.TaskTypes.FirstOrDefault(t => t.Code == code);
     }
 
     // List all task types
     public List<TinyGenerator.Models.TaskTypeInfo> ListTaskTypes()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, code AS Code, description AS Description, default_executor_role AS DefaultExecutorRole, default_checker_role AS DefaultCheckerRole, output_merge_strategy AS OutputMergeStrategy, validation_criteria AS ValidationCriteria FROM task_types ORDER BY code";
-        return conn.Query<TinyGenerator.Models.TaskTypeInfo>(sql).ToList();
+        using var context = CreateDbContext();
+        return context.TaskTypes.OrderBy(t => t.Code).ToList();
     }
 
     // Upsert a task type by code
     public void UpsertTaskType(TinyGenerator.Models.TaskTypeInfo tt)
     {
         if (tt == null || string.IsNullOrWhiteSpace(tt.Code)) return;
-        using var conn = CreateConnection();
-        conn.Open();
-        var now = DateTime.UtcNow.ToString("o");
-        var sql = @"INSERT INTO task_types(code, description, default_executor_role, default_checker_role, output_merge_strategy, validation_criteria) VALUES(@Code,@Description,@DefaultExecutorRole,@DefaultCheckerRole,@OutputMergeStrategy,@ValidationCriteria) ON CONFLICT(code) DO UPDATE SET description=@Description, default_executor_role=@DefaultExecutorRole, default_checker_role=@DefaultCheckerRole, output_merge_strategy=@OutputMergeStrategy, validation_criteria=@ValidationCriteria;";
-        conn.Execute(sql, new { tt.Code, tt.Description, tt.DefaultExecutorRole, tt.DefaultCheckerRole, tt.OutputMergeStrategy, tt.ValidationCriteria });
+        using var context = CreateDbContext();
+        var existing = context.TaskTypes.FirstOrDefault(t => t.Code == tt.Code);
+        if (existing != null)
+        {
+            existing.Description = tt.Description;
+            existing.DefaultExecutorRole = tt.DefaultExecutorRole;
+            existing.DefaultCheckerRole = tt.DefaultCheckerRole;
+            existing.OutputMergeStrategy = tt.OutputMergeStrategy;
+            existing.ValidationCriteria = tt.ValidationCriteria;
+        }
+        else
+        {
+            context.TaskTypes.Add(tt);
+        }
+        context.SaveChanges();
     }
 
     public void DeleteTaskTypeByCode(string code)
     {
         if (string.IsNullOrWhiteSpace(code)) return;
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("DELETE FROM task_types WHERE code = @code", new { code });
+        using var context = CreateDbContext();
+        var tt = context.TaskTypes.FirstOrDefault(t => t.Code == code);
+        if (tt != null)
+        {
+            context.TaskTypes.Remove(tt);
+            context.SaveChanges();
+        }
     }
 
     public TinyGenerator.Models.StepTemplate? GetStepTemplateById(long id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, instructions AS Instructions, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates WHERE id = @id LIMIT 1";
-        return conn.QueryFirstOrDefault<TinyGenerator.Models.StepTemplate>(sql, new { id });
+        using var context = CreateDbContext();
+        return context.StepTemplates.Find(id);
     }
 
     public TinyGenerator.Models.StepTemplate? GetStepTemplateByName(string name)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, instructions AS Instructions, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates WHERE name = @name LIMIT 1";
-        return conn.QueryFirstOrDefault<TinyGenerator.Models.StepTemplate>(sql, new { name });
+        using var context = CreateDbContext();
+        return context.StepTemplates.FirstOrDefault(s => s.Name == name);
     }
 
     public List<TinyGenerator.Models.StepTemplate> ListStepTemplates(string? taskType = null)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var baseSql = @"SELECT id AS Id, name AS Name, task_type AS TaskType, step_prompt AS StepPrompt, instructions AS Instructions, description AS Description, created_at AS CreatedAt, updated_at AS UpdatedAt FROM step_templates";
-        var sql = taskType == null
-            ? baseSql + " ORDER BY name"
-            : baseSql + " WHERE task_type = @tt ORDER BY name";
-        return conn.Query<TinyGenerator.Models.StepTemplate>(sql, new { tt = taskType }).ToList();
+        using var context = CreateDbContext();
+        IQueryable<TinyGenerator.Models.StepTemplate> query = context.StepTemplates;
+        if (!string.IsNullOrWhiteSpace(taskType))
+            query = query.Where(s => s.TaskType == taskType);
+        return query.OrderBy(s => s.Name).ToList();
     }
 
     public void UpsertStepTemplate(TinyGenerator.Models.StepTemplate template)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var existing = conn.ExecuteScalar<long?>("SELECT id FROM step_templates WHERE name = @name", new { template.Name });
-        
-        if (existing.HasValue)
+        using var context = CreateDbContext();
+        var existing = context.StepTemplates.FirstOrDefault(s => s.Name == template.Name);
+        if (existing != null)
         {
-            // Update
-            var sql = @"UPDATE step_templates SET task_type=@TaskType, step_prompt=@StepPrompt, instructions=@Instructions, description=@Description, updated_at=@UpdatedAt WHERE id=@Id";
-            conn.Execute(sql, new { template.TaskType, template.StepPrompt, template.Instructions, template.Description, UpdatedAt = DateTime.UtcNow.ToString("o"), Id = existing.Value });
+            existing.TaskType = template.TaskType;
+            existing.StepPrompt = template.StepPrompt;
+            existing.Instructions = template.Instructions;
+            existing.Description = template.Description;
+            existing.UpdatedAt = DateTime.UtcNow.ToString("o");
         }
         else
         {
-            // Insert
-            var sql = @"INSERT INTO step_templates (name, task_type, step_prompt, instructions, description, created_at, updated_at) VALUES (@Name, @TaskType, @StepPrompt, @Instructions, @Description, @CreatedAt, @UpdatedAt)";
-            conn.Execute(sql, template);
+            context.StepTemplates.Add(template);
         }
+        context.SaveChanges();
     }
 
     public void UpdateStepTemplate(TinyGenerator.Models.StepTemplate template)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"UPDATE step_templates SET name=@Name, task_type=@TaskType, step_prompt=@StepPrompt, instructions=@Instructions, description=@Description, updated_at=@UpdatedAt WHERE id=@Id";
-        conn.Execute(sql, template);
+        using var context = CreateDbContext();
+        var existing = context.StepTemplates.Find(template.Id);
+        if (existing != null)
+        {
+            existing.Name = template.Name;
+            existing.TaskType = template.TaskType;
+            existing.StepPrompt = template.StepPrompt;
+            existing.Instructions = template.Instructions;
+            existing.Description = template.Description;
+            existing.UpdatedAt = template.UpdatedAt;
+            context.SaveChanges();
+        }
     }
 
     public void DeleteStepTemplate(long id)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        conn.Execute("DELETE FROM step_templates WHERE id = @id", new { id });
+        using var context = CreateDbContext();
+        var template = context.StepTemplates.Find(id);
+        if (template != null)
+        {
+            context.StepTemplates.Remove(template);
+            context.SaveChanges();
+        }
     }
 
     public void CleanupOldTaskExecutions()
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = "DELETE FROM task_executions WHERE status IN ('completed','failed') AND datetime(updated_at) < datetime('now','-7 days')";
-        var deleted = conn.Execute(sql);
-        if (deleted > 0)
+        using var context = CreateDbContext();
+        var cutoffDate = DateTime.UtcNow.AddDays(-7).ToString("o");
+        var oldExecutions = context.TaskExecutions
+            .Where(e => (e.Status == "completed" || e.Status == "failed") && string.Compare(e.UpdatedAt, cutoffDate) < 0)
+            .ToList();
+        if (oldExecutions.Count > 0)
         {
-            Console.WriteLine($"[DB] Cleaned up {deleted} old task executions");
+            context.TaskExecutions.RemoveRange(oldExecutions);
+            context.SaveChanges();
+            Console.WriteLine($"[DB] Cleaned up {oldExecutions.Count} old task executions");
         }
     }
 
@@ -3307,11 +3514,9 @@ SELECT last_insert_rowid();";
     /// </summary>
     public void SaveChunkFacts(ChunkFacts facts)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"INSERT INTO story_chunk_facts (story_id, chunk_number, facts_json, ts) 
-                    VALUES (@StoryId, @ChunkNumber, @FactsJson, @Ts)";
-        conn.Execute(sql, facts);
+        using var context = CreateDbContext();
+        context.ChunkFacts.Add(facts);
+        context.SaveChanges();
     }
 
     /// <summary>
@@ -3319,13 +3524,8 @@ SELECT last_insert_rowid();";
     /// </summary>
     public ChunkFacts? GetChunkFacts(int storyId, int chunkNumber)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, story_id AS StoryId, chunk_number AS ChunkNumber, 
-                    facts_json AS FactsJson, ts AS Ts 
-                    FROM story_chunk_facts 
-                    WHERE story_id = @sid AND chunk_number = @cn";
-        return conn.QueryFirstOrDefault<ChunkFacts>(sql, new { sid = storyId, cn = chunkNumber });
+        using var context = CreateDbContext();
+        return context.ChunkFacts.FirstOrDefault(c => c.StoryId == storyId && c.ChunkNumber == chunkNumber);
     }
 
     /// <summary>
@@ -3333,14 +3533,8 @@ SELECT last_insert_rowid();";
     /// </summary>
     public List<ChunkFacts> GetAllChunkFacts(int storyId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, story_id AS StoryId, chunk_number AS ChunkNumber, 
-                    facts_json AS FactsJson, ts AS Ts 
-                    FROM story_chunk_facts 
-                    WHERE story_id = @sid 
-                    ORDER BY chunk_number";
-        return conn.Query<ChunkFacts>(sql, new { sid = storyId }).ToList();
+        using var context = CreateDbContext();
+        return context.ChunkFacts.Where(c => c.StoryId == storyId).OrderBy(c => c.ChunkNumber).ToList();
     }
 
     /// <summary>
@@ -3348,12 +3542,9 @@ SELECT last_insert_rowid();";
     /// </summary>
     public void SaveCoherenceScore(CoherenceScore score)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"INSERT INTO story_coherence_scores 
-                    (story_id, chunk_number, local_coherence, global_coherence, errors, ts) 
-                    VALUES (@StoryId, @ChunkNumber, @LocalCoherence, @GlobalCoherence, @Errors, @Ts)";
-        conn.Execute(sql, score);
+        using var context = CreateDbContext();
+        context.CoherenceScores.Add(score);
+        context.SaveChanges();
     }
 
     /// <summary>
@@ -3361,15 +3552,8 @@ SELECT last_insert_rowid();";
     /// </summary>
     public List<CoherenceScore> GetCoherenceScores(int storyId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, story_id AS StoryId, chunk_number AS ChunkNumber, 
-                    local_coherence AS LocalCoherence, global_coherence AS GlobalCoherence, 
-                    errors AS Errors, ts AS Ts 
-                    FROM story_coherence_scores 
-                    WHERE story_id = @sid 
-                    ORDER BY chunk_number";
-        return conn.Query<CoherenceScore>(sql, new { sid = storyId }).ToList();
+        using var context = CreateDbContext();
+        return context.CoherenceScores.Where(c => c.StoryId == storyId).OrderBy(c => c.ChunkNumber).ToList();
     }
 
     /// <summary>
@@ -3377,12 +3561,20 @@ SELECT last_insert_rowid();";
     /// </summary>
     public void SaveGlobalCoherence(GlobalCoherence coherence)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"INSERT OR REPLACE INTO story_global_coherence 
-                    (story_id, global_coherence, chunk_count, notes, ts) 
-                    VALUES (@StoryId, @GlobalCoherenceValue, @ChunkCount, @Notes, @Ts)";
-        conn.Execute(sql, coherence);
+        using var context = CreateDbContext();
+        var existing = context.GlobalCoherences.FirstOrDefault(g => g.StoryId == coherence.StoryId);
+        if (existing != null)
+        {
+            existing.GlobalCoherenceValue = coherence.GlobalCoherenceValue;
+            existing.ChunkCount = coherence.ChunkCount;
+            existing.Notes = coherence.Notes;
+            existing.Ts = coherence.Ts;
+        }
+        else
+        {
+            context.GlobalCoherences.Add(coherence);
+        }
+        context.SaveChanges();
     }
 
     /// <summary>
@@ -3390,13 +3582,8 @@ SELECT last_insert_rowid();";
     /// </summary>
     public GlobalCoherence? GetGlobalCoherence(int storyId)
     {
-        using var conn = CreateConnection();
-        conn.Open();
-        var sql = @"SELECT id AS Id, story_id AS StoryId, global_coherence AS GlobalCoherenceValue, 
-                    chunk_count AS ChunkCount, notes AS Notes, ts AS Ts 
-                    FROM story_global_coherence 
-                    WHERE story_id = @sid";
-        return conn.QueryFirstOrDefault<GlobalCoherence>(sql, new { sid = storyId });
+        using var context = CreateDbContext();
+        return context.GlobalCoherences.FirstOrDefault(g => g.StoryId == storyId);
     }
 
     #endregion

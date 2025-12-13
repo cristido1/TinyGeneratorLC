@@ -6,6 +6,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
+    [Table("task_executions")]
     public class TaskExecution
     {
         [Column("id")]
@@ -64,6 +65,7 @@ namespace TinyGenerator.Models
         public string? CheckerAgentName { get; set; }
     }
 
+    [Table("task_execution_steps")]
     public class TaskExecutionStep
     {
         [Column("id")]

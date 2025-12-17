@@ -73,7 +73,7 @@
                     <span class="text-muted">-</span>
                 }
             </td>
-            <td>@s.Model</td>
+            <td class="model-name">@s.Model</td>
             <td>@(s.Folder ?? "-")</td>
             <td>@s.CharCount.ToString("N0")</td>
             <td>
@@ -124,6 +124,28 @@
                                     <button type="submit" class="dropdown-item">🔊 Genera TTS</button>
                                 </form>
                             </li>
+                            <li>
+                                <form method="post" asp-page-handler="GenerateAmbience" asp-route-id="@s.Id" asp-route-folderName="@s.Folder" style="display:inline">
+                                    <button type="submit" class="dropdown-item">🌲 Genera Audio Ambientale</button>
+                                </form>
+                            </li>
+                            <li>
+                                <form method="post" asp-page-handler="GenerateFx" asp-route-id="@s.Id" asp-route-folderName="@s.Folder" style="display:inline">
+                                    <button type="submit" class="dropdown-item">💥 Genera Effetti Sonori (FX)</button>
+                                </form>
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <form method="post" asp-page-handler="MixFinalAudio" asp-route-id="@s.Id" asp-route-folderName="@s.Folder" style="display:inline">
+                                    <button type="submit" class="dropdown-item">🎚️ Mix Audio Finale</button>
+                                </form>
+                            </li>
+                            @if (s.HasFinalMix)
+                            {
+                                <li>
+                                    <a href="@Url.Page("/Stories/Index", "FinalMixAudio", new { id = s.Id })" class="dropdown-item" target="_blank">🎧 Ascolta Mix Finale</a>
+                                </li>
+                            }
                             @if (s.HasVoiceSource)
                             {
                                 <li>
@@ -133,6 +155,22 @@
                                 </li>
                                 <li>
                                     <a href="#" class="dropdown-item tts-playlist-btn" data-story-id="@s.Id">▶️ Ascolta sequenza TTS</a>
+                                </li>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(s.Characters))
+                            {
+                                <li>
+                                    <form method="post" asp-page-handler="NormalizeCharacterNames" asp-route-id="@s.Id" style="display:inline">
+                                        <button type="submit" class="dropdown-item">🔤 Normalizza nomi personaggi</button>
+                                    </form>
+                                </li>
+                            }
+                            @if (s.HasVoiceSource)
+                            {
+                                <li>
+                                    <form method="post" asp-page-handler="NormalizeSentiments" asp-route-id="@s.Id" style="display:inline">
+                                        <button type="submit" class="dropdown-item">😊 Normalizza sentimenti</button>
+                                    </form>
                                 </li>
                             }
                         }
@@ -323,6 +361,13 @@
         /* Draggable queue card */
         #queuePanel {
             touch-action: none;
+        }
+        /* Ensure long model names wrap inside the table */
+        .model-name {
+            max-width: 260px; /* adjust as needed */
+            white-space: normal !important;
+            word-break: break-word;
+            overflow-wrap: anywhere;
         }
     </style>
 

@@ -17,6 +17,27 @@ public class TtsPhrase
     public int? DurationMs { get; set; }
     public int? StartMs { get; set; }
     public int? EndMs { get; set; }
+    
+    /// <summary>
+    /// Background ambient sound/setting description (e.g., "spaceship_hum", "wind", "crowd_murmur").
+    /// Used to generate background sounds during audio mixing.
+    /// </summary>
+    public string? Ambience { get; set; }
+    
+    /// <summary>
+    /// Sound effect description to generate (from [FX, duration, description] tag).
+    /// </summary>
+    public string? FxDescription { get; set; }
+    
+    /// <summary>
+    /// Duration in seconds for the sound effect.
+    /// </summary>
+    public int? FxDuration { get; set; }
+    
+    /// <summary>
+    /// Generated sound effect file name.
+    /// </summary>
+    public string? FxFile { get; set; }
 }
 public class TtsPause
 {

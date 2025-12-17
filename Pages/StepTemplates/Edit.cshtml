@@ -28,6 +28,13 @@
             </div>
 
             <div class="mb-3">
+                <label asp-for="Template.CharactersStep" class="form-label">Characters Step</label>
+                <input asp-for="Template.CharactersStep" type="number" class="form-control" min="1" max="20" placeholder="Es. 2" style="max-width: 120px;" />
+                <span asp-validation-for="Template.CharactersStep" class="text-danger"></span>
+                <div class="form-text">Numero dello step che genera la lista dei personaggi (per task type "story"). Lasciare vuoto se non applicabile.</div>
+            </div>
+
+            <div class="mb-3">
                 <label asp-for="Template.Description" class="form-label">Description</label>
                 <textarea asp-for="Template.Description" class="form-control" rows="3" maxlength="500"></textarea>
                 <span asp-validation-for="Template.Description" class="text-danger"></span>

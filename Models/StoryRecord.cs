@@ -74,6 +74,12 @@ namespace TinyGenerator.Models
         [NotMapped]
         public bool HasVoiceSource { get; set; }
 
+        /// <summary>
+        /// Indicates if the story has a final mixed audio file (final_mix.wav or final_mix.mp3)
+        /// </summary>
+        [NotMapped]
+        public bool HasFinalMix { get; set; }
+
         // Test information (if story was generated from a test)
         [NotMapped]
         public int? TestRunId { get; set; }
@@ -86,6 +92,13 @@ namespace TinyGenerator.Models
         
         [Column("agent_id")]
         public int? AgentId { get; set; }
+
+        /// <summary>
+        /// JSON string containing the list of characters with their canonical names and genders.
+        /// Format: [{"name": "Carta", "gender": "male", "role": "protagonist", "aliases": ["COMANDANTE CARTA", "Alessandro Carta"]}]
+        /// </summary>
+        [Column("characters")]
+        public string? Characters { get; set; }
 
         // Evaluations attached to the story (one for each saved evaluation)
         [NotMapped]

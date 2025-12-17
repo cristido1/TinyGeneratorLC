@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TinyGenerator.Data;
 
@@ -10,9 +11,11 @@ using TinyGenerator.Data;
 namespace TinyGenerator.Data.Migrations
 {
     [DbContext(typeof(TinyGeneratorDbContext))]
-    partial class TinyGeneratorDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251214163843_AddStepNumberToLog")]
+    partial class AddStepNumberToLog
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -892,10 +895,6 @@ namespace TinyGenerator.Data.Migrations
                     b.Property<int>("CharCount")
                         .HasColumnType("INTEGER")
                         .HasColumnName("char_count");
-
-                    b.Property<string>("Characters")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("characters");
 
                     b.Property<string>("Eval")
                         .IsRequired()

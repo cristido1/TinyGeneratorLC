@@ -61,7 +61,17 @@ namespace TinyGenerator.Services
             // If semantic threshold is provided in validationCriteria, enforce it early
             if (semanticScore.HasValue && validationCriteria != null && validationCriteria.ContainsKey("semantic_threshold"))
             {
-                var threshold = Convert.ToDouble(validationCriteria["semantic_threshold"]);
+                var thresholdValue = validationCriteria["semantic_threshold"];
+                double threshold;
+                if (thresholdValue is JsonElement je)
+                {
+                    threshold = je.ValueKind == JsonValueKind.Number ? je.GetDouble() : 0.0;
+                }
+                else
+                {
+                    threshold = Convert.ToDouble(thresholdValue);
+                }
+                
                 if (semanticScore.Value < threshold)
                 {
                     _logger.Log("Warning", "MultiStep", $"Semantic score {semanticScore.Value:F2} below threshold {threshold:F2}, writer validation failed");
@@ -132,6 +142,14 @@ namespace TinyGenerator.Services
             {
                 var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
                 var checkerModelName = modelInfo?.Name ?? "phi3:mini";
+
+                // Push a scope with "Response Checker" as agent name so logs show correctly in ChatLog
+                using var checkerScope = LogScope.Push(
+                    "response_checker_validation",
+                    null,
+                    LogScope.CurrentStepNumber,
+                    LogScope.CurrentMaxStep,
+                    "Response Checker");
 
                 var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
                 var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
@@ -275,6 +293,14 @@ namespace TinyGenerator.Services
             {
                 var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
                 var checkerModelName = modelInfo?.Name ?? "phi3:mini";
+
+                // Push a scope with "Response Checker" as agent name so logs show correctly in ChatLog
+                using var checkerScope = LogScope.Push(
+                    "response_checker_tool_reminder",
+                    null,
+                    LogScope.CurrentStepNumber,
+                    LogScope.CurrentMaxStep,
+                    "Response Checker");
 
                 var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
                 var bridge = _kernelFactory.CreateChatBridge(checkerModelName);

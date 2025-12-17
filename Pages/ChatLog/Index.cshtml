@@ -64,9 +64,9 @@
     }
     
     .chat-header {
-        font-size: 12px;
+        font-size: 10px;
         font-weight: 600;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
         color: #546e7a;
         font-family: 'Rajdhani', sans-serif;
         text-transform: uppercase;
@@ -90,17 +90,37 @@
         color: #c62828;
     }
     
+    /* Response Checker specific styles */
+    .chat-message.system.checker .chat-bubble {
+        background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+        border-left: 3px solid #ff9800;
+    }
+    
+    .chat-message.agent.checker .chat-bubble {
+        background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%);
+        border-right: 3px solid #ffc107;
+    }
+    
+    .chat-message.system.checker .chat-header {
+        color: #e65100;
+    }
+    
+    .chat-message.agent.checker .chat-header {
+        color: #ff8f00;
+    }
+    }
+    
     .chat-content {
         word-wrap: break-word;
-        font-size: 14px;
-        line-height: 1.6;
+        font-size: 12px;
+        line-height: 1.5;
         color: #263238;
     }
     
     .chat-timestamp {
-        font-size: 11px;
+        font-size: 9px;
         color: #78909c;
-        margin-top: 8px;
+        margin-top: 6px;
         font-style: italic;
     }
     
@@ -167,6 +187,19 @@
         font-size: 13px;
         color: #546e7a;
     }
+    
+    .step-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #ff9800, #f57c00);
+        color: white;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 700;
+        margin-right: 8px;
+        vertical-align: middle;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
 </style>
 
 <div class="chat-container">
@@ -180,6 +213,10 @@
                 <label for="filterTaskId">Task ID</label>
                 <input type="number" class="form-control form-control-sm" id="filterTaskId" placeholder="Tutti">
             </div>
+            <div class="col-md-1">
+                <label for="filterStep">Step</label>
+                <input type="number" class="form-control form-control-sm" id="filterStep" placeholder="Tutti" min="1">
+            </div>
             <div class="col-md-2">
                 <label for="filterCategory">Categoria</label>
                 <select class="form-control form-control-sm" id="filterCategory">
@@ -190,7 +227,7 @@
                     <option value="ModelCompletion">Completion</option>
                 </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label for="filterDate">Data</label>
                 <input type="date" class="form-control form-control-sm" id="filterDate">
             </div>
@@ -224,21 +261,27 @@
                 var isValidation = msg.Category == "ModelResponse" && msg.Message.Contains("RESPONSE_JSON");
                 var validationSuccess = isValidation && (msg.Message.Contains("\"valid\":true") || msg.Message.Contains("\"isValid\":true"));
                 var validationError = isValidation && (msg.Message.Contains("\"valid\":false") || msg.Message.Contains("\"isValid\":false"));
+                var isChecker = msg.AgentName?.Equals("Response Checker", StringComparison.OrdinalIgnoreCase) == true;
 
                 var cssClass = isSystem ? "system" : "agent";
+                if (isChecker) cssClass += " checker";
                 if (validationSuccess) cssClass += " success";
                 if (validationError) cssClass += " error";
 
-                <div class="chat-message @cssClass" data-threadid="@msg.ThreadId" data-taskid="@msg.ThreadId" data-category="@msg.Category" data-date="@msg.Timestamp.ToString("yyyy-MM-dd")">
+                <div class="chat-message @cssClass" data-threadid="@msg.ThreadId" data-taskid="@msg.ThreadId" data-category="@msg.Category" data-date="@msg.Timestamp.ToString("yyyy-MM-dd")" data-step="@msg.StepNumber" data-agent="@msg.AgentName">
                     <div class="chat-bubble">
                         <div class="chat-header">
+                            @if (msg.StepNumber.HasValue && msg.MaxStep.HasValue)
+                            {
+                                <span class="step-badge" title="Step @msg.StepNumber di @msg.MaxStep">@msg.StepNumber/@msg.MaxStep</span>
+                            }
                             @if (isSystem)
                             {
-                                <text>System to [@msg.AgentName]</text>
+                                <text>System → @msg.AgentName</text>
                             }
                             else
                             {
-                                <text>[@msg.AgentName]</text>
+                                <text>@msg.AgentName → System</text>
                             }
                         </div>
                         <div class="chat-content">@Html.Raw((msg.ChatText ?? msg.Message)?.Replace("\\n", "<br>").Replace("\\t", "&nbsp;&nbsp;&nbsp;&nbsp;").Replace("\n", "<br>").Replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;"))</div>
@@ -274,6 +317,7 @@
             $('#btnApplyFilter').click(function() {
                 var threadId = $('#filterThreadId').val();
                 var taskId = $('#filterTaskId').val();
+                var step = $('#filterStep').val();
                 var category = $('#filterCategory').val();
                 var date = $('#filterDate').val();
                 
@@ -286,6 +330,10 @@
                     }
                     
                     if (taskId && $msg.data('taskid') != taskId) {
+                        show = false;
+                    }
+                    
+                    if (step && $msg.data('step') != step) {
                         show = false;
                     }
                     

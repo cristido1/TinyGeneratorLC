@@ -5,7 +5,12 @@
     ViewData["PageDescription"] = "Gestisci i template multi-step per la generazione delle storie";
 }
 
-<div class="mb-3"></div>
+<div class="mb-3 d-flex align-items-center gap-2">
+    <button type="button" class="btn btn-success" id="btnNewTemplate" onclick="openCreateModal()">
+        <i class="fa fa-plus me-1"></i> New Template
+    </button>
+    <div class="ms-auto text-muted small">Manage your multi-step templates</div>
+</div>
 
 <table id="tabTemplates" class="table table-bordered table-sm table-pastel table-compact datatable"
        data-create-label="Create Template"
@@ -38,6 +43,9 @@
                     <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@t.Id">Edit</a>
                     <form method="post" asp-page-handler="Delete" asp-route-id="@t.Id" style="display:inline;" onsubmit="return confirm('Delete template @t.Name?');">
                         <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                    </form>
+                    <form method="post" asp-page-handler="Copy" asp-route-id="@t.Id" style="display:inline;margin-left:.25rem;">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary" title="Copy template">Copy</button>
                     </form>
                 </td>
             </tr>
@@ -194,6 +202,8 @@
             $('#templateDescription').val('');
             $('#templateInstructions').val('');
             $('#templateStepPrompt').val('');
+            var modal = new bootstrap.Modal(document.getElementById('modalEditTemplate'));
+            modal.show();
         }
 
         function openEditModal(id, templateJson) {

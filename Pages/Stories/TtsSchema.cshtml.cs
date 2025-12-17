@@ -7,6 +7,7 @@ using TinyGenerator.Services;
 
 namespace TinyGenerator.Pages.Stories
 {
+    [IgnoreAntiforgeryToken]
     public class TtsSchemaModel : PageModel
     {
         private readonly StoriesService _storiesService;

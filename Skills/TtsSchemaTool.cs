@@ -111,6 +111,14 @@ namespace TinyGenerator.Skills
                             { "type", "string" },
                             { "description", "Narrator text to append" }
                         }
+                    },
+                    {
+                        "ambience",
+                        new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "description", "Background ambient sound/setting description for this scene" }
+                        }
                     }
                 },
                 new List<string> { "text" }
@@ -147,6 +155,14 @@ namespace TinyGenerator.Skills
                             { "type", "string" },
                             { "description", "Emotion for the line. Allowed: neutral, happy, sad, angry, fearful, disgusted, surprised" },
                             { "enum", SupportedEmotions.ToArray() }
+                        }
+                    },
+                    {
+                        "ambience",
+                        new Dictionary<string, object>
+                        {
+                            { "type", "string" },
+                            { "description", "Background ambient sound/setting description for this scene" }
                         }
                     }
                 },
@@ -189,7 +205,7 @@ namespace TinyGenerator.Skills
                 return SerializeResult(new { error = "Invalid input format" });
             }
             LastFunctionCalled = "add_narration";
-            var result = AddNarration(request.Text);
+            var result = AddNarration(request.Text, request.Ambience);
             LastFunctionResult = result;
             return result;
         }
@@ -202,7 +218,7 @@ namespace TinyGenerator.Skills
                 return SerializeResult(new { error = "Invalid input format" });
             }
             LastFunctionCalled = "add_phrase";
-            var result = AddPhraseAutoCreate(request.Character, request.Text, request.Emotion);
+            var result = AddPhraseAutoCreate(request.Character, request.Text, request.Emotion, request.Ambience);
             LastFunctionResult = result;
             return result;
         }
@@ -211,19 +227,25 @@ namespace TinyGenerator.Skills
 
 
 
-        internal string AddNarration(string? text)
+        internal string AddNarration(string? text, string? ambience = null)
         {
             if (string.IsNullOrWhiteSpace(text))
                 return SerializeResult(new { error = "Narration text is required" });
 
             EnsureCharacterExists("Narratore");
 
-            _schema.Timeline.Add(new TtsPhrase { Character = "Narratore", Text = text, Emotion = "neutral" });
+            _schema.Timeline.Add(new TtsPhrase 
+            { 
+                Character = "Narratore", 
+                Text = text, 
+                Emotion = "neutral",
+                Ambience = ambience
+            });
             PersistSchemaSnapshot();
             return SerializeResult(new { result = "Narration added" });
         }
 
-        internal string AddPhraseAutoCreate(string? character, string? text, string? emotion)
+        internal string AddPhraseAutoCreate(string? character, string? text, string? emotion, string? ambience = null)
         {
             if (string.IsNullOrWhiteSpace(text))
                 return SerializeResult(new { error = "Phrase text is required" });
@@ -239,7 +261,13 @@ namespace TinyGenerator.Skills
 
             EnsureCharacterExists(charName);
 
-            _schema.Timeline.Add(new TtsPhrase { Character = charName, Text = text, Emotion = emotion });
+            _schema.Timeline.Add(new TtsPhrase 
+            { 
+                Character = charName, 
+                Text = text, 
+                Emotion = emotion,
+                Ambience = ambience
+            });
             PersistSchemaSnapshot();
             return SerializeResult(new { result = "Phrase added" });
         }
@@ -374,6 +402,7 @@ namespace TinyGenerator.Skills
         private class NarrationRequest
         {
             public string? Text { get; set; }
+            public string? Ambience { get; set; }
         }
 
         private class PhraseRequest
@@ -381,6 +410,7 @@ namespace TinyGenerator.Skills
             public string? Character { get; set; }
             public string? Text { get; set; }
             public string? Emotion { get; set; }
+            public string? Ambience { get; set; }
         }
 
 

@@ -68,6 +68,13 @@ namespace TinyGenerator.Services.Commands
 
                 _logger.Log("Information", "MultiStep", $"Using template: {template.Name}");
 
+                // Build config with characters_step if defined in template
+                string? configOverrides = null;
+                if (template.CharactersStep.HasValue)
+                {
+                    configOverrides = JsonSerializer.Serialize(new { characters_step = template.CharactersStep.Value });
+                }
+
                 // Don't create story record yet - will be created after successful generation
                 // Store model info for later use
                 int? modelId = agent.ModelId;
@@ -84,7 +91,7 @@ namespace TinyGenerator.Services.Commands
                     stepPrompt: template.StepPrompt,
                     executorAgentId: agent.Id,
                     checkerAgentId: null, // Use default checker from task_types
-                    configOverrides: null,
+                    configOverrides: configOverrides,
                     initialContext: _theme, // ← Pass user theme as initial context!
                     threadId: threadId,
                     templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions
@@ -92,7 +99,8 @@ namespace TinyGenerator.Services.Commands
 
                 _logger.Log("Information", "MultiStep", $"Started task execution {executionId} (story will be created on success)");
 
-                // Enqueue execution command
+                // Enqueue execution command with different runId suffix to avoid conflict
+                var executeRunId = $"{_generationId}_exec";
                 _dispatcher.Enqueue(
                     "ExecuteMultiStepTask",
                     async ctx => {
@@ -107,7 +115,7 @@ namespace TinyGenerator.Services.Commands
                         await executeCmd.ExecuteAsync(ctx.CancellationToken);
                         return new CommandResult(true, "Task execution completed");
                     },
-                    runId: _generationId.ToString(),
+                    runId: executeRunId,
                     metadata: new Dictionary<string, string>
                     {
                         ["agentName"] = agent.Name ?? string.Empty,

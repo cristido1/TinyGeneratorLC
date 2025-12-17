@@ -95,10 +95,12 @@ namespace TinyGenerator.Services
                 State = state,
                 ThreadId = (int)(LogScope.CurrentOperationId ?? Environment.CurrentManagedThreadId),
                 ThreadScope = scope,
-                AgentName = null,
+                AgentName = LogScope.CurrentAgentName,
                 Context = null,
                 ChatText = chatText,
-                Result = string.IsNullOrWhiteSpace(derivedResult) ? null : derivedResult
+                Result = string.IsNullOrWhiteSpace(derivedResult) ? null : derivedResult,
+                StepNumber = LogScope.CurrentStepNumber,
+                MaxStep = LogScope.CurrentMaxStep
             };
 
             bool shouldFlush = false;
@@ -155,17 +157,26 @@ namespace TinyGenerator.Services
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] REQUEST_JSON: {requestJson}";
             
-            // Extract user content from JSON for cleaner chat display
+            // Extract the LAST message from the conversation for cleaner chat display
+            // This allows following the conversation flow, showing feedback messages during retries
             string chatText;
             try
             {
                 var json = System.Text.Json.JsonDocument.Parse(requestJson);
                 var messages = json.RootElement.GetProperty("messages");
-                var userContent = messages.EnumerateArray()
-                    .FirstOrDefault(m => m.GetProperty("role").GetString() == "user")
-                    .GetProperty("content").GetString();
+                var lastMessage = messages.EnumerateArray().LastOrDefault();
                 
-                chatText = userContent ?? requestJson;
+                if (lastMessage.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                {
+                    var content = lastMessage.TryGetProperty("content", out var contentProp) 
+                        ? contentProp.GetString() 
+                        : null;
+                    chatText = content ?? requestJson;
+                }
+                else
+                {
+                    chatText = requestJson;
+                }
             }
             catch
             {

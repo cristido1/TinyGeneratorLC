@@ -12,7 +12,7 @@ namespace TinyGenerator.Services
 {
     public sealed class CommandDispatcherOptions
     {
-        public int MaxParallelCommands { get; set; } = 2;
+        public int MaxParallelCommands { get; set; } = 1;
     }
 
     internal sealed class CommandWorkItem
@@ -24,6 +24,7 @@ namespace TinyGenerator.Services
         public Func<CommandContext, Task<CommandResult>> Handler { get; }
         public TaskCompletionSource<CommandResult> Completion { get; }
         public long OperationNumber { get; }
+        public string? AgentName { get; }
 
         public CommandWorkItem(
             string runId,
@@ -31,7 +32,8 @@ namespace TinyGenerator.Services
             string threadScope,
             IReadOnlyDictionary<string, string>? metadata,
             Func<CommandContext, Task<CommandResult>> handler,
-            long operationNumber)
+            long operationNumber,
+            string? agentName = null)
         {
             RunId = runId;
             OperationName = operationName;
@@ -39,6 +41,7 @@ namespace TinyGenerator.Services
             Metadata = metadata;
             Handler = handler;
             OperationNumber = operationNumber;
+            AgentName = agentName;
             Completion = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
     }
@@ -88,7 +91,8 @@ namespace TinyGenerator.Services
                 : runId.Trim();
 
             var opNumber = LogScope.GenerateOperationId();
-            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber);
+            var agentName = metadata != null && metadata.TryGetValue("agentName", out var an) ? an : null;
+            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, agentName);
 
             if (!_queue.Writer.TryWrite(workItem))
             {
@@ -103,7 +107,7 @@ namespace TinyGenerator.Services
                 Metadata = metadata,
                 Status = "queued",
                 EnqueuedAt = DateTimeOffset.UtcNow,
-                AgentName = metadata != null && metadata.TryGetValue("agentName", out var an) ? an : null,
+                AgentName = agentName,
                 ModelName = metadata != null && metadata.TryGetValue("modelName", out var mn) ? mn : null,
                 CurrentStep = metadata != null && metadata.TryGetValue("stepCurrent", out var sc) && int.TryParse(sc, out var c) ? c : null,
                 MaxStep = metadata != null && metadata.TryGetValue("stepMax", out var sm) && int.TryParse(sm, out var m) ? m : null
@@ -166,7 +170,7 @@ namespace TinyGenerator.Services
 
         private async Task ProcessWorkItemAsync(CommandWorkItem workItem, CancellationToken stoppingToken)
         {
-            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber);
+            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName);
             var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, stoppingToken);
             var startMessage = $"[{workItem.RunId}] START {workItem.OperationName}";
             _logger?.Log("Information", "Command", startMessage);

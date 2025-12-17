@@ -86,5 +86,41 @@ namespace TinyGenerator.Pages.StepTemplates
             TempData["Success"] = $"Template '{template.Name}' deleted";
             return RedirectToPage();
         }
+
+        public IActionResult OnPostCopy(int id)
+        {
+            var template = _db.GetStepTemplateById(id);
+            if (template == null)
+            {
+                TempData["Error"] = "Template not found";
+                return RedirectToPage();
+            }
+
+            // Build a unique name for the copied template
+            var baseName = template.Name + " copia";
+            var newName = baseName;
+            int idx = 1;
+            while (_db.GetStepTemplateByName(newName) != null)
+            {
+                newName = baseName + " (" + idx + ")";
+                idx++;
+            }
+
+            var copy = new TinyGenerator.Models.StepTemplate
+            {
+                Id = 0,
+                Name = newName,
+                TaskType = template.TaskType,
+                StepPrompt = template.StepPrompt,
+                Instructions = template.Instructions,
+                Description = template.Description,
+                CreatedAt = DateTime.UtcNow.ToString("o"),
+                UpdatedAt = DateTime.UtcNow.ToString("o")
+            };
+
+            _db.UpsertStepTemplate(copy);
+            TempData["Success"] = $"Template '{template.Name}' copied to '{newName}'";
+            return RedirectToPage();
+        }
     }
 }

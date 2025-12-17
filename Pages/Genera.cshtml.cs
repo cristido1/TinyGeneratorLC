@@ -11,6 +11,7 @@ public class GeneraModel : PageModel
 {
     private readonly DatabaseService _database;
     private readonly MultiStepOrchestrationService? _orchestrator;
+    private readonly StoriesService _storiesService;
     private readonly CommandDispatcher _dispatcher;
     private readonly ICustomLogger _customLogger;
     private readonly ILogger<GeneraModel> _logger;
@@ -18,12 +19,14 @@ public class GeneraModel : PageModel
     public GeneraModel(
         DatabaseService database,
         CommandDispatcher dispatcher,
+        StoriesService storiesService,
         ICustomLogger customLogger,
         ILogger<GeneraModel> logger,
         MultiStepOrchestrationService? orchestrator = null)
     {
         _database = database;
         _orchestrator = orchestrator;
+        _storiesService = storiesService;
         _dispatcher = dispatcher;
         _customLogger = customLogger;
         _logger = logger;
@@ -147,5 +150,55 @@ public class GeneraModel : PageModel
         var completed = _customLogger.IsCompleted(id);
         var result = _customLogger.GetResult(id);
         return new JsonResult(new { messages, completed, result });
+    }
+
+    /// <summary>
+    /// Avvia il pipeline completo: genera storie da tutti i writer, valuta, seleziona la migliore,
+    /// e poi esegue l'intero pipeline audio (TTS, ambience, FX, mix finale).
+    /// </summary>
+    public async Task<IActionResult> OnPostStartFullPipelineAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Prompt))
+        {
+            return BadRequest(new { error = "Il prompt è obbligatorio." });
+        }
+
+        if (_orchestrator == null)
+        {
+            return BadRequest(new { error = "Orchestrator non configurato per il pipeline completo." });
+        }
+
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+
+        var cmd = new FullStoryPipelineCommand(
+            Prompt,
+            genId,
+            _database,
+            _orchestrator,
+            _storiesService,
+            _dispatcher,
+            _customLogger
+        );
+
+        _dispatcher.Enqueue(
+            "FullStoryPipeline",
+            async ctx => {
+                await cmd.ExecuteAsync(ctx.CancellationToken);
+                return new CommandResult(true, "Full story pipeline completed");
+            },
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "full_story_pipeline",
+                ["prompt"] = Prompt.Length > 100 ? Prompt.Substring(0, 100) + "..." : Prompt
+            }
+        );
+
+        _customLogger.Append(genId.ToString(), "🎬 Pipeline completo avviato");
+
+        try { await _customLogger.NotifyGroupAsync(genId.ToString(), "Started", "Full pipeline started", "info"); } catch { }
+
+        return new JsonResult(new { id = genId.ToString() });
     }
 }

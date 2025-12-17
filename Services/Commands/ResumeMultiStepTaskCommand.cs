@@ -60,7 +60,8 @@ namespace TinyGenerator.Services.Commands
                 {
                     _logger.Log("Information", "MultiStep", $"Step {current}/{max}: {stepDesc}");
                     _ = _logger.BroadcastStepProgress(_generationId, current, max, stepDesc);
-                    _dispatcher?.UpdateStep(_generationId.ToString(), current, max);
+                    // Use same runId pattern as Enqueue: {generationId}_exec
+                    _dispatcher?.UpdateStep($"{_generationId}_exec", current, max);
                 }
 
                 // Resume execution

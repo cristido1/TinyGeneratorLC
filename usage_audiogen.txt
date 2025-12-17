@@ -1,0 +1,251 @@
+Audiocraft API - Documentazione (formato testo)
+Generato automaticamente per integrazione con altri strumenti AI
+
+---
+Sommario:
+- Base URL: http://localhost:8003 (porta di default)
+- Autenticazione: nessuna implementata nel server mostrato (nessun header obbligatorio)
+- Formato dati: JSON per request/response; file audio restituiti come `audio/wav` per download
+- Directory output: `generated_audio/` (file salvati localmente)
+- Device supportati: CUDA (GPU NVIDIA), MPS (Mac M-series), CPU
+
+---
+ENDPOINT: Root
+- Metodo: GET
+- Path: /
+- Descrizione: Informazioni generali sull'API e elenco degli endpoint disponibili.
+- Request: nessuna
+- Response: JSON con message, version e lista endpoints
+  Esempio di response:
+  {
+    "message": "Audiocraft API Server",
+    "version": "1.0.0",
+    "endpoints": { ... }
+  }
+
+---
+ENDPOINT: Health check
+- Metodo: GET
+- Path: /health
+- Descrizione: Restituisce lo stato di salute del servizio e informazioni sul device (GPU CUDA, MPS su Mac, o CPU)
+- Request: nessuna
+- Response JSON:
+  {
+    "status": "healthy",
+    "device": "cuda" | "mps" | "cpu",
+    "mps_available": true|false
+  }
+
+---
+ENDPOINT: List models
+- Metodo: GET
+- Path: /api/models
+- Descrizione: Restituisce la lista dei modelli musicgen e audiogen supportati dal server
+- Request: nessuna
+- Response JSON (esempio):
+  {
+    "musicgen_models": [
+      "facebook/musicgen-small",
+      "facebook/musicgen-medium",
+      "facebook/musicgen-large",
+      "facebook/musicgen-melody"
+    ],
+    "audiogen_models": [
+      "facebook/audiogen-medium"
+    ]
+  }
+
+---
+ENDPOINT: OpenAPI JSON
+- Metodo: GET
+- Path: /api/openapi.json
+- Descrizione: Restituisce lo schema OpenAPI/Swagger in formato JSON.
+- Uso: utile per generazione automatica di client o strumenti di documentazione.
+- Response: JSON (schema OpenAPI)
+
+ENDPOINT: OpenAPI YAML
+- Metodo: GET
+- Path: /api/openapi.yaml
+- Descrizione: Restituisce lo schema OpenAPI in formato YAML (leggibile).
+- Response: testo YAML
+
+---
+ENDPOINT: Generazione musica (MusicGen)
+- Metodo: POST
+- Path: /api/musicgen
+- Descrizione: Genera un file audio (wav) con MusicGen a partire da un prompt testuale.
+- Headers: Content-Type: application/json
+- Body (JSON) - schema (vedi Pydantic MusicGenRequest):
+  {
+    "prompt": "string (il testo descrittivo della traccia)",
+    "duration": float (durata in secondi, default 8.0),
+    "model_name": "string (es. \"facebook/musicgen-small\")",
+    "temperature": float (default 1.0),
+    "top_k": int (default 250),
+    "top_p": float (default 0.0)
+  }
+- Esempio di request body:
+  {
+    "prompt": "Upbeat lo-fi piano with light drums",
+    "duration": 10.0,
+    "model_name": "facebook/musicgen-small",
+    "temperature": 1.0,
+    "top_k": 250,
+    "top_p": 0.0
+  }
+- Response (GenerationResponse):
+  {
+    "success": true,
+    "file_path": "generated_audio/music_xxx.wav",
+    "file_url": "/download/music_xxx.wav",
+    "prompt": "Upbeat lo-fi piano with light drums",
+    "duration": 10.0,
+    "generated_at": "2025-11-08T12:34:56.789"
+  }
+- IMPORTANTE per scaricare il file:
+  - `file_url` è un path relativo (es. "/download/music_xxx.wav")
+  - L'URL completo per il download è: Base URL + file_url
+  - Esempio: http://localhost:8003/download/music_xxx.wav
+  - `file_path` è il percorso locale sul server (non usare per download remoto)
+- Errori comuni:
+  - 500 Internal Server Error: problema nella generazione o salvataggio del file
+
+---
+ENDPOINT: Generazione suoni (AudioGen)
+- Metodo: POST
+- Path: /api/audiogen
+- Descrizione: Genera effetti sonori o suoni brevi a partire da un prompt testuale.
+- Headers: Content-Type: application/json
+- Body (JSON) - schema (AudioGenRequest):
+  {
+    "prompt": "string",
+    "duration": float (default 5.0),
+    "model_name": "string (es. \"facebook/audiogen-medium\")",
+    "temperature": float,
+    "top_k": int,
+    "top_p": float
+  }
+- Esempio di request body:
+  {
+    "prompt": "A short wind whoosh followed by a soft chime",
+    "duration": 4.0,
+    "model_name": "facebook/audiogen-medium",
+    "temperature": 1.0,
+    "top_k": 250,
+    "top_p": 0.0
+  }
+- Response: stesso schema di GenerationResponse usato da /api/musicgen
+- Errori comuni:
+  - 500 Internal Server Error: errore nella pipeline di generazione
+
+---
+ENDPOINT: Download file generato
+- Metodo: GET
+- Path: /download/{filename}
+- URL completo: http://localhost:8003/download/{filename}
+- Descrizione: Scarica il file audio (WAV) generato in precedenza.
+- Come usare:
+  1. Dopo aver chiamato /api/musicgen o /api/audiogen, leggi il campo `file_url` dalla response
+  2. Concatena la Base URL (http://localhost:8003) con `file_url`
+  3. Esegui una GET request all'URL completo per scaricare il file
+- Path parameter:
+  - filename: nome del file (es. music_ab12cd34_20251108_123456.wav)
+- Response: File WAV binario con Content-Type: audio/wav
+- Errori:
+  - 404 Not Found: file non esiste nella directory `generated_audio/`
+
+---
+MODELLI E PARAMETRI IMPORTANTI
+- Device: il server usa automaticamente `cuda` (GPU NVIDIA) se disponibile, altrimenti `mps` su Mac M-series, altrimenti `cpu`.
+  Per forzare CPU: impostare variabile d'ambiente AUDIOCRAFT_FORCE_CPU=1
+- I modelli sono caricati in modalità lazy loading e selezionati tramite `model_name` nella request.
+- Parametri di generazione comuni:
+  - duration: durata in secondi
+  - temperature: controllo della casualità
+  - top_k / top_p: filtri di sampling
+
+---
+FORMATO DEL FILE DI OUTPUT
+- I file sono WAV e vengono salvati in `generated_audio/` con nomi generati in questo pattern:
+  - Music (MusicGen): music_{uuid}_{timestamp}.wav
+  - Sound (AudioGen): sound_{uuid}_{timestamp}.wav
+- Il campo `file_url` nella response è il path relativo per il download (es. /download/music_xxx.wav)
+
+---
+ESEMPI CURL (da usare come riferimento)
+- Generazione musica con MusicGen (POST JSON):
+  curl -X POST http://localhost:8003/api/musicgen \
+    -H "Content-Type: application/json" \
+    -d '{"prompt":"Ambient piano","duration":8.0}'
+
+- Generazione suoni con AudioGen (POST JSON):
+  curl -X POST http://localhost:8003/api/audiogen \
+    -H "Content-Type: application/json" \
+    -d '{"prompt":"Dog barking in the distance","duration":5.0}'
+
+- Scaricare file (usa il valore di file_url dalla response):
+  curl -O http://localhost:8003/download/sound_abc12345_20251217_120000.wav
+
+- Esempio flusso completo con jq (Linux/Mac):
+  FILE_URL=$(curl -s -X POST http://localhost:8003/api/audiogen \
+    -H "Content-Type: application/json" \
+    -d '{"prompt":"Rain on window","duration":5.0}' | jq -r '.file_url')
+  curl -O "http://localhost:8003${FILE_URL}"
+
+---
+CONSIGLI PER L'USO DA PARTE DI UN ALTRO PROGRAMMA AI
+- Preferibile usare `/api/openapi.json` o `/api/openapi.yaml` per ottenere lo schema completo e generare client automaticamente.
+- Se si vuole passare solo testo parsabile, usare questo file: ogni endpoint è definito in blocchi separati ("---"), ideale per parsing.
+- Se necessario, convertire in OpenAPI/JSON per strumenti che consumano direttamente Swagger.
+
+FLUSSO COMPLETO PER GENERARE E SCARICARE UN FILE:
+1. POST http://localhost:8003/api/audiogen (o /api/musicgen)
+   Body: {"prompt": "descrizione audio", "duration": 5.0}
+2. La response contiene:
+   - "success": true (se ok)
+   - "file_url": "/download/sound_abc123_20251217_120000.wav"
+3. Per scaricare: GET http://localhost:8003/download/sound_abc123_20251217_120000.wav
+   (costruisci URL completo: "http://localhost:8003" + file_url)
+4. Il file WAV viene restituito come binary stream
+
+---
+ERROR HANDLING (riassunto)
+- 500: errore interno (problemi di caricamento modello o generazione)
+- 404: file non trovato su /download/{filename}
+- Nessuna autenticazione implementata: se il programma richiede sicurezza, aggiungere un proxy con autenticazione o estendere il server (es. API key/Authorization header).
+
+FORMATO DELLA RESPONSE DI ERRORE:
+Quando si verifica un errore, il server restituisce:
+- HTTP Status Code: 500 (errore interno) o 404 (file non trovato)
+- Content-Type: application/json
+- Body JSON:
+  {
+    "detail": "Descrizione dell'errore specifico"
+  }
+
+Esempi di messaggi di errore nel campo "detail":
+- "Errore generazione musica: CUDA out of memory..."
+- "Errore generazione suono: Model not found..."
+- "File non trovato"
+
+COME GESTIRE GLI ERRORI (per il programma chiamante):
+1. Controlla lo status code HTTP della response
+2. Se status code != 200, leggi il campo "detail" dal body JSON
+3. Il campo "detail" contiene la descrizione testuale dell'errore
+4. Esempio in Python:
+   response = requests.post(url, json=data)
+   if response.status_code != 200:
+       error_msg = response.json().get("detail", "Errore sconosciuto")
+       print(f"Errore: {error_msg}")
+
+---
+NOTE TECNICHE AGGIUNTIVE
+- Endpoint interattivi: /docs (Swagger UI) e /redoc sono disponibili quando il server è in esecuzione; utili per esplorare i tipi precisi e i payload.
+- Per avviare il server:
+  - Windows: start_server.bat oppure python api_server.py
+  - Linux/Mac: ./start_server.sh oppure python api_server.py
+  - Manuale: uvicorn api_server:app --host 0.0.0.0 --port 8003
+- GPU RTX 5080 (Blackwell): richiede PyTorch nightly cu128 e shim xformers (vedi README per setup)
+
+---
+Fine della documentazione testuale.

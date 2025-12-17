@@ -19,14 +19,40 @@ namespace TinyGenerator.Services
         public TimeSpan Timeout => TimeSpan.FromSeconds(TimeoutSeconds);
     }
 
-    // Minimal DTOs matching typical FastAPI responses described by the user
+    // Minimal DTOs matching the localTTS FastAPI responses
     public class VoiceInfo
     {
-        [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
-        [JsonPropertyName("name")] public string Name { get; set; } = string.Empty;
-        [JsonPropertyName("language")] public string? Language { get; set; }
+        // Primary fields from localTTS API
+        [JsonPropertyName("model")] public string? Model { get; set; }
+        [JsonPropertyName("speaker")] public string? Speaker { get; set; }
         [JsonPropertyName("gender")] public string? Gender { get; set; }
-        // Additional fields that help to decide assignment (confidence/age/style/etc.)
+        [JsonPropertyName("age_range")] public string? AgeRange { get; set; }
+        [JsonPropertyName("archetype")] public string? Archetype { get; set; }
+        [JsonPropertyName("rating")] public int? Rating { get; set; }
+        [JsonPropertyName("notes")] public string? Notes { get; set; }
+        
+        // Id field: can be set explicitly, or computed from Speaker/Model
+        private string? _id;
+        [JsonPropertyName("id")]
+        public string Id 
+        { 
+            get => !string.IsNullOrWhiteSpace(_id) ? _id 
+                 : !string.IsNullOrWhiteSpace(Speaker) ? Speaker 
+                 : (Model ?? string.Empty);
+            set => _id = value;
+        }
+        
+        // Name field: can be set explicitly, or computed from Id
+        private string? _name;
+        [JsonPropertyName("name")]
+        public string Name
+        {
+            get => !string.IsNullOrWhiteSpace(_name) ? _name : Id;
+            set => _name = value;
+        }
+        
+        // Legacy/compatibility fields
+        [JsonPropertyName("language")] public string? Language { get; set; }
         [JsonPropertyName("age")] public string? Age { get; set; }
         [JsonPropertyName("confidence")] public double? Confidence { get; set; }
         [JsonPropertyName("tags")] public Dictionary<string,string>? Tags { get; set; }
@@ -99,8 +125,9 @@ namespace TinyGenerator.Services
         }
     }
 
-        // POST /synthesize (body: { voice, text, language?, sentiment? }) -> returns SynthesisResult
+        // POST /synthesize (body: { model, speaker, text, language?, emotion? }) -> returns SynthesisResult
         // If no language is provided, default to Italian ("it").
+        // The voiceId parameter is the speaker name (e.g., "Dionisio Schuyler")
         public async Task<SynthesisResult?> SynthesizeAsync(string voiceId, string text, string? language = null, string? sentiment = null)
         {
             if (string.IsNullOrWhiteSpace(voiceId)) throw new ArgumentException("voiceId required", nameof(voiceId));
@@ -108,7 +135,9 @@ namespace TinyGenerator.Services
 
             var payload = new Dictionary<string, object?>
             {
-                ["voice"] = voiceId,
+                // Use the default XTTS model and pass voiceId as speaker name
+                ["model"] = "tts_models/multilingual/multi-dataset/xtts_v2",
+                ["speaker"] = voiceId,
                 ["text"] = text
             };
             // Ensure we always send a language; default to Italian if not specified
@@ -117,7 +146,8 @@ namespace TinyGenerator.Services
                 language = "it";
             }
             payload["language"] = language;
-            if (!string.IsNullOrWhiteSpace(sentiment)) payload["sentiment"] = sentiment;
+            // API uses "emotion" field, not "sentiment"
+            if (!string.IsNullOrWhiteSpace(sentiment)) payload["emotion"] = sentiment;
 
             // try common endpoints
             var candidates = new[] { "/synthesize", "/v1/synthesize", "/api/synthesize" };

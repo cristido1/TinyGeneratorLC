@@ -48,6 +48,7 @@ namespace TinyGenerator.Skills
 
         public override IEnumerable<string> FunctionNames => new[]
         {
+            "memory",  // Alias for backwards compatibility with simple schema
             "memory_remember",
             "memory_forget",
             "memory_recall",
@@ -86,6 +87,22 @@ namespace TinyGenerator.Skills
         public override async Task<string> ExecuteFunctionAsync(string functionName, string input)
         {
             var parsed = ParseInput<MemoryToolInput>(input) ?? new MemoryToolInput();
+            
+            // If called as "memory" (legacy/simple schema), use the operation field to determine the actual function
+            if (functionName.Equals("memory", StringComparison.OrdinalIgnoreCase))
+            {
+                var op = parsed.Operation?.ToLowerInvariant() ?? "recall";
+                functionName = op switch
+                {
+                    "remember" => "memory_remember",
+                    "forget" => "memory_forget",
+                    "recall" => "memory_recall",
+                    "search" => "memory_search",
+                    "search_chat" => "memory_search_chat",
+                    _ => $"memory_{op}"  // Fallback: prepend memory_ prefix
+                };
+            }
+            
             return await ExecuteOperationAsync(functionName, parsed, functionName.Equals("memory_search_chat", StringComparison.OrdinalIgnoreCase) ? "chat" : null);
         }
 

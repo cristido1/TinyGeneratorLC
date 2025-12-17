@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Services;
@@ -141,17 +142,21 @@ namespace TinyGenerator.Services
                 _logger?.Log("Info", "ReActLoop", $"Added system message (length={_systemMessage.Length})");
                 Console.WriteLine($"[DEBUG ReActLoop] Added system message (length={_systemMessage.Length})");
             }
-            // Add any initial assistant/system messages provided by the caller (e.g., validation feedback)
+            
+            // Add the user prompt (original step instruction)
+            _messageHistory.Add(new ConversationMessage { Role = "user", Content = userPrompt });
+            
+            // Add any conversation history messages (e.g., previous response + validation feedback)
+            // These come AFTER the user prompt to maintain proper conversation flow:
+            // System -> User (request) -> Assistant (previous response) -> User (feedback)
             if (_initialExtraMessages != null && _initialExtraMessages.Count > 0)
             {
                 foreach (var m in _initialExtraMessages)
                 {
                     _messageHistory.Add(m);
-                    _logger?.Log("Info", "ReActLoop", $"Injected initial message role={m.Role} len={m.Content?.Length ?? 0}");
+                    _logger?.Log("Info", "ReActLoop", $"Added conversation history message role={m.Role} len={m.Content?.Length ?? 0}");
                 }
             }
-            
-            _messageHistory.Add(new ConversationMessage { Role = "user", Content = userPrompt });
 
             _logger?.Log("Info", "ReActLoop", $"Starting ReAct loop with prompt length={userPrompt.Length}");
             Console.WriteLine($"[DEBUG ReActLoop] Starting ReAct loop with prompt length={userPrompt.Length}");
@@ -779,14 +784,59 @@ namespace TinyGenerator.Services
         /// </summary>
         private string ExtractPlainTextResponse(string modelResponse)
         {
+            string content;
             try
             {
                 var doc = JsonDocument.Parse(modelResponse);
-                if (doc.RootElement.TryGetProperty("content", out var content))
-                    return content.GetString() ?? modelResponse;
+                if (doc.RootElement.TryGetProperty("content", out var contentProp))
+                    content = contentProp.GetString() ?? modelResponse;
+                else
+                    content = modelResponse;
             }
-            catch { }
-            return modelResponse;
+            catch
+            {
+                content = modelResponse;
+            }
+            return SanitizeModelResponse(content);
+        }
+
+        /// <summary>
+        /// Remove thinking/analysis tags from model responses.
+        /// These are internal reasoning sections that should not appear in the final output.
+        /// Also removes common retry apology patterns that pollute the output.
+        /// </summary>
+        private static string SanitizeModelResponse(string response)
+        {
+            if (string.IsNullOrEmpty(response))
+                return response;
+            
+            // Remove <think>...</think> sections
+            response = Regex.Replace(response, @"<think>.*?</think>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            // Remove <analysis>...</analysis> sections
+            response = Regex.Replace(response, @"<analysis>.*?</analysis>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            // Remove <reasoning>...</reasoning> sections (common variant)
+            response = Regex.Replace(response, @"<reasoning>.*?</reasoning>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            
+            // Remove common retry apology patterns at the beginning of responses
+            // These patterns appear when the model acknowledges a previous error
+            var apologyPatterns = new[]
+            {
+                @"^[Ss]cusa[,.]?\s*(ho fatto un errore|mi sono sbagliato|per l['']errore)[^.]*\.\s*",
+                @"^[Ss]orry[,.]?\s*(I made a mistake|for the error|I apologize)[^.]*\.\s*",
+                @"^[Mm]i scuso[^.]*\.\s*",
+                @"^[Hh]ai ragione[,.]?\s*[^.]*\.\s*",
+                @"^[Yy]ou['']re right[,.]?\s*[^.]*\.\s*",
+                @"^[Ee]cco (la versione corretta|una versione migliore|la correzione)[^:]*:\s*",
+                @"^[Hh]ere['']?s? (the corrected|a better|the fixed) version[^:]*:\s*",
+                @"^(Qui sotto|Di seguito|Ecco) (una versione migliore|la versione corretta)[^:]*:\s*"
+            };
+            
+            foreach (var pattern in apologyPatterns)
+            {
+                response = Regex.Replace(response, pattern, "", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+            }
+            
+            return response.Trim();
         }
 
         private void LogFinalOutcome(ReActResult result)

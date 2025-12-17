@@ -116,32 +116,55 @@ namespace TinyGenerator.Services
 
         private List<string> ParseAndRenumberSteps(string stepPrompt, int threadId)
         {
-            var lines = stepPrompt.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            // Split by lines, keeping empty lines for structure
+            var lines = stepPrompt.Split('\n');
             var steps = new List<string>();
-            var stepPattern = new Regex(@"^\s*\d+[.\)]\s*(.+)$", RegexOptions.Compiled);
+            var stepStartPattern = new Regex(@"^\s*(\d+)[.\)]\s*(.*)$", RegexOptions.Compiled);
+            
+            var currentStepContent = new System.Text.StringBuilder();
+            var originalNumbers = new List<int>();
+            bool inStep = false;
 
             foreach (var line in lines)
             {
-                var match = stepPattern.Match(line.Trim());
+                var match = stepStartPattern.Match(line);
                 if (match.Success)
                 {
-                    steps.Add(match.Groups[1].Value.Trim());
-                }
-            }
-
-            // Check for gaps in original numbering
-            if (steps.Count > 0)
-            {
-                var originalNumbers = new List<int>();
-                foreach (var line in lines)
-                {
-                    var match = Regex.Match(line.Trim(), @"^(\d+)[.\)]");
-                    if (match.Success && int.TryParse(match.Groups[1].Value, out var num))
+                    // Save previous step if any
+                    if (inStep && currentStepContent.Length > 0)
+                    {
+                        steps.Add(currentStepContent.ToString().Trim());
+                    }
+                    
+                    // Start new step
+                    if (int.TryParse(match.Groups[1].Value, out var num))
                     {
                         originalNumbers.Add(num);
                     }
+                    currentStepContent.Clear();
+                    currentStepContent.Append(match.Groups[2].Value.Trim());
+                    inStep = true;
                 }
+                else if (inStep)
+                {
+                    // Continue current step - append this line
+                    if (currentStepContent.Length > 0)
+                    {
+                        currentStepContent.Append('\n');
+                    }
+                    currentStepContent.Append(line.TrimEnd());
+                }
+            }
+            
+            // Don't forget the last step
+            if (inStep && currentStepContent.Length > 0)
+            {
+                steps.Add(currentStepContent.ToString().Trim());
+            }
 
+            // Check for gaps in original numbering
+            if (originalNumbers.Count > 1)
+            {
                 for (int i = 1; i < originalNumbers.Count; i++)
                 {
                     if (originalNumbers[i] != originalNumbers[i - 1] + 1)
@@ -242,9 +265,37 @@ namespace TinyGenerator.Services
                 }
 
                 // If completed all steps successfully, finalize
+                Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - After while loop: execution={execution != null}, status={execution?.Status}, currentStep={execution?.CurrentStep}, maxStep={execution?.MaxStep}");
+                _logger.Log("Debug", "MultiStep", $"After while loop: status={execution?.Status}, currentStep={execution?.CurrentStep}, maxStep={execution?.MaxStep}");
+                
                 if (execution != null && execution.Status == "in_progress" && execution.CurrentStep > execution.MaxStep)
                 {
-                    await CompleteExecutionAsync(executionId, threadId);
+                    Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - Calling CompleteExecutionAsync");
+                    _logger.Log("Information", "MultiStep", $"Calling CompleteExecutionAsync for execution {executionId}");
+                    try
+                    {
+                        await CompleteExecutionAsync(executionId, threadId);
+                        Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - CompleteExecutionAsync returned successfully");
+                    }
+                    catch (Exception completeEx)
+                    {
+                        Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - CompleteExecutionAsync FAILED: {completeEx.Message}");
+                        _logger.Log("Error", "MultiStep", $"CompleteExecutionAsync failed: {completeEx.Message}", completeEx.ToString());
+                        // Even if CompleteExecutionAsync fails, mark as completed to unblock
+                        execution.Status = "completed";
+                        execution.UpdatedAt = DateTime.UtcNow.ToString("o");
+                        _database.UpdateTaskExecution(execution);
+                        _logger.Log("Warning", "MultiStep", $"Force-marked execution {executionId} as completed after CompleteExecutionAsync failure");
+                    }
+                }
+                else if (execution != null && execution.CurrentStep > execution.MaxStep)
+                {
+                    // All steps done but status isn't in_progress - still mark as completed
+                    Console.WriteLine($"[DEBUG] ExecuteAllStepsAsync - All steps done but status={execution.Status}, forcing completion");
+                    _logger.Log("Warning", "MultiStep", $"All steps done but status={execution.Status}, forcing completion for execution {executionId}");
+                    execution.Status = "completed";
+                    execution.UpdatedAt = DateTime.UtcNow.ToString("o");
+                    _database.UpdateTaskExecution(execution);
                 }
             }
             catch (Exception ex)
@@ -292,6 +343,14 @@ namespace TinyGenerator.Services
                 throw new InvalidOperationException($"Execution {executionId} is not in progress (status: {execution.Status})");
             }
 
+            // Push a scope with step information so all logs during this step execution
+            // will have StepNumber and MaxStep populated
+            using var stepScope = LogScope.Push(
+                $"step_{execution.CurrentStep}_of_{execution.MaxStep}",
+                threadId,
+                execution.CurrentStep,
+                execution.MaxStep);
+
             _logger.Log("Information", "MultiStep", $"Executing step {execution.CurrentStep}/{execution.MaxStep}");
 
             // Get step instruction
@@ -307,9 +366,18 @@ namespace TinyGenerator.Services
             // Build context from step placeholders ({{STEP_1}}, {{STEP_2}}, etc.)
             // This must be done ALWAYS, not just on retry, to resolve the placeholders in the instruction.
             // Only filter to completed steps from prior step numbers.
+            // IMPORTANT: Take only the LAST attempt for each step (highest AttemptCount) to avoid duplications
+            // when a step was retried multiple times.
             var completedPreviousSteps = previousSteps
                 .Where(s => s.StepNumber < execution.CurrentStep && !string.IsNullOrWhiteSpace(s.StepOutput))
+                .GroupBy(s => s.StepNumber)
+                .Select(g => g.OrderByDescending(s => s.AttemptCount).First())
+                .OrderBy(s => s.StepNumber)
                 .ToList();
+            
+            // Check if the original step instruction contains {{PROMPT}} BEFORE replacing placeholders
+            // This determines whether the InitialContext should be added to the system message later
+            var originalHadPromptPlaceholder = stepInstruction.Contains("{{PROMPT}}");
             
             // Replace placeholders in stepInstruction
             stepInstruction = await ReplaceStepPlaceholdersAsync(stepInstruction, completedPreviousSteps, execution.InitialContext, threadId, ct);
@@ -357,7 +425,7 @@ namespace TinyGenerator.Services
                 };
             }
 
-            // If this is a retry (RetryCount > 0), prepend validation failure feedback
+            // If this is a retry (RetryCount > 0), build conversation history with previous response + feedback
             if (execution.RetryCount > 0)
             {
                 var lastAttempt = previousSteps
@@ -367,21 +435,37 @@ namespace TinyGenerator.Services
 
                 if (lastAttempt?.ParsedValidation != null && !lastAttempt.ParsedValidation.IsValid)
                 {
-                    // If the previous validation included a SystemMessageOverride, inject it into the
-                    // `systemMessage` instead of placing the feedback inside the user prompt/context.
+                    // Build proper conversation history:
+                    // 1. Assistant's previous response (that was rejected)
+                    // 2. System/User feedback explaining the error
+                    extraMessages = new List<ConversationMessage>();
+                    
+                    // Add the previous (rejected) response as assistant message
+                    if (!string.IsNullOrWhiteSpace(lastAttempt.StepOutput))
+                    {
+                        extraMessages.Add(new ConversationMessage 
+                        { 
+                            Role = "assistant", 
+                            Content = lastAttempt.StepOutput 
+                        });
+                    }
+                    
+                    // If the previous validation included a SystemMessageOverride, add it as system message
                     if (!string.IsNullOrWhiteSpace(lastAttempt.ParsedValidation.SystemMessageOverride))
                     {
-                        extraMessages = new List<ConversationMessage>
-                        {
-                            new ConversationMessage { Role = "system", Content = lastAttempt.ParsedValidation.SystemMessageOverride }
-                        };
+                        extraMessages.Add(new ConversationMessage 
+                        { 
+                            Role = "system", 
+                            Content = lastAttempt.ParsedValidation.SystemMessageOverride 
+                        });
                     }
                     else
                     {
+                        // Add feedback as user message explaining why the response was rejected
                         var feedbackMessage = string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase)
                             ? $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
 
-Il tentativo precedente è stato respinto per il seguente motivo:
+La tua risposta è stata respinta per il seguente motivo:
 {lastAttempt.ParsedValidation.Reason}
 
 Ripeti la trascrizione del chunk usando SOLO blocchi:
@@ -389,26 +473,19 @@ Ripeti la trascrizione del chunk usando SOLO blocchi:
 Testo narrativo
 [PERSONAGGIO: Nome | EMOZIONE: emotion]
 Testo parlato
-NON aggiungere altro testo o JSON, copri tutto il chunk senza saltare nulla.
-"
+NON aggiungere altro testo o JSON, copri tutto il chunk senza saltare nulla."
                             : $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
 
-Il tentativo precedente è stato respinto per il seguente motivo:
+La tua risposta è stata respinta per il seguente motivo:
 {lastAttempt.ParsedValidation.Reason}
 
-Output precedente che è stato respinto:
----
-{lastAttempt.StepOutput}
----
-
-Correggi l'output tenendo conto del feedback ricevuto.
-
-";
-                        // Add feedback as a separate assistant message (do not insert into user prompt)
-                        extraMessages = new List<ConversationMessage>
-                        {
-                            new ConversationMessage { Role = "assistant", Content = feedbackMessage }
-                        };
+Correggi la tua risposta tenendo conto del feedback ricevuto.";
+                        
+                        extraMessages.Add(new ConversationMessage 
+                        { 
+                            Role = "user", 
+                            Content = feedbackMessage 
+                        });
                     }
                 }
             }
@@ -433,6 +510,14 @@ Correggi l'output tenendo conto del feedback ricevuto.
 
             // Get executor agent
             var executorAgent = await GetExecutorAgentAsync(execution, threadId);
+            
+            // Push a nested scope with the agent name for logging
+            using var agentScope = LogScope.Push(
+                $"agent_{executorAgent.Name}",
+                threadId,
+                execution.CurrentStep,
+                execution.MaxStep,
+                executorAgent.Name);
 
             // Check if stepInstruction contains {{PROMPT}} tag
             string fullPrompt;
@@ -443,29 +528,22 @@ Correggi l'output tenendo conto del feedback ricevuto.
             // Note: any validation-requested system overrides are injected via `extraMessages`
             var attachInitialContext = execution.CurrentStep == 1
                 && !hasChunkPlaceholder
-                && !string.IsNullOrWhiteSpace(execution.InitialContext);
+                && !string.IsNullOrWhiteSpace(execution.InitialContext)
+                && !originalHadPromptPlaceholder;  // Don't attach to system message if {{PROMPT}} was in the template
 
-            if (stepInstruction.Contains("{{PROMPT}}") && !string.IsNullOrWhiteSpace(execution.InitialContext) && !hasChunkPlaceholder)
-            {
-                // Replace {{PROMPT}} tag with initial context
-                var stepWithPrompt = stepInstruction.Replace("{{PROMPT}}", execution.InitialContext);
-                fullPrompt = string.IsNullOrEmpty(context)
-                    ? stepWithPrompt
-                    : $"{context}\n\n---\n\n{stepWithPrompt}";
-            }
-            else
-            {
-                // Original behavior: include initial context in system message for step 1
-                fullPrompt = string.IsNullOrEmpty(context)
-                    ? stepInstruction
-                    : $"{context}\n\n---\n\n{stepInstruction}";
+            // The {{PROMPT}} placeholder was already replaced earlier by ReplaceStepPlaceholdersAsync,
+            // so we just need to build the prompt. If originalHadPromptPlaceholder is true, the InitialContext
+            // is already in the user prompt and should NOT be added to the system message.
+            fullPrompt = string.IsNullOrEmpty(context)
+                ? stepInstruction
+                : $"{context}\n\n---\n\n{stepInstruction}";
 
-                if (attachInitialContext)
-                {
-                    systemMessage = string.IsNullOrEmpty(systemMessage)
-                        ? $"**CONTESTO DELLA STORIA**:\n{execution.InitialContext}"
-                        : $"{systemMessage}\n\n**CONTESTO DELLA STORIA**:\n{execution.InitialContext}";
-                }
+            if (attachInitialContext)
+            {
+                // Only add to system message if the template did NOT have {{PROMPT}}
+                systemMessage = string.IsNullOrEmpty(systemMessage)
+                    ? $"**CONTESTO DELLA STORIA**:\n{execution.InitialContext}"
+                    : $"{systemMessage}\n\n**CONTESTO DELLA STORIA**:\n{execution.InitialContext}";
             }
 
             if (!string.IsNullOrWhiteSpace(chunkIntro))
@@ -1034,6 +1112,44 @@ Correggi l'output tenendo conto del feedback ricevuto.
         }
 
         /// <summary>
+        /// Gets a typed value from the execution config JSON.
+        /// </summary>
+        private static T? GetConfigValue<T>(string? configJson, string propertyName)
+        {
+            if (string.IsNullOrWhiteSpace(configJson))
+                return default;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(configJson);
+                if (doc.RootElement.TryGetProperty(propertyName, out var prop))
+                {
+                    if (typeof(T) == typeof(int?) || typeof(T) == typeof(int))
+                    {
+                        if (prop.TryGetInt32(out var intVal))
+                            return (T)(object)intVal;
+                    }
+                    else if (typeof(T) == typeof(string))
+                    {
+                        return (T?)(object?)prop.GetString();
+                    }
+                    else if (typeof(T) == typeof(bool?) || typeof(T) == typeof(bool))
+                    {
+                        if (prop.ValueKind == JsonValueKind.True)
+                            return (T)(object)true;
+                        if (prop.ValueKind == JsonValueKind.False)
+                            return (T)(object)false;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return default;
+        }
+
+        /// <summary>
         /// Convert a structured text response (blocks like [NARRATORE] ... or [PERSONAGGIO: X | EMOZIONE: Y]) into a tool_calls JSON.
         /// Returns null/empty if conversion is not applicable.
         /// </summary>
@@ -1157,8 +1273,46 @@ Correggi l'output tenendo conto del feedback ricevuto.
                 instruction = instruction.Replace("{{PROMPT}}", initialContext);
             }
 
+            // Handle SECTION placeholders: {{STEP_N_SECTION[TAG]}}
+            // Extract content between [TAG] and next [TAG] or end of text
+            var sectionPattern = @"\{\{STEP_(\d+)_SECTION\[([^\]]+)\]\}\}";
+            var sectionMatches = Regex.Matches(instruction, sectionPattern);
+            
+            _logger.Log("Debug", "MultiStep", $"Found {sectionMatches.Count} SECTION placeholder(s). Available steps: [{string.Join(", ", previousSteps.Select(s => s.StepNumber))}]");
+            
+            foreach (Match match in sectionMatches)
+            {
+                int stepNum = int.Parse(match.Groups[1].Value);
+                string tag = match.Groups[2].Value;
+                
+                _logger.Log("Debug", "MultiStep", $"Processing SECTION placeholder: step={stepNum}, tag={tag}");
+                
+                var targetStep = previousSteps.FirstOrDefault(s => s.StepNumber == stepNum);
+                if (targetStep == null)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Step {stepNum} not found in previousSteps for SECTION[{tag}]");
+                    instruction = instruction.Replace(match.Value, $"[Section {tag} from step {stepNum} not available]");
+                    continue;
+                }
+                
+                if (string.IsNullOrWhiteSpace(targetStep.StepOutput))
+                {
+                    _logger.Log("Warning", "MultiStep", $"Step {stepNum} has empty output for SECTION[{tag}]");
+                    instruction = instruction.Replace(match.Value, $"[Section {tag} from step {stepNum} is empty]");
+                    continue;
+                }
+                
+                _logger.Log("Debug", "MultiStep", $"Step {stepNum} output length: {targetStep.StepOutput.Length} chars, extracting section [{tag}]");
+                
+                string sectionContent = ExtractSection(targetStep.StepOutput, tag);
+                _logger.Log("Debug", "MultiStep", $"ExtractSection result for [{tag}]: {sectionContent.Length} chars, starts with: {(sectionContent.Length > 50 ? sectionContent.Substring(0, 50) + "..." : sectionContent)}");
+                
+                instruction = instruction.Replace(match.Value, sectionContent);
+            }
+
             // Parse placeholders: {{STEP_N}}, {{STEP_N_SUMMARY}}, {{STEP_N_EXTRACT:filter}}, {{STEPS_N-M_SUMMARY}}
-            var placeholderPattern = @"\{\{STEP(?:S)?_(\d+)(?:-(\d+))?(?:_(SUMMARY|EXTRACT):(.+?))?\}\}";
+            // Colon is optional - only needed for EXTRACT:filter
+            var placeholderPattern = @"\{\{STEP(?:S)?_(\d+)(?:-(\d+))?(?:_(SUMMARY|EXTRACT)(?::(.+?))?)?\}\}";
             var matches = Regex.Matches(instruction, placeholderPattern);
 
             if (matches.Count == 0)
@@ -1183,6 +1337,14 @@ Correggi l'output tenendo conto del feedback ricevuto.
                     result = result.Replace(match.Value, $"[Step {stepFrom} not yet available]");
                     continue;
                 }
+
+                // If there are multiple attempts for the same step, take only the last attempt (highest AttemptCount)
+                // to avoid including both failed and successful versions
+                targetSteps = targetSteps
+                    .GroupBy(s => s.StepNumber)
+                    .Select(g => g.OrderByDescending(s => s.AttemptCount).First())
+                    .OrderBy(s => s.StepNumber)
+                    .ToList();
 
                 string content;
                 if (mode == "SUMMARY")
@@ -1225,7 +1387,8 @@ Correggi l'output tenendo conto del feedback ricevuto.
             CancellationToken ct)
         {
             // Parse placeholders: {{STEP_N}}, {{STEP_N_SUMMARY}}, {{STEP_N_EXTRACT:filter}}, {{STEPS_N-M_SUMMARY}}
-            var placeholderPattern = @"\{\{STEP(?:S)?_(\d+)(?:-(\d+))?(?:_(SUMMARY|EXTRACT):(.+?))?\}\}";
+            // Colon is optional - only needed for EXTRACT:filter
+            var placeholderPattern = @"\{\{STEP(?:S)?_(\d+)(?:-(\d+))?(?:_(SUMMARY|EXTRACT)(?::(.+?))?)?\}\}";
             var matches = Regex.Matches(instruction, placeholderPattern);
 
             if (matches.Count == 0)
@@ -1286,9 +1449,17 @@ Correggi l'output tenendo conto del feedback ricevuto.
 
         private async Task<string> GenerateSummaryAsync(List<TaskExecutionStep> steps, int threadId, CancellationToken ct)
         {
+            _logger.Log("Information", "MultiStep", $"GenerateSummaryAsync called for {steps.Count} step(s): [{string.Join(", ", steps.Select(s => s.StepNumber))}]");
+            
             var text = string.Join("\n\n", steps.Select(s => s.StepOutput));
             
-            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+            _logger.Log("Debug", "MultiStep", $"Summary input text length: {text?.Length ?? 0} chars");
+            
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                _logger.Log("Warning", "MultiStep", "Summary input is empty or whitespace");
+                return string.Empty;
+            }
 
             // Find fast summary model (qwen2.5:3b or phi3:mini)
             var summaryModel = _database.ListModels()
@@ -1296,11 +1467,11 @@ Correggi l'output tenendo conto del feedback ricevuto.
 
             if (summaryModel == null)
             {
-                _logger.Log("Warning", "MultiStep", "No summary model found, returning full text");
+                _logger.Log("Warning", "MultiStep", "No summary model found (looking for qwen2.5:3b or phi3:mini), returning full text");
                 return text; // Fallback: full text
             }
 
-            _logger.Log("Information", "MultiStep", $"Summarizing context using {summaryModel.Name}");
+            _logger.Log("Information", "MultiStep", $"Summarizing {text.Length} chars using {summaryModel.Name}");
 
             try
             {
@@ -1312,15 +1483,109 @@ RIASSUNTO:";
 
                 var summaryModelName = summaryModel.Name;
                 var orchestrator = _kernelFactory.CreateOrchestrator(summaryModelName, new List<string>());
-                var loop = new ReActLoopOrchestrator(orchestrator, _logger);
+                var bridge = _kernelFactory.CreateChatBridge(summaryModelName);
+                var loop = new ReActLoopOrchestrator(orchestrator, _logger, modelBridge: bridge);
                 var response = await loop.ExecuteAsync(prompt, ct);
-                return response.FinalResponse ?? text;
+                
+                var summary = response.FinalResponse ?? string.Empty;
+                _logger.Log("Information", "MultiStep", $"Summary generated: {summary.Length} chars, success={response.Success}");
+                
+                if (string.IsNullOrWhiteSpace(summary))
+                {
+                    _logger.Log("Warning", "MultiStep", "Summary result is empty, returning original text");
+                    return text;
+                }
+                
+                return summary;
             }
             catch (Exception ex)
             {
-                _logger.Log($"Summary generation failed: {ex.Message}, returning full text", "MultiStep", "Warning");
+                _logger.Log("Error", "MultiStep", $"Summary generation failed: {ex.Message}, returning full text", ex.ToString());
                 return text;
             }
+        }
+
+        /// <summary>
+        /// Extracts a section from text based on section tags.
+        /// Supports multiple formats:
+        /// - [CAPITOLO 2] or [CHAPTER 2] with brackets
+        /// - CAPITOLO 2: or Capitolo 2: with colon
+        /// - **CAPITOLO 2** or **Capitolo 2** with markdown bold
+        /// - ## CAPITOLO 2 or ## Capitolo 2 with markdown headers
+        /// Example: ExtractSection(text, "CAPITOLO 2") returns content between CAPITOLO 2 and CAPITOLO 3 (or end).
+        /// </summary>
+        private string ExtractSection(string output, string sectionTag)
+        {
+            if (string.IsNullOrWhiteSpace(output)) return string.Empty;
+
+            // Build flexible patterns to match various section formats
+            // sectionTag could be "CAPITOLO 2", "Chapter 2", etc.
+            var escapedTag = Regex.Escape(sectionTag);
+            
+            // Try multiple patterns in order of specificity
+            var patterns = new[]
+            {
+                // [CAPITOLO 2] - bracketed format
+                $@"\[{escapedTag}\]",
+                // **CAPITOLO 2** - markdown bold
+                $@"\*\*{escapedTag}\*\*",
+                // ## CAPITOLO 2 or ### CAPITOLO 2 - markdown headers  
+                $@"#+\s*{escapedTag}",
+                // CAPITOLO 2: or Capitolo 2: - with colon
+                $@"(?:^|\n)\s*{escapedTag}\s*[:\-–]",
+                // CAPITOLO 2 (at start of line, no punctuation but followed by newline)
+                $@"(?:^|\n)\s*{escapedTag}\s*(?=\n)"
+            };
+
+            System.Text.RegularExpressions.Match startMatch = null!;
+            foreach (var pattern in patterns)
+            {
+                startMatch = Regex.Match(output, pattern, RegexOptions.IgnoreCase | RegexOptions.Multiline);
+                if (startMatch.Success)
+                {
+                    _logger.Log("Debug", "MultiStep", $"Found section [{sectionTag}] using pattern: {pattern}");
+                    break;
+                }
+            }
+            
+            if (startMatch == null || !startMatch.Success)
+            {
+                _logger.Log("Warning", "MultiStep", $"Section tag [{sectionTag}] not found in step output. Tried patterns for brackets, markdown, and colon formats.");
+                return $"[Section {sectionTag} not found]";
+            }
+
+            int startIndex = startMatch.Index + startMatch.Length;
+            
+            // Find the next section tag (various formats) or end of text
+            // Look for patterns like [CAPITOLO N], **CAPITOLO N**, ## CAPITOLO N, CAPITOLO N:
+            var nextSectionPatterns = new[]
+            {
+                @"\[[A-Z][A-Za-z]+\s*\d+\]",              // [CAPITOLO 3]
+                @"\*\*[A-Z][A-Za-z]+\s*\d+\*\*",         // **CAPITOLO 3**
+                @"#+\s*[A-Z][A-Za-z]+\s*\d+",            // ## CAPITOLO 3
+                @"(?:^|\n)\s*[A-Z][A-Za-z]+\s*\d+\s*[:\-–]"  // CAPITOLO 3:
+            };
+            
+            int endIndex = output.Length;
+            foreach (var pattern in nextSectionPatterns)
+            {
+                var nextMatch = Regex.Match(output.Substring(startIndex), pattern, RegexOptions.IgnoreCase | RegexOptions.Multiline);
+                if (nextMatch.Success && startIndex + nextMatch.Index < endIndex)
+                {
+                    endIndex = startIndex + nextMatch.Index;
+                    break;
+                }
+            }
+            
+            string content = output.Substring(startIndex, endIndex - startIndex).Trim();
+            
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                _logger.Log("Warning", "MultiStep", $"Section [{sectionTag}] is empty");
+                return $"[Section {sectionTag} is empty]";
+            }
+            
+            return content;
         }
 
         private string ExtractContent(string output, string filter)
@@ -1331,16 +1596,27 @@ RIASSUNTO:";
             var extracting = false;
             var result = new StringBuilder();
 
+            // Build a pattern to detect the START of a new section (not just the filter we're looking for)
+            // This handles multiple formats: [CAPITOLO N], **CAPITOLO N**, CAPITOLO N:, ## CAPITOLO N
+            var newSectionPattern = @"^(\s*\[|\s*\*\*|\s*#+\s*|\s*)(Capitolo|Chapter|CAPITOLO|CHAPTER)\s*\d+";
+
             foreach (var line in lines)
             {
+                // Check if this line starts a new section (and it's not the one we're looking for)
+                if (extracting && Regex.IsMatch(line, newSectionPattern, RegexOptions.IgnoreCase))
+                {
+                    // Check if this is a DIFFERENT section than the one we started with
+                    if (!line.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Stop - we've reached the next section
+                        break;
+                    }
+                }
+                
+                // Start extracting when we find the filter
                 if (line.Contains(filter, StringComparison.OrdinalIgnoreCase))
                 {
                     extracting = true;
-                }
-                else if (extracting && Regex.IsMatch(line, @"^(Capitolo|Chapter|\d+\.)", RegexOptions.IgnoreCase))
-                {
-                    // Stop when encountering another chapter/section
-                    break;
                 }
 
                 if (extracting)
@@ -1349,7 +1625,7 @@ RIASSUNTO:";
                 }
             }
 
-            return result.Length > 0 ? result.ToString() : output;
+            return result.Length > 0 ? result.ToString().Trim() : output;
         }
 
         private async Task<string> SummarizeContextAsync(string context, int threadId, CancellationToken ct)
@@ -1561,6 +1837,36 @@ RIASSUNTO:";
                     _database.UpdateTaskExecution(execution);
                     
                     _logger.Log("Information", "MultiStep", $"Created story {storyId} with final text on successful completion");
+                }
+
+                // Extract and save characters if characters_step is configured
+                var charactersStep = GetConfigValue<int?>(execution.Config, "characters_step");
+                if (charactersStep.HasValue && execution.EntityId.HasValue)
+                {
+                    try
+                    {
+                        var charStep = steps.FirstOrDefault(s => s.StepNumber == charactersStep.Value);
+                        if (charStep != null && !string.IsNullOrWhiteSpace(charStep.StepOutput))
+                        {
+                            var characters = StoryCharacterParser.ParseCharacterList(charStep.StepOutput);
+                            if (characters.Count > 0)
+                            {
+                                var charactersJson = StoryCharacterParser.ToJson(characters);
+                                _database.UpdateStoryCharacters(execution.EntityId.Value, charactersJson);
+                                _logger.Log("Information", "MultiStep", 
+                                    $"Saved {characters.Count} characters from step {charactersStep.Value} to story {execution.EntityId.Value}");
+                            }
+                        }
+                        else
+                        {
+                            _logger.Log("Warning", "MultiStep", 
+                                $"Characters step {charactersStep.Value} not found or empty for execution {executionId}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Log("Warning", "MultiStep", $"Failed to extract characters: {ex.Message}");
+                    }
                 }
             }
 

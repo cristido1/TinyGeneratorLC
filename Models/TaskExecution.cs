@@ -205,6 +205,13 @@ namespace TinyGenerator.Models
         [Column("description")]
         public string? Description { get; set; }
         
+        /// <summary>
+        /// Step number that generates the character list (e.g., 2 means step 2 output contains characters).
+        /// If null, no automatic character extraction is performed.
+        /// </summary>
+        [Column("characters_step")]
+        public int? CharactersStep { get; set; }
+        
         [Column("created_at")]
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
         

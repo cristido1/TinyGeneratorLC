@@ -104,6 +104,13 @@ builder.Services.AddSingleton<CommandDispatcher>(sp =>
 builder.Services.AddSingleton<ICommandDispatcher>(sp => sp.GetRequiredService<CommandDispatcher>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>());
 
+// Sentiment mapping service (embedding-based + agent fallback)
+builder.Services.AddSingleton<SentimentMappingService>(sp => new SentimentMappingService(
+    sp.GetRequiredService<DatabaseService>(),
+    sp.GetService<ICustomLogger>(),
+    sp.GetRequiredService<IConfiguration>(),
+    sp.GetRequiredService<IHttpClientFactory>()));
+
 // Stories persistence service (LangChain-first pipeline)
 builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetRequiredService<DatabaseService>(), 
@@ -112,7 +119,8 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetService<ICustomLogger>(),
     sp.GetService<ILogger<StoriesService>>(),
     sp.GetService<ICommandDispatcher>(),
-    sp.GetService<MultiStepOrchestrationService>()));
+    sp.GetService<MultiStepOrchestrationService>(),
+    sp.GetService<SentimentMappingService>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)

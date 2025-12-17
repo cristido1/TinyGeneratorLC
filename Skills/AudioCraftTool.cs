@@ -16,7 +16,7 @@ namespace TinyGenerator.Skills
     {
         private readonly HttpClient _http;
         private readonly bool _forceCpu;
-        private readonly string _baseUrl = "http://localhost:8000";
+        private readonly string _baseUrl = "http://localhost:8003";
 
         public string? LastGeneratedMusicFile { get; set; }
         public string? LastGeneratedSoundFile { get; set; }
@@ -149,7 +149,7 @@ namespace TinyGenerator.Skills
             {
                 var payload = new Dictionary<string, object>
                 {
-                    ["model"] = request.Model ?? "facebook/musicgen-small",
+                    ["model_name"] = request.Model ?? "facebook/musicgen-small",
                     ["prompt"] = request.Prompt ?? string.Empty,
                     ["duration"] = request.Duration ?? 30
                 };
@@ -168,7 +168,7 @@ namespace TinyGenerator.Skills
                 {
                     var retryPayload = new Dictionary<string, object>
                     {
-                        ["model"] = request.Model ?? "facebook/musicgen-small",
+                        ["model_name"] = request.Model ?? "facebook/musicgen-small",
                         ["prompt"] = request.Prompt ?? string.Empty,
                         ["duration"] = request.Duration ?? 30,
                         ["device"] = "cpu"
@@ -181,13 +181,18 @@ namespace TinyGenerator.Skills
                         return SerializeResult(new { result = body2 });
                     }
                     var body2Err = await SafeReadContentAsync(r2);
-                    return SerializeResult(new { error = $"AudioCraft music generation failed after retry (status {r2.StatusCode}). Server: {body2Err}" });
+                    var errorDetail = ExtractErrorDetail(body2Err);
+                    CustomLogger?.Log("Error", "AudioCraftTool", $"Music generation failed after retry: {errorDetail}");
+                    return SerializeResult(new { error = $"AudioCraft music generation failed after retry (status {r2.StatusCode}): {errorDetail}" });
                 }
 
-                return SerializeResult(new { error = $"AudioCraft music generation failed (status {response.StatusCode}). Server: {body}" });
+                var errorMsg = ExtractErrorDetail(body);
+                CustomLogger?.Log("Error", "AudioCraftTool", $"Music generation failed: {errorMsg}");
+                return SerializeResult(new { error = $"AudioCraft music generation failed (status {response.StatusCode}): {errorMsg}" });
             }
             catch (Exception ex)
             {
+                CustomLogger?.Log("Error", "AudioCraftTool", $"Music generation exception: {ex.Message}");
                 return SerializeResult(new { error = ex.Message });
             }
         }
@@ -198,7 +203,7 @@ namespace TinyGenerator.Skills
             {
                 var payload = new Dictionary<string, object>
                 {
-                    ["model"] = request.Model ?? "facebook/audiogen-medium",
+                    ["model_name"] = request.Model ?? "facebook/audiogen-medium",
                     ["prompt"] = request.Prompt ?? string.Empty,
                     ["duration"] = request.Duration ?? 10
                 };
@@ -217,7 +222,7 @@ namespace TinyGenerator.Skills
                 {
                     var retryPayload = new Dictionary<string, object>
                     {
-                        ["model"] = request.Model ?? "facebook/audiogen-medium",
+                        ["model_name"] = request.Model ?? "facebook/audiogen-medium",
                         ["prompt"] = request.Prompt ?? string.Empty,
                         ["duration"] = request.Duration ?? 10,
                         ["device"] = "cpu"
@@ -230,13 +235,18 @@ namespace TinyGenerator.Skills
                         return SerializeResult(new { result = body2 });
                     }
                     var body2Err = await SafeReadContentAsync(r2);
-                    return SerializeResult(new { error = $"AudioCraft sound generation failed after retry (status {r2.StatusCode}). Server: {body2Err}" });
+                    var errorDetail = ExtractErrorDetail(body2Err);
+                    CustomLogger?.Log("Error", "AudioCraftTool", $"Sound generation failed after retry: {errorDetail}");
+                    return SerializeResult(new { error = $"AudioCraft sound generation failed after retry (status {r2.StatusCode}): {errorDetail}" });
                 }
 
-                return SerializeResult(new { error = $"AudioCraft sound generation failed (status {response.StatusCode}). Server: {body}" });
+                var errorMsg = ExtractErrorDetail(body);
+                CustomLogger?.Log("Error", "AudioCraftTool", $"Sound generation failed: {errorMsg}");
+                return SerializeResult(new { error = $"AudioCraft sound generation failed (status {response.StatusCode}): {errorMsg}" });
             }
             catch (Exception ex)
             {
+                CustomLogger?.Log("Error", "AudioCraftTool", $"Sound generation exception: {ex.Message}");
                 return SerializeResult(new { error = ex.Message });
             }
         }
@@ -253,17 +263,21 @@ namespace TinyGenerator.Skills
                     return SerializeResult(new { result = base64, format = "base64" });
                 }
 
+                var body = await SafeReadContentAsync(response);
+                var errorMsg = ExtractErrorDetail(body);
+                
                 if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
-                    var body = await SafeReadContentAsync(response);
-                    return SerializeResult(new { error = $"File not found on server: {request.File}. Server: {body}" });
+                    CustomLogger?.Log("Error", "AudioCraftTool", $"File not found: {request.File} - {errorMsg}");
+                    return SerializeResult(new { error = $"File not found on server: {request.File}. Detail: {errorMsg}" });
                 }
 
-                var err = await SafeReadContentAsync(response);
-                return SerializeResult(new { error = $"Failed to download file {request.File} (status {response.StatusCode}). Server: {err}" });
+                CustomLogger?.Log("Error", "AudioCraftTool", $"Download failed for {request.File}: {errorMsg}");
+                return SerializeResult(new { error = $"Failed to download file {request.File} (status {response.StatusCode}): {errorMsg}" });
             }
             catch (Exception ex)
             {
+                CustomLogger?.Log("Error", "AudioCraftTool", $"Download exception for {request.File}: {ex.Message}");
                 return SerializeResult(new { error = ex.Message });
             }
         }
@@ -279,6 +293,23 @@ namespace TinyGenerator.Skills
                         using var doc = JsonDocument.Parse(respBody);
                         if (doc.RootElement.ValueKind == JsonValueKind.Object)
                         {
+                            // First check file_url (the documented field from AudioCraft API)
+                            // Format: "/download/sound_abc123_20251217_120000.wav"
+                            if (doc.RootElement.TryGetProperty("file_url", out var pfu))
+                            {
+                                var fileUrl = pfu.GetString();
+                                if (!string.IsNullOrWhiteSpace(fileUrl))
+                                {
+                                    // Extract just the filename from the URL path
+                                    var fileName = fileUrl.Replace("/download/", "").Trim('/');
+                                    if (isMusic) LastGeneratedMusicFile = fileName;
+                                    else LastGeneratedSoundFile = fileName;
+                                    CustomLogger?.Log("Debug", "AudioCraftTool", $"Extracted file from file_url: {fileName}");
+                                    return;
+                                }
+                            }
+                            
+                            // Fallback to other field names
                             if (doc.RootElement.TryGetProperty("file", out var pf))
                             {
                                 var fileName = pf.GetString();
@@ -306,6 +337,28 @@ namespace TinyGenerator.Skills
                 }
             }
             catch { }
+        }
+
+        /// <summary>
+        /// Extracts the error detail from an AudioCraft error response.
+        /// The API returns {"detail": "error message"} on errors.
+        /// </summary>
+        private static string ExtractErrorDetail(string? responseBody)
+        {
+            if (string.IsNullOrWhiteSpace(responseBody))
+                return "Unknown error (empty response)";
+            
+            try
+            {
+                using var doc = JsonDocument.Parse(responseBody);
+                if (doc.RootElement.TryGetProperty("detail", out var detail))
+                {
+                    return detail.GetString() ?? responseBody;
+                }
+            }
+            catch { }
+            
+            return responseBody;
         }
 
         private static async Task<string?> SafeReadContentAsync(HttpResponseMessage resp)

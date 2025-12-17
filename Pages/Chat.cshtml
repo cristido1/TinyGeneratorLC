@@ -1,4 +1,4 @@
-@page "{model?}"
+@page
 @model ChatModel
 @{
     ViewData["Title"] = "Chat AI";
@@ -107,7 +107,7 @@
             <h5 class="mb-0">💬 Chat AI</h5>
 
             <form method="get" id="modelForm" class="model-select-inline d-flex align-items-center">
-                <select class="form-select form-select-sm me-2" id="modelSelect" name="model" onchange="document.getElementById('modelForm').submit();">
+                <select class="form-select form-select-sm me-2" id="modelSelect" name="model" onchange="this.form.submit();">
                     <option value="">-- Seleziona Modello --</option>
                     @if (Model?.AvailableModels != null)
                     {
@@ -162,8 +162,9 @@
             @if (!string.IsNullOrEmpty(Model?.SelectedModel))
             {
                 <div class="chat-footer-compact d-flex align-items-center">
-                    <form method="post" asp-page-handler="SendMessage" asp-route-model="@Model.SelectedModel" class="w-100 d-flex gap-2">
+                    <form method="post" asp-page-handler="SendMessage" class="w-100 d-flex gap-2">
                         @Html.AntiForgeryToken()
+                        <input type="hidden" name="model" value="@Model.SelectedModel" />
                         <input type="text" class="form-control compact" name="message" placeholder="Scrivi un messaggio..." required autocomplete="off" />
                         <button class="btn btn-primary btn-sm-compact" type="submit">Invia</button>
                         <button type="button" id="clearChatBtn" class="btn btn-outline-danger btn-sm-compact">🗑️</button>

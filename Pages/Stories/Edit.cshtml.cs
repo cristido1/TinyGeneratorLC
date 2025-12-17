@@ -24,6 +24,9 @@ namespace TinyGenerator.Pages.Stories
         public string StoryText { get; set; } = string.Empty;
 
         [BindProperty]
+        public string? Characters { get; set; }
+
+        [BindProperty]
         public int? StatusId { get; set; }
 
         public List<StoryStatus> Statuses { get; set; } = new();
@@ -35,6 +38,7 @@ namespace TinyGenerator.Pages.Stories
             if (s == null) return NotFound();
             Prompt = s.Prompt;
             StoryText = s.Story;
+            Characters = s.Characters;
             StatusId = s.StatusId;
             LoadStatuses();
             return Page();
@@ -45,6 +49,10 @@ namespace TinyGenerator.Pages.Stories
             if (Id <= 0) return BadRequest();
             LoadStatuses();
             _stories.UpdateStoryById(Id, StoryText, null, null, StatusId, updateStatus: true);
+            if (!string.IsNullOrEmpty(Characters))
+            {
+                _stories.UpdateStoryCharacters(Id, Characters);
+            }
             return RedirectToPage("/Stories/Details", new { id = Id });
         }
 

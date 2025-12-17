@@ -35,16 +35,28 @@ namespace TinyGenerator.Pages
             InitializePage(model);
         }
 
-        public async Task<IActionResult> OnPostSendMessage(string model, string message)
+        public async Task<IActionResult> OnPostSendMessage(string? model, string message)
         {
             try
             {
+                // Fallback: try to get model from form if route param is empty
+                if (string.IsNullOrEmpty(model) && Request.Form.ContainsKey("model"))
+                {
+                    model = Request.Form["model"].ToString();
+                }
+
+                if (string.IsNullOrEmpty(model))
+                {
+                    TempData["Error"] = "Nessun modello selezionato";
+                    return RedirectToPage();
+                }
+
                 // Get model info
                 var modelInfo = _database.GetModelInfo(model);
                 if (modelInfo == null)
                 {
-                    TempData["Error"] = "Modello non trovato";
-                    return Redirect($"/Chat?model={System.Net.WebUtility.UrlEncode(model)}");
+                    TempData["Error"] = $"Modello '{model}' non trovato nel database";
+                    return RedirectToPage(new { model = model });
                 }
 
                 // Get conversation history from session
@@ -138,14 +150,13 @@ namespace TinyGenerator.Pages
                 // Save updated history to session
                 SaveConversationHistory(model, history);
 
-                InitializePage(model);
-                return Page();
+                // Use PRG pattern to avoid form resubmission and preserve model in URL
+                return RedirectToPage(new { model = model });
             }
             catch (Exception ex)
             {
                 TempData["Error"] = $"Errore: {ex.Message}";
-                InitializePage(model);
-                return Page();
+                return RedirectToPage(new { model = model });
             }
         }
 

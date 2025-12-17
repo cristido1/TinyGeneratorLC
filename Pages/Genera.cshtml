@@ -10,7 +10,7 @@
         @Html.AntiForgeryToken()
         <div style="margin-bottom:10px">
             <label for="Prompt" class="note-title">Inserisci il prompt della storia</label>
-            <input class="keep-input" type="text" id="Prompt" name="Prompt" value="@Model.Prompt" required />
+            <textarea class="keep-input font-monospace" id="Prompt" name="Prompt" rows="8" style="width:100%; padding:10px; font-size:0.95rem;" required>@Model.Prompt</textarea>
         </div>
         <div id="genError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
 
@@ -31,8 +31,9 @@
                 </select>
             </div>
 
-            <div style="margin-left:auto">
+            <div style="margin-left:auto; display:flex; gap:8px;">
                 <button type="button" id="startBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia generazione</button>
+                <button type="button" id="fullPipelineBtn" class="action-btn" style="font-weight:600; padding:8px 14px; background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; border:none;">🎬 Pipeline Completo</button>
             </div>
         </div>
 
@@ -193,6 +194,48 @@
         // persist last gen id so user can come back to page and reconnect
         try { localStorage.setItem('lastGenId', id); } catch { }
         appendMessage('🟢 Generazione avviata. id: ' + id);
+        // load history and start SignalR for live updates
+        await loadHistory(id);
+        await connectSignalRAndJoin(id);
+    });
+
+    // Full Pipeline button - generates with all writers, evaluates, selects best, runs full audio pipeline
+    const fullPipelineBtn = document.getElementById('fullPipelineBtn');
+    fullPipelineBtn.addEventListener('click', async () => {
+        const prompt = document.getElementById('Prompt').value;
+        const genError = document.getElementById('genError');
+        if (!prompt || prompt.trim().length === 0) {
+            if (genError) {
+                genError.textContent = 'Inserisci il prompt';
+                genError.style.display = 'block';
+            }
+            document.getElementById('Prompt').focus();
+            return;
+        } else if (genError) {
+            genError.textContent = '';
+            genError.style.display = 'none';
+        }
+
+        clearMessages();
+        appendMessage('🎬 Avvio pipeline completo...');
+        appendMessage('📝 Verrà generata una storia con tutti i writer attivi');
+        appendMessage('🔍 Le storie verranno valutate e la migliore selezionata');
+        appendMessage('🔊 Poi verrà eseguito il pipeline audio completo');
+
+        // send start request for full pipeline
+        const form = document.getElementById('genForm');
+        const fd = new FormData(form);
+        const res = await fetch('?handler=StartFullPipeline', { method: 'POST', body: fd });
+        if (!res.ok) {
+            const text = await res.text();
+            appendMessage('Errore avvio: ' + text, 'error');
+            return;
+        }
+        const data = await res.json();
+        const id = data.id;
+        // persist last gen id so user can come back to page and reconnect
+        try { localStorage.setItem('lastGenId', id); } catch { }
+        appendMessage('🟢 Pipeline completo avviato. id: ' + id);
         // load history and start SignalR for live updates
         await loadHistory(id);
         await connectSignalRAndJoin(id);

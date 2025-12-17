@@ -104,7 +104,8 @@ namespace TinyGenerator.Services
             if (allowedSet.Contains("math"))
                 RegisterMathTool(orchestrator, modelId, agentId);
 
-            if (allowedSet.Contains("memory"))
+            // Memory tool: match "memory" or any "memory_*" function name
+            if (allowedSet.Contains("memory") || allowedSet.Any(t => t.StartsWith("memory_")))
                 RegisterMemoryTool(orchestrator, modelId, agentId);
 
             if (allowedSet.Contains("evaluator"))

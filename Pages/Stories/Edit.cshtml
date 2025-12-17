@@ -21,6 +21,11 @@
                 <textarea class="form-control" rows="10" asp-for="StoryText"></textarea>
             </div>
             <div class="mb-3">
+                <label class="form-label">Personaggi (JSON)</label>
+                <textarea class="form-control" rows="6" asp-for="Characters" placeholder='[{"name": "Nome", "gender": "male", "age": "35"}]'></textarea>
+                <small class="text-muted">Array JSON con name, gender, age, title, role, aliases</small>
+            </div>
+            <div class="mb-3">
                 <label class="form-label">Status</label>
                 <select class="form-select" asp-for="StatusId">
                     <option value="">-- nessuno --</option>

@@ -1668,6 +1668,19 @@ SET TotalScore = (
         return true;
     }
 
+    /// <summary>
+    /// Updates the characters JSON field for a story.
+    /// </summary>
+    public bool UpdateStoryCharacters(long storyId, string charactersJson)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.Characters = charactersJson;
+        context.SaveChanges();
+        return true;
+    }
+
     // TTS voices: list and upsert
     public List<TinyGenerator.Models.TtsVoice> ListTtsVoices()
     {
@@ -2124,6 +2137,27 @@ SET TotalScore = (
             Console.WriteLine($"[DB] Warning: unable to add Result column to Log: {ex.Message}");
         }
 
+        // Migration: add StepNumber and MaxStep columns to Log for multi-step tracking
+        try
+        {
+            var hasStepNumber = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name = 'StepNumber'") > 0;
+            if (!hasStepNumber)
+            {
+                conn.Execute("ALTER TABLE Log ADD COLUMN StepNumber INTEGER");
+                Console.WriteLine("[DB] Migration: added StepNumber column to Log");
+            }
+            var hasMaxStep = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name = 'MaxStep'") > 0;
+            if (!hasMaxStep)
+            {
+                conn.Execute("ALTER TABLE Log ADD COLUMN MaxStep INTEGER");
+                Console.WriteLine("[DB] Migration: added MaxStep column to Log");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add step columns to Log: {ex.Message}");
+        }
+
         // Migration: create app_events table and seed default event types
         var hasAppEventsTable = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_events'");
         if (hasAppEventsTable == 0)
@@ -2560,6 +2594,159 @@ Regole:
         catch (Exception ex)
         {
             Console.WriteLine($"[DB] Warning patching tts_schema templates: {ex.Message}");
+        }
+
+        // Migration: Add characters column to stories table for storing structured character list
+        try
+        {
+            var hasCharacters = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='characters'");
+            if (hasCharacters == 0)
+            {
+                Console.WriteLine("[DB] Adding characters column to stories");
+                conn.Execute("ALTER TABLE stories ADD COLUMN characters TEXT");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add characters column to stories: {ex.Message}");
+        }
+
+        // Migration: Add characters_step column to step_templates for specifying which step generates character list
+        try
+        {
+            var hasCharactersStep = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('step_templates') WHERE name='characters_step'");
+            if (hasCharactersStep == 0)
+            {
+                Console.WriteLine("[DB] Adding characters_step column to step_templates");
+                conn.Execute("ALTER TABLE step_templates ADD COLUMN characters_step INTEGER");
+                // Set default value for existing story templates (step 2 generates characters)
+                conn.Execute("UPDATE step_templates SET characters_step = 2 WHERE task_type = 'story' AND characters_step IS NULL");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add characters_step column to step_templates: {ex.Message}");
+        }
+
+        // Migration: Create mapped_sentiments table for sentiment mapping cache
+        try
+        {
+            var hasMappedSentiments = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mapped_sentiments'");
+            if (hasMappedSentiments == 0)
+            {
+                Console.WriteLine("[DB] Creating mapped_sentiments table");
+                conn.Execute(@"
+CREATE TABLE mapped_sentiments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_sentiment TEXT NOT NULL UNIQUE,
+    dest_sentiment TEXT NOT NULL,
+    confidence REAL,
+    source_type TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+)");
+                // Seed common mappings
+                conn.Execute(@"
+INSERT OR IGNORE INTO mapped_sentiments (source_sentiment, dest_sentiment, source_type, confidence)
+VALUES 
+    ('neutrale', 'neutral', 'seed', 1.0),
+    ('felice', 'happy', 'seed', 1.0),
+    ('contento', 'happy', 'seed', 1.0),
+    ('gioioso', 'happy', 'seed', 1.0),
+    ('triste', 'sad', 'seed', 1.0),
+    ('malinconico', 'sad', 'seed', 1.0),
+    ('arrabbiato', 'angry', 'seed', 1.0),
+    ('furioso', 'angry', 'seed', 1.0),
+    ('irritato', 'angry', 'seed', 1.0),
+    ('spaventato', 'fearful', 'seed', 1.0),
+    ('terrorizzato', 'fearful', 'seed', 1.0),
+    ('ansioso', 'fearful', 'seed', 1.0),
+    ('disgustato', 'disgusted', 'seed', 1.0),
+    ('nauseato', 'disgusted', 'seed', 1.0),
+    ('sorpreso', 'surprised', 'seed', 1.0),
+    ('stupito', 'surprised', 'seed', 1.0)
+");
+                Console.WriteLine("[DB] Created mapped_sentiments table with seed data");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to create mapped_sentiments table: {ex.Message}");
+        }
+
+        // Migration: Create sentiment_embeddings table for caching TTS sentiment embeddings
+        try
+        {
+            var hasSentimentEmbeddings = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sentiment_embeddings'");
+            if (hasSentimentEmbeddings == 0)
+            {
+                Console.WriteLine("[DB] Creating sentiment_embeddings table");
+                conn.Execute(@"
+CREATE TABLE sentiment_embeddings (
+    sentiment TEXT PRIMARY KEY,
+    embedding TEXT NOT NULL,
+    model TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+)");
+                Console.WriteLine("[DB] Created sentiment_embeddings table");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to create sentiment_embeddings table: {ex.Message}");
+        }
+
+        // Migration: Create global_coherence table for storing final coherence scores
+        try
+        {
+            var hasGlobalCoherence = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='global_coherence'");
+            if (hasGlobalCoherence == 0)
+            {
+                Console.WriteLine("[DB] Creating global_coherence table");
+                conn.Execute(@"
+CREATE TABLE global_coherence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    story_id INTEGER NOT NULL,
+    global_coherence_value REAL NOT NULL,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    ts TEXT DEFAULT (datetime('now'))
+)");
+                Console.WriteLine("[DB] Created global_coherence table");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to create global_coherence table: {ex.Message}");
+        }
+
+        // Migration: Seed SentimentMapper agent if not exists
+        try
+        {
+            var hasSentimentMapper = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM agents WHERE name='SentimentMapper'");
+            if (hasSentimentMapper == 0)
+            {
+                Console.WriteLine("[DB] Seeding SentimentMapper agent");
+                conn.Execute(@"
+INSERT INTO agents (name, description, is_active, role, prompt, instructions, created_at, updated_at)
+VALUES (
+    'SentimentMapper',
+    'Mappa sentimenti liberi ai 7 sentimenti TTS supportati (neutral, happy, sad, angry, fearful, disgusted, surprised)',
+    1,
+    'sentiment_mapper',
+    'Mappa il sentimento ''{{sentiment}}'' a UNO solo di questi valori:
+neutral, happy, sad, angry, fearful, disgusted, surprised
+
+Rispondi SOLO con la parola inglese, senza spiegazioni.',
+    'Sei un esperto di analisi del sentiment. Devi mappare qualsiasi sentimento o emozione italiana a uno dei 7 sentimenti base supportati dal TTS.',
+    datetime('now'),
+    datetime('now')
+)");
+                Console.WriteLine("[DB] Seeded SentimentMapper agent");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to seed SentimentMapper agent: {ex.Message}");
         }
     }
 
@@ -3584,6 +3771,96 @@ WHERE Id = @modelId;";
     {
         using var context = CreateDbContext();
         return context.GlobalCoherences.FirstOrDefault(g => g.StoryId == storyId);
+    }
+
+    #endregion
+
+    #region Sentiment Mapping
+
+    /// <summary>
+    /// Cerca una mappatura sentimento esistente
+    /// </summary>
+    public MappedSentiment? GetMappedSentiment(string sourceSentiment)
+    {
+        if (string.IsNullOrWhiteSpace(sourceSentiment)) return null;
+        using var conn = CreateConnection();
+        conn.Open();
+        return conn.QueryFirstOrDefault<MappedSentiment>(
+            "SELECT * FROM mapped_sentiments WHERE source_sentiment = @sourceSentiment COLLATE NOCASE",
+            new { sourceSentiment });
+    }
+
+    /// <summary>
+    /// Recupera tutte le mappature sentimento
+    /// </summary>
+    public List<MappedSentiment> GetAllMappedSentiments()
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        return conn.Query<MappedSentiment>(
+            "SELECT * FROM mapped_sentiments ORDER BY source_sentiment").ToList();
+    }
+
+    /// <summary>
+    /// Inserisce o aggiorna una mappatura sentimento
+    /// </summary>
+    public void InsertMappedSentiment(MappedSentiment mapping)
+    {
+        if (mapping == null) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute(@"
+            INSERT OR REPLACE INTO mapped_sentiments 
+                (source_sentiment, dest_sentiment, confidence, source_type, created_at)
+            VALUES 
+                (@SourceSentiment, @DestSentiment, @Confidence, @SourceType, @CreatedAt)",
+            mapping);
+    }
+
+    /// <summary>
+    /// Elimina una mappatura sentimento
+    /// </summary>
+    public void DeleteMappedSentiment(int id)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute("DELETE FROM mapped_sentiments WHERE id = @id", new { id });
+    }
+
+    /// <summary>
+    /// Recupera tutti gli embedding dei sentimenti destinazione
+    /// </summary>
+    public List<SentimentEmbedding> GetAllSentimentEmbeddings()
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        return conn.Query<SentimentEmbedding>("SELECT * FROM sentiment_embeddings").ToList();
+    }
+
+    /// <summary>
+    /// Inserisce o aggiorna un embedding sentimento
+    /// </summary>
+    public void UpsertSentimentEmbedding(SentimentEmbedding embedding)
+    {
+        if (embedding == null) return;
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute(@"
+            INSERT OR REPLACE INTO sentiment_embeddings 
+                (sentiment, embedding, model, created_at)
+            VALUES 
+                (@Sentiment, @Embedding, @Model, @CreatedAt)",
+            embedding);
+    }
+
+    /// <summary>
+    /// Cerca un agente per nome
+    /// </summary>
+    public TinyGenerator.Models.Agent? GetAgentByName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        using var context = CreateDbContext();
+        return context.Agents.FirstOrDefault(a => a.Name == name);
     }
 
     #endregion

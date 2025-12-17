@@ -74,6 +74,12 @@ namespace TinyGenerator.Models
         [Column("Result")]
         public string? Result { get; set; } // Optional outcome: SUCCESS / FAILED / null
         
+        [Column("StepNumber")]
+        public int? StepNumber { get; set; } // Current step number for multi-step operations
+        
+        [Column("MaxStep")]
+        public int? MaxStep { get; set; } // Total steps for multi-step operations
+        
         // Concurrency token for optimistic locking
         [Timestamp]
         public byte[]? RowVersion { get; set; }

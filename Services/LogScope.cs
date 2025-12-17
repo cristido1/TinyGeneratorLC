@@ -11,14 +11,20 @@ namespace TinyGenerator.Services
     {
         private sealed class ScopeInfo
         {
-            public ScopeInfo(string name, long? operationId)
+            public ScopeInfo(string name, long? operationId, int? stepNumber = null, int? maxStep = null, string? agentName = null)
             {
                 Name = name;
                 OperationId = operationId;
+                StepNumber = stepNumber;
+                MaxStep = maxStep;
+                AgentName = agentName;
             }
 
             public string Name { get; }
             public long? OperationId { get; }
+            public int? StepNumber { get; }
+            public int? MaxStep { get; }
+            public string? AgentName { get; }
         }
 
         private static long _operationCounter;
@@ -31,7 +37,12 @@ namespace TinyGenerator.Services
 
         public static IDisposable Push(string scope) => Push(scope, null);
 
-        public static IDisposable Push(string scope, long? operationId)
+        public static IDisposable Push(string scope, long? operationId) => Push(scope, operationId, null, null);
+
+        public static IDisposable Push(string scope, long? operationId, int? stepNumber, int? maxStep)
+            => Push(scope, operationId, stepNumber, maxStep, null);
+
+        public static IDisposable Push(string scope, long? operationId, int? stepNumber, int? maxStep, string? agentName)
         {
             if (string.IsNullOrWhiteSpace(scope))
             {
@@ -45,7 +56,12 @@ namespace TinyGenerator.Services
                 _scopes.Value = stack;
             }
             var inheritedOperation = operationId ?? (stack.Count > 0 ? stack.Peek().OperationId : null);
-            stack.Push(new ScopeInfo(scope, inheritedOperation));
+            // Inherit step info if not provided
+            var inheritedStep = stepNumber ?? (stack.Count > 0 ? stack.Peek().StepNumber : null);
+            var inheritedMax = maxStep ?? (stack.Count > 0 ? stack.Peek().MaxStep : null);
+            // Inherit agent name if not provided
+            var inheritedAgent = agentName ?? (stack.Count > 0 ? stack.Peek().AgentName : null);
+            stack.Push(new ScopeInfo(scope, inheritedOperation, inheritedStep, inheritedMax, inheritedAgent));
             return new ScopeHandle(stack);
         }
 
@@ -66,6 +82,36 @@ namespace TinyGenerator.Services
                 var stack = _scopes.Value;
                 if (stack == null || stack.Count == 0) return null;
                 return stack.Peek().OperationId;
+            }
+        }
+
+        public static int? CurrentStepNumber
+        {
+            get
+            {
+                var stack = _scopes.Value;
+                if (stack == null || stack.Count == 0) return null;
+                return stack.Peek().StepNumber;
+            }
+        }
+
+        public static int? CurrentMaxStep
+        {
+            get
+            {
+                var stack = _scopes.Value;
+                if (stack == null || stack.Count == 0) return null;
+                return stack.Peek().MaxStep;
+            }
+        }
+
+        public static string? CurrentAgentName
+        {
+            get
+            {
+                var stack = _scopes.Value;
+                if (stack == null || stack.Count == 0) return null;
+                return stack.Peek().AgentName;
             }
         }
 

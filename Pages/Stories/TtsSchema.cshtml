@@ -79,6 +79,9 @@
             const btnConfirmDelete = document.getElementById('btnConfirmDelete');
             const schemaForm = document.getElementById('schemaForm');
             const storyId = @Model.StoryId;
+            
+            // Get anti-forgery token
+            const antiForgeryToken = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
 
             // Format JSON button
             btnFormat.addEventListener('click', function() {
@@ -101,6 +104,7 @@
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
+                            'RequestVerificationToken': antiForgeryToken
                         },
                         body: JSON.stringify({
                             storyId: storyId,
@@ -128,6 +132,7 @@
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'RequestVerificationToken': antiForgeryToken
                     },
                     body: JSON.stringify({
                         storyId: storyId

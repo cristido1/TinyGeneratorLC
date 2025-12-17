@@ -213,13 +213,65 @@ namespace TinyGenerator.Pages.Stories
                 "generate_tts_audio",
                 async ctx =>
                 {
-                    var (success, error) = await _stories.GenerateTtsForStoryAsync(id, folderName);
-                    var message = success ? "Generazione audio TTS avviata." : error;
+                    // Pass dispatcher runId to enable progress reporting
+                    var (success, error) = await _stories.GenerateTtsForStoryAsync(id, folderName, ctx.RunId);
+                    var message = success ? "Generazione audio TTS completata." : error;
                     return new CommandResult(success, message);
                 },
                 "Generazione audio TTS avviata in background.");
 
             TempData["StatusMessage"] = $"Generazione audio TTS avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostGenerateAmbience(long id, string folderName)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "generate_ambience_audio",
+                async ctx =>
+                {
+                    var (success, error) = await _stories.GenerateAmbienceForStoryAsync(id, folderName, ctx.RunId);
+                    var message = success ? "Generazione audio ambientale completata." : error;
+                    return new CommandResult(success, message);
+                },
+                "Generazione audio ambientale avviata in background.");
+
+            TempData["StatusMessage"] = $"Generazione audio ambientale avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostGenerateFx(long id, string folderName)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "generate_fx_audio",
+                async ctx =>
+                {
+                    var (success, error) = await _stories.GenerateFxForStoryAsync(id, folderName, ctx.RunId);
+                    var message = success ? "Generazione effetti sonori completata." : error;
+                    return new CommandResult(success, message);
+                },
+                "Generazione effetti sonori avviata in background.");
+
+            TempData["StatusMessage"] = $"Generazione effetti sonori avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostMixFinalAudio(long id, string folderName)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "mix_final_audio",
+                async ctx =>
+                {
+                    var (success, error) = await _stories.MixFinalAudioForStoryAsync(id, folderName, ctx.RunId);
+                    var message = success ? "Mixaggio audio completato." : error;
+                    return new CommandResult(success, message);
+                },
+                "Mixaggio audio finale avviato in background.");
+
+            TempData["StatusMessage"] = $"Mixaggio audio finale avviato (run {runId}).";
             return RedirectToPage();
         }
 
@@ -236,6 +288,29 @@ namespace TinyGenerator.Pages.Stories
                 "Generazione JSON TTS avviata in background.");
             TempData["StatusMessage"] = $"Generazione JSON TTS avviata (run {runId}).";
             return RedirectToPage();
+        }
+
+        public IActionResult OnGetFinalMixAudio(long id)
+        {
+            var story = _stories.GetStoryById(id);
+            if (story == null || string.IsNullOrWhiteSpace(story.Folder)) return NotFound();
+
+            var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
+            
+            // Prefer MP3, fallback to WAV
+            var mp3Path = Path.Combine(folderPath, "final_mix.mp3");
+            var wavPath = Path.Combine(folderPath, "final_mix.wav");
+            
+            if (System.IO.File.Exists(mp3Path))
+            {
+                return PhysicalFile(mp3Path, "audio/mpeg", "final_mix.mp3");
+            }
+            if (System.IO.File.Exists(wavPath))
+            {
+                return PhysicalFile(wavPath, "audio/wav", "final_mix.wav");
+            }
+            
+            return NotFound("File audio finale non trovato");
         }
 
         public IActionResult OnGetTtsAudio(long id, string file)
@@ -320,6 +395,36 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public IActionResult OnPostNormalizeCharacterNames(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "normalize_characters",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.NormalizeCharacterNamesAsync(id);
+                    return new CommandResult(success, message ?? (success ? "Nomi normalizzati" : "Normalizzazione fallita"));
+                },
+                "Normalizzazione nomi personaggi avviata in background.");
+            TempData["StatusMessage"] = $"Normalizzazione nomi avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostNormalizeSentiments(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "normalize_sentiments",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.NormalizeSentimentsAsync(id);
+                    return new CommandResult(success, message ?? (success ? "Sentimenti normalizzati" : "Normalizzazione fallita"));
+                },
+                "Normalizzazione sentimenti avviata in background.");
+            TempData["StatusMessage"] = $"Normalizzazione sentimenti avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
         public StoryStatus? GetNextStatus(StoryRecord story)
         {
             return _stories.GetNextStatusForStory(story, Statuses);
@@ -354,8 +459,10 @@ namespace TinyGenerator.Pages.Stories
                     {
                         var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
                         story.HasVoiceSource = System.IO.File.Exists(Path.Combine(folderPath, "tts_schema.json"));
+                        story.HasFinalMix = System.IO.File.Exists(Path.Combine(folderPath, "final_mix.mp3")) 
+                            || System.IO.File.Exists(Path.Combine(folderPath, "final_mix.wav"));
                     }
-                    catch { story.HasVoiceSource = false; }
+                    catch { story.HasVoiceSource = false; story.HasFinalMix = false; }
                 }
             }
             

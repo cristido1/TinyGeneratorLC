@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Threading.Tasks;
 using TinyGenerator.Services;
@@ -184,9 +185,19 @@ namespace TinyGenerator.Skills
         {
             try
             {
+                // Sanitize text: remove forbidden characters '*' and '#' before sending to TTS
+                var textToSynthesize = request.Text ?? string.Empty;
+                if (textToSynthesize.IndexOfAny(new[] { '*', '#' }) >= 0)
+                {
+                    CustomLogger?.Log("Information", "TtsApiTool", "Sanitizing TTS text: removed '*' and '#' characters from payload.");
+                    textToSynthesize = textToSynthesize.Replace("*", string.Empty).Replace("#", string.Empty);
+                    // Collapse multiple whitespace to single spaces and trim
+                    textToSynthesize = Regex.Replace(textToSynthesize, "\\s{2,}", " ").Trim();
+                }
+
                 var payload = new Dictionary<string, object>
                 {
-                    ["text"] = request.Text ?? string.Empty,
+                    ["text"] = textToSynthesize,
                     ["model"] = request.Model ?? "voice_templates",
                     ["format"] = request.Format ?? "wav"
                 };

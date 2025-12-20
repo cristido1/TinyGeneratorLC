@@ -38,6 +38,21 @@ public class TtsPhrase
     /// Generated sound effect file name.
     /// </summary>
     public string? FxFile { get; set; }
+    
+    /// <summary>
+    /// Music description to generate (from [MUSICA: description] tag).
+    /// </summary>
+    public string? MusicDescription { get; set; }
+    
+    /// <summary>
+    /// Duration in seconds for the music (default 10 seconds).
+    /// </summary>
+    public int? MusicDuration { get; set; }
+    
+    /// <summary>
+    /// Generated music file name.
+    /// </summary>
+    public string? MusicFile { get; set; }
 }
 public class TtsPause
 {

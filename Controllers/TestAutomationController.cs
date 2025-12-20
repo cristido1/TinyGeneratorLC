@@ -315,6 +315,49 @@ public class TestAutomationController : ControllerBase
             return Ok(new { success = false, error = ex.Message });
         }
     }
+
+    /// <summary>
+    /// Scan stories_folder and set status to audio_master_generated for folders containing final_mix.wav
+    /// POST /api/TestAutomation/scan-audio-masters
+    /// </summary>
+    [HttpPost("scan-audio-masters")]
+    public IActionResult ScanAudioMasters()
+    {
+        try
+        {
+            _customLogger.Log("Info", "TestAutomation", "Enqueuing audio masters scan");
+
+            var metadata = new Dictionary<string, string>
+            {
+                ["task"] = "scan_audio_masters"
+            };
+
+            var handle = _dispatcher.Enqueue(
+                "scan_audio_masters",
+                async ctx =>
+                {
+                    var updated = await _storiesService.ScanAndMarkAudioMastersAsync();
+                    return new CommandResult(true, $"Scan completed. Updated {updated} stories.");
+                },
+                threadScope: "maintenance",
+                metadata: metadata);
+
+            return Ok(new
+            {
+                success = true,
+                commandId = handle.RunId,
+                message = "Scan enqueued"
+            });
+        }
+        catch (Exception ex)
+        {
+            return Ok(new
+            {
+                success = false,
+                error = ex.Message
+            });
+        }
+    }
 }
 
 public class GenerateStoryRequest

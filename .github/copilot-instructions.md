@@ -4,7 +4,7 @@
 TinyGenerator is an ASP.NET Core web application that generates stories using AI agents powered by Microsoft Semantic Kernel (SK). It orchestrates multiple writer agents (using local Ollama models) and evaluator agents to produce coherent, structured narratives. The app uses Razor Pages for UI, SignalR for real-time progress updates, and SQLite for persistence.
 
 ## Architecture
-- **Core Service**: `StoryGeneratorService` coordinates story generation via multiple writer agents (A, B, C) with different models, evaluates outputs, and selects the best story.
+- **Core Service**: `FullStoryPipelineCommand` coordinates story generation via all active writer agents (dynamically loaded from DB), evaluates outputs with all active evaluator agents, and selects the best story for production.
 - **Kernel Management**: `KernelFactory` creates SK kernels with Ollama/OpenAI connectors and registers custom plugins (skills) like `TextPlugin`, `MemorySkill`, `TtsApiSkill`.
 - **Persistence**: `DatabaseService` handles SQLite storage for stories, logs, models, agents, and test results.
 - **UI**: Razor Pages (e.g., `Genera.cshtml`) with Bootstrap/DataTables for admin interfaces. SignalR (`ProgressHub`) for live generation updates.
@@ -15,7 +15,7 @@ TinyGenerator is an ASP.NET Core web application that generates stories using AI
 - **Build**: `dotnet build` or VS Code task "build".
 - **Run/Debug**: `dotnet run` or `dotnet watch run` (task "watch") for hot reload. Debug via VS Code launch settings.
 - **Test Models**: Use `Pages/Models.cshtml` to run function-calling tests on Ollama models. Tests execute prompts and verify SK function invocations.
-- **Generate Stories**: Via `Pages/Genera.cshtml` - inputs theme, selects writer (All/A/B/C), monitors progress via SignalR.
+- **Generate Stories**: Via `Pages/Genera.cshtml` - inputs theme, selects a single writer or launches Full Pipeline (all active writers compete, best story goes to production), monitors progress via SignalR.
 - **Admin**: Manage agents, models, logs in admin pages using DataTables for CRUD.
 
 ## Conventions

@@ -4,117 +4,227 @@
     ViewData["Title"] = "TinyGenerator";
 }
 
-<div class="container">
-    <div class="d-flex align-items-center mb-3">
-        <h2 class="me-3">TinyGenerator</h2>
-        <small class="text-muted">Seleziona un'azione</small>
+<style>
+    .kpi-card {
+        background: #f8f9fa;
+        border: 2px solid #343a40;
+        border-radius: 12px;
+        padding: 1.5rem;
+        color: #212529;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .kpi-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+    }
+    .kpi-value {
+        font-size: 2.5rem;
+        font-weight: 700;
+        line-height: 1.1;
+        color: #212529;
+    }
+    .kpi-label {
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #6c757d;
+    }
+    .kpi-icon {
+        font-size: 2rem;
+        color: #6c757d;
+    }
+    .ranking-table {
+        background: #f8f9fa;
+        border: 2px solid #343a40;
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    .ranking-table th {
+        background: #e9ecef;
+        color: #495057;
+        font-weight: 500;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border: none;
+    }
+    .ranking-table td {
+        background: #f8f9fa;
+        color: #212529;
+        border-color: #dee2e6;
+        vertical-align: middle;
+    }
+    .ranking-table tbody tr:hover td {
+        background: #e9ecef;
+    }
+    .rank-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .rank-1 { background: #ffd700; color: #000; }
+    .rank-2 { background: #c0c0c0; color: #000; }
+    .rank-3 { background: #cd7f32; color: #fff; }
+    .rank-other { background: #adb5bd; color: #495057; }
+    .score-badge {
+        background: #e9ecef;
+        border: 1px solid #adb5bd;
+        padding: 0.3rem 0.6rem;
+        border-radius: 6px;
+        font-weight: 600;
+        color: #212529;
+    }
+    .section-title {
+        color: #495057;
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #343a40;
+    }
+</style>
+
+<div class="container-fluid px-4">
+    <!-- KPI Cards Row -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="kpi-card">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="kpi-value">@Model.TotalStories</div>
+                        <div class="kpi-label mt-1">Storie Totali</div>
+                    </div>
+                    <i class="bi bi-journal-text kpi-icon"></i>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card medium">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="kpi-value">@Model.EnabledModels<span style="font-size: 1.2rem; opacity: 0.6;">/@(Model.EnabledModels + Model.DisabledModels)</span></div>
+                        <div class="kpi-label mt-1">Modelli Attivi</div>
+                    </div>
+                    <i class="bi bi-cpu kpi-icon"></i>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card light">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="kpi-value">@Model.DisabledModels</div>
+                        <div class="kpi-label mt-1">Modelli Disabilitati</div>
+                    </div>
+                    <i class="bi bi-pause-circle kpi-icon"></i>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="kpi-card">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="kpi-value">@Model.AudioMasterGeneratedCount</div>
+                        <div class="kpi-label mt-1">Audio Master Ready</div>
+                    </div>
+                    <i class="bi bi-music-note-beamed kpi-icon"></i>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div class="keep-container mt-2">
-        <a class="note-card" asp-page="/Genera">
-            <i class="note-card-icon bi bi-pencil-square" aria-hidden="true"></i>
-            <div class="note-title">Genera storia</div>
-            <div class="note-brief">Crea una nuova storia</div>
-            <div class="note-body">Avvia il processo guidato per creare una storia completa (trama, personaggi, capitoli).</div>
-        </a>
+    <!-- Rankings Row -->
+    <div class="row g-4">
+        <!-- Top Writers -->
+        <div class="col-lg-6">
+            <div class="section-title">
+                <i class="bi bi-trophy me-2"></i>Classifica Scrittori (per valutazione media)
+            </div>
+            <div class="ranking-table">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">#</th>
+                            <th>Agente</th>
+                            <th>Modello</th>
+                            <th class="text-center">Storie</th>
+                            <th class="text-end">Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (Model.TopWriters.Any())
+                        {
+                            var rank = 0;
+                            foreach (var writer in Model.TopWriters)
+                            {
+                                rank++;
+                                var rankClass = rank switch { 1 => "rank-1", 2 => "rank-2", 3 => "rank-3", _ => "rank-other" };
+                                <tr>
+                                    <td><span class="rank-badge @rankClass">@rank</span></td>
+                                    <td>@writer.AgentName</td>
+                                    <td><small class="text-muted">@writer.ModelName</small></td>
+                                    <td class="text-center">@writer.StoryCount</td>
+                                    <td class="text-end"><span class="score-badge">@writer.AvgScore.ToString("F1")</span></td>
+                                </tr>
+                            }
+                        }
+                        else
+                        {
+                            <tr><td colspan="5" class="text-center text-muted py-3">Nessun dato disponibile</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
 
-        <a class="note-card" asp-page="/Stories/Index">
-            <i class="note-card-icon bi bi-journal-text" aria-hidden="true"></i>
-            <div class="note-title">Storie salvate</div>
-            <div class="note-brief">Visualizza generazioni</div>
-            <div class="note-body">Visualizza, cancella o esporta le generazioni salvate in precedenza.</div>
-        </a>
-
-        <a class="note-card" asp-page="/Logs/Index">
-            <i class="note-card-icon bi bi-list-check" aria-hidden="true"></i>
-            <div class="note-title">Logs</div>
-            <div class="note-brief">Vedi i log</div>
-            <div class="note-body">Visualizza i log dell'applicazione e svuota la tabella di log.</div>
-        </a>
-
-        <a class="note-card" asp-page="/ChatLog/Index">
-            <i class="note-card-icon bi bi-chat-left-text" aria-hidden="true"></i>
-            <div class="note-title">Chat Log</div>
-            <div class="note-brief">Cronologia chat</div>
-            <div class="note-body">Visualizza le conversazioni tra sistema e agenti AI in formato chat.</div>
-        </a>
-
-        <a class="note-card" asp-page="/OllamaMonitor">
-            <i class="note-card-icon bi bi-cpu" aria-hidden="true"></i>
-            <div class="note-title">Ollama Monitor</div>
-            <div class="note-brief">Stato modelli locali</div>
-            <div class="note-body">Visualizza lo stato dei modelli Ollama in esecuzione e l'ultimo prompt inviato ad ogni modello.</div>
-        </a>
-
-        <a class="note-card" asp-page="/Models">
-            <i class="note-card-icon bi bi-diagram-3" aria-hidden="true"></i>
-            <div class="note-title">Modelli</div>
-            <div class="note-brief">Elenco modelli</div>
-            <div class="note-body">Visualizza, testa e valuta la compatibilità dei modelli AI disponibili.</div>
-        </a>
-
-        <a class="note-card agent-card" asp-page="/Agents/Index">
-            <i class="note-card-icon bi bi-people" aria-hidden="true"></i>
-            <div class="note-title">Agents</div>
-            <div class="note-brief">Gestisci agenti</div>
-            <div class="note-body">Crea e gestisci agenti riutilizzabili (coordinator, writer, musician, tts, ecc.).</div>
-        </a>
-
-        <a class="note-card" asp-page="/Series/Index">
-            <i class="note-card-icon bi bi-collection" aria-hidden="true"></i>
-            <div class="note-title">Serie TV / Racconti</div>
-            <div class="note-brief">Gestisci serie</div>
-            <div class="note-body">Crea e gestisci serie TV e racconti con trama, personaggi e ambientazione.</div>
-        </a>
-
-        <a class="note-card half-height" asp-page="/TaskTypes/Index">
-            <i class="note-card-icon bi bi-tags" aria-hidden="true"></i>
-            <div class="note-title">Task Types</div>
-            <div class="note-brief">Configura i tipi di task.</div>
-            <div class="note-body">Configura i tipi di task usati dall'orchestratore multi-step.</div>
-        </a>
-
-        <a class="note-card" asp-page="/Admin">
-            <i class="note-card-icon bi bi-graph-up" aria-hidden="true"></i>
-            <div class="note-title">Pannello Admin</div>
-            <div class="note-brief">Impostazioni admin</div>
-            <div class="note-body">Controllo costi, limiti token e configurazioni amministrative.</div>
-        </a>
-
-        <!-- Special compact cards moved to the end and displayed as half-height -->
-        <!-- Order: Stories Status, Test Definitions, TTS Voices, Step Templates, Chat -->
-        <a class="note-card half-height" asp-page="/StoriesStatus/Index">
-            <i class="note-card-icon bi bi-flag" aria-hidden="true"></i>
-            <div class="note-title">Stories Status</div>
-            <div class="note-brief">Stati e progressi</div>
-            <div class="note-body">Gestisci gli stati e i progressi delle generazioni delle storie.</div>
-        </a>
-
-        <a class="note-card half-height" asp-page="/TestDefinitions/Index">
-            <i class="note-card-icon bi bi-list-ul" aria-hidden="true"></i>
-            <div class="note-title">Test Definitions</div>
-            <div class="note-brief">Casi di test</div>
-            <div class="note-body">Gestisci i casi di test: prompt, comportamento atteso e plugin consentiti.</div>
-        </a>
-
-        <a class="note-card half-height" asp-page="/TtsVoices/Index">
-            <i class="note-card-icon bi bi-megaphone" aria-hidden="true"></i>
-            <div class="note-title">TTS Voices</div>
-            <div class="note-brief">Voci TTS</div>
-            <div class="note-body">Visualizza e sincronizza le voci TTS disponibili dal servizio.</div>
-        </a>
-
-        <a class="note-card half-height" asp-page="/StepTemplates/Index">
-            <i class="note-card-icon bi bi-list-ol" aria-hidden="true"></i>
-            <div class="note-title">Step Templates</div>
-            <div class="note-brief">Template passi</div>
-            <div class="note-body">Gestisci i template multi-step per la generazione sequenziale di storie.</div>
-        </a>
-
-        <a class="note-card half-height" asp-page="/Chat">
-            <i class="note-card-icon bi bi-chat-dots" aria-hidden="true"></i>
-            <div class="note-title">Chat</div>
-            <div class="note-brief">Chat interattiva</div>
-            <div class="note-body">Apri una conversazione interattiva con un modello a tua scelta.</div>
-        </a>
+        <!-- Top Stories -->
+        <div class="col-lg-6">
+            <div class="section-title">
+                <i class="bi bi-star me-2"></i>Top 10 Storie (per valutazione)
+            </div>
+            <div class="ranking-table">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">#</th>
+                            <th>Prompt</th>
+                            <th>Modello</th>
+                            <th class="text-end">Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (Model.TopStories.Any())
+                        {
+                            var rank = 0;
+                            foreach (var story in Model.TopStories)
+                            {
+                                rank++;
+                                var rankClass = rank switch { 1 => "rank-1", 2 => "rank-2", 3 => "rank-3", _ => "rank-other" };
+                                <tr>
+                                    <td><span class="rank-badge @rankClass">@rank</span></td>
+                                    <td>
+                                        <a href="/Stories/Details/@story.Id" class="text-decoration-none" style="color: #9cf;">
+                                            @story.Prompt
+                                        </a>
+                                    </td>
+                                    <td><small class="text-muted">@story.Model</small></td>
+                                    <td class="text-end"><span class="score-badge">@story.AvgEvalScore.ToString("F1")/40</span></td>
+                                </tr>
+                            }
+                        }
+                        else
+                        {
+                            <tr><td colspan="4" class="text-center text-muted py-3">Nessun dato disponibile</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
+</div>

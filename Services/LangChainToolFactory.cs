@@ -143,6 +143,10 @@ namespace TinyGenerator.Services
 
             // 'storyevaluator' tool removed in favor of unified EvaluatorTool
 
+            // ChapterEvaluatorTool for evaluating individual chapters during multi-step generation
+            if (allowedSet.Contains("chapter_evaluator"))
+                RegisterChapterEvaluatorTool(orchestrator, modelId, agentId);
+
             var wantsVoiceTool = allowedSet.Contains("voicechoser") || allowedSet.Contains("voicechooser");
             var wantsSchemaTool = allowedSet.Contains("ttsschema") || allowedSet.Contains("ttsschematool");
             // Register TTS-specific tools only if explicitly requested
@@ -160,6 +164,24 @@ namespace TinyGenerator.Services
 
             _logger?.Log("Info", "ToolFactory", $"Created orchestrator with {orchestrator.GetToolSchemas().Count} tools");
             return orchestrator;
+        }
+
+        private void RegisterChapterEvaluatorTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId)
+        {
+            try
+            {
+                var tool = new ChapterEvaluatorTool(_logger)
+                {
+                    ModelId = modelId,
+                    AgentId = agentId
+                };
+                orchestrator.RegisterTool(tool);
+                _logger?.Log("Info", "ToolFactory", "Registered ChapterEvaluatorTool");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "ToolFactory", $"Failed to register ChapterEvaluatorTool: {ex.Message}");
+            }
         }
 
         private void RegisterTextTool(HybridLangChainOrchestrator orchestrator, int? modelId, int? agentId)

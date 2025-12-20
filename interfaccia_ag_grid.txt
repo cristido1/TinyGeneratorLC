@@ -1,0 +1,204 @@
+ISTRUZIONI PER GITHUB COPILOT
+STANDARD PAGINE DASHBOARD – ASP.NET RAZOR PAGES + AG GRID
+
+====================================================
+1. TECNOLOGIE E VINCOLI OBBLIGATORI
+====================================================
+- Framework backend: ASP.NET Razor Pages
+- Frontend:
+  - HTML5
+  - CSS
+  - JavaScript vanilla
+- Griglia dati:
+  - AG Grid Community (versione gratuita)
+- UI:
+  - Bootstrap 5.3.x via CDN
+  - Font Awesome 6.x via CDN
+- Vietato usare:
+  - React, Vue, Angular
+  - jQuery, Alpine
+  - DataTables, DevExtreme
+- Nessun build step frontend
+- AG Grid usato in modalità JavaScript pura (no framework wrapper)
+
+====================================================
+2. STRUTTURA FILE RAZOR (.cshtml)
+====================================================
+Ogni pagina Razor DEVE avere:
+
+- @page
+- @model NomePaginaModel
+- Usa _Layout.cshtml comune
+
+Struttura della pagina:
+- Sidebar (se non già nel layout)
+- Header pagina
+- Area contenuto scrollabile
+- Sezione griglia AG Grid
+
+NON creare Razor Components per la griglia.
+NON usare TagHelper per generare colonne.
+
+====================================================
+3. SEPARAZIONE DEI RUOLI (REGOLA CRITICA)
+====================================================
+
+--- PageModel (.cshtml.cs) ---
+- Recupera i dati (DB / API / servizi)
+- Espone:
+  - DTO semplici
+  - Liste serializzabili
+- NON gestisce:
+  - filtri
+  - sort
+  - paginazione
+- NON contiene logica UI
+
+--- Razor (.cshtml) ---
+- Contiene:
+  - markup HTML
+  - container della griglia
+  - serializzazione dati iniziali
+- Nessun ciclo Razor per righe o colonne
+
+--- JavaScript ---
+- Gestisce:
+  - AG Grid
+  - eventi UI
+  - interazioni utente
+- Unico punto di verità lato client
+
+====================================================
+4. PASSAGGIO DATI DA C# A AG GRID
+====================================================
+I dati DEVONO essere passati così:
+
+- PageModel:
+  public List<T> GridData { get; set; }
+
+- Razor:
+  const rowData = @Html.Raw(Json.Serialize(Model.GridData));
+
+- JavaScript:
+  gridOptions.rowData = rowData;
+
+È VIETATO:
+- Renderizzare righe con Razor
+- Fare fetch riga-per-riga
+
+====================================================
+5. SIDEBAR (OBBLIGATORIA)
+====================================================
+- Sidebar collassabile
+- Stato JS:
+  - isMenuOpen
+- Sidebar ESPANSA:
+  - ~16rem
+  - icone + label
+- Sidebar COLLASSATA:
+  - ~5rem
+  - solo icone
+- Toggle con JS
+- Voci menu come <button>
+
+====================================================
+6. HEADER PAGINA
+====================================================
+- Header sopra la griglia
+- Contiene:
+  - Titolo (h2)
+  - Sottotitolo descrittivo
+- Bordo + ombra soft
+- Nessun bottone operativo nel header
+
+====================================================
+7. AG GRID – CONFIGURAZIONE OBBLIGATORIA
+====================================================
+
+AG Grid DEVE includere:
+
+- Tema:
+  - ag-theme-alpine (personalizzato via CSS)
+- Colonne:
+  - definizione esplicita columnDefs
+  - headerName chiaro
+- Funzionalità abilitate:
+  - sorting
+  - filtering (testuale)
+  - column show/hide
+  - pagination
+- Pagination:
+  - pageSize selezionabile
+  - controlli esterni (custom)
+- DefaultColDef:
+  - sortable: true
+  - filter: true
+  - resizable: true
+
+È VIETATO:
+- Usare API enterprise
+- Usare server-side row model
+- Mischiare logica Razor con AG Grid
+
+====================================================
+8. TOOLBAR SOPRA LA GRIGLIA
+====================================================
+Toolbar personalizzata (fuori da AG Grid):
+
+- Input ricerca globale:
+  - usa gridApi.setQuickFilter()
+- Pulsanti:
+  - selezione colonne (columnToolPanel)
+  - refresh (reload dati)
+  - nuovo record (redirect Razor)
+
+NON usare la toolbar nativa AG Grid.
+
+====================================================
+9. STATO JAVASCRIPT
+====================================================
+Gestisci uno stato minimo:
+
+- gridApi
+- columnApi
+- pageSize
+- quickFilterText
+
+NON duplicare stato già gestito da AG Grid.
+
+====================================================
+10. STILE GRAFICO (VINCOLO FORTE)
+====================================================
+- Design coerente con dashboard SaaS
+- Rounded:
+  - 0.75rem – 1.5rem
+- Ombre leggere
+- Palette:
+  - grigi freddi
+  - blu come colore primario
+- Personalizza AG Grid via CSS
+- NON usare il look default senza override
+
+====================================================
+11. ESTENDIBILITÀ BACKEND
+====================================================
+- La pagina deve poter:
+  - sostituire rowData con fetch API
+  - usare API Razor / Web API
+- UI indipendente da:
+  - EF Core
+  - SQL Server
+  - logica business
+
+====================================================
+12. REGOLE FINALI
+====================================================
+- Tutte le pagine con griglia DEVONO:
+  - usare AG Grid
+  - avere UX coerente
+- Cambiano solo:
+  - colonne
+  - dati
+- Se Copilot è incerto:
+  - replica il pattern
+  - NON inventare alternative

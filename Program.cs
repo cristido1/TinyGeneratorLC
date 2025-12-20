@@ -315,4 +315,26 @@ app.MapControllers();
 app.MapGet("/api/v1/stories/{id:int}/evaluations", (int id, TinyGenerator.Services.StoriesService s) => Results.Json(s.GetEvaluationsForStory(id)));
 app.MapGet("/api/v1/models/busy", (ICustomLogger eventLogger) => Results.Json(eventLogger.GetBusyModelsSnapshot()));
 
+// Optional one-time migration: prefix all existing story folders with their story id
+try
+{
+    var doPrefix = Environment.GetEnvironmentVariable("PREFIX_STORY_FOLDERS");
+    if (!string.IsNullOrWhiteSpace(doPrefix) && (doPrefix == "1" || doPrefix.Equals("true", StringComparison.OrdinalIgnoreCase)))
+    {
+        using (var scope = app.Services.CreateScope())
+        {
+            var svc = scope.ServiceProvider.GetService<TinyGenerator.Services.StoriesService>();
+            if (svc != null)
+            {
+                var migrated = svc.PrefixAllStoryFoldersWithIdAsync().GetAwaiter().GetResult();
+                logger?.LogInformation("PrefixAllStoryFoldersWithIdAsync completed: {count} folders updated", migrated);
+            }
+        }
+    }
+}
+catch (Exception ex)
+{
+    logger?.LogWarning(ex, "PREFIX_STORY_FOLDERS migration failed: {msg}", ex.Message);
+}
+
 app.Run();

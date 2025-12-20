@@ -1,9 +1,10 @@
 namespace TinyGenerator.Models
 {
     /// <summary>
-    /// Unified story generation payload used by LangChain pipelines and persistence.
-    /// Mirrors the historical StoryGeneratorService.GenerationResult structure so
-    /// DatabaseService/StoriesService can stay agnostic to the generating engine.
+    /// LEGACY: Story generation payload with fixed A/B/C structure.
+    /// Used only by legacy test pages (LangChainTest.cshtml).
+    /// For production, use FullStoryPipelineCommand which dynamically handles
+    /// all active writer agents and stores stories via TaskExecution/MultiStepOrchestrationService.
     /// </summary>
     public class StoryGenerationResult
     {

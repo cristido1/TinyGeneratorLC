@@ -74,6 +74,9 @@ namespace TinyGenerator.Services
             // Track pending FX for the next phrase
             string? pendingFxDescription = null;
             int? pendingFxDuration = null;
+            
+            // Track pending music for the next phrase
+            string? pendingMusicDescription = null;
 
             // Process each tag and extract the following text
             for (int i = 0; i < matches.Count; i++)
@@ -97,6 +100,20 @@ namespace TinyGenerator.Services
                         pendingAmbience = tagContent.Substring(colonIndex + 1).Trim();
                         _logger?.Log("Debug", "TtsSchemaGenerator", 
                             $"Parsed ambience (will apply to first phrase only): '{pendingAmbience}'");
+                    }
+                    continue;
+                }
+
+                // Handle MUSICA tags - extract description and apply to next phrase
+                if (tagContent.StartsWith("MUSICA", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Extract music description from tag content (everything after the colon)
+                    var colonIndex = tagContent.IndexOf(':');
+                    if (colonIndex >= 0)
+                    {
+                        pendingMusicDescription = tagContent.Substring(colonIndex + 1).Trim();
+                        _logger?.Log("Debug", "TtsSchemaGenerator", 
+                            $"Parsed music description: '{pendingMusicDescription}'");
                     }
                     continue;
                 }
@@ -233,7 +250,6 @@ namespace TinyGenerator.Services
                 }
 
                 // Create phrase with normalized character name
-                // Ambience is applied only to the first phrase after an AMBIENTE tag
                 var phrase = new TtsPhrase
                 {
                     Character = characterKey,
@@ -241,13 +257,16 @@ namespace TinyGenerator.Services
                     Emotion = string.IsNullOrWhiteSpace(emotion) ? "neutral" : emotion,
                     Ambience = pendingAmbience,
                     FxDescription = pendingFxDescription,
-                    FxDuration = pendingFxDuration
+                    FxDuration = pendingFxDuration,
+                    MusicDescription = pendingMusicDescription,
+                    MusicDuration = pendingMusicDescription != null ? 10 : null // Fixed 10 seconds for music
                 };
 
-                // Reset pending ambience and FX after applying to phrase (applied only once)
+                // Reset pending ambience, FX, and music after applying to phrase (applied only once)
                 pendingAmbience = null;
                 pendingFxDescription = null;
                 pendingFxDuration = null;
+                pendingMusicDescription = null;
 
                 timeline.Add(phrase);
             }

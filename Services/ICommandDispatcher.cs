@@ -40,7 +40,7 @@ namespace TinyGenerator.Services
             IReadOnlyDictionary<string, string>? metadata = null);
 
         IReadOnlyList<CommandSnapshot> GetActiveCommands();
-        void UpdateStep(string runId, int current, int max);
+        void UpdateStep(string runId, int current, int max, string? stepDescription = null);
         void UpdateRetry(string runId, int retryCount);
 
         /// <summary>
@@ -81,6 +81,7 @@ namespace TinyGenerator.Services
         string? ModelName = null,
         int? CurrentStep = null,
         int? MaxStep = null,
+        string? StepDescription = null,
         int RetryCount = 0,
         string? ErrorMessage = null);
 }

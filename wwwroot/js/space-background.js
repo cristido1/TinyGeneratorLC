@@ -2,6 +2,8 @@
 // Designed to be lightweight and run on a full-screen canvas behind the layout
 
 (function () {
+    // DISABLED: space background animations removed via layout.
+    if (true) return; // short-circuit: leave file in place but do not execute animations
     const id = 'space-canvas';
     const canvas = document.getElementById(id);
     if (!canvas) return;

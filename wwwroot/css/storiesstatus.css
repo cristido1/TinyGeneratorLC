@@ -1,0 +1,68 @@
+/* StoriesStatus page: light background, full-height grid */
+
+/* Override page container for this page */
+.page-container {
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100vh - 48px);
+}
+
+.stories-page-wrapper {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.stories-page-wrapper .toolbar-row {
+    flex-shrink: 0;
+}
+
+.stories-page-wrapper .grid-fill {
+    flex: 1;
+    min-height: 400px;
+    height: 600px;
+    width: 100%;
+}
+
+#storiesGrid {
+    height: 100%;
+    width: 100%;
+}
+
+.ag-theme-alpine {
+    --ag-background-color: #ffffff;
+    --ag-foreground-color: #1f2937;
+    --ag-header-background-color: #f3f4f6;
+    --ag-odd-row-background-color: #fafafa;
+    --ag-row-hover-color: #e5e7eb;
+    --ag-row-height: 42px;
+    --ag-header-height: 48px;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+}
+
+/* Ensure grid body is visible */
+#storiesGrid .ag-body-viewport,
+#storiesGrid .ag-center-cols-viewport,
+#storiesGrid .ag-center-cols-container,
+#storiesGrid .ag-row {
+    overflow: visible !important;
+}
+
+#storiesGrid .ag-row {
+    background-color: #fff;
+}
+
+#storiesGrid .ag-row-odd {
+    background-color: #fafafa;
+}
+
+#storiesGrid .ag-header {
+    box-shadow: none;
+    background-color: #f3f4f6;
+}

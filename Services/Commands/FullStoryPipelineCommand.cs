@@ -48,6 +48,7 @@ namespace TinyGenerator.Services.Commands
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 1: Ottieni tutti gli agenti writer attivi               ║
                 // ╚══════════════════════════════════════════════════════════════╝
+                await BroadcastPipelinePhaseAsync("Fase 1/7: Ricerca agenti writer...");
                 await LogAndNotifyAsync("🎬 Avvio pipeline completo...");
 
                 var writerAgents = _database.ListAgents()
@@ -67,6 +68,7 @@ namespace TinyGenerator.Services.Commands
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 2: Avvia generazione storie in parallelo                ║
                 // ╚══════════════════════════════════════════════════════════════╝
+                await BroadcastPipelinePhaseAsync($"Fase 2/7: Generazione {writerAgents.Count} storie in parallelo...");
                 var generationTasks = new List<(Agent agent, long executionId, Task task)>();
 
                 foreach (var agent in writerAgents)
@@ -116,6 +118,7 @@ namespace TinyGenerator.Services.Commands
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 3: Aspetta completamento tutte le generazioni           ║
                 // ╚══════════════════════════════════════════════════════════════╝
+                await BroadcastPipelinePhaseAsync($"Fase 3/7: Attendendo {generationTasks.Count} generazioni...");
                 await LogAndNotifyAsync($"⏳ Attendendo il completamento di {generationTasks.Count} generazioni...");
 
                 await Task.WhenAll(generationTasks.Select(t => t.task));
@@ -123,6 +126,7 @@ namespace TinyGenerator.Services.Commands
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 4: Raccogli storie generate con successo                ║
                 // ╚══════════════════════════════════════════════════════════════╝
+                await BroadcastPipelinePhaseAsync("Fase 4/7: Raccolta storie generate...");
                 var successfulStories = new List<(Agent agent, long storyId, TaskExecution execution)>();
 
                 foreach (var (agent, executionId, _) in generationTasks)
@@ -156,6 +160,7 @@ namespace TinyGenerator.Services.Commands
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 5: Valuta le storie con gli agenti evaluator            ║
                 // ╚══════════════════════════════════════════════════════════════╝
+                await BroadcastPipelinePhaseAsync("Fase 5/7: Ricerca agenti evaluator...");
                 var evaluatorAgents = _database.ListAgents()
                     .Where(a => a.IsActive &&
                                 (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
@@ -167,10 +172,22 @@ namespace TinyGenerator.Services.Commands
                     await LogAndNotifyAsync("⚠️ Nessun agente evaluator attivo trovato, selezione della prima storia", "warning");
                     // Se non ci sono valutatori, prendi la prima storia
                     var (agent, storyId, _) = successfulStories[0];
-                    await RunFullPipelineOnStoryAsync(storyId, agent.Name, ct);
+                    await BroadcastPipelinePhaseAsync("Fase 7/7: Pipeline audio...");
+                    var pipelineOk = await RunFullPipelineOnStoryAsync(storyId, agent.Name, ct);
+                    if (pipelineOk)
+                    {
+                        await LogAndNotifyAsync("🎉 Pipeline completo terminato con successo!", "success");
+                        await _logger.BroadcastTaskComplete(_generationId, "completed");
+                    }
+                    else
+                    {
+                        await LogAndNotifyAsync("❌ Pipeline audio fallito", "error");
+                        await _logger.BroadcastTaskComplete(_generationId, "failed");
+                    }
                     return;
                 }
 
+                await BroadcastPipelinePhaseAsync($"Fase 5/7: Valutazione {successfulStories.Count} storie con {evaluatorAgents.Count} evaluator...");
                 await LogAndNotifyAsync($"🔍 Valutazione con {evaluatorAgents.Count} agenti evaluator...");
 
                 var storyScores = new Dictionary<long, List<(int evaluatorId, double score)>>();
@@ -209,6 +226,7 @@ namespace TinyGenerator.Services.Commands
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 6: Seleziona la storia con il punteggio più alto        ║
                 // ╚══════════════════════════════════════════════════════════════╝
+                await BroadcastPipelinePhaseAsync("Fase 6/7: Selezione storia vincitrice...");
                 long bestStoryId = 0;
                 double bestAvgScore = -1;
                 string bestWriterName = "";
@@ -249,20 +267,30 @@ namespace TinyGenerator.Services.Commands
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 7: Esegui il pipeline completo sulla storia vincitrice  ║
                 // ╚══════════════════════════════════════════════════════════════╝
-                await RunFullPipelineOnStoryAsync(bestStoryId, bestWriterName, ct);
+                await BroadcastPipelinePhaseAsync($"Fase 7/7: Pipeline audio su storia {bestStoryId}...");
+                var pipelineSuccess = await RunFullPipelineOnStoryAsync(bestStoryId, bestWriterName, ct);
 
-                await LogAndNotifyAsync("🎉 Pipeline completo terminato con successo!", "success");
+                if (pipelineSuccess)
+                {
+                    await LogAndNotifyAsync("🎉 Pipeline completo terminato con successo!", "success");
+                    await _logger.BroadcastTaskComplete(_generationId, "completed");
+                }
+                else
+                {
+                    await LogAndNotifyAsync("❌ Pipeline audio fallito", "error");
+                    await _logger.BroadcastTaskComplete(_generationId, "failed");
+                }
             }
             catch (OperationCanceledException)
             {
                 await LogAndNotifyAsync("⚠️ Pipeline cancellato", "warning");
-                _ = _logger.BroadcastTaskComplete(_generationId, "cancelled");
+                await _logger.BroadcastTaskComplete(_generationId, "cancelled");
             }
             catch (Exception ex)
             {
                 await LogAndNotifyAsync($"❌ Errore pipeline: {ex.Message}", "error");
                 _logger.Log("Error", "FullPipeline", $"Pipeline error: {ex.Message}", ex.ToString());
-                _ = _logger.BroadcastTaskComplete(_generationId, "failed");
+                await _logger.BroadcastTaskComplete(_generationId, "failed");
             }
         }
 
@@ -290,7 +318,7 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        private async Task RunFullPipelineOnStoryAsync(long storyId, string writerName, CancellationToken ct)
+        private async Task<bool> RunFullPipelineOnStoryAsync(long storyId, string writerName, CancellationToken ct)
         {
             await LogAndNotifyAsync($"🎯 Esecuzione pipeline audio sulla storia {storyId} ({writerName})...");
 
@@ -299,30 +327,33 @@ namespace TinyGenerator.Services.Commands
             if (story == null)
             {
                 await LogAndNotifyAsync($"❌ Storia {storyId} non trovata", "error");
-                return;
+                return false;
             }
 
             // Build folder name for audio files
             var storyFolderName = story.Folder;
             if (string.IsNullOrEmpty(storyFolderName))
             {
-                storyFolderName = $"story_{storyId}";
+                storyFolderName = storyId.ToString("D5");
             }
             
             // Ensure the folder exists
             var storyFolderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", storyFolderName);
             Directory.CreateDirectory(storyFolderPath);
 
+            const int audioPipelineTotalSteps = 9;
+
             // ═══════════════════════════════════════════════════════════════
             // STEP 1: Genera TTS Schema
             // ═══════════════════════════════════════════════════════════════
             ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(1, audioPipelineTotalSteps, "📄 Generazione TTS schema...");
             await LogAndNotifyAsync("📄 Generazione TTS schema...");
             var (ttsSchemaOk, ttsSchemaMsg) = await _storiesService.GenerateTtsSchemaJsonAsync(storyId);
             if (!ttsSchemaOk)
             {
                 await LogAndNotifyAsync($"❌ TTS Schema fallito: {ttsSchemaMsg}", "error");
-                return;
+                return false;
             }
             await LogAndNotifyAsync("✅ TTS Schema generato", "success");
 
@@ -330,6 +361,7 @@ namespace TinyGenerator.Services.Commands
             // STEP 2: Normalizza nomi personaggi
             // ═══════════════════════════════════════════════════════════════
             ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(2, audioPipelineTotalSteps, "👤 Normalizzazione nomi personaggi...");
             await LogAndNotifyAsync("👤 Normalizzazione nomi personaggi...");
             var (normCharOk, normCharMsg) = await _storiesService.NormalizeCharacterNamesAsync(storyId);
             if (!normCharOk)
@@ -343,9 +375,27 @@ namespace TinyGenerator.Services.Commands
             }
 
             // ═══════════════════════════════════════════════════════════════
-            // STEP 3: Normalizza sentimenti
+            // STEP 3: Assegna voci ai personaggi
             // ═══════════════════════════════════════════════════════════════
             ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(3, audioPipelineTotalSteps, "🎤 Assegnazione voci ai personaggi...");
+            await LogAndNotifyAsync("🎤 Assegnazione voci ai personaggi...");
+            var (assignVoicesOk, assignVoicesMsg) = await _storiesService.AssignVoicesAsync(storyId);
+            if (!assignVoicesOk)
+            {
+                await LogAndNotifyAsync($"⚠️ Assegnazione voci: {assignVoicesMsg}", "warning");
+                // Continue anyway - some characters may already have voices
+            }
+            else
+            {
+                await LogAndNotifyAsync($"✅ {assignVoicesMsg}", "success");
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // STEP 4: Normalizza sentimenti
+            // ═══════════════════════════════════════════════════════════════
+            ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(4, audioPipelineTotalSteps, "💭 Normalizzazione sentimenti...");
             await LogAndNotifyAsync("💭 Normalizzazione sentimenti...");
             var (normSentOk, normSentMsg) = await _storiesService.NormalizeSentimentsAsync(storyId);
             if (!normSentOk)
@@ -359,22 +409,24 @@ namespace TinyGenerator.Services.Commands
             }
 
             // ═══════════════════════════════════════════════════════════════
-            // STEP 4: Genera TTS audio
+            // STEP 5: Genera TTS audio
             // ═══════════════════════════════════════════════════════════════
             ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(5, audioPipelineTotalSteps, "🔊 Generazione audio TTS...");
             await LogAndNotifyAsync("🔊 Generazione audio TTS...");
             var ttsResult = await _storiesService.GenerateTtsForStoryAsync(storyId, storyFolderName, _generationId.ToString());
             if (!ttsResult.success)
             {
                 await LogAndNotifyAsync($"❌ TTS fallito: {ttsResult.error}", "error");
-                return;
+                return false;
             }
             await LogAndNotifyAsync("✅ Audio TTS generato", "success");
 
             // ═══════════════════════════════════════════════════════════════
-            // STEP 5: Genera suoni ambientali
+            // STEP 6: Genera suoni ambientali
             // ═══════════════════════════════════════════════════════════════
             ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(6, audioPipelineTotalSteps, "🌲 Generazione suoni ambientali...");
             await LogAndNotifyAsync("🌲 Generazione suoni ambientali...");
             var ambienceResult = await _storiesService.GenerateAmbienceForStoryAsync(storyId, storyFolderName, _generationId.ToString());
             if (!ambienceResult.success)
@@ -388,9 +440,10 @@ namespace TinyGenerator.Services.Commands
             }
 
             // ═══════════════════════════════════════════════════════════════
-            // STEP 6: Genera effetti sonori (FX)
+            // STEP 7: Genera effetti sonori (FX)
             // ═══════════════════════════════════════════════════════════════
             ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(7, audioPipelineTotalSteps, "💥 Generazione effetti sonori (FX)...");
             await LogAndNotifyAsync("💥 Generazione effetti sonori (FX)...");
             var fxResult = await _storiesService.GenerateFxForStoryAsync(storyId, storyFolderName, _generationId.ToString());
             if (!fxResult.success)
@@ -404,19 +457,40 @@ namespace TinyGenerator.Services.Commands
             }
 
             // ═══════════════════════════════════════════════════════════════
-            // STEP 7: Mix audio finale
+            // STEP 8: Genera musica
             // ═══════════════════════════════════════════════════════════════
             ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(8, audioPipelineTotalSteps, "🎵 Generazione musica...");
+            await LogAndNotifyAsync("🎵 Generazione musica...");
+            var musicResult = await _storiesService.GenerateMusicForStoryAsync(storyId, storyFolderName, _generationId.ToString());
+            if (!musicResult.success)
+            {
+                await LogAndNotifyAsync($"⚠️ Musica: {musicResult.error}", "warning");
+                // Continue anyway
+            }
+            else
+            {
+                await LogAndNotifyAsync("✅ Musica generata", "success");
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // STEP 9: Mix audio finale
+            // ═══════════════════════════════════════════════════════════════
+            ct.ThrowIfCancellationRequested();
+            await BroadcastAudioPipelineStepAsync(9, audioPipelineTotalSteps, "🎚️ Mixaggio audio finale...");
             await LogAndNotifyAsync("🎚️ Mixaggio audio finale...");
+            await LogAndNotifyAsync($"[DEBUG] Chiamata a MixFinalAudioForStoryAsync(storyId={storyId}, folder={storyFolderName})...");
             var mixResult = await _storiesService.MixFinalAudioForStoryAsync(storyId, storyFolderName, _generationId.ToString());
+            await LogAndNotifyAsync($"[DEBUG] MixFinalAudioForStoryAsync completato: success={mixResult.success}");
             if (!mixResult.success)
             {
                 await LogAndNotifyAsync($"❌ Mix finale fallito: {mixResult.error}", "error");
-                return;
+                return false;
             }
             await LogAndNotifyAsync("✅ Mix audio finale completato", "success");
+            await LogAndNotifyAsync($"[DEBUG] RunFullPipelineOnStoryAsync returning true");
 
-            _ = _logger.BroadcastTaskComplete(_generationId, "completed");
+            return true;
         }
 
         private async Task LogAndNotifyAsync(string message, string extraClass = "")
@@ -432,6 +506,35 @@ namespace TinyGenerator.Services.Commands
             catch
             {
                 // Ignore notification errors
+            }
+        }
+
+        private async Task BroadcastAudioPipelineStepAsync(int currentStep, int totalSteps, string stepDescription)
+        {
+            try
+            {
+                await _logger.BroadcastStepProgress(_generationId, currentStep, totalSteps, stepDescription);
+                // Aggiorna anche il CommandDispatcher per mostrare la descrizione nel pannello comandi
+                _dispatcher?.UpdateStep(_generationId.ToString(), currentStep, totalSteps, stepDescription);
+            }
+            catch
+            {
+                // Ignore broadcast errors
+            }
+        }
+
+        private async Task BroadcastPipelinePhaseAsync(string phaseDescription)
+        {
+            try
+            {
+                // Usa BroadcastStepProgress con step 0 per indicare una fase macro (non un sub-step)
+                await _logger.BroadcastStepProgress(_generationId, 0, 7, phaseDescription);
+                // Aggiorna anche il CommandDispatcher per mostrare la fase nel pannello comandi
+                _dispatcher?.UpdateStep(_generationId.ToString(), 0, 7, phaseDescription);
+            }
+            catch
+            {
+                // Ignore broadcast errors
             }
         }
     }

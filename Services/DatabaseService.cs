@@ -163,12 +163,65 @@ public sealed class DatabaseService
             }
             
             InitializeSchema();
+            // Ensure generated_* columns exist for stories table (best-effort)
+            try
+            {
+                EnsureStoryGeneratedColumnsExist();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to ensure generated columns: {ex.Message}");
+            }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[DB] Initialize() error: {ex.Message}\n{ex.StackTrace}");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Ensure the generated_* boolean columns exist in the `stories` table.
+    /// This is best-effort and will add columns when missing using ALTER TABLE.
+    /// </summary>
+    private void EnsureStoryGeneratedColumnsExist()
+    {
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info('stories');";
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                existing.Add(Convert.ToString(reader[1]) ?? string.Empty);
+            }
+        }
+
+        void AddIfMissing(string columnName, string columnDef)
+        {
+            if (existing.Contains(columnName)) return;
+            try
+            {
+                using var addCmd = conn.CreateCommand();
+                addCmd.CommandText = $"ALTER TABLE stories ADD COLUMN {columnName} {columnDef};";
+                addCmd.ExecuteNonQuery();
+                Console.WriteLine($"[DB] Added column {columnName} to stories table");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: unable to add column {columnName}: {ex.Message}");
+            }
+        }
+
+        // SQLite represents booleans as INTEGER 0/1
+        AddIfMissing("generated_tts_json", "INTEGER DEFAULT 0");
+        AddIfMissing("generated_tts", "INTEGER DEFAULT 0");
+        AddIfMissing("generated_ambient", "INTEGER DEFAULT 0");
+        AddIfMissing("generated_music", "INTEGER DEFAULT 0");
+        AddIfMissing("generated_effects", "INTEGER DEFAULT 0");
+        AddIfMissing("generated_mixed_audio", "INTEGER DEFAULT 0");
     }
 
     /// <summary>
@@ -1433,7 +1486,24 @@ SET TotalScore = (
         }
     }
 
+    /// <summary>
+    /// Delete all evaluations related to a story (best-effort).
+    /// </summary>
+    public void DeleteEvaluationsForStory(long storyId)
+    {
+        using var context = CreateDbContext();
+        var evals = context.StoryEvaluations.Where(e => e.StoryId == storyId).ToList();
+        if (evals.Count == 0) return;
+        context.StoryEvaluations.RemoveRange(evals);
+        context.SaveChanges();
+    }
+
     // Stories CRUD operations
+    /// <summary>
+    /// LEGACY: Saves stories using fixed WriterA/B/C structure.
+    /// Used only by legacy test pages. For production, stories are saved automatically
+    /// during multi-step execution via MultiStepOrchestrationService.
+    /// </summary>
     public long SaveGeneration(string prompt, TinyGenerator.Models.StoryGenerationResult r, string? memoryKey = null)
     {
         using var context = CreateDbContext();
@@ -1623,12 +1693,34 @@ SET TotalScore = (
             Score = score,
             Approved = approved != 0,
             StatusId = statusId ?? InitialStoryStatusId,
-            Folder = folder,
+            Folder = null,
             ModelId = modelId,
             AgentId = agentId
         };
         context.Stories.Add(storyRecord);
         context.SaveChanges();
+
+        // After saving we have the story Id; construct a folder name prefixed with a 5-digit zero-padded id
+        try
+        {
+            var paddedId = storyRecord.Id.ToString("D5");
+            string finalFolder;
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                finalFolder = SanitizeFolderName($"{paddedId}_{folder}");
+            }
+            else
+            {
+                finalFolder = SanitizeFolderName($"{paddedId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}");
+            }
+            storyRecord.Folder = finalFolder;
+            context.SaveChanges();
+        }
+        catch
+        {
+            // best-effort: if folder update fails, keep original state
+        }
+
         return storyRecord.Id;
     }
 
@@ -1679,6 +1771,30 @@ SET TotalScore = (
         storyRecord.Characters = charactersJson;
         context.SaveChanges();
         return true;
+    }
+
+    /// <summary>
+    /// Set the generated flags for a story. Best-effort using a direct SQL update so
+    /// this method can be used even if EF migrations adding these columns have
+    /// not yet been applied. Returns true if the update executed without error.
+    /// </summary>
+    public bool UpdateStoryGeneratedTts(long storyId, bool generatedTts)
+    {
+        try
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            // SQLite uses integer 0/1 for booleans
+            var sql = "UPDATE stories SET generated_tts = @g WHERE id = @id";
+            conn.Execute(sql, new { g = generatedTts ? 1 : 0, id = storyId });
+            return true;
+        }
+        catch
+        {
+            // Best-effort: if the column doesn't exist or DB schema isn't updated yet,
+            // swallow the error and return false so callers can continue.
+            return false;
+        }
     }
 
     // TTS voices: list and upsert
@@ -2626,6 +2742,40 @@ Regole:
         catch (Exception ex)
         {
             Console.WriteLine($"[DB] Warning: failed to add characters_step column to step_templates: {ex.Message}");
+        }
+
+        // Migration: Add evaluation_steps column to step_templates for specifying which steps require evaluator validation
+        try
+        {
+            var hasEvaluationSteps = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('step_templates') WHERE name='evaluation_steps'");
+            if (hasEvaluationSteps == 0)
+            {
+                Console.WriteLine("[DB] Adding evaluation_steps column to step_templates");
+                conn.Execute("ALTER TABLE step_templates ADD COLUMN evaluation_steps TEXT");
+                // Set default value for existing story templates (evaluate chapter steps 4-9)
+                conn.Execute("UPDATE step_templates SET evaluation_steps = '4,5,6,7,8,9' WHERE task_type = 'story' AND evaluation_steps IS NULL");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add evaluation_steps column to step_templates: {ex.Message}");
+        }
+
+        // Migration: Add trama_steps column to step_templates for specifying which steps contain the chapter trama
+        try
+        {
+            var hasTramaSteps = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('step_templates') WHERE name='trama_steps'");
+            if (hasTramaSteps == 0)
+            {
+                Console.WriteLine("[DB] Adding trama_steps column to step_templates");
+                conn.Execute("ALTER TABLE step_templates ADD COLUMN trama_steps TEXT");
+                // Default: step 1 contains the overall trama for story templates
+                conn.Execute("UPDATE step_templates SET trama_steps = '1' WHERE task_type = 'story' AND trama_steps IS NULL");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add trama_steps column to step_templates: {ex.Message}");
         }
 
         // Migration: Create mapped_sentiments table for sentiment mapping cache
@@ -3663,6 +3813,9 @@ WHERE Id = @modelId;";
             existing.StepPrompt = template.StepPrompt;
             existing.Instructions = template.Instructions;
             existing.Description = template.Description;
+            existing.CharactersStep = template.CharactersStep;
+            existing.EvaluationSteps = template.EvaluationSteps;
+            existing.TramaSteps = template.TramaSteps;
             existing.UpdatedAt = template.UpdatedAt;
             context.SaveChanges();
         }
@@ -3861,6 +4014,53 @@ WHERE Id = @modelId;";
         if (string.IsNullOrWhiteSpace(name)) return null;
         using var context = CreateDbContext();
         return context.Agents.FirstOrDefault(a => a.Name == name);
+    }
+
+    /// <summary>
+    /// Top 10 storie per media valutazioni dalla tabella stories_evaluations
+    /// </summary>
+    public List<(long Id, string Prompt, string Model, double AvgScore, string Timestamp)> GetTopStoriesByEvaluation(int top = 10)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+            SELECT 
+                s.id AS Id,
+                COALESCE(s.prompt, '') AS Prompt,
+                COALESCE(m.Name, '') AS Model,
+                AVG(se.total_score) AS AvgScore,
+                COALESCE(s.ts, '') AS Timestamp
+            FROM stories s
+            INNER JOIN stories_evaluations se ON se.story_id = s.id
+            LEFT JOIN models m ON s.model_id = m.Id
+            GROUP BY s.id
+            ORDER BY AvgScore DESC
+            LIMIT @top";
+        return conn.Query<(long Id, string Prompt, string Model, double AvgScore, string Timestamp)>(sql, new { top }).ToList();
+    }
+
+    /// <summary>
+    /// Top 10 scrittori (agenti) per media valutazioni delle loro storie
+    /// </summary>
+    public List<(string AgentName, string ModelName, double AvgScore, int StoryCount)> GetTopWritersByEvaluation(int top = 10)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+            SELECT 
+                COALESCE(a.name, '') AS AgentName,
+                COALESCE(m.Name, '') AS ModelName,
+                AVG(se.total_score) AS AvgScore,
+                COUNT(DISTINCT s.id) AS StoryCount
+            FROM stories s
+            INNER JOIN stories_evaluations se ON se.story_id = s.id
+            LEFT JOIN agents a ON s.agent_id = a.id
+            LEFT JOIN models m ON s.model_id = m.Id
+            WHERE s.agent_id IS NOT NULL
+            GROUP BY s.agent_id, s.model_id
+            ORDER BY AvgScore DESC
+            LIMIT @top";
+        return conn.Query<(string AgentName, string ModelName, double AvgScore, int StoryCount)>(sql, new { top }).ToList();
     }
 
     #endregion

@@ -2,829 +2,227 @@
 @model TinyGenerator.Pages.ModelsModel
 @{
     ViewData["Title"] = "Models";
-    ViewData["PageDescription"] = "Gestisci i modelli e i test delle funzioni";
-    var groupsHeader = Model.TestGroups ?? new System.Collections.Generic.List<string>();
-    var visibleGroups = groupsHeader.Take(4).ToList();
 }
-<style>
-    /* Allow long model names to wrap instead of truncating; never truncate */
-    .model-name-col {
-        white-space: normal !important;
-        word-break: break-word !important;
-        overflow-wrap: anywhere !important;
-        overflow: visible !important;
-        hyphens: auto !important;
-        max-width: none !important;
-    }
 
-    /* Enable manual column resizing */
-    .resizable-table {
-        table-layout: auto;
-    }
-    .resizable-table th {
-        position: relative;
-    }
-    .resizable-table th .col-resizer {
-        position: absolute;
-        right: 0;
-        top: 0;
-        width: 6px;
-        height: 100%;
-        cursor: col-resize;
-        user-select: none;
-    }
-    #queuePanel {
-        touch-action: none;
-    }
-</style>
-
-<div class="mb-3 d-flex gap-2 align-items-center">
-    <div class="input-group input-group-sm" style="width:260px">
-        <select id="groupSelect" class="form-select">
+<div class="page-wrapper">
+    <div class="d-flex mb-2 align-items-center toolbar-row">
+        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <select id="groupSelect" class="form-select form-select-sm ms-2" style="max-width:180px;">
             @foreach(var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
             {
                 <option value="@g">@g</option>
             }
         </select>
-    </div>
-    <label class="form-check form-check-inline ms-2">
-        <input id="showDisabledCheckbox" class="form-check-input" type="checkbox" @(Model.ShowDisabled ? "checked" : "") />
-        <span class="form-check-label">Mostra disabilitati</span>
-    </label>
-</div>
-<!-- Hidden buttons for JS handlers -->
-<button id="runGroupBtn" style="display:none;"></button>
-<button id="runAllBtn" style="display:none;"></button>
-<button id="purgeOllamaBtn" style="display:none;"></button>
-<button id="refreshContextsBtn" style="display:none;"></button>
-<button id="discoverOllamaBtn" style="display:none;"></button>
-<button id="recalculateScoresBtn" style="display:none;"></button>
-
-<div class="models-table-wrapper">
-    <table id="modelsTable" class="table table-sm table-striped resizable-table datatable"
-           data-create-label="Nuovo modello"
-           data-create-url="@Url.Page("/Models/Edit")">
-        <thead>
-            <tr>
-                <th></th>
-                <th class="model-name-col">Name</th>
-                <th>Provider</th>
-                <th>Note</th>
-                <th>Local</th>
-                <th>MaxContext</th>
-                <th>ContextToUse</th>
-                <th class="text-center">Total</th>
-                <th class="text-center">Base</th>
-                <th class="text-center">TextEval</th>
-                <th class="text-center">Writer</th>
-                <th class="text-center">TTS</th>
-                <th class="text-center">Music</th>
-                <th class="text-center">FX</th>
-                <th class="text-center">Ambient</th>
-                <th class="text-center">NoTools</th>
-                <th class="text-center">Duration (s)</th>
-                <th class="text-end">Cost In $/1k</th>
-                <th class="text-end">Cost Out $/1k</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var m in Model.Models ?? new System.Collections.Generic.List<TinyGenerator.Models.ModelInfo>())
-            {
-                var hasTestResults = m.TestDurationSeconds.HasValue && m.TestDurationSeconds.Value > 0;
-                Func<double, string> renderScore = score =>
-                {
-                    if (!hasTestResults) return "-";
-                    return score > 0
-                        ? score.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)
-                        : "0";
-                };
-
-                <tr data-model="@m.Name">
-                    <td class="dt-control"></td>
-                    <td class="model-name-col">@m.Name</td>
-                    <td>
-                        @if (m.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
-                        {
-                            <span class="badge bg-success">@m.Provider</span>
-                        }
-                        else if (m.Provider?.Equals("openai", StringComparison.OrdinalIgnoreCase) == true)
-                        {
-                            <span class="badge bg-warning text-dark">@m.Provider</span>
-                        }
-                        else
-                        {
-                            <span class="badge bg-secondary">@m.Provider</span>
-                        }
-                    </td>
-                    <td>@(m.Note ?? "")</td>
-                    <td>@(m.IsLocal ? "Yes" : "No")</td>
-                    <td>@m.MaxContext</td>
-                    <td>@m.ContextToUse</td>
-                    <td class="text-center">@renderScore(m.TotalScore)</td>
-                    <td class="text-center">@renderScore(m.BaseScore)</td>
-                    <td class="text-center">@renderScore(m.TextEvalScore)</td>
-                    <td class="text-center">@renderScore(m.WriterScore)</td>
-                    <td class="text-center">@renderScore(m.TtsScore)</td>
-                    <td class="text-center">@renderScore(m.MusicScore)</td>
-                    <td class="text-center">@renderScore(m.FxScore)</td>
-                    <td class="text-center">@renderScore(m.AmbientScore)</td>
-                    <td class="text-center">@(m.NoTools ? "✓" : "")</td>
-                    <td class="text-center">@(m.TestDurationSeconds.HasValue ? String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}", m.TestDurationSeconds.Value) : "-")</td>
-                    <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostInPerToken)</td>
-                    <td class="text-end">@String.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#####}", m.CostOutPerToken)</td>
-                    <td class="text-end">
-                        <div class="btn-group" role="group">
-                            <a class="btn btn-sm btn-outline-secondary" href="/Models/Edit?name=@System.Net.WebUtility.UrlEncode(m.Name)">Edit</a>
-                            <div class="btn-group">
-                                <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">Run</button>
-                                <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="/Chat?model=@System.Net.WebUtility.UrlEncode(m.Name)">💬 Chat with model</a></li>
-                                    <li><hr class="dropdown-divider"></li>
-                                    <li><a class="dropdown-item run-model-all" href="#" data-model="@m.Name">All tests</a></li>
-                                    @foreach(var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
-                                    {
-                                        <li><a class="dropdown-item run-model-group" href="#" data-model="@m.Name" data-group="@g">@g</a></li>
-                                    }
-                                </ul>
-                            </div>
-                        </div>
-                    </td>
-                </tr>
-            }
-        </tbody>
-    </table>
-</div>
-
-<div id="queuePanel" class="position-fixed bottom-0 end-0 p-3" style="z-index:1040; width: 380px; max-width: 95vw;">
-    <div class="card shadow-sm">
-        <div class="card-header d-flex justify-content-between align-items-center queue-drag-handle" style="cursor: move;">
-            <span>Operazioni in coda / in esecuzione</span>
-            <span class="badge bg-primary">@Model.ActiveCommands.Count</span>
-        </div>
-        <div class="list-group list-group-flush small" style="max-height: 55vh; overflow-y: auto;">
-            @if (Model.ActiveCommands == null || !Model.ActiveCommands.Any())
-            {
-                <div class="list-group-item text-muted">Nessuna operazione in corso</div>
-            }
-            else
-            {
-                foreach (var cmd in Model.ActiveCommands)
-                {
-                    var op = (cmd.Metadata != null && cmd.Metadata.TryGetValue("operation", out var opVal)) ? opVal : cmd.OperationName;
-                    var agentName = cmd.AgentName ?? "-";
-                    var modelName = cmd.ModelName ?? "-";
-                    var group = (cmd.Metadata != null && cmd.Metadata.TryGetValue("group", out var gn)) ? gn : string.Empty;
-                    var statusClass = cmd.Status.Equals("running", System.StringComparison.OrdinalIgnoreCase) ? "bg-success" : "bg-warning text-dark";
-                    <div class="list-group-item">
-                        <div class="d-flex justify-content-between align-items-start">
-                            <div>
-                                <div class="fw-semibold">@op</div>
-                                <div class="text-muted">Agent: @agentName | Model: @modelName</div>
-                                @if (!string.IsNullOrWhiteSpace(group))
-                                {
-                                    <div class="text-muted">Group: @group</div>
-                                }
-                            </div>
-                            <span class="badge @statusClass text-uppercase">@cmd.Status</span>
-                        </div>
-                        <div class="text-muted mt-1">
-                            <small>Enqueued: @cmd.EnqueuedAt.ToLocalTime().ToString("HH:mm:ss")</small>
-                            @if (cmd.StartedAt.HasValue)
-                            {
-                                <small class="ms-2">Start: @cmd.StartedAt.Value.ToLocalTime().ToString("HH:mm:ss")</small>
-                            }
-                        </div>
-                    </div>
-                }
-            }
+        <label class="form-check form-check-inline ms-2 mb-0">
+            <input id="showDisabledCheckbox" class="form-check-input" type="checkbox" @(Model.ShowDisabled ? "checked" : "") />
+            <span class="form-check-label small">Mostra disabilitati</span>
+        </label>
+        <div class="ms-auto d-flex gap-1 flex-wrap">
+            <button id="runGroupBtn" class="btn btn-sm btn-outline-success" title="Run Group"><i class="bi bi-play-fill"></i> Group</button>
+            <button id="runAllBtn" class="btn btn-sm btn-outline-primary" title="Run All"><i class="bi bi-collection-play"></i> All</button>
+            <button id="purgeBtn" class="btn btn-sm btn-outline-warning" title="Purge Disabled"><i class="bi bi-trash3"></i> Purge</button>
+            <button id="refreshCtxBtn" class="btn btn-sm btn-outline-secondary" title="Refresh Contexts"><i class="bi bi-arrow-repeat"></i> Ctx</button>
+            <button id="discoverBtn" class="btn btn-sm btn-outline-info" title="Discover Ollama"><i class="bi bi-search"></i> Discover</button>
+            <button id="recalcBtn" class="btn btn-sm btn-outline-secondary" title="Recalc Scores"><i class="bi bi-calculator"></i> Recalc</button>
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
+                    <i class="bi bi-layout-three-columns"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end" id="modelsGridColVisMenu" style="min-width: 180px;"></ul>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
+            <a class="btn btn-sm btn-primary" href="/Models/Edit">Nuovo</a>
         </div>
     </div>
+
+    <div id="modelsGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
 </div>
 
-    <!-- Include DataTables from CDN (CSS + JS). If your layout already provides these, duplicates are harmless in dev. -->
-    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css" />
-    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
-
+@section Scripts {
     <script>
-        // Simple column resize handles
-        (function() {
-            function makeResizable(table) {
-                if (!table) return;
-                const ths = table.querySelectorAll('th');
-                ths.forEach((th, idx) => {
-                    // Skip the expand-control column
-                    if (idx === 0) return;
-                    const handle = document.createElement('span');
-                    handle.className = 'col-resizer';
-                    th.appendChild(handle);
+        window.__models_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Models));
+        window.__test_groups = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.TestGroups ?? new System.Collections.Generic.List<string>()));
+    </script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const rowData = window.__models_data || [];
+            const testGroups = window.__test_groups || [];
 
-                    let startX = 0;
-                    let startWidth = 0;
-                    handle.addEventListener('mousedown', (e) => {
-                        startX = e.pageX;
-                        startWidth = th.offsetWidth;
-                        document.body.style.cursor = 'col-resize';
-                        const onMove = (ev) => {
-                            const delta = ev.pageX - startX;
-                            const newWidth = Math.max(50, startWidth + delta);
-                            th.style.width = newWidth + 'px';
-                            // Apply width to all cells in this column
-                            table.querySelectorAll('tr').forEach(row => {
-                                const cell = row.children[idx];
-                                if (cell) cell.style.width = newWidth + 'px';
-                            });
-                        };
-                        const onUp = () => {
-                            document.removeEventListener('mousemove', onMove);
-                            document.removeEventListener('mouseup', onUp);
-                            document.body.style.cursor = '';
-                        };
-                        document.addEventListener('mousemove', onMove);
-                        document.addEventListener('mouseup', onUp);
-                    });
-                });
+            function renderScore(val, hasResults) {
+                if (!hasResults) return '-';
+                return val > 0 ? val.toFixed(1) : '0';
             }
 
-            document.addEventListener('DOMContentLoaded', function() {
-                const tableEl = document.getElementById('modelsTable');
-                makeResizable(tableEl);
+            function providerBadge(provider) {
+                if (!provider) return '<span class="badge bg-secondary">-</span>';
+                const p = provider.toLowerCase();
+                if (p === 'ollama') return '<span class="badge bg-success">ollama</span>';
+                if (p === 'openai') return '<span class="badge bg-warning text-dark">openai</span>';
+                return `<span class="badge bg-secondary">${escapeHtml(provider)}</span>`;
+            }
+
+            const columnDefs = [
+                { headerName: 'Name', field: 'Name', flex: 2, wrapText: true, autoHeight: true, cellClass: 'text-wrap' },
+                { headerName: 'Provider', field: 'Provider', width: 100, cellRenderer: p => providerBadge(p.value) },
+                { headerName: 'Note', field: 'Note', flex: 1 },
+                { headerName: 'Local', field: 'IsLocal', width: 70, cellRenderer: p => p.value ? 'Yes' : 'No' },
+                { headerName: 'MaxCtx', field: 'MaxContext', width: 90, type: 'numericColumn' },
+                { headerName: 'CtxToUse', field: 'ContextToUse', width: 95, type: 'numericColumn' },
+                { headerName: 'Total', field: 'TotalScore', width: 70, type: 'numericColumn', cellRenderer: p => renderScore(p.value, p.data.TestDurationSeconds > 0) },
+                { headerName: 'Base', field: 'BaseScore', width: 70, type: 'numericColumn', cellRenderer: p => renderScore(p.value, p.data.TestDurationSeconds > 0) },
+                { headerName: 'TextEval', field: 'TextEvalScore', width: 80, type: 'numericColumn', cellRenderer: p => renderScore(p.value, p.data.TestDurationSeconds > 0) },
+                { headerName: 'Writer', field: 'WriterScore', width: 70, type: 'numericColumn', cellRenderer: p => renderScore(p.value, p.data.TestDurationSeconds > 0) },
+                { headerName: 'TTS', field: 'TtsScore', width: 60, type: 'numericColumn', cellRenderer: p => renderScore(p.value, p.data.TestDurationSeconds > 0) },
+                { headerName: 'Music', field: 'MusicScore', width: 70, type: 'numericColumn', cellRenderer: p => renderScore(p.value, p.data.TestDurationSeconds > 0) },
+                { headerName: 'FX', field: 'FxScore', width: 60, type: 'numericColumn', cellRenderer: p => renderScore(p.value, p.data.TestDurationSeconds > 0) },
+                { headerName: 'Ambient', field: 'AmbientScore', width: 80, type: 'numericColumn', cellRenderer: p => renderScore(p.value, p.data.TestDurationSeconds > 0) },
+                { headerName: 'NoTools', field: 'NoTools', width: 80, cellRenderer: p => p.value ? '' : '' },
+                { headerName: 'Duration', field: 'TestDurationSeconds', width: 90, type: 'numericColumn', cellRenderer: p => p.value ? p.value.toFixed(2) : '-' },
+                { headerName: 'Cost In', field: 'CostInPerToken', width: 85, type: 'numericColumn', cellRenderer: p => (p.value || 0).toFixed(5) },
+                { headerName: 'Cost Out', field: 'CostOutPerToken', width: 90, type: 'numericColumn', cellRenderer: p => (p.value || 0).toFixed(5) },
+                {
+                    headerName: 'Actions', colId: 'actions', width: 200, suppressColumnsToolPanel: true, pinned: 'right',
+                    cellRenderer: params => {
+                        const name = params.data.Name;
+                        const encodedName = encodeURIComponent(name);
+                        let groupItems = testGroups.map(g => 
+                            `<li><a class="dropdown-item run-model-group" href="#" data-model="${escapeAttr(name)}" data-group="${escapeAttr(g)}">${escapeHtml(g)}</a></li>`
+                        ).join('');
+                        return `
+                            <div class="btn-group" role="group">
+                                <a class="btn btn-sm btn-outline-secondary" href="/Models/Edit?name=${encodedName}">Edit</a>
+                                <div class="btn-group">
+                                    <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">Run</button>
+                                    <ul class="dropdown-menu dropdown-menu-end">
+                                        <li><a class="dropdown-item" href="/Chat?model=${encodedName}"> Chat</a></li>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li><a class="dropdown-item run-model-all" href="#" data-model="${escapeAttr(name)}">All tests</a></li>
+                                        ${groupItems}
+                                    </ul>
+                                </div>
+                            </div>`;
+                    }
+                }
+            ];
+
+            // Master-detail for test results
+            const detailCellRendererParams = {
+                detailGridOptions: {
+                    columnDefs: [
+                        { headerName: 'Group', field: 'group', flex: 1 },
+                        { headerName: 'Passed', field: 'passed', width: 80 },
+                        { headerName: 'Failed', field: 'failed', width: 80 },
+                        { headerName: 'Score', field: 'score', width: 80 },
+                        { headerName: 'Duration', field: 'duration', width: 100 }
+                    ],
+                    defaultColDef: { sortable: true, resizable: true }
+                },
+                getDetailRowData: params => {
+                    const modelName = params.data.Name;
+                    fetch(`/api/test-automation/model/${encodeURIComponent(modelName)}/groups`)
+                        .then(r => r.json())
+                        .then(data => params.successCallback(data || []))
+                        .catch(() => params.successCallback([]));
+                }
+            };
+
+            AgGridHelper.init('modelsGrid', columnDefs, rowData, {
+                storageKey: 'agGrid_models_colVis',
+                pageSize: 50,
+                masterDetail: true,
+                detailCellRendererParams: detailCellRendererParams,
+                detailRowAutoHeight: true
             });
-        })();
 
-        $(document).ready(function(){
-            // Draggable queue panel (reuse logic from Stories)
-            (function () {
-                var panel = document.getElementById('queuePanel');
-                if (!panel) return;
-                var handle = panel.querySelector('.queue-drag-handle');
-                if (!handle) return;
+            // Quick filter
+            document.getElementById('globalFilter')?.addEventListener('input', e => {
+                window.modelsGridApi?.setQuickFilter(e.target.value);
+            });
 
-                var offsetX = 0, offsetY = 0, startX = 0, startY = 0;
+            // Show disabled toggle
+            document.getElementById('showDisabledCheckbox')?.addEventListener('change', e => {
+                const url = new URL(window.location.href);
+                url.searchParams.set('showDisabled', e.target.checked);
+                window.location.href = url.toString();
+            });
 
-                handle.addEventListener('pointerdown', function (e) {
+            // Toolbar buttons
+            document.getElementById('runGroupBtn')?.addEventListener('click', () => {
+                const grp = document.getElementById('groupSelect')?.value;
+                if (!grp) { alert('Seleziona un gruppo'); return; }
+                postAction('RunGroup', { groupName: grp });
+            });
+
+            document.getElementById('runAllBtn')?.addEventListener('click', () => {
+                if (!confirm('Run all tests?')) return;
+                postAction('RunAll', {});
+            });
+
+            document.getElementById('purgeBtn')?.addEventListener('click', () => {
+                if (!confirm('Purge disabled Ollama models?')) return;
+                postAction('PurgeDisabledOllama', {});
+            });
+
+            document.getElementById('refreshCtxBtn')?.addEventListener('click', () => {
+                postAction('RefreshContexts', {});
+            });
+
+            document.getElementById('discoverBtn')?.addEventListener('click', () => {
+                postAction('DiscoverOllama', {});
+            });
+
+            document.getElementById('recalcBtn')?.addEventListener('click', () => {
+                postAction('RecalculateScores', {});
+            });
+
+            // Grid click handlers for dropdown items
+            document.getElementById('modelsGrid').addEventListener('click', e => {
+                const runAllLink = e.target.closest('.run-model-all');
+                if (runAllLink) {
                     e.preventDefault();
-                    var rect = panel.getBoundingClientRect();
-                    panel.style.left = rect.left + 'px';
-                    panel.style.top = rect.top + 'px';
-                    panel.style.right = 'auto';
-                    panel.style.bottom = 'auto';
-                    startX = e.clientX;
-                    startY = e.clientY;
-                    offsetX = rect.left;
-                    offsetY = rect.top;
+                    const model = runAllLink.dataset.model;
+                    postAction('RunModelAll', { modelName: model });
+                }
 
-                    var move = function (ev) {
-                        var dx = ev.clientX - startX;
-                        var dy = ev.clientY - startY;
-                        panel.style.left = (offsetX + dx) + 'px';
-                        panel.style.top = (offsetY + dy) + 'px';
-                    };
+                const runGroupLink = e.target.closest('.run-model-group');
+                if (runGroupLink) {
+                    e.preventDefault();
+                    const model = runGroupLink.dataset.model;
+                    const group = runGroupLink.dataset.group;
+                    postAction('RunModelGroup', { modelName: model, groupName: group });
+                }
+            });
 
-                    var up = function () {
-                        document.removeEventListener('pointermove', move);
-                        document.removeEventListener('pointerup', up);
-                    };
-
-                    document.addEventListener('pointermove', move);
-                    document.addEventListener('pointerup', up);
-                });
-            })();
-
-            // Function to format child row content
-            function formatChildRow(model) {
-                return '<div class="test-details-container p-3" style="background-color: #f8f9fa;" data-model="' + model + '">' +
-                       '<div class="test-groups-loading">Loading test results...</div>' +
-                       '</div>';
+            function postAction(handler, data) {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = `?handler=${handler}`;
+                for (const key in data) {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = key;
+                    input.value = data[key];
+                    form.appendChild(input);
+                }
+                const token = document.querySelector('input[name=__RequestVerificationToken]');
+                if (token) {
+                    const tokenInput = document.createElement('input');
+                    tokenInput.type = 'hidden';
+                    tokenInput.name = '__RequestVerificationToken';
+                    tokenInput.value = token.value;
+                    form.appendChild(tokenInput);
+                }
+                document.body.appendChild(form);
+                form.submit();
             }
-
-            var table = $('#modelsTable').DataTable({
-                paging: true,
-                info: true,
-                searching: true,
-                ordering: true,
-                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
-                     "rt" +
-                     "<'row'<'col-sm-6'i><'col-sm-6'p>>",
-                buttons: [
-                    {
-                        text: 'Run Group',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            var grp = $('#groupSelect').val();
-                            if (!grp) { alert('Seleziona un gruppo'); return; }
-                            $.post('?handler=RunGroup', { groupName: grp, __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
-                                .done(function(){ location.reload(); })
-                                .fail(function(){ alert('Errore run group'); });
-                        }
-                    },
-                    {
-                        text: 'Run All',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            if (!confirm('Run all tests?')) return;
-                            $.post('?handler=RunAll', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
-                                .done(function(){ location.reload(); })
-                                .fail(function(){ alert('Errore run all'); });
-                        }
-                    },
-                    {
-                        text: 'Purge',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            if (!confirm('Purge disabled Ollama models?')) return;
-                            $.post('?handler=PurgeDisabledOllama', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
-                                .done(function(){ location.reload(); })
-                                .fail(function(){ alert('Errore purge'); });
-                        }
-                    },
-                    {
-                        text: 'Refresh Ctx',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            $.post('?handler=RefreshContexts', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
-                                .done(function(){ location.reload(); })
-                                .fail(function(){ alert('Errore refresh'); });
-                        }
-                    },
-                    {
-                        text: 'Discover',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            $.post('?handler=DiscoverOllama', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
-                                .done(function(){ location.reload(); })
-                                .fail(function(){ alert('Errore discover'); });
-                        }
-                    },
-                    {
-                        text: 'Recalc',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            $.post('?handler=RecalculateScores', { __RequestVerificationToken: $('input[name=__RequestVerificationToken]').val() })
-                                .done(function(){ location.reload(); })
-                                .fail(function(){ alert('Errore recalc'); });
-                        }
-                    },
-                    {
-                        extend: 'colvis',
-                        text: 'Columns',
-                        className: 'btn btn-light btn-sm'
-                    }
-                ],
-                stateSave: true,
-                stateSaveName: 'DataTables_models',
-                stateDuration: -1,
-                order: [[6, 'desc']], // Score column (now index 6 because of chevron column + MaxContext)
-                columnDefs: [ 
-                    { targets: 0, orderable: false, className: 'dt-control' },
-                    { targets: 'no-sort', orderable: false }
-                ]
-            });
-
-            // Ripristina esplicitamente la visibilità delle colonne salvata in localStorage
-            (function() {
-                try {
-                    var savedCols = localStorage.getItem('DataTables_models_columns');
-                    if (savedCols) {
-                        var cols = JSON.parse(savedCols);
-                        if (Array.isArray(cols)) {
-                            table.columns().every(function(idx) {
-                                var colState = cols[idx];
-                                if (colState && typeof colState.visible !== 'undefined') {
-                                    // Forza lo stato di visibilità (coerente sia con saved object completo che con array di {visible:bool})
-                                    this.visible(!!colState.visible);
-                                }
-                            });
-                        }
-                    }
-                } catch(e) {
-                    console.error('Error restoring column visibility:', e);
-                }
-            })();
-
-            // Aggiorna il vecchio storage ad ogni modifica così resta compatibile e persistente
-            table.on('column-visibility.dt', function () {
-                try {
-                    var state = table.state();
-                    if (state && state.columns) {
-                        localStorage.setItem('DataTables_models_columns', JSON.stringify(state.columns));
-                    }
-                } catch (err) {
-                    console.warn('Unable to persist column visibility', err);
-                }
-            });
-
-            // Handle click on td.dt-control to expand/collapse child row
-            $('#modelsTable tbody').on('click', 'td.dt-control', function () {
-                var tr = $(this).closest('tr');
-                var row = table.row(tr);
-                var model = tr.data('model');
-
-                if (row.child.isShown()) {
-                    // Close this row
-                    row.child.hide();
-                    tr.removeClass('shown');
-                } else {
-                    // Open this row
-                    row.child(formatChildRow(model)).show();
-                    tr.addClass('shown');
-                    
-                    // Load test groups
-                    var container = $(row.child()).find('.test-details-container');
-                    loadTestGroups(model, container);
-                }
-            });
-
-            // Live update for the bottom-right queue panel using ProgressHub (SignalR)
-            (function() {
-                if (typeof signalR === 'undefined') return;
-                try {
-                    const qPanel = document.getElementById('queuePanel');
-                    if (!qPanel) return;
-
-                    const badge = qPanel.querySelector('.card-header .badge');
-                    const list = qPanel.querySelector('.list-group');
-
-                    const render = (cmds) => {
-                        if (!Array.isArray(cmds) || cmds.length === 0) {
-                            if (badge) badge.textContent = '0';
-                            if (list) list.innerHTML = '<div class="list-group-item text-muted">Nessuna operazione in corso</div>';
-                            return;
-                        }
-
-                        if (badge) badge.textContent = cmds.length;
-
-                        const html = cmds.map(c => {
-                            const op = c.OperationName || c.ThreadScope || '';
-                            const agentName = c.AgentName || '-';
-                            const modelName = c.ModelName || '-';
-                            const statusClass = (c.Status || '').toLowerCase() === 'running' ? 'bg-success' : 'bg-warning text-dark';
-                            const enq = c.EnqueuedAt ? new Date(c.EnqueuedAt).toLocaleTimeString() : '';
-                            const started = c.StartedAt ? new Date(c.StartedAt).toLocaleTimeString() : '';
-                            const stepInfo = (c.CurrentStep && c.MaxStep) ? `<small class="ms-2">Step: ${c.CurrentStep}/${c.MaxStep}</small>` : '';
-
-                            return `
-                                <div class="list-group-item">
-                                    <div class="d-flex justify-content-between align-items-start">
-                                        <div>
-                                            <div class="fw-semibold">${op}</div>
-                                            <div class="text-muted">Agent: ${agentName} | Model: ${modelName}</div>
-                                        </div>
-                                        <span class="badge ${statusClass} text-uppercase">${c.Status || ''}</span>
-                                    </div>
-                                    <div class="text-muted mt-1">
-                                        <small>Enqueued: ${enq}</small>
-                                        ${started ? `<small class="ms-2">Start: ${started}</small>` : ''}
-                                        ${stepInfo}
-                                    </div>
-                                </div>`;
-                        }).join('');
-
-                        if (list) list.innerHTML = html;
-                    };
-
-                    const conn = new signalR.HubConnectionBuilder().withUrl('/progressHub').withAutomaticReconnect().build();
-                    conn.on('CommandListUpdated', cmds => render(cmds || []));
-                    // When connected the hub will push an initial snapshot if any active commands exist
-                    conn.start().catch(e => console.debug('QueuePanel SR connect failed', e));
-                } catch (e) {
-                    console.error('QueuePanel live update failed', e);
-                }
-            })();
-
-            function postHandler(handler, data) {
-                return fetch('?handler=' + handler, { method: 'POST', headers: { 'Accept': 'application/json' }, body: data });
-            }
-
-            $('#runGroupBtn').on('click', function(){
-                var group = $('#groupSelect').val();
-                var model = null; // run for all? We use RunGroup with model param when run per-model; for global group run we call RunAll
-                // For convenience run the selected group for all enabled models via RunAll with group param
-                var form = new FormData();
-                form.append('group', group);
-                postHandler('RunAll', form)
-                    .then(r => r.json())
-                    .then(j => { 
-                        // Monitor test completion and reload page when done
-                        if (j.runIds && j.runIds.length > 0) {
-                            monitorTestCompletion(j.runIds);
-                        }
-                    })
-                    .catch(e => { showError('Error', 'Error starting run: ' + e); });
-            });
-
-            $('#runAllBtn').on('click', function(){
-                var group = $('#groupSelect').val();
-                var form = new FormData();
-                if(group) form.append('group', group);
-                postHandler('RunAll', form)
-                    .then(r => r.json())
-                    .then(j => { 
-                        if (j.runIds && j.runIds.length > 0) {
-                            monitorTestCompletion(j.runIds);
-                        }
-                    })
-                    .catch(e => { showError('Error', 'Error starting run: ' + e); });
-            });
-
-            $('#purgeOllamaBtn').on('click', function(){
-                showConfirm('Purge Models', 'Permanently purge disabled local Ollama models? This will attempt to delete installed models.').then(confirmed => {
-                    if(!confirmed) return;
-                    postHandler('PurgeDisabledOllama', new FormData())
-                        .then(r => r.json())
-                        .then(j => { showSuccess('Success', 'Purge completed. Check logs for details.'); })
-                        .catch(e => { showError('Error', 'Error purging: ' + e); });
-                });
-            });
-
-            $('#refreshContextsBtn').on('click', function(){
-                postHandler('RefreshContexts', new FormData())
-                    .then(r => { if(r.redirected) window.location = r.url; else return r.json(); })
-                    .then(j => { if(j) showInfo('Result', 'Refresh contexts result: ' + JSON.stringify(j)); })
-                    .catch(e => { showError('Error', 'Error refreshing contexts: ' + e); });
-            });
-
-            $('#discoverOllamaBtn').on('click', function(){
-                postHandler('AddOllamaModels', new FormData())
-                    .then(r => { if(r.redirected) window.location = r.url; else return r.json(); })
-                    .then(j => { if(j) showInfo('Result', 'Discover result: ' + JSON.stringify(j)); else window.location.reload(); })
-                    .catch(e => { showError('Error', 'Error discovering: ' + e); });
-            });
-
-            $('#recalculateScoresBtn').on('click', function(){
-                showConfirm('Recalculate', 'Ricalcolare i punteggi writer per tutti i modelli?').then(confirmed => {
-                    if(!confirmed) return;
-                    postHandler('RecalculateScores', new FormData())
-                        .then(r => { if(r.redirected) window.location = r.url; else window.location.reload(); })
-                        .catch(e => { showError('Error', 'Error recalculating: ' + e); });
-                });
-            });
-
-            // ShowDisabled checkbox: update querystring and reload while preserving other params
-            $('#showDisabledCheckbox').on('change', function(){
-                try {
-                    var params = new URLSearchParams(window.location.search);
-                    if(this.checked) params.set('showDisabled', 'true'); else params.delete('showDisabled');
-                    // Preserve selected group param if present in UI
-                    var group = $('#groupSelect').val();
-                    if(group) params.set('group', group);
-                    var qs = params.toString();
-                    window.location.search = qs;
-                } catch(e) { console.error(e); window.location.reload(); }
-            });
-
-            // Groups available from server
-            var allGroups = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.TestGroups ?? new System.Collections.Generic.List<string>()));
-
-            // Per-row dropdown: run a single group for the selected model
-            // Use delegated event handlers so bindings survive DataTables DOM manipulations
-            $('#modelsTable').on('click', '.run-model-group', function(e){
-                e.preventDefault();
-                var model = $(this).data('model');
-                var group = $(this).data('group');
-                var form = new FormData();
-                form.append('model', model);
-                if(group) form.append('group', group);
-                postHandler('RunGroup', form)
-                    .then(r => r.json())
-                    .then(j => { 
-                        if(j.runId) {
-                            monitorTestCompletion([j.runId]);
-                        }
-                    })
-                    .catch(e => { alert('Error starting run: ' + e); });
-            });
-
-            // Per-row dropdown: run ALL groups for the selected model (start one RunGroup per group)
-            $('#modelsTable').on('click', '.run-model-all', function(e){
-                e.preventDefault();
-                var model = $(this).data('model');
-                var groups = allGroups || [];
-                var runIds = [];
-                var promises = [];
-                try {
-                    for(var i=0;i<groups.length;i++){
-                        var g = groups[i];
-                        var form = new FormData();
-                        form.append('model', model);
-                        form.append('group', g);
-                        var promise = postHandler('RunGroup', form)
-                            .then(r => r.json())
-                            .then(j => { if(j.runId) runIds.push(j.runId); })
-                            .catch(()=>{});
-                        promises.push(promise);
-                    }
-                    Promise.all(promises).then(() => {
-                        if(runIds.length > 0) {
-                            monitorTestCompletion(runIds);
-                        }
-                    });
-                } catch(e) { console.error(e); }
-            });
-
-            function loadTestGroups(model, container) {
-                fetch('/Models?handler=TestGroups&model=' + encodeURIComponent(model))
-                    .then(r => {
-                        if(!r.ok) throw new Error('HTTP ' + r.status);
-                        return r.json();
-                    })
-                    .then(groups => {
-                        if(!groups || !Array.isArray(groups) || groups.length === 0) {
-                            container.html('<div class="text-muted">No test results available for this model.</div>');
-                            return;
-                        }
-                        
-                        var html = '<div class="test-groups">';
-                        groups.forEach(function(group) {
-                            var passRate = group.total > 0 ? Math.round((group.passed / group.total) * 100) : 0;
-                            var statusColor = group.success ? 'success' : 'warning';
-                            
-                            html += '<div class="card mb-2">';
-                            html += '<div class="card-header bg-' + statusColor + ' bg-opacity-10">';
-                            html += '<button class="btn btn-link p-0 text-decoration-none w-100 text-start load-group-steps" data-model="' + model + '" data-group="' + group.group + '">';
-                            html += '<strong>' + group.group + '</strong> ';
-                            html += '<span class="badge bg-' + statusColor + '">' + group.score + '/10</span> ';
-                            html += '<span class="text-muted small">(' + group.passed + '/' + group.total + ' passed, ' + passRate + '%)</span>';
-                            html += '</button>';
-                            html += '</div>';
-                            html += '<div class="card-body collapse test-steps-container" data-model="' + model + '" data-group="' + group.group + '">';
-                            html += '<div class="text-muted">Click to load details...</div>';
-                            html += '</div>';
-                            html += '</div>';
-                        });
-                        html += '</div>';
-                        
-                        container.html(html);
-                    })
-                    .catch(e => {
-                        container.html('<div class="text-danger">Error loading test groups: ' + e.message + '</div>');
-                    });
-            }
-
-            // Load test steps for a specific group (now works within child rows)
-            $(document).on('click', '.load-group-steps', function(e){
-                e.preventDefault();
-                var model = $(this).data('model');
-                var group = $(this).data('group');
-                var stepsContainer = $('.test-steps-container[data-model="' + model + '"][data-group="' + group + '"]');
-                
-                if(stepsContainer.hasClass('show')) {
-                    stepsContainer.collapse('hide');
-                    return;
-                }
-                
-                stepsContainer.collapse('show');
-                
-                // Load steps if not already loaded
-                if(stepsContainer.find('.text-muted').length > 0) {
-                    stepsContainer.html('<div class="text-center"><div class="spinner-border spinner-border-sm"></div> Loading...</div>');
-                    
-                    fetch('/Models?handler=TestSteps&model=' + encodeURIComponent(model) + '&group=' + encodeURIComponent(group))
-                        .then(r => r.json())
-                        .then(steps => {
-                            if(!steps || steps.length === 0) {
-                                stepsContainer.html('<div class="text-muted">No steps found.</div>');
-                                return;
-                            }
-                            
-                            var html = '<div class="list-group list-group-flush">';
-                            steps.forEach(function(step) {
-                                var statusBadge = step.passed ? 
-                                    '<span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> PASSED</span>' : 
-                                    '<span class="badge bg-danger"><i class="bi bi-x-circle-fill"></i> FAILED</span>';
-                                
-                                var itemClass = step.passed ? 'list-group-item' : 'list-group-item border-start border-danger border-3';
-                                
-                                html += '<div class="' + itemClass + '">';
-                                html += '<div class="d-flex align-items-center mb-2">';
-                                html += statusBadge + ' ';
-                                html += '<strong class="ms-2">' + (step.stepName || 'Step ' + step.stepNumber) + '</strong>';
-                                if(step.durationMs) {
-                                    html += '<span class="ms-auto text-muted small">' + step.durationMs + 'ms</span>';
-                                }
-                                html += '</div>';
-                                
-                                if(step.prompt) {
-                                    html += '<div class="mb-2">';
-                                    html += '<small class="text-muted">Request:</small>';
-                                    html += '<div class="p-2 bg-light rounded small" style="max-height:150px;overflow-y:auto;">';
-                                    html += '<code>' + escapeHtml(step.prompt) + '</code>';
-                                    html += '</div>';
-                                    html += '</div>';
-                                }
-                                
-                                if(step.response) {
-                                    html += '<div class="mb-2">';
-                                    html += '<small class="text-muted">Response:</small>';
-                                    html += '<div class="p-2 bg-light rounded small" style="max-height:150px;overflow-y:auto;">';
-                                    html += '<code>' + escapeHtml(step.response) + '</code>';
-                                    html += '</div>';
-                                    html += '</div>';
-                                }
-                                
-                                if(step.error) {
-                                    html += '<div class="alert alert-danger mb-0 py-1 px-2 small">';
-                                    html += '<strong>Error:</strong> ' + escapeHtml(step.error);
-                                    html += '</div>';
-                                }
-                                
-                                html += '</div>';
-                            });
-                            html += '</div>';
-                            
-                            stepsContainer.html(html);
-                        })
-                        .catch(e => {
-                            stepsContainer.html('<div class="text-danger">Error loading steps: ' + e.message + '</div>');
-                        });
-                }
-            });
 
             function escapeHtml(text) {
-                if(!text) return '';
-                var div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
+                if (!text) return '';
+                return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
             }
-
-            // Monitor test completion via SignalR and reload page when done
-            function monitorTestCompletion(runIds) {
-                if(!window.signalR || !runIds || runIds.length === 0) return;
-                
-                var connection = new signalR.HubConnectionBuilder()
-                    .withUrl('/progressHub')
-                    .withAutomaticReconnect()
-                    .build();
-                
-                var completedRuns = new Set();
-                
-                connection.on('ProgressAppended', function(id, message, extraClass) {
-                    // Check if this is a completion message
-                    if(runIds.includes(parseInt(id)) && extraClass) {
-                        completedRuns.add(id);
-                        
-                        // Show notification
-                        var notification = $('<div class="alert alert-dismissible fade show" role="alert" style="position:fixed;top:20px;right:20px;z-index:9999;min-width:300px;max-width:500px;">');
-                        
-                        if(extraClass === 'success') {
-                            notification.addClass('alert-success');
-                            notification.css('background-color', '#d4edda');
-                        } else if(extraClass === 'error') {
-                            notification.addClass('alert-danger');
-                            notification.css('background-color', '#f8d7da');
-                        }
-                        
-                        notification.html(escapeHtml(message) + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>');
-                        $('body').append(notification);
-                        
-                        // Auto-dismiss after 5 seconds
-                        setTimeout(function() { notification.alert('close'); }, 5000);
-                        
-                        // If all runs completed, reload page after a short delay
-                        if(completedRuns.size === runIds.length) {
-                            setTimeout(function() {
-                                connection.stop();
-                                window.location.reload();
-                            }, 2000);
-                        }
-                    }
-                });
-                
-                connection.start().then(function() {
-                    runIds.forEach(function(id) {
-                        connection.invoke('JoinGroup', id.toString());
-                    });
-                }).catch(function(err) {
-                    console.error('SignalR connection error:', err);
-                });
+            function escapeAttr(text) {
+                return escapeHtml(text).replace(/'/g, '&#39;');
             }
         });
     </script>
-
-    <style>
-        .dt-control {
-            cursor: pointer;
-            text-align: center;
-            position: relative;
-        }
-        .dt-control:hover {
-            background-color: #f8f9fa;
-        }
-        .dt-control::before {
-            content: '▶';
-            font-size: 12px;
-            transition: transform 0.2s;
-            display: inline-block;
-            color: #666;
-        }
-        tr.shown .dt-control::before {
-            transform: rotate(90deg);
-        }
-        .test-details-container {
-            border-top: 2px solid #dee2e6;
-        }
-        .test-groups .card {
-            border-left: 3px solid #0d6efd;
-        }
-    </style>
+}

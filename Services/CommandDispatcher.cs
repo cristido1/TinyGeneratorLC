@@ -270,6 +270,7 @@ namespace TinyGenerator.Services
                     s.ModelName,
                     s.CurrentStep,
                     s.MaxStep,
+                    s.StepDescription,
                     s.RetryCount,
                     s.ErrorMessage));
             }
@@ -291,6 +292,7 @@ namespace TinyGenerator.Services
                     s.ModelName,
                     s.CurrentStep,
                     s.MaxStep,
+                    s.StepDescription,
                     s.RetryCount,
                     s.ErrorMessage));
             }
@@ -299,12 +301,16 @@ namespace TinyGenerator.Services
             return list;
         }
 
-        public void UpdateStep(string runId, int current, int max)
+        public void UpdateStep(string runId, int current, int max, string? stepDescription = null)
         {
             if (_active.TryGetValue(runId, out var state))
             {
                 state.CurrentStep = current;
                 state.MaxStep = max;
+                if (stepDescription != null)
+                {
+                    state.StepDescription = stepDescription;
+                }
                 _ = BroadcastCommandsAsync();
             }
         }
@@ -387,6 +393,7 @@ namespace TinyGenerator.Services
         public string? ModelName { get; set; }
         public int? CurrentStep { get; set; }
         public int? MaxStep { get; set; }
+        public string? StepDescription { get; set; }
         public int RetryCount { get; set; }
         public string? ErrorMessage { get; set; }
     }

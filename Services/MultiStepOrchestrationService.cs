@@ -20,6 +20,7 @@ namespace TinyGenerator.Services
         private readonly ITokenizer _tokenizerService;
         private readonly ICustomLogger _logger;
         private readonly IConfiguration _configuration;
+        private readonly IMemoryEmbeddingGenerator _embeddingGenerator;
         private readonly Dictionary<long, List<string>> _chunkCache = new();
         private readonly bool _autoRecoverStaleExecutions;
 
@@ -29,7 +30,8 @@ namespace TinyGenerator.Services
             ResponseCheckerService checkerService,
             ITokenizer tokenizerService,
             ICustomLogger logger,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IMemoryEmbeddingGenerator embeddingGenerator)
         {
             _kernelFactory = kernelFactory;
             _database = database;
@@ -37,6 +39,7 @@ namespace TinyGenerator.Services
             _tokenizerService = tokenizerService;
             _logger = logger;
             _configuration = configuration;
+            _embeddingGenerator = embeddingGenerator;
             _autoRecoverStaleExecutions = _configuration.GetValue<bool>("MultiStep:AutoRecoverStaleExecutions", false);
         }
 
@@ -775,6 +778,71 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
 
             if (validationResult.IsValid)
             {
+                // Step valid - check if this step requires evaluator validation
+                var evaluationSteps = GetEvaluationStepsFromTemplate(execution);
+                
+                if (evaluationSteps.Contains(execution.CurrentStep))
+                {
+                    _logger.Log("Information", "MultiStep", $"Step {execution.CurrentStep} requires evaluator validation");
+                    
+                    var (passed, avgScore, feedback) = await EvaluateChapterWithEvaluatorsAsync(
+                        output, execution.CurrentStep, threadId, ct);
+                    
+                    if (!passed)
+                    {
+                        // Evaluation failed - check if we should retry or proceed
+                        _logger.Log("Warning", "MultiStep", 
+                            $"Step {execution.CurrentStep} failed evaluator validation: avg={avgScore:F2} < 6.0");
+                        
+                        if (execution.RetryCount < 2)
+                        {
+                            // Can still retry - create validation result with evaluator feedback
+                            var evalValidationResult = new ValidationResult
+                            {
+                                IsValid = false,
+                                Reason = $"Il capitolo non ha superato la valutazione dei critici (punteggio medio: {avgScore:F1}/10, minimo richiesto: 6.0).\n\n{feedback}",
+                                NeedsRetry = true,
+                                SemanticScore = avgScore
+                            };
+                            
+                            // Save failed attempt with evaluator feedback
+                            var evalFailedStep = new TaskExecutionStep
+                            {
+                                ExecutionId = executionId,
+                                StepNumber = execution.CurrentStep,
+                                StepInstruction = stepInstruction,
+                                StepOutput = output,
+                                AttemptCount = execution.RetryCount + 1,
+                                StartedAt = DateTime.UtcNow.ToString("o"),
+                                CompletedAt = DateTime.UtcNow.ToString("o")
+                            };
+                            evalFailedStep.ParsedValidation = evalValidationResult;
+                            _database.CreateTaskExecutionStep(evalFailedStep);
+                            
+                            execution.RetryCount++;
+                            execution.UpdatedAt = DateTime.UtcNow.ToString("o");
+                            _database.UpdateTaskExecution(execution);
+                            
+                            retryCallback?.Invoke(execution.RetryCount);
+                            
+                            // Retry same step with evaluator feedback
+                            return await ExecuteNextStepAsync(executionId, threadId, ct, retryCallback);
+                        }
+                        else
+                        {
+                            // Max retries exceeded - accept anyway but log warning
+                            _logger.Log("Warning", "MultiStep", 
+                                $"Step {execution.CurrentStep} failed evaluation after 3 attempts, proceeding anyway with score {avgScore:F2}");
+                            // Don't modify validationResult - keep it as valid to proceed
+                        }
+                    }
+                    else
+                    {
+                        _logger.Log("Information", "MultiStep", 
+                            $"Step {execution.CurrentStep} passed evaluator validation: avg={avgScore:F2}");
+                    }
+                }
+                
                 // Step valid - save and advance
                 var step = new TaskExecutionStep
                 {
@@ -1789,13 +1857,21 @@ RIASSUNTO:";
             }
 
             // Apply merge strategy
-            string merged = taskTypeInfo.OutputMergeStrategy switch
+            string merged;
+            if (taskTypeInfo.OutputMergeStrategy == "accumulate_chapters")
             {
-                "accumulate_chapters" => MergeChapters(steps),
-                "accumulate_all" => string.Join("\n\n---\n\n", steps.Select(s => s.StepOutput)),
-                "last_only" => steps.LastOrDefault()?.StepOutput ?? string.Empty,
-                _ => string.Join("\n\n", steps.Select(s => s.StepOutput))
-            };
+                // Need to pass execution/context to MergeChapters so we can consult template.trama_steps
+                merged = await MergeChapters(steps, execution, threadId);
+            }
+            else
+            {
+                merged = taskTypeInfo.OutputMergeStrategy switch
+                {
+                    "accumulate_all" => string.Join("\n\n---\n\n", steps.Select(s => s.StepOutput)),
+                    "last_only" => steps.LastOrDefault()?.StepOutput ?? string.Empty,
+                    _ => string.Join("\n\n", steps.Select(s => s.StepOutput))
+                };
+            }
 
             // Create or update story entity
             if (execution.TaskType == "story")
@@ -1981,15 +2057,34 @@ RIASSUNTO:";
             return merged;
         }
 
-        private string MergeChapters(List<TaskExecutionStep> steps)
+        private async Task<string> MergeChapters(List<TaskExecutionStep> steps, TaskExecution execution, int threadId, CancellationToken ct = default)
         {
             var sb = new StringBuilder();
 
             // Steps 1-3 are typically: plot, characters, structure (skip in final output)
             // Steps 4+ are chapters
-            var chapters = steps.Where(s => s.StepNumber >= 4).OrderBy(s => s.StepNumber);
+            var allChapters = steps.Where(s => s.StepNumber >= 4).OrderBy(s => s.StepNumber).ToList();
 
-            foreach (var chapter in chapters)
+            // Group by step number and pick the longest output if duplicates exist
+            var uniqueChapters = allChapters
+                .GroupBy(s => s.StepNumber)
+                .Select(g =>
+                {
+                    if (g.Count() > 1)
+                    {
+                        _logger.Log("Warning", "MultiStep",
+                            $"Found {g.Count()} duplicate entries for step {g.Key}, keeping the longest one");
+                        return g.OrderByDescending(s => (s.StepOutput ?? string.Empty).Length).First();
+                    }
+                    return g.First();
+                })
+                .OrderBy(s => s.StepNumber)
+                .ToList();
+
+            // Apply embeddings-based similarity filtering for trama steps (if configured)
+            List<TaskExecutionStep> filteredChapters = await FilterSimilarChaptersByEmbeddingsAsync(uniqueChapters, execution, threadId, ct);
+
+            foreach (var chapter in filteredChapters)
             {
                 sb.AppendLine($"## CAPITOLO {chapter.StepNumber - 3}");
                 sb.AppendLine();
@@ -2000,6 +2095,320 @@ RIASSUNTO:";
             }
 
             return sb.ToString();
+        }
+
+        private async Task<List<TaskExecutionStep>> FilterSimilarChaptersByEmbeddingsAsync(
+            List<TaskExecutionStep> chapters,
+            TaskExecution execution,
+            int threadId,
+            CancellationToken ct = default)
+        {
+            // Determine which steps contain trama text from the template associated to this execution's executor agent
+            var tramaSteps = new List<int>();
+            if (execution.ExecutorAgentId.HasValue)
+            {
+                var agent = _database.GetAgentById(execution.ExecutorAgentId.Value);
+                if (agent?.MultiStepTemplateId != null)
+                {
+                    var template = _database.GetStepTemplateById(agent.MultiStepTemplateId.Value);
+                    if (template != null)
+                    {
+                        tramaSteps = template.ParsedTramaSteps;
+                    }
+                }
+            }
+
+            // If no trama steps configured, return original chapters
+            if (tramaSteps == null || tramaSteps.Count == 0)
+            {
+                return chapters;
+            }
+
+            // Similarity threshold (configurable)
+            var threshold = _configuration.GetValue<double?>("MultiStep:TramaSimilarityThreshold") ?? 0.82;
+
+            var kept = new List<TaskExecutionStep>();
+            var keptEmbeddings = new List<float[]>();
+
+            for (int i = 0; i < chapters.Count; i++)
+            {
+                var chap = chapters[i];
+                // If this chapter's step is not marked as trama, keep it
+                if (!tramaSteps.Contains(chap.StepNumber))
+                {
+                    kept.Add(chap);
+                    keptEmbeddings.Add(Array.Empty<float>());
+                    continue;
+                }
+
+                var text = chap.StepOutput ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    kept.Add(chap);
+                    keptEmbeddings.Add(Array.Empty<float>());
+                    continue;
+                }
+
+                try
+                {
+                    var embedding = await _embeddingGenerator.GenerateAsync(text, ct);
+                    if (embedding == null || embedding.Length == 0)
+                    {
+                        // Couldn't compute embedding — keep chapter
+                        kept.Add(chap);
+                        keptEmbeddings.Add(Array.Empty<float>());
+                        continue;
+                    }
+
+                    var isDuplicate = false;
+                    for (int j = 0; j < keptEmbeddings.Count; j++)
+                    {
+                        var prevEmb = keptEmbeddings[j];
+                        if (prevEmb == null || prevEmb.Length == 0) continue;
+                        var sim = CosineSimilarity(embedding, prevEmb);
+                        if (sim >= threshold)
+                        {
+                            isDuplicate = true;
+                            _logger.Log("Warning", "MultiStep",
+                                $"Chapter step {chap.StepNumber} is semantically similar to previous chapter (step {kept[j].StepNumber}) with similarity={sim:F3} >= threshold {threshold:F2}. Skipping duplicate.");
+                            break;
+                        }
+                    }
+
+                    if (!isDuplicate)
+                    {
+                        kept.Add(chap);
+                        keptEmbeddings.Add(embedding);
+                    }
+                    else
+                    {
+                        // Optionally, add an informational log entry for the execution so the writer can be informed
+                        _logger.Log("Information", "MultiStep", $"Execution {execution.Id}: removed duplicate chapter at step {chap.StepNumber} due to high similarity to earlier chapter.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Embedding similarity check failed for step {chap.StepNumber}: {ex.Message}");
+                    // On failure, keep the chapter to avoid accidental loss
+                    kept.Add(chap);
+                    keptEmbeddings.Add(Array.Empty<float>());
+                }
+            }
+
+            return kept;
+        }
+
+        private static double CosineSimilarity(float[] a, float[] b)
+        {
+            if (a == null || b == null) return 0.0;
+            if (a.Length != b.Length) return 0.0;
+            double dot = 0.0;
+            double na = 0.0;
+            double nb = 0.0;
+            for (int i = 0; i < a.Length; i++)
+            {
+                dot += (double)a[i] * (double)b[i];
+                na += (double)a[i] * (double)a[i];
+                nb += (double)b[i] * (double)b[i];
+            }
+            if (na == 0 || nb == 0) return 0.0;
+            return dot / (Math.Sqrt(na) * Math.Sqrt(nb));
+        }
+
+        /// <summary>
+        /// Evaluates a chapter/step output using all active chapter evaluators.
+        /// Returns the average score and combined feedback. If average score is below threshold, 
+        /// the step should be retried with the feedback.
+        /// </summary>
+        private async Task<(bool passed, double averageScore, string combinedFeedback)> EvaluateChapterWithEvaluatorsAsync(
+            string chapterText,
+            int stepNumber,
+            int threadId,
+            CancellationToken ct = default)
+        {
+            // Get all active evaluators (story_evaluator role)
+            var evaluators = _database.ListAgents()
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
+                     a.Role.Equals("evaluator", StringComparison.OrdinalIgnoreCase) ||
+                     a.Role.Equals("chapter_evaluator", StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(a => a.Id)
+                .ToList();
+
+            if (evaluators.Count == 0)
+            {
+                _logger.Log("Warning", "MultiStep", "No active evaluators found, skipping chapter evaluation");
+                return (true, 10.0, string.Empty);
+            }
+
+            _logger.Log("Information", "MultiStep", $"Evaluating step {stepNumber} with {evaluators.Count} evaluators");
+
+            var evaluationResults = new List<ChapterEvaluationResult>();
+            var feedbackParts = new List<string>();
+
+            foreach (var evaluator in evaluators)
+            {
+                try
+                {
+                    var result = await EvaluateChapterWithSingleEvaluatorAsync(
+                        chapterText, stepNumber, evaluator, threadId, ct);
+                    
+                    if (result != null)
+                    {
+                        evaluationResults.Add(result);
+                        
+                        var evalFeedback = new StringBuilder();
+                        evalFeedback.AppendLine($"### Valutatore: {evaluator.Name} (punteggio medio: {result.AverageScore:F1})");
+                        evalFeedback.AppendLine($"- Coerenza narrativa: {result.NarrativeCoherenceScore}/10 - {result.NarrativeCoherenceFeedback}");
+                        evalFeedback.AppendLine($"- Originalità: {result.OriginalityScore}/10 - {result.OriginalityFeedback}");
+                        evalFeedback.AppendLine($"- Impatto emotivo: {result.EmotionalImpactScore}/10 - {result.EmotionalImpactFeedback}");
+                        evalFeedback.AppendLine($"- Stile: {result.StyleScore}/10 - {result.StyleFeedback}");
+                        evalFeedback.AppendLine($"**Valutazione complessiva:** {result.OverallFeedback}");
+                        feedbackParts.Add(evalFeedback.ToString());
+
+                        _logger.Log("Information", "MultiStep", 
+                            $"Evaluator {evaluator.Name}: avg={result.AverageScore:F1} (coherence={result.NarrativeCoherenceScore}, originality={result.OriginalityScore}, emotion={result.EmotionalImpactScore}, style={result.StyleScore})");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Evaluator {evaluator.Name} failed: {ex.Message}");
+                }
+            }
+
+            if (evaluationResults.Count == 0)
+            {
+                _logger.Log("Warning", "MultiStep", "All evaluators failed, passing step by default");
+                return (true, 10.0, string.Empty);
+            }
+
+            var overallAverage = evaluationResults.Average(r => r.AverageScore);
+            var combinedFeedback = string.Join("\n\n", feedbackParts);
+            var passed = overallAverage >= 6.0;
+
+            _logger.Log("Information", "MultiStep", 
+                $"Chapter evaluation complete: avg={overallAverage:F2}, passed={passed}, evaluators={evaluationResults.Count}");
+
+            return (passed, overallAverage, combinedFeedback);
+        }
+
+        /// <summary>
+        /// Evaluates chapter text with a single evaluator agent using the ChapterEvaluatorTool.
+        /// </summary>
+        private async Task<ChapterEvaluationResult?> EvaluateChapterWithSingleEvaluatorAsync(
+            string chapterText,
+            int stepNumber,
+            Agent evaluator,
+            int threadId,
+            CancellationToken ct = default)
+        {
+            var modelInfo = _database.GetModelInfoById(evaluator.ModelId ?? 0);
+            var modelName = modelInfo?.Name ?? "phi3:mini";
+
+            // Create orchestrator with chapter_evaluator skill only
+            var orchestrator = _kernelFactory.CreateOrchestrator(
+                modelName,
+                new List<string> { "chapter_evaluator" },
+                evaluator.Id,
+                ttsWorkingFolder: null,
+                ttsStoryText: null);
+
+            // Set tool context
+            var chapterTool = orchestrator.GetTool<ChapterEvaluatorTool>("chapter_evaluator");
+            if (chapterTool != null)
+            {
+                chapterTool.AgentId = evaluator.Id;
+                chapterTool.ModelId = evaluator.ModelId;
+                chapterTool.ModelName = modelName;
+            }
+
+            var bridge = _kernelFactory.CreateChatBridge(modelName, evaluator.Temperature, evaluator.TopP);
+
+            // Build system message for evaluation
+            var systemMessage = evaluator.Instructions ?? 
+                "Sei un critico letterario esperto. Valuta il capitolo fornito usando la funzione evaluate_chapter. " +
+                "Fornisci punteggi da 1 a 10 per ogni criterio e feedback specifici. " +
+                "Devi SEMPRE chiamare la funzione evaluate_chapter per restituire i tuoi risultati.";
+
+            // Build user prompt with chapter text
+            var userPrompt = $@"Valuta il seguente capitolo (Step {stepNumber}) usando la funzione evaluate_chapter:
+
+---
+{chapterText}
+---
+
+Analizza il testo e fornisci una valutazione dettagliata per:
+1. Coerenza narrativa (1-10): logica, flusso, consistenza
+2. Originalità (1-10): creatività, unicità
+3. Impatto emotivo (1-10): coinvolgimento, emozioni
+4. Stile (1-10): qualità della prosa, uso del linguaggio
+
+Chiama la funzione evaluate_chapter con i tuoi punteggi e feedback.";
+
+            var loop = new ReActLoopOrchestrator(
+                orchestrator,
+                _logger,
+                maxIterations: 10,
+                runId: null,
+                modelBridge: bridge,
+                systemMessage: systemMessage,
+                responseChecker: null, // No response checker for evaluations
+                agentRole: evaluator.Role,
+                extraMessages: null);
+
+            try
+            {
+                using var evalCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                evalCts.CancelAfter(TimeSpan.FromMinutes(3));
+
+                var result = await loop.ExecuteAsync(userPrompt, evalCts.Token);
+
+                // Parse result from ChapterEvaluatorTool
+                if (chapterTool?.LastResult != null)
+                {
+                    return JsonSerializer.Deserialize<ChapterEvaluationResult>(
+                        chapterTool.LastResult,
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                }
+
+                // Try to parse from final response
+                if (!string.IsNullOrWhiteSpace(result.FinalResponse))
+                {
+                    try
+                    {
+                        return JsonSerializer.Deserialize<ChapterEvaluationResult>(
+                            result.FinalResponse,
+                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    }
+                    catch
+                    {
+                        _logger.Log("Warning", "MultiStep", $"Could not parse evaluation result from {evaluator.Name}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Log("Error", "MultiStep", $"Evaluation by {evaluator.Name} failed: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Gets the list of step numbers that require evaluator validation from the template.
+        /// </summary>
+        private List<int> GetEvaluationStepsFromTemplate(TaskExecution execution)
+        {
+            // Get executor agent
+            if (!execution.ExecutorAgentId.HasValue)
+                return new List<int>();
+
+            var agent = _database.GetAgentById(execution.ExecutorAgentId.Value);
+            if (agent?.MultiStepTemplateId == null)
+                return new List<int>();
+
+            var template = _database.GetStepTemplateById(agent.MultiStepTemplateId.Value);
+            return template?.ParsedEvaluationSteps ?? new List<int>();
         }
     }
 }

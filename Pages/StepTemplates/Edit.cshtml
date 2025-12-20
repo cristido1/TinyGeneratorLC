@@ -35,6 +35,20 @@
             </div>
 
             <div class="mb-3">
+                <label asp-for="Template.EvaluationSteps" class="form-label">Evaluation Steps</label>
+                <input asp-for="Template.EvaluationSteps" type="text" class="form-control" placeholder="Es. 4,5,6,7,8,9" style="max-width: 250px;" />
+                <span asp-validation-for="Template.EvaluationSteps" class="text-danger"></span>
+                <div class="form-text">Numeri degli step (separati da virgola) che devono essere valutati dai critici. Se il punteggio medio è inferiore a 6, lo step verrà ripetuto con il feedback dei valutatori.</div>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Template.TramaSteps" class="form-label">Trama Steps</label>
+                <input asp-for="Template.TramaSteps" type="text" class="form-control" placeholder="Es. 1" style="max-width: 250px;" />
+                <span asp-validation-for="Template.TramaSteps" class="text-danger"></span>
+                <div class="form-text">Numeri degli step (separati da virgola) che contengono la trama divisa in capitoli. Verrà eseguito un controllo similarity usando embeddings sui capitoli generati per evitare duplicati semantici.</div>
+            </div>
+
+            <div class="mb-3">
                 <label asp-for="Template.Description" class="form-label">Description</label>
                 <textarea asp-for="Template.Description" class="form-control" rows="3" maxlength="500"></textarea>
                 <span asp-validation-for="Template.Description" class="text-danger"></span>

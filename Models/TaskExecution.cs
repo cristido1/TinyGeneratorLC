@@ -212,6 +212,17 @@ namespace TinyGenerator.Models
         [Column("characters_step")]
         public int? CharactersStep { get; set; }
         
+        /// <summary>
+        /// Comma-separated list of step numbers that require evaluator validation.
+        /// E.g., "3,5,7" means steps 3, 5, and 7 will be evaluated by all active evaluators.
+        /// If average score is below 6, the step is retried with evaluator feedback.
+        /// </summary>
+        [Column("evaluation_steps")]
+        public string? EvaluationSteps { get; set; }
+
+        [Column("trama_steps")]
+        public string? TramaSteps { get; set; }
+        
         [Column("created_at")]
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
         
@@ -221,5 +232,40 @@ namespace TinyGenerator.Models
         // Concurrency token for optimistic locking
         [Timestamp]
         public byte[]? RowVersion { get; set; }
+        
+        /// <summary>
+        /// Parses the EvaluationSteps field into a list of step numbers.
+        /// </summary>
+        [NotMapped]
+        public List<int> ParsedEvaluationSteps
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(EvaluationSteps))
+                    return new List<int>();
+                
+                return EvaluationSteps
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(s => int.TryParse(s, out var n) ? n : 0)
+                    .Where(n => n > 0)
+                    .ToList();
+            }
+        }
+
+        [NotMapped]
+        public List<int> ParsedTramaSteps
+        {
+            get
+            {
+                if (string.IsNullOrWhiteSpace(TramaSteps))
+                    return new List<int>();
+
+                return TramaSteps
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(s => int.TryParse(s, out var n) ? n : 0)
+                    .Where(n => n > 0)
+                    .ToList();
+            }
+        }
     }
 }

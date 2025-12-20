@@ -1,172 +1,26 @@
 @page
 @model TinyGenerator.Pages.Agents.IndexModel
 @{
-    Layout = "_Layout";
     ViewData["Title"] = "Agents";
-    ViewData["PageDescription"] = "Gestisci gli agenti e le loro configurazioni";
 }
 
-<div class="mb-3 d-flex justify-content-between align-items-center">
-    <div></div>
+<div class="page-wrapper">
+    <div class="d-flex mb-2 align-items-center toolbar-row">
+        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <div class="ms-auto d-flex gap-1">
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
+                    <i class="bi bi-layout-three-columns"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end" id="agentsGridColVisMenu" style="min-width: 180px;"></ul>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
+            <a class="btn btn-sm btn-primary" asp-page="./Create">Nuovo</a>
+        </div>
+    </div>
+
+    <div id="agentsGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
 </div>
-
-<table id="tabAgents" class="table table-bordered datatable"
-       data-create-label="Create Agent"
-       data-create-url="@Url.Page("./Create")">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Role</th>
-            <th>Model</th>
-            <th>Temperature</th>
-            <th>Top P</th>
-            <th>Voice</th>
-            <th>Skills</th>
-            <th>JSON Format</th>
-            <th></th>
-        </tr>
-    </thead>
-    <tbody>
-    @if (Model.Agents != null && Model.Agents.Any())
-    {
-        foreach (var a in Model.Agents)
-        {
-                <tr>
-                <td>@a.Name</td>
-                <td>@a.Role</td>
-                <td>@(string.IsNullOrWhiteSpace(a.ModelName) ? a.ModelId?.ToString() ?? "" : a.ModelName)</td>
-                <td>@(a.Temperature.HasValue ? a.Temperature.Value.ToString("0.##") : "-")</td>
-                <td>@(a.TopP.HasValue ? a.TopP.Value.ToString("0.##") : "-")</td>
-                <td>@(string.IsNullOrWhiteSpace(a.VoiceName) ? (a.VoiceId?.ToString() ?? "") : a.VoiceName)</td>
-                <td>@a.Skills</td>
-                <td>@(string.IsNullOrWhiteSpace(a.JsonResponseFormat) ? "-" : a.JsonResponseFormat)</td>
-                <td>
-                    <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@a.Id">Edit</a>
-                    <form method="post" asp-page-handler="Clone" asp-route-id="@a.Id" class="d-inline">
-                        <button type="submit" class="btn btn-sm btn-outline-secondary me-1">Duplica</button>
-                    </form>
-                    @if (a.Role?.Equals("writer", StringComparison.OrdinalIgnoreCase) == true)
-                    {
-                        <button type="button" class="btn btn-sm btn-outline-success me-1 generate-story-btn" data-agent-id="@a.Id" data-agent-name="@a.Name">
-                            <i class="bi bi-pencil-square"></i> Generate
-                        </button>
-                    }
-                    <form method="post" asp-page-handler="Delete" asp-route-id="@a.Id" class="d-inline agent-delete-form">
-                        <button type="button" class="btn btn-sm btn-outline-danger agent-delete-btn">Delete</button>
-                    </form>
-                </td>
-            </tr>
-        }
-    }
-    else
-    {
-        <tr><td colspan="9">No agents found.</td></tr>
-    }
-    </tbody>
-</table>
-
-@section Styles {
-    <link rel="stylesheet" href="~/css/site.css" />
-}
-
-@section Scripts {
-    <script src="~/js/agents-index.js" asp-append-version="true"></script>
-    <script>
-        (function(){
-            function initAgentsTable() {
-                try {
-                    var table = $('#tabAgents').DataTable({
-                        responsive: true,
-                        colReorder: true,
-                        dom: "<'dt-top'Bf>rt<'dt-bottom'lip>",
-                        buttons: [
-                            {
-                                extend: 'colvis',
-                                text: 'Columns',
-                                className: 'btn btn-light btn-sm'
-                            }
-                        ],
-                        columnDefs: [ { orderable: false, targets: -1 } ],
-                        order: [[0, 'asc']],
-                        pageLength: 25,
-                        stateSave: true,
-                        stateSaveName: 'DataTables_agents',
-                        stateDuration: -1
-                    });
-
-                    document.querySelectorAll('.agent-delete-btn').forEach(btn => {
-                        btn.addEventListener('click', async (e) => {
-                            e.preventDefault();
-                            const form = btn.closest('.agent-delete-form');
-                            const confirmed = await showConfirm('Delete Agent', 'Are you sure you want to delete this agent?', 'Delete', 'Cancel');
-                            if (confirmed) {
-                                form.submit();
-                            }
-                        });
-                    });
-
-                    const storyModalEl = document.getElementById('storyModal');
-                    try {
-                        if (storyModalEl && storyModalEl.parentElement !== document.body) {
-                            document.body.appendChild(storyModalEl);
-                        }
-                    } catch (e) {
-                        console.warn('Failed to append modal to body', e);
-                    }
-
-                    const storyModal = new bootstrap.Modal(storyModalEl, {
-                        backdrop: true,
-                        keyboard: true
-                    });
-                    const storyThemeInput = document.getElementById('storyThemeInput');
-                    const modalAgentId = document.getElementById('modalAgentId');
-                    const STORAGE_KEY = 'lastStoryTheme';
-
-                    storyModalEl.addEventListener('shown.bs.modal', function() {
-                        const backdrop = document.querySelector('.modal-backdrop');
-                        if (backdrop) {
-                            backdrop.style.zIndex = '10550';
-                        }
-                        storyModalEl.style.zIndex = '10600';
-                        if (storyThemeInput) storyThemeInput.focus();
-                    });
-
-                    const lastTheme = localStorage.getItem(STORAGE_KEY);
-                    if (lastTheme && storyThemeInput) {
-                        storyThemeInput.value = lastTheme;
-                    }
-
-                    document.querySelectorAll('.generate-story-btn').forEach(btn => {
-                        btn.addEventListener('click', (e) => {
-                            e.preventDefault();
-                            const agentId = btn.dataset.agentId;
-                            const agentName = btn.dataset.agentName;
-                            if (modalAgentId) modalAgentId.value = agentId;
-                            const titleEl = document.querySelector('#storyModal .modal-title');
-                            if (titleEl) titleEl.textContent = `Generate Story - ${agentName}`;
-                            storyModal.show();
-                        });
-                    });
-
-                    const storyForm = document.getElementById('storyForm');
-                    if (storyForm) {
-                        storyForm.addEventListener('submit', () => {
-                            const theme = storyThemeInput ? storyThemeInput.value.trim() : '';
-                            if (theme) {
-                                localStorage.setItem(STORAGE_KEY, theme);
-                            }
-                        });
-                    }
-                } catch (e) {
-                    console.warn('Failed to initialize Agents DataTable', e);
-                }
-            }
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', initAgentsTable);
-            } else { initAgentsTable(); }
-        })();
-    </script>
-}
 
 <!-- Story Generation Modal -->
 <div class="modal fade" id="storyModal" tabindex="-1">
@@ -193,3 +47,129 @@
         </div>
     </div>
 </div>
+
+@section Scripts {
+    <script>
+        window.__agents_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Agents));
+    </script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const rowData = window.__agents_data || [];
+
+            const columnDefs = [
+                { headerName: 'Name', field: 'Name', flex: 1 },
+                { headerName: 'Role', field: 'Role', width: 120 },
+                { headerName: 'Model', field: 'ModelName', flex: 1, cellRenderer: p => p.value || p.data.ModelId || '' },
+                { headerName: 'Temp', field: 'Temperature', width: 80, cellRenderer: p => p.value != null ? p.value.toFixed(2) : '-' },
+                { headerName: 'TopP', field: 'TopP', width: 80, cellRenderer: p => p.value != null ? p.value.toFixed(2) : '-' },
+                { headerName: 'Voice', field: 'VoiceName', width: 120, cellRenderer: p => p.value || p.data.VoiceId || '' },
+                { headerName: 'Skills', field: 'Skills', flex: 1 },
+                { headerName: 'JSON Format', field: 'JsonResponseFormat', width: 120, cellRenderer: p => p.value || '-' },
+                {
+                    headerName: 'Actions', colId: 'actions', width: 260, suppressColumnsToolPanel: true, pinned: 'right',
+                    cellRenderer: params => {
+                        const id = params.data.Id;
+                        const name = params.data.Name;
+                        const role = (params.data.Role || '').toLowerCase();
+                        let generateBtn = '';
+                        if (role === 'writer') {
+                            generateBtn = `<button type="button" class="btn btn-sm btn-outline-success me-1 generate-story-btn" data-agent-id="${id}" data-agent-name="${escapeAttr(name)}"><i class="bi bi-pencil-square"></i></button>`;
+                        }
+                        return `
+                            <a class="btn btn-sm btn-outline-primary me-1" href="/Agents/Edit?id=${id}">Edit</a>
+                            <button type="button" class="btn btn-sm btn-outline-secondary me-1 clone-btn" data-id="${id}">Duplica</button>
+                            ${generateBtn}
+                            <button type="button" class="btn btn-sm btn-outline-danger delete-btn" data-id="${id}">Delete</button>
+                        `;
+                    }
+                }
+            ];
+
+            AgGridHelper.init('agentsGrid', columnDefs, rowData, {
+                storageKey: 'agGrid_agents_colVis',
+                pageSize: 25
+            });
+
+            // Quick filter
+            document.getElementById('globalFilter')?.addEventListener('input', e => {
+                window.agentsGridApi?.setQuickFilter(e.target.value);
+            });
+
+            // Grid click handlers
+            document.getElementById('agentsGrid').addEventListener('click', e => {
+                const cloneBtn = e.target.closest('.clone-btn');
+                if (cloneBtn) {
+                    const id = cloneBtn.dataset.id;
+                    postAction('Clone', { id: id });
+                }
+
+                const deleteBtn = e.target.closest('.delete-btn');
+                if (deleteBtn) {
+                    const id = deleteBtn.dataset.id;
+                    if (confirm('Are you sure you want to delete this agent?')) {
+                        postAction('Delete', { id: id });
+                    }
+                }
+
+                const generateBtn = e.target.closest('.generate-story-btn');
+                if (generateBtn) {
+                    const agentId = generateBtn.dataset.agentId;
+                    const agentName = generateBtn.dataset.agentName;
+                    document.getElementById('modalAgentId').value = agentId;
+                    document.querySelector('#storyModal .modal-title').textContent = `Generate Story - ${agentName}`;
+                    new bootstrap.Modal(document.getElementById('storyModal')).show();
+                }
+            });
+
+            // Restore last theme from localStorage
+            const STORAGE_KEY = 'lastStoryTheme';
+            const storyThemeInput = document.getElementById('storyThemeInput');
+            const lastTheme = localStorage.getItem(STORAGE_KEY);
+            if (lastTheme && storyThemeInput) {
+                storyThemeInput.value = lastTheme;
+            }
+
+            // Save theme on form submit
+            const storyForm = document.getElementById('storyForm');
+            if (storyForm) {
+                storyForm.addEventListener('submit', () => {
+                    const theme = storyThemeInput ? storyThemeInput.value.trim() : '';
+                    if (theme) {
+                        localStorage.setItem(STORAGE_KEY, theme);
+                    }
+                });
+            }
+
+            function postAction(handler, data) {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = `?handler=${handler}`;
+                for (const key in data) {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = key;
+                    input.value = data[key];
+                    form.appendChild(input);
+                }
+                const token = document.querySelector('input[name=__RequestVerificationToken]');
+                if (token) {
+                    const tokenInput = document.createElement('input');
+                    tokenInput.type = 'hidden';
+                    tokenInput.name = '__RequestVerificationToken';
+                    tokenInput.value = token.value;
+                    form.appendChild(tokenInput);
+                }
+                document.body.appendChild(form);
+                form.submit();
+            }
+
+            function escapeHtml(text) {
+                if (!text) return '';
+                return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
+            }
+            function escapeAttr(text) {
+                return escapeHtml(text).replace(/'/g, '&#39;');
+            }
+        });
+    </script>
+}

@@ -206,6 +206,66 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        /// <summary>
+        /// Delete stories that have at least two evaluations and an average score < 50/100.
+        /// Also deletes associated folders on disk and evaluations.
+        /// </summary>
+        public IActionResult OnPostDeleteLowRated()
+        {
+            try
+            {
+                var all = _stories.GetAllStories();
+                var toDelete = new List<StoryRecord>();
+                foreach (var s in all)
+                {
+                    var evals = _database.GetStoryEvaluations(s.Id) ?? new List<StoryEvaluation>();
+                    if (evals.Count < 2) continue;
+                    var avgTotal = evals.Average(e => e.TotalScore);
+                    // TotalScore is out of 40 -> convert to percentage
+                    var pct = avgTotal * 100.0 / 40.0;
+                    if (pct < 50.0)
+                    {
+                        toDelete.Add(s);
+                    }
+                }
+
+                int deleted = 0;
+                foreach (var s in toDelete)
+                {
+                    try
+                    {
+                        // delete folder
+                        if (!string.IsNullOrWhiteSpace(s.Folder))
+                        {
+                            var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", s.Folder);
+                            if (Directory.Exists(folderPath))
+                            {
+                                try { Directory.Delete(folderPath, true); } catch (Exception ex) { _logger?.LogWarning(ex, "Unable to delete folder {Path}", folderPath); }
+                            }
+                        }
+
+                        // delete evaluations
+                        _database.DeleteEvaluationsForStory(s.Id);
+
+                        // delete story record(s)
+                        _stories.Delete(s.Id);
+                        deleted++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to delete story {Id}", s.Id);
+                    }
+                }
+
+                TempData["StatusMessage"] = $"Eliminate {deleted} storie con valutazione media <50 e almeno 2 valutazioni.";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore durante eliminazione storie: " + ex.Message;
+            }
+            return RedirectToPage();
+        }
+
         public IActionResult OnPostGenerateTts(long id, string folderName)
         {
             var runId = QueueStoryCommand(
@@ -255,6 +315,23 @@ namespace TinyGenerator.Pages.Stories
                 "Generazione effetti sonori avviata in background.");
 
             TempData["StatusMessage"] = $"Generazione effetti sonori avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostGenerateMusic(long id, string folderName)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "generate_music",
+                async ctx =>
+                {
+                    var (success, error) = await _stories.GenerateMusicForStoryAsync(id, folderName, ctx.RunId);
+                    var message = success ? "Generazione musica completata." : error;
+                    return new CommandResult(success, message);
+                },
+                "Generazione musica avviata in background.");
+
+            TempData["StatusMessage"] = $"Generazione musica avviata (run {runId}).";
             return RedirectToPage();
         }
 
@@ -586,6 +663,92 @@ namespace TinyGenerator.Pages.Stories
                 ["storyId"] = storyId.ToString(),
                 ["operation"] = operationCode
             };
+        }
+
+        // JSON data endpoint used by client-side JS to fetch stories and allowed actions
+        public IActionResult OnGetData()
+        {
+            LoadData();
+
+            var storiesDto = Stories.Select(s => new
+            {
+                s.Id,
+                Timestamp = DateTime.TryParse(s.Timestamp, out var dt) ? dt.ToString("dd/MM/yyyy HH:mm") : s.Timestamp,
+                Prompt = s.Prompt?.Length > 200 ? s.Prompt.Substring(0, 200) + "..." : s.Prompt,
+                FullPrompt = s.Prompt,
+                s.StatusId,
+                s.Status,
+                StatusDescription = !string.IsNullOrWhiteSpace(s.StatusDescription) ? s.StatusDescription : (!string.IsNullOrWhiteSpace(s.Status) ? s.Status : "N/D"),
+                StatusColor = string.IsNullOrWhiteSpace(s.StatusColor) ? "#6c757d" : s.StatusColor,
+                s.Model,
+                Folder = s.Folder ?? "-",
+                GeneratedTtsJson = s.GeneratedTtsJson,
+                GeneratedTts = s.GeneratedTts,
+                GeneratedAmbient = s.GeneratedAmbient,
+                GeneratedEffects = s.GeneratedEffects,
+                GeneratedMusic = s.GeneratedMusic,
+                GeneratedMixedAudio = s.GeneratedMixedAudio,
+                CharCount = s.CharCount,
+                s.TestRunId,
+                s.TestStepId,
+                s.Score,
+                EvalScore = (s.Evaluations ?? new List<StoryEvaluation>()).Any() ? ((s.Evaluations.Average(e => e.TotalScore) * 100.0 / 40.0).ToString("F1") + "/100") : "-",
+                Approved = s.Approved,
+                s.HasFinalMix,
+                s.HasVoiceSource,
+                s.Characters,
+                Evaluations = (s.Evaluations ?? new List<StoryEvaluation>()).Select(e => new {
+                    e.Id, e.Model, e.AgentName, e.AgentModel, e.Timestamp, e.TotalScore,
+                    e.NarrativeCoherenceScore, e.NarrativeCoherenceDefects,
+                    e.OriginalityScore, e.OriginalityDefects,
+                    e.EmotionalImpactScore, e.EmotionalImpactDefects,
+                    e.ActionScore, e.ActionDefects
+                }),
+                NextStatus = GetNextStatus(s) is StoryStatus ns ? new { ns.Id, ns.CaptionToExecute, ns.OperationType } : null,
+                Actions = BuildActionsForStory(s)
+            }).ToList();
+
+            var evaluatorsDto = Evaluators.Select(e => new { e.Id, e.Name, e.Role }).ToList();
+            var actionEvaluatorsDto = ActionEvaluators.Select(e => new { e.Id, e.Name, e.Role }).ToList();
+
+            return new JsonResult(new { stories = storiesDto, evaluators = evaluatorsDto, actionEvaluators = actionEvaluatorsDto });
+        }
+
+        private List<object> BuildActionsForStory(StoryRecord s)
+        {
+            var actions = new List<object>();
+
+            // Advance status (POST)
+            var next = GetNextStatus(s);
+            if (next != null && !string.IsNullOrWhiteSpace(next.OperationType))
+            {
+                actions.Add(new { id = "advance", title = next.CaptionToExecute ?? "Avanza", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AdvanceStatus", id = s.Id }, Request.Scheme) });
+            }
+
+            // Details / Edit (GET)
+            actions.Add(new { id = "details", title = "Dettagli", method = "GET", url = Url.Page("/Stories/Details", new { id = s.Id }) });
+            actions.Add(new { id = "edit", title = "Modifica", method = "GET", url = Url.Page("/Stories/Edit", new { id = s.Id }) });
+
+            if (!string.IsNullOrWhiteSpace(s.Folder))
+            {
+                actions.Add(new { id = "gen_tts_json", title = "Genera JSON TTS", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateTtsJson", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "gen_tts", title = "Genera TTS", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateTts", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "gen_ambience", title = "Genera Audio Ambientale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateAmbience", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "gen_fx", title = "Genera Effetti Sonori", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateFx", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "gen_music", title = "Genera Musica", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateMusic", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "mix_final", title = "Mix Audio Finale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "MixFinalAudio", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "final_mix_play", title = "Ascolta Mix Finale", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "FinalMixAudio", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "assign_voices", title = "Assegna voci", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AssignVoices", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "tts_playlist", title = "Ascolta sequenza TTS", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "TtsPlaylist", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "normalize_chars", title = "Normalizza nomi personaggi", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "NormalizeCharacterNames", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "normalize_sentiments", title = "Normalizza sentimenti", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "NormalizeSentiments", id = s.Id }, Request.Scheme) });
+            }
+
+            // Delete
+            actions.Add(new { id = "delete", title = "Elimina", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "Delete", id = s.Id }, Request.Scheme), confirm = true });
+
+            // Evaluators (client will render evaluator-specific actions)
+            return actions;
         }
     }
 }

@@ -5,126 +5,98 @@
     ViewData["PageDescription"] = "Crea e gestisci le definizioni dei test";
 }
 
-<div class="mb-3 d-flex justify-content-between align-items-center">
-        <div class="d-flex"></div>
-        <div class="form-check">
-        <input class="form-check-input" type="checkbox" id="chkShowDisabled" checked="@Model.ShowDisabled" onchange="window.location.href='?ShowDisabled=' + (this.checked ? 'true' : 'false');" />
-        <label class="form-check-label" for="chkShowDisabled">
-            Show Disabled Tests
-        </label>
+<div class="page-wrapper">
+    <div class="d-flex mb-2 align-items-center toolbar-row">
+        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <div class="ms-auto d-flex gap-1 align-items-center">
+            <div class="form-check me-2">
+                <input class="form-check-input" type="checkbox" id="chkShowDisabled" checked="@Model.ShowDisabled" onchange="window.location.href='?ShowDisabled=' + (this.checked ? 'true' : 'false');" />
+                <label class="form-check-label" for="chkShowDisabled">Show Disabled</label>
+            </div>
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
+                    <i class="bi bi-layout-three-columns"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end" id="testDefsGridColVisMenu" style="min-width: 180px;"></ul>
+            </div>
+            <button id="refreshBtn" class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
+            <a class="btn btn-sm btn-primary" asp-page="./Edit">Nuovo</a>
+        </div>
+    </div>
+
+    <div id="testDefsGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
+</div>
+
+<!-- Details Modal for Prompt -->
+<div class="modal fade" id="promptModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Prompt Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="promptModalBody">
+                <pre class="bg-light p-3" style="white-space:pre-wrap;word-break:break-word;font-size:0.9rem;"></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
     </div>
 </div>
 
-<table id="tabTests" class="table table-bordered table-sm table-pastel table-compact datatable"
-       data-create-label="Create Test Definition"
-       data-create-url="@Url.Page("./Edit")">
-    <thead>
-        <tr>
-            <th>Group</th>
-            <th>Library</th>
-            <th>Function</th>
-            <th>Priority</th>
-            <th>Timeout (s)</th>
-            <th>Test Type</th>
-            <th>Allowed Plugins</th>
-            <th>Response Format</th>
-            <th>Execution Plan</th>
-            <th>Active</th>
-            <th class="d-none">Prompt</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-    @if (Model.Definitions != null && Model.Definitions.Any())
-    {
-        foreach (var d in Model.Definitions)
-        {
-            <tr>
-                <td class="group">@d.GroupName</td>
-                <td class="library">@d.Library</td>
-                <td class="function">@d.FunctionName</td>
-                <td class="priority" data-priority="@d.Priority">@d.Priority</td>
-                <td class="timeout" data-timeout-secs="@d.TimeoutSecs">@(d.TimeoutSecs > 0 ? d.TimeoutSecs.ToString() : "")</td>
-                <td class="testtype">@(string.IsNullOrWhiteSpace(d.TestType) ? "" : d.TestType)</td>
-                <td class="allowedplugins">@(string.IsNullOrWhiteSpace(d.AllowedPlugins) ? "" : d.AllowedPlugins)</td>
-                <td class="responseformat">@(string.IsNullOrWhiteSpace(d.JsonResponseFormat) ? "" : d.JsonResponseFormat)</td>
-                <td class="executionplan">@(string.IsNullOrWhiteSpace(d.ExecutionPlan) ? "" : d.ExecutionPlan)</td>
-                <td class="active">@(d.Active ? "Yes" : "No")</td>
-                <td class="prompt d-none">@System.Net.WebUtility.HtmlEncode(d.Prompt)</td>
-                <td class="actions">
-                    <button type="button" class="btn btn-sm btn-outline-secondary dt-expand me-1">+</button>
-                    <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@d.Id">Edit</a>
-                    <a class="btn btn-sm btn-outline-danger" asp-page="./Delete" asp-route-id="@d.Id">Delete</a>
-                </td>
-            </tr>
-        }
-    }
-    else
-    {
-        <tr>
-            <td colspan="12">No test definitions found.</td>
-        </tr>
-    }
-    </tbody>
-</table>
-
-@section Styles {
-    <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
-}
-
 @section Scripts {
     <script>
-        $(document).ready(function() {
-            // Initialize DataTable (Bootstrap 5 integration assumed in _Layout)
-            var table = $('#tabTests').DataTable({
-                paging: true,
-                searching: true,
-                ordering: true,
-                info: true,
-                lengthChange: true,
-                lengthMenu: [ [10, 25, 50, 100], [10, 25, 50, 100] ],
-                pageLength: 25,
-                responsive: true,
-                columnDefs: [{ orderable: false, targets: -1 }], // actions column not sortable
-                // Add Buttons colvis so user can toggle visible columns
-                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
-                     "rt" +
-                     "<'row'<'col-sm-6'i><'col-sm-6'p>>",
-                buttons: [
-                    {
-                        extend: 'colvis',
-                        text: 'Columns',
-                        className: 'btn btn-light btn-sm'
+        window.__testdefs_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Definitions));
+    </script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const rowData = window.__testdefs_data || [];
+
+            const columnDefs = [
+                { headerName: 'Group', field: 'GroupName', width: 120 },
+                { headerName: 'Library', field: 'Library', width: 100 },
+                { headerName: 'Function', field: 'FunctionName', flex: 1 },
+                { headerName: 'Priority', field: 'Priority', width: 90 },
+                { headerName: 'Timeout (s)', field: 'TimeoutSecs', width: 100, valueFormatter: p => p.value > 0 ? p.value : '' },
+                { headerName: 'Test Type', field: 'TestType', width: 100 },
+                { headerName: 'Allowed Plugins', field: 'AllowedPlugins', width: 130 },
+                { headerName: 'Response Format', field: 'JsonResponseFormat', width: 130 },
+                { headerName: 'Execution Plan', field: 'ExecutionPlan', width: 130 },
+                { headerName: 'Active', field: 'Active', width: 80, valueFormatter: p => p.value ? 'Yes' : 'No' },
+                {
+                    headerName: 'Actions', colId: 'actions', width: 180, suppressColumnsToolPanel: true,
+                    cellRenderer: params => {
+                        const id = params.data.Id;
+                        const hasPrompt = params.data.Prompt && params.data.Prompt.trim().length > 0;
+                        return `<button class="btn btn-sm btn-outline-secondary me-1 btn-details" data-id="${id}" ${!hasPrompt ? 'disabled' : ''} title="Show prompt">+</button>` +
+                               `<a class="btn btn-sm btn-outline-primary me-1" href="/TestDefinitions/Edit?id=${id}">Edit</a>` +
+                               `<a class="btn btn-sm btn-outline-danger" href="/TestDefinitions/Delete?id=${id}">Delete</a>`;
                     }
-                ],
-                stateSave: true,
-                stateSaveName: 'DataTables_testdefinitions',
-                stateDuration: -1
-            });
-
-            // Format detail content showing the prompt
-            function formatPrompt(rowNode) {
-                var promptText = $(rowNode).find('td.prompt').text() || '';
-                if (!promptText) return '<div style="padding:6px 8px;font-size:0.85rem;color:#666">(no prompt)</div>';
-                return '<div style="padding:6px 8px;font-size:0.9rem;color:#333"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:0.9rem;line-height:1.25;background:transparent;border:0;padding:0;">' + promptText + '</pre></div>';
-            }
-
-            // Toggle details on expand button click
-            $('#tabTests tbody').on('click', 'button.dt-expand', function () {
-                var tr = $(this).closest('tr');
-                var row = table.row(tr);
-                if (row.child.isShown()) {
-                    row.child.hide();
-                    $(this).text('+');
-                } else {
-                    row.child(formatPrompt(tr)).show();
-                    $(this).text('−');
                 }
+            ];
+
+            AgGridHelper.init('testDefsGrid', columnDefs, rowData, {
+                storageKey: 'agGrid_testDefs_colVis',
+                pageSize: 25
             });
 
-            // Wire the external searchBox to DataTables
-            $('#searchBox').on('input', function() {
-                table.search(this.value).draw();
+            // Quick filter
+            document.getElementById('globalFilter')?.addEventListener('input', e => {
+                window.testDefsGridApi?.setQuickFilter(e.target.value);
+            });
+
+            // Grid click handlers
+            document.getElementById('testDefsGrid').addEventListener('click', e => {
+                const detailsBtn = e.target.closest('.btn-details');
+                if (detailsBtn && !detailsBtn.disabled) {
+                    const id = parseInt(detailsBtn.dataset.id);
+                    const item = rowData.find(r => r.Id === id);
+                    if (item && item.Prompt) {
+                        document.querySelector('#promptModalBody pre').textContent = item.Prompt;
+                        new bootstrap.Modal(document.getElementById('promptModal')).show();
+                    }
+                }
             });
         });
     </script>

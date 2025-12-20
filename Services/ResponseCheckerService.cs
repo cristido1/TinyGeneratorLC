@@ -105,6 +105,20 @@ namespace TinyGenerator.Services
             var semanticInfo = semanticScore.HasValue ? $"Semantic Alignment Score: {semanticScore.Value:F2} (0-1 scale)" : string.Empty;
 
             var sb = new StringBuilder();
+            // Include agent-level prompt/instructions if present so DB-managed instructions are honored
+            if (!string.IsNullOrWhiteSpace(checkerAgent.Prompt))
+            {
+                sb.AppendLine("=== Agent Prompt ===");
+                sb.AppendLine(checkerAgent.Prompt);
+                sb.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(checkerAgent.Instructions))
+            {
+                sb.AppendLine("=== Agent Instructions ===");
+                sb.AppendLine(checkerAgent.Instructions);
+                sb.AppendLine();
+            }
+
             sb.AppendLine("You are a Response Checker. Validate if the writer's output meets the requirements.");
             sb.AppendLine();
             sb.AppendLine("**Step Instruction:**");
@@ -266,6 +280,20 @@ namespace TinyGenerator.Services
                 .ToList();
 
             var prompt = new StringBuilder();
+            // Include agent-level prompt/instructions if present
+            if (!string.IsNullOrWhiteSpace(checkerAgent.Prompt))
+            {
+                prompt.AppendLine("=== Agent Prompt ===");
+                prompt.AppendLine(checkerAgent.Prompt);
+                prompt.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(checkerAgent.Instructions))
+            {
+                prompt.AppendLine("=== Agent Instructions ===");
+                prompt.AppendLine(checkerAgent.Instructions);
+                prompt.AppendLine();
+            }
+
             prompt.AppendLine("You are a response_checker helping another agent that MUST call functions instead of replying with free text.");
             prompt.AppendLine($"Attempt: {attempt + 1}/2.");
             prompt.AppendLine("Provide a SHORT assistant reply to the primary model that reminds it to use the tools, and if possible suggest the first tool to call.");

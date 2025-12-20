@@ -5,60 +5,23 @@
     ViewData["PageDescription"] = "Gestisci i template multi-step per la generazione delle storie";
 }
 
-<div class="mb-3 d-flex align-items-center gap-2">
-    <button type="button" class="btn btn-success" id="btnNewTemplate" onclick="openCreateModal()">
-        <i class="fa fa-plus me-1"></i> New Template
-    </button>
-    <div class="ms-auto text-muted small">Manage your multi-step templates</div>
-</div>
+<div class="page-wrapper">
+    <div class="d-flex mb-2 align-items-center toolbar-row">
+        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <div class="ms-auto d-flex gap-1">
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
+                    <i class="bi bi-layout-three-columns"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end" id="stepTemplatesGridColVisMenu" style="min-width: 180px;"></ul>
+            </div>
+            <button id="refreshBtn" class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
+            <button class="btn btn-sm btn-primary" onclick="openCreateModal()">Nuovo</button>
+        </div>
+    </div>
 
-<table id="tabTemplates" class="table table-bordered table-sm table-pastel table-compact datatable"
-       data-create-label="Create Template"
-       data-create-handler="openCreateModal">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Task Type</th>
-            <th>Description</th>
-            <th>Steps</th>
-            <th>Created</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-    @if (Model.Templates != null && Model.Templates.Any())
-    {
-        foreach (var t in Model.Templates)
-        {
-            var stepCount = System.Text.RegularExpressions.Regex.Matches(t.StepPrompt ?? "", @"^\d+\.", System.Text.RegularExpressions.RegexOptions.Multiline).Count;
-            var templateJson = System.Text.Json.JsonSerializer.Serialize(t);
-            <tr data-template='@Html.Raw(templateJson.Replace("'", "&#39;"))'>
-                <td class="name">@t.Name</td>
-                <td class="tasktype">@t.TaskType</td>
-                <td class="description">@(string.IsNullOrWhiteSpace(t.Description) ? "" : t.Description)</td>
-                <td class="stepcount">@stepCount</td>
-                <td class="created">@(DateTime.TryParse(t.CreatedAt, out var dt) ? dt.ToString("yyyy-MM-dd HH:mm") : t.CreatedAt)</td>
-                <td class="actions">
-                    <button type="button" class="btn btn-sm btn-outline-secondary dt-expand me-1" title="Show details">+</button>
-                    <a class="btn btn-sm btn-outline-primary me-1" asp-page="./Edit" asp-route-id="@t.Id">Edit</a>
-                    <form method="post" asp-page-handler="Delete" asp-route-id="@t.Id" style="display:inline;" onsubmit="return confirm('Delete template @t.Name?');">
-                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                    </form>
-                    <form method="post" asp-page-handler="Copy" asp-route-id="@t.Id" style="display:inline;margin-left:.25rem;">
-                        <button type="submit" class="btn btn-sm btn-outline-secondary" title="Copy template">Copy</button>
-                    </form>
-                </td>
-            </tr>
-        }
-    }
-    else
-    {
-        <tr>
-            <td colspan="6">No templates found.</td>
-        </tr>
-    }
-    </tbody>
-</table>
+    <div id="stepTemplatesGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
+</div>
 
 <!-- Edit/Create Modal -->
 <div class="modal fade" id="modalEditTemplate" tabindex="-1">
@@ -112,121 +75,160 @@
     </div>
 </div>
 
-@section Styles {
-    <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
-}
+<!-- Details Modal -->
+<div class="modal fade" id="detailsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Template Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="detailsModalBody"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 @section Scripts {
     <script>
-        $(document).ready(function() {
-            var table = $('#tabTemplates').DataTable({
-                paging: true,
-                searching: true,
-                ordering: true,
-                order: [[4, 'desc']], // Sort by created date
-                pageLength: 25,
-                responsive: true,
-                autoWidth: false,
-                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
-                     "rt" +
-                     "<'row'<'col-sm-6'i><'col-sm-6'p>>",
-                buttons: [
-                    {
-                        extend: 'colvis',
-                        text: 'Columns',
-                        className: 'btn btn-light btn-sm'
-                    }
-                ],
-                stateSave: true,
-                stateSaveName: 'DataTables_steptemplates',
-                stateDuration: -1,
-                columns: [
-                    { data: 'name', width: '20%' },
-                    { data: 'tasktype', width: '10%' },
-                    { data: 'description', width: '30%' },
-                    { data: 'stepcount', width: '8%' },
-                    { data: 'created', width: '15%' },
-                    { data: 'actions', orderable: false, width: '17%' }
-                ]
+        window.__steptemplates_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Templates));
+    </script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const rowData = (window.__steptemplates_data || []).map(t => {
+                // Count numbered steps
+                const stepCount = (t.StepPrompt || '').match(/^\d+\./gm)?.length || 0;
+                return { ...t, StepCount: stepCount };
             });
 
-            // Row expansion for detailed step view
-            $('#tabTemplates tbody').on('click', '.dt-expand', function() {
-                var tr = $(this).closest('tr');
-                var row = table.row(tr);
+            const columnDefs = [
+                { headerName: 'Name', field: 'Name', flex: 1 },
+                { headerName: 'Task Type', field: 'TaskType', width: 120 },
+                { headerName: 'Description', field: 'Description', flex: 2 },
+                { headerName: 'Steps', field: 'StepCount', width: 80 },
+                { headerName: 'Created', field: 'CreatedAt', width: 160, valueFormatter: p => formatDate(p.value) },
+                {
+                    headerName: 'Actions', colId: 'actions', width: 220, suppressColumnsToolPanel: true,
+                    cellRenderer: params => {
+                        const id = params.data.Id;
+                        return `<button class="btn btn-sm btn-outline-secondary me-1 btn-details" data-id="${id}" title="Show details">+</button>` +
+                               `<a class="btn btn-sm btn-outline-primary me-1" href="/StepTemplates/Edit?id=${id}">Edit</a>` +
+                               `<button class="btn btn-sm btn-outline-secondary me-1 btn-copy" data-id="${id}" title="Copy">Copy</button>` +
+                               `<button class="btn btn-sm btn-outline-danger btn-delete" data-id="${id}">Delete</button>`;
+                    }
+                }
+            ];
 
-                if (row.child.isShown()) {
-                    row.child.hide();
-                    $(this).text('+');
-                } else {
-                    var templateJson = tr.attr('data-template');
-                    if (templateJson) {
-                        try {
-                            var template = JSON.parse(templateJson);
-                            var stepPrompt = template.StepPrompt || '';
-                            var instructions = template.Instructions || '';
-                            
-                            // Parse steps (lines starting with digit followed by dot)
-                            var steps = stepPrompt.split('\n').filter(line => /^\d+\./.test(line.trim()));
-                            var stepsHtml = '<div class="p-3">';
-                            if (instructions) {
-                                stepsHtml += '<div class="mb-3"><h6 class="mb-1">Instructions override</h6><pre class="bg-light border p-2" style="max-height:140px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(instructions) + '</pre></div>';
-                            }
-                            stepsHtml += '<h6>Template Steps:</h6><ol class="list-group list-group-numbered mt-2">';
-                            
-                            if (steps.length > 0) {
-                                steps.forEach(function(step) {
-                                    var stepText = step.replace(/^\d+\.\s*/, '').trim();
-                                    stepsHtml += '<li class="list-group-item">' + escapeHtml(stepText) + '</li>';
-                                });
-                            } else {
-                                stepsHtml += '<li class="list-group-item">No numbered steps found</li>';
-                            }
-                            
-                            stepsHtml += '</ol><hr><strong>Full Step Prompt:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(stepPrompt) + '</pre></div>';
-                            row.child(stepsHtml).show();
-                            $(this).text('-');
-                        } catch (e) {
-                            console.error('Failed to parse template JSON', e);
-                        }
+            AgGridHelper.init('stepTemplatesGrid', columnDefs, rowData, {
+                storageKey: 'agGrid_stepTemplates_colVis',
+                pageSize: 25
+            });
+
+            // Quick filter
+            document.getElementById('globalFilter')?.addEventListener('input', e => {
+                window.stepTemplatesGridApi?.setQuickFilter(e.target.value);
+            });
+
+            // Grid click handlers
+            document.getElementById('stepTemplatesGrid').addEventListener('click', e => {
+                const detailsBtn = e.target.closest('.btn-details');
+                if (detailsBtn) {
+                    const id = parseInt(detailsBtn.dataset.id);
+                    const item = rowData.find(r => r.Id === id);
+                    if (item) showDetails(item);
+                }
+                
+                const copyBtn = e.target.closest('.btn-copy');
+                if (copyBtn) {
+                    const id = copyBtn.dataset.id;
+                    // Submit copy form
+                    const form = document.createElement('form');
+                    form.method = 'POST';
+                    form.innerHTML = `<input type="hidden" name="id" value="${id}"/>`;
+                    form.action = '?handler=Copy';
+                    document.body.appendChild(form);
+                    form.submit();
+                }
+
+                const deleteBtn = e.target.closest('.btn-delete');
+                if (deleteBtn) {
+                    const id = deleteBtn.dataset.id;
+                    const item = rowData.find(r => r.Id == id);
+                    if (confirm('Delete template ' + (item?.Name || id) + '?')) {
+                        const form = document.createElement('form');
+                        form.method = 'POST';
+                        form.innerHTML = `<input type="hidden" name="id" value="${id}"/>`;
+                        form.action = '?handler=Delete';
+                        document.body.appendChild(form);
+                        form.submit();
                     }
                 }
             });
-        });
 
-        function openCreateModal() {
-            $('#modalTitle').text('Create Template');
-            $('#templateId').val('0');
-            $('#templateName').val('');
-            $('#templateTaskType').val('story');
-            $('#templateDescription').val('');
-            $('#templateInstructions').val('');
-            $('#templateStepPrompt').val('');
-            var modal = new bootstrap.Modal(document.getElementById('modalEditTemplate'));
-            modal.show();
-        }
-
-        function openEditModal(id, templateJson) {
-            try {
-                var template = JSON.parse(templateJson);
-                $('#modalTitle').text('Edit Template: ' + template.Name);
-                $('#templateId').val(template.Id);
-                $('#templateName').val(template.Name);
-                $('#templateTaskType').val(template.TaskType);
-                $('#templateDescription').val(template.Description || '');
-                $('#templateInstructions').val(template.Instructions || '');
-                $('#templateStepPrompt').val(template.StepPrompt || '');
-
-                var modal = new bootstrap.Modal(document.getElementById('modalEditTemplate'));
-                modal.show();
-            } catch (e) {
-                alert('Failed to load template data: ' + e.message);
+            function showDetails(item) {
+                const stepPrompt = item.StepPrompt || '';
+                const instructions = item.Instructions || '';
+                
+                // Parse steps (lines starting with digit followed by dot)
+                const steps = stepPrompt.split('\n').filter(line => /^\d+\./.test(line.trim()));
+                
+                let html = '<div class="p-2">';
+                if (instructions) {
+                    html += '<div class="mb-3"><h6 class="mb-1">Instructions override</h6><pre class="bg-light border p-2" style="max-height:140px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(instructions) + '</pre></div>';
+                }
+                html += '<h6>Template Steps:</h6><ol class="list-group list-group-numbered mt-2">';
+                
+                if (steps.length > 0) {
+                    steps.forEach(step => {
+                        const stepText = step.replace(/^\d+\.\s*/, '').trim();
+                        html += '<li class="list-group-item">' + escapeHtml(stepText) + '</li>';
+                    });
+                } else {
+                    html += '<li class="list-group-item">No numbered steps found</li>';
+                }
+                
+                html += '</ol><hr><strong>Full Step Prompt:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(stepPrompt) + '</pre></div>';
+                
+                document.getElementById('detailsModalBody').innerHTML = html;
+                new bootstrap.Modal(document.getElementById('detailsModal')).show();
             }
-        }
 
-        function escapeHtml(text) {
-            var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-            return text.replace(/[&<>"']/g, function(m) { return map[m]; });
-        }
+            window.openEditModal = function(item) {
+                document.getElementById('modalTitle').textContent = 'Edit Template: ' + item.Name;
+                document.getElementById('templateId').value = item.Id;
+                document.getElementById('templateName').value = item.Name;
+                document.getElementById('templateTaskType').value = item.TaskType;
+                document.getElementById('templateDescription').value = item.Description || '';
+                document.getElementById('templateInstructions').value = item.Instructions || '';
+                document.getElementById('templateStepPrompt').value = item.StepPrompt || '';
+                new bootstrap.Modal(document.getElementById('modalEditTemplate')).show();
+            };
+
+            window.openCreateModal = function() {
+                document.getElementById('modalTitle').textContent = 'Create Template';
+                document.getElementById('templateId').value = '0';
+                document.getElementById('templateName').value = '';
+                document.getElementById('templateTaskType').value = 'story';
+                document.getElementById('templateDescription').value = '';
+                document.getElementById('templateInstructions').value = '';
+                document.getElementById('templateStepPrompt').value = '';
+                new bootstrap.Modal(document.getElementById('modalEditTemplate')).show();
+            };
+
+            function escapeHtml(text) {
+                if (!text) return '';
+                return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
+            }
+
+            function formatDate(val) {
+                if (!val) return '';
+                try {
+                    const dt = new Date(val);
+                    return dt.toLocaleDateString('it-IT') + ' ' + dt.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+                } catch { return val; }
+            }
+        });
     </script>
 }

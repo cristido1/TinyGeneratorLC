@@ -1,0 +1,131 @@
+OBIETTIVO
+Definire uno standard per una pagina Razor Pages di tipo “lista/griglia”
+con rendering server-side, senza componenti grid JS (AG Grid, DevExtreme, ecc.).
+
+PRINCIPI FONDAMENTALI
+- Razor Pages è il controller della pagina
+- Il backend decide SEMPRE (dati, paging, sorting)
+- Il frontend rende solo UI e interazioni leggere
+- NESSUNA SPA
+- NESSUN framework JS
+- JS solo per UX riusabile (colonne, menu, paginazione)
+
+STRUTTURA GENERALE DELLA PAGINA
+
+1) BACKEND (PageModel)
+- Esporre SEMPRE:
+  - IReadOnlyList<T> Items
+  - int PageIndex
+  - int PageSize
+  - int TotalCount
+  - string? Search
+  - string? OrderBy
+
+- Recupero dati:
+  - filtro, ordinamento e paginazione DEVONO avvenire nel DB
+  - PageIndex parte da 1
+
+- PageModel di riferimento:
+  class PagedResult<T> {
+    IReadOnlyList<T> Items
+    int PageIndex
+    int PageSize
+    int TotalCount
+  }
+
+- La Razor Page NON deve contenere logica dati
+
+2) RAZOR PAGE (HTML)
+- Usare <table> HTML standard
+- Ogni colonna DEVE avere data-col
+- NESSUN JS inline complesso
+- NESSUN rendering dinamico di righe lato JS
+
+ESEMPIO COLONNE:
+<th data-col="name">Nome</th>
+<td data-col="name">@item.Name</td>
+
+3) PAGINAZIONE (SERVER-SIDE OBBLIGATORIA)
+- La paginazione NON gestisce dati
+- Serve solo a costruire link GET
+- Querystring standard:
+  ?page=1&pageSize=25&search=abc&orderBy=name
+
+- La paginazione va resa tramite JS condiviso
+- Il backend fornisce PageIndex, PageSize, TotalCount
+
+4) COLONNE VISIBILI
+- Implementazione client-side
+- Stato salvato in localStorage
+- Basata su data-col
+- Nessuna dipendenza da backend
+- JS condiviso
+
+5) FILE JAVASCRIPT CONDIVISI (OBBLIGATORI)
+
+/wwwroot/js/shared/
+  - column-visibility.js
+  - pagination.js
+
+OPPURE:
+  - list-ui.js (unificato)
+
+La Razor Page include SOLO questi script.
+
+6) MENU COLONNE
+- Menu Bootstrap semplice
+- Checkbox generate da JS
+- Nessuna logica Razor per visibilità colonne
+
+7) PAGINAZIONE UI
+- Un solo container <div id="pager">
+- JS costruisce:
+  - first / prev / next / last
+  - selettore page size
+- Tutti i link sono GET
+- Nessuna fetch / ajax
+
+8) SEARCH E SORT
+- SEARCH:
+  - <input name="search">
+  - submit GET
+- SORT:
+  - link su <th> con ?orderBy=campo
+- NESSUN sorting client-side
+
+9) AZIONI DI RIGA
+- Bottoni o menu per riga
+- Azioni eseguite tramite:
+  - <form method="post" asp-page-handler="X">
+- Niente fetch salvo casi particolari
+- Niente dropdown annidati complessi
+- Menu globale se necessario
+
+10) COSA È VIETATO
+- AG Grid / DevExtreme / DataTables
+- Virtual scroll
+- Rendering righe via JS
+- Decisioni di business nel JS
+- Hack CSS su overflow / z-index
+- SPA mascherate
+
+11) COSA È CONSENTITO
+- JS leggero e riusabile
+- localStorage per preferenze UI
+- SweetAlert per conferme
+- Bootstrap puro
+
+RISULTATO ATTESO
+- Razor Page leggibile
+- JS minimo
+- Backend chiaro e testabile
+- UX moderna ma semplice
+- Nessuna duplicazione di logica
+- Standard riutilizzabile in tutto il progetto
+
+ISTRUZIONI PER GPT-5 MINI
+- Seguire ESATTAMENTE questo standard
+- Non introdurre framework
+- Non semplificare eliminando funzionalità
+- Non convertire in SPA
+- Fornire codice concreto, non teoria

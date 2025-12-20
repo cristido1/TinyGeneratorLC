@@ -205,8 +205,9 @@
 
                 const currentStep = c.currentStep || c.CurrentStep;
                 const maxStep = c.maxStep || c.MaxStep;
+                const stepDesc = c.stepDescription || c.StepDescription || '';
                 const retryCount = c.retryCount || c.RetryCount || 0;
-                const stepInfo = (currentStep && maxStep) ? ` Step ${currentStep}/${maxStep}` : '';
+                const stepInfo = stepDesc ? ` (${stepDesc})` : ((currentStep && maxStep) ? ` Step ${currentStep}/${maxStep}` : '');
                 const retryInfo = (retryCount > 0) ? ` (Retry ${retryCount})` : '';
                 const agent = c.agentName || c.AgentName || 'N/A';
                 const op = c.operationName || c.OperationName || c.threadScope || c.ThreadScope || 'N/A';
@@ -330,5 +331,19 @@
                 ensureConnection();
             }
         });
+
+        // Periodic polling fallback: fetch command list every 10 seconds as backup
+        async function pollCommands() {
+            try {
+                const resp = await fetch('/api/commands');
+                if (resp.ok) {
+                    const cmds = await resp.json();
+                    renderCommands(cmds);
+                }
+            } catch (e) {
+                console.log('[CommandPanel] Poll fallback error:', e);
+            }
+        }
+        setInterval(pollCommands, 10000);
     }
 })();

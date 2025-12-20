@@ -74,6 +74,25 @@ namespace TinyGenerator.Models
         [NotMapped]
         public bool HasVoiceSource { get; set; }
 
+        // Generated asset flags
+        [Column("generated_tts_json")]
+        public bool GeneratedTtsJson { get; set; }
+
+        [Column("generated_tts")]
+        public bool GeneratedTts { get; set; }
+
+        [Column("generated_ambient")]
+        public bool GeneratedAmbient { get; set; }
+
+        [Column("generated_music")]
+        public bool GeneratedMusic { get; set; }
+
+        [Column("generated_effects")]
+        public bool GeneratedEffects { get; set; }
+
+        [Column("generated_mixed_audio")]
+        public bool GeneratedMixedAudio { get; set; }
+
         /// <summary>
         /// Indicates if the story has a final mixed audio file (final_mix.wav or final_mix.mp3)
         /// </summary>

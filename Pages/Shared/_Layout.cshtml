@@ -26,7 +26,8 @@
     <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
     <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/space-background.css" asp-append-version="true" />
+    <!-- Sidebar navigation CSS -->
+    <link rel="stylesheet" href="~/css/sidebar.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/custom-nav.css" asp-append-version="true" />
     
     <style>
@@ -196,43 +197,154 @@
             }
         }
         
+        /* AG Grid isolation - prevent global styles from affecting grid */
+        .ag-theme-alpine,
+        .ag-theme-alpine * {
+            all: revert;
+        }
+        .ag-theme-alpine {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        }
     </style>
     
     @await RenderSectionAsync("Styles", required: false)
 </head>
-<body>
+<body class="has-sidebar">
+    <!-- Mobile menu button -->
+    <button class="mobile-menu-btn d-md-none" aria-label="Apri menu">
+        <i class="bi bi-list"></i>
+    </button>
+    
+    <!-- Sidebar overlay for mobile -->
+    <div class="sidebar-overlay"></div>
+    
+    <!-- Collapsible sidebar navigation -->
+    <nav class="app-sidebar">
+        <div class="sidebar-header">
+            <a href="/" class="sidebar-brand">
+                <i class="bi bi-lightning-fill"></i>
+                <span class="sidebar-brand-text">TinyGenerator</span>
+            </a>
+            <button class="sidebar-toggle" aria-label="Riduci menu">
+                <i class="bi bi-chevron-left"></i>
+            </button>
+        </div>
+        
+        <div class="sidebar-nav">
+            <!-- Main section -->
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Principale</div>
+                <a href="/" title="Home">
+                    <i class="bi bi-house"></i>
+                    <span>Home</span>
+                </a>
+                <a asp-page="/Genera" title="Genera storia">
+                    <i class="bi bi-pencil-square"></i>
+                    <span>Genera storia</span>
+                </a>
+                <a asp-page="/Stories/Index" title="Storie salvate">
+                    <i class="bi bi-journal-text"></i>
+                    <span>Storie salvate</span>
+                </a>
+                <a asp-page="/Chat" title="Chat">
+                    <i class="bi bi-chat-dots"></i>
+                    <span>Chat</span>
+                </a>
+            </div>
+            
+            <!-- Monitoring section -->
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Monitoraggio</div>
+                <a asp-page="/Logs/Index" title="Logs">
+                    <i class="bi bi-list-check"></i>
+                    <span>Logs</span>
+                </a>
+                <a asp-page="/ChatLog/Index" title="Chat Log">
+                    <i class="bi bi-chat-left-text"></i>
+                    <span>Chat Log</span>
+                </a>
+                <a asp-page="/OllamaMonitor" title="Ollama Monitor">
+                    <i class="bi bi-cpu"></i>
+                    <span>Ollama Monitor</span>
+                </a>
+                <a asp-page="/StoriesStatus/Index" title="Stories Status">
+                    <i class="bi bi-flag"></i>
+                    <span>Stories Status</span>
+                </a>
+            </div>
+            
+            <!-- Configuration section -->
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Configurazione</div>
+                <a asp-page="/Models" title="Modelli">
+                    <i class="bi bi-diagram-3"></i>
+                    <span>Modelli</span>
+                </a>
+                <a asp-page="/Agents/Index" title="Agents">
+                    <i class="bi bi-people"></i>
+                    <span>Agents</span>
+                </a>
+                <a asp-page="/Series/Index" title="Serie">
+                    <i class="bi bi-collection"></i>
+                    <span>Serie</span>
+                </a>
+                <a asp-page="/TaskTypes/Index" title="Task Types">
+                    <i class="bi bi-tags"></i>
+                    <span>Task Types</span>
+                </a>
+                <a asp-page="/StepTemplates/Index" title="Step Templates">
+                    <i class="bi bi-list-ol"></i>
+                    <span>Step Templates</span>
+                </a>
+            </div>
+            
+            <!-- Admin section -->
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Admin</div>
+                <a asp-page="/Admin" title="Pannello Admin">
+                    <i class="bi bi-graph-up"></i>
+                    <span>Admin</span>
+                </a>
+                <a asp-page="/TestDefinitions/Index" title="Test Definitions">
+                    <i class="bi bi-list-ul"></i>
+                    <span>Test Definitions</span>
+                </a>
+                <a asp-page="/TtsVoices/Index" title="TTS Voices">
+                    <i class="bi bi-megaphone"></i>
+                    <span>TTS Voices</span>
+                </a>
+            </div>
+        </div>
+    </nav>
+    
     <canvas id="matrix-canvas"></canvas>
     <!-- Space background canvas (stars + spaceship) -->
-    <canvas id="space-canvas"></canvas>
+    <!-- Space background canvas removed -->
     
-    <!-- Main content area with header (title + home icon) rendered by layout -->
-    @{
-        var path = Context.Request.Path.HasValue ? Context.Request.Path.Value.ToLowerInvariant() : "/";
-        var isHome = path == "/" || path == "/index" || path == "/index/";
-        var pageTitle = ViewData["Title"] as string ?? string.Empty;
-    }
-
-    <main class="container mt-4">
-        @if (!isHome && !string.IsNullOrWhiteSpace(pageTitle))
-        {
-            var pageDescription = ViewData["PageDescription"] as string ?? string.Empty;
-            <div class="d-flex align-items-center mb-3">
-                <a href="/" class="home-icon-link" title="Torna alla home" aria-label="Torna alla home">
-                    <svg class="home-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M3 12L12 3L21 12V20C21 20.5304 20.7893 21.0391 20.4142 21.4142C20.0391 21.7893 19.5304 22 19 22H5C4.46957 22 3.96086 21.7893 3.58579 21.4142C3.21071 21.0391 3 20.5304 3 20V12Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        <path d="M9 22V12H15V22" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </a>
-                <h2 class="me-3">@pageTitle</h2>
-                @if (!string.IsNullOrWhiteSpace(pageDescription))
-                {
-                    <small class="text-muted">@pageDescription</small>
-                }
-            </div>
+    <!-- Main content wrapper -->
+    <div class="main-content">
+        @{
+            var path = Context.Request.Path.HasValue ? Context.Request.Path.Value.ToLowerInvariant() : "/";
+            var isHome = path == "/" || path == "/index" || path == "/index/";
+            var pageTitle = ViewData["Title"] as string ?? string.Empty;
         }
 
-        @RenderBody()
-    </main>
+        <main class="page-container">
+            @if (!isHome && !string.IsNullOrWhiteSpace(pageTitle))
+            {
+                var pageDescription = ViewData["PageDescription"] as string ?? string.Empty;
+                <div class="d-flex align-items-center mb-3">
+                    <h2 class="me-3">@pageTitle</h2>
+                    @if (!string.IsNullOrWhiteSpace(pageDescription))
+                    {
+                        <small class="text-muted">@pageDescription</small>
+                    }
+                </div>
+            }
+
+            @RenderBody()
+        </main>
+    </div>
 
     <!-- Toast container for app-wide notifications (Bootstrap toasts) -->
     <div id="toast-container" class="toast-container tg-toast-sm-container position-fixed top-0 end-0 p-3" style="z-index:1060;">
@@ -324,8 +436,9 @@
 
     <!-- Matrix Rain Effect (temporaneamente disabilitato) -->
     <!-- <script src="~/js/matrix_effect.js" asp-append-version="true"></script> -->
-    <!-- Space background effect (stars + occasional spaceship) -->
-    <script src="~/js/space-background.js" asp-append-version="true"></script>
+    
+    <!-- Sidebar toggle functionality -->
+    <script src="~/js/sidebar.js" asp-append-version="true"></script>
 
     <!-- App SignalR notification client (toasts) -->
     <script src="~/js/signalr-notifs.js" asp-append-version="true"></script>

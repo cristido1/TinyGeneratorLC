@@ -9,6 +9,8 @@ namespace TinyGenerator.Pages;
 
 public class GeneraModel : PageModel
 {
+    [BindProperty]
+    public string? Title { get; set; }
     private readonly DatabaseService _database;
     private readonly MultiStepOrchestrationService? _orchestrator;
     private readonly StoriesService _storiesService;
@@ -81,17 +83,18 @@ public class GeneraModel : PageModel
         {
             return BadRequest(new { error = "Il prompt è obbligatorio." });
         }
-
+        if (string.IsNullOrWhiteSpace(Title))
+        {
+            return BadRequest(new { error = "Il titolo è obbligatorio." });
+        }
         if (WriterAgentId <= 0)
         {
             return BadRequest(new { error = "Seleziona un writer agent per avviare la generazione." });
         }
-
         if (_orchestrator == null)
         {
             return BadRequest(new { error = "Orchestrator non configurato per la generazione multi-step." });
         }
-
         // Validate agent and template before enqueueing
         var agent = _database.GetAgentById(WriterAgentId);
         if (agent == null)
@@ -118,7 +121,8 @@ public class GeneraModel : PageModel
             _database,
             _orchestrator,
             _dispatcher,
-            _customLogger
+            _customLogger,
+            Title
         );
 
         _dispatcher.Enqueue(

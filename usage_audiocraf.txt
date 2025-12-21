@@ -98,11 +98,13 @@ ENDPOINT: Generazione musica (MusicGen)
     "success": true,
     "file_path": "generated_audio/music_xxx.wav",
     "file_url": "/download/music_xxx.wav",
+    "url": "http://localhost:8003/download/music_xxx.wav",
     "prompt": "Upbeat lo-fi piano with light drums",
     "duration": 10.0,
     "generated_at": "2025-11-08T12:34:56.789"
   }
 - IMPORTANTE per scaricare il file:
+  - `url` è l'URL completo pronto per il download (es. "http://localhost:8003/download/music_xxx.wav")
   - `file_url` è un path relativo (es. "/download/music_xxx.wav")
   - L'URL completo per il download è: Base URL + file_url
   - Esempio: http://localhost:8003/download/music_xxx.wav
@@ -135,6 +137,8 @@ ENDPOINT: Generazione suoni (AudioGen)
     "top_p": 0.0
   }
 - Response: stesso schema di GenerationResponse usato da /api/musicgen
+  Include i campi: success, file_path, file_url, url, prompt, duration, generated_at
+  Il campo "url" contiene l'URL completo pronto per il download.
 - Errori comuni:
   - 500 Internal Server Error: errore nella pipeline di generazione
 
@@ -203,9 +207,10 @@ FLUSSO COMPLETO PER GENERARE E SCARICARE UN FILE:
    Body: {"prompt": "descrizione audio", "duration": 5.0}
 2. La response contiene:
    - "success": true (se ok)
-   - "file_url": "/download/sound_abc123_20251217_120000.wav"
-3. Per scaricare: GET http://localhost:8003/download/sound_abc123_20251217_120000.wav
-   (costruisci URL completo: "http://localhost:8003" + file_url)
+   - "url": "http://localhost:8003/download/sound_abc123_20251217_120000.wav" (URL completo)
+   - "file_url": "/download/sound_abc123_20251217_120000.wav" (path relativo)
+3. Per scaricare: usa direttamente il campo "url" dalla response
+   Oppure costruisci: "http://localhost:8003" + file_url
 4. Il file WAV viene restituito come binary stream
 
 ---

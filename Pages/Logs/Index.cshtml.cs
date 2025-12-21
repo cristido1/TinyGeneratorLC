@@ -168,6 +168,28 @@ namespace TinyGenerator.Pages.Logs
             }
         }
 
+        // Return full message for a single log entry (used for lazy loading in the UI)
+        public IActionResult OnGetMessage(long id)
+        {
+            try
+            {
+                var log = _db.GetLogById(id);
+                if (log == null) return NotFound();
+
+                return new JsonResult(new {
+                    id = log.Id,
+                    message = log.Message ?? string.Empty,
+                    chatText = log.ChatText ?? string.Empty,
+                    exception = log.Exception ?? string.Empty
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Errore recupero messaggio log {Id}", id);
+                return StatusCode(500, ex.Message);
+            }
+        }
+
         private static string EscapeCsv(string? value)
         {
             if (string.IsNullOrEmpty(value)) return "";

@@ -238,7 +238,7 @@ namespace TinyGenerator.Skills
                             }
                         }
 
-                        var dbVoices = _database.ListTtsVoices();
+                        var dbVoices = _database.ListTtsVoices(onlyEnabled: true);
                         result = dbVoices.Select(v => new VoiceInfo
                         {
                             Id = v.VoiceId,
@@ -265,7 +265,7 @@ namespace TinyGenerator.Skills
             {
                 try
                 {
-                    var dbVoices = _database.ListTtsVoices();
+                    var dbVoices = _database.ListTtsVoices(onlyEnabled: true);
                     result = dbVoices.Select(v => new VoiceInfo
                     {
                         Id = v.VoiceId,

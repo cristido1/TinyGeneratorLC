@@ -38,6 +38,12 @@ namespace TinyGenerator.Pages.Stories
         }
 
         public IEnumerable<StoryRecord> Stories { get; set; } = new List<StoryRecord>();
+        // Paging/search properties (server-side)
+        public int PageIndex { get; set; } = 1;
+        public int PageSize { get; set; } = 25;
+        public int TotalCount { get; set; }
+        public string? Search { get; set; }
+        public string? OrderBy { get; set; }
         public List<Agent> Evaluators { get; set; } = new List<Agent>();
         public List<Agent> ActionEvaluators { get; set; } = new List<Agent>();
         public List<StoryStatus> Statuses { get; set; } = new List<StoryStatus>();
@@ -45,6 +51,11 @@ namespace TinyGenerator.Pages.Stories
 
         public void OnGet()
         {
+            // read querystring for paging/search
+            if (int.TryParse(Request.Query["page"], out var p) && p > 0) PageIndex = p;
+            if (int.TryParse(Request.Query["pageSize"], out var ps) && ps > 0) PageSize = ps;
+            Search = string.IsNullOrWhiteSpace(Request.Query["search"]) ? null : Request.Query["search"].ToString();
+            OrderBy = string.IsNullOrWhiteSpace(Request.Query["orderBy"]) ? null : Request.Query["orderBy"].ToString();
             LoadData();
         }
 
@@ -367,6 +378,77 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public IActionResult OnPostPrepareTtsSchema(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "prepare_tts_schema",
+                async ctx =>
+                {
+                    var sb = new System.Text.StringBuilder();
+                    var overallSuccess = true;
+
+                    // 1) Generate TTS schema JSON
+                    try
+                    {
+                        var (ttsOk, ttsMsg) = await _stories.GenerateTtsSchemaJsonAsync(id);
+                        sb.AppendLine($"GenerateTtsSchema: {ttsMsg}");
+                        if (!ttsOk) overallSuccess = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.AppendLine("GenerateTtsSchema: exception " + ex.Message);
+                        overallSuccess = false;
+                    }
+
+                    // 2) Normalize character names (best-effort)
+                    try
+                    {
+                        var (normCharOk, normCharMsg) = await _stories.NormalizeCharacterNamesAsync(id);
+                        sb.AppendLine($"NormalizeCharacterNames: {normCharMsg}");
+                        if (!normCharOk) overallSuccess = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.AppendLine("NormalizeCharacterNames: exception " + ex.Message);
+                        overallSuccess = false;
+                    }
+
+                    // 3) Assign voices
+                    try
+                    {
+                        var (assignOk, assignMsg) = await _stories.AssignVoicesAsync(id);
+                        sb.AppendLine($"AssignVoices: {assignMsg}");
+                        if (!assignOk) overallSuccess = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.AppendLine("AssignVoices: exception " + ex.Message);
+                        overallSuccess = false;
+                    }
+
+                    // 4) Normalize sentiments
+                    try
+                    {
+                        var (normSentOk, normSentMsg) = await _stories.NormalizeSentimentsAsync(id);
+                        sb.AppendLine($"NormalizeSentiments: {normSentMsg}");
+                        if (!normSentOk) overallSuccess = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.AppendLine("NormalizeSentiments: exception " + ex.Message);
+                        overallSuccess = false;
+                    }
+
+                    var message = sb.ToString();
+                    return new CommandResult(overallSuccess, message);
+                },
+                "Preparazione TTS schema avviata in background.");
+
+            TempData["StatusMessage"] = $"Preparazione TTS schema avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
         public IActionResult OnGetFinalMixAudio(long id)
         {
             var story = _stories.GetStoryById(id);
@@ -525,9 +607,32 @@ namespace TinyGenerator.Pages.Stories
         private void LoadData()
         {
             var allStories = _stories.GetAllStories().ToList();
-            
-            // Load evaluations for each story
-            foreach (var story in allStories)
+
+            // server-side search (basic, in-memory fallback)
+            if (!string.IsNullOrWhiteSpace(Search))
+            {
+                var s = Search!.ToLowerInvariant();
+                allStories = allStories.Where(st => (st.Prompt ?? string.Empty).ToLowerInvariant().Contains(s)
+                    || (st.Model ?? string.Empty).ToLowerInvariant().Contains(s)
+                    || (st.Folder ?? string.Empty).ToLowerInvariant().Contains(s)).ToList();
+            }
+
+            // ordering (basic)
+            if (!string.IsNullOrWhiteSpace(OrderBy))
+            {
+                if (OrderBy == "id") allStories = allStories.OrderBy(st => st.Id).ToList();
+                else if (OrderBy == "chars") allStories = allStories.OrderByDescending(st => st.CharCount).ToList();
+                // fallback: leave as is
+            }
+
+            TotalCount = allStories.Count;
+
+            // paging (server-side)
+            var skip = (PageIndex - 1) * PageSize;
+            var pageItems = allStories.Skip(skip).Take(PageSize).ToList();
+
+            // Load evaluations and flags for each page item
+            foreach (var story in pageItems)
             {
                 story.Evaluations = _stories.GetEvaluationsForStory(story.Id);
                 if (!string.IsNullOrWhiteSpace(story.Folder))
@@ -542,8 +647,8 @@ namespace TinyGenerator.Pages.Stories
                     catch { story.HasVoiceSource = false; story.HasFinalMix = false; }
                 }
             }
-            
-            Stories = allStories;
+
+            Stories = pageItems;
             Statuses = _stories.GetAllStoryStatuses();
 
             // Load active evaluator agents (both story_evaluator and coherence_evaluator)
@@ -705,7 +810,7 @@ namespace TinyGenerator.Pages.Stories
                     e.ActionScore, e.ActionDefects
                 }),
                 NextStatus = GetNextStatus(s) is StoryStatus ns ? new { ns.Id, ns.CaptionToExecute, ns.OperationType } : null,
-                Actions = BuildActionsForStory(s)
+                Actions = GetActionsForStory(s)
             }).ToList();
 
             var evaluatorsDto = Evaluators.Select(e => new { e.Id, e.Name, e.Role }).ToList();
@@ -714,7 +819,7 @@ namespace TinyGenerator.Pages.Stories
             return new JsonResult(new { stories = storiesDto, evaluators = evaluatorsDto, actionEvaluators = actionEvaluatorsDto });
         }
 
-        private List<object> BuildActionsForStory(StoryRecord s)
+        public List<object> GetActionsForStory(StoryRecord s)
         {
             var actions = new List<object>();
 
@@ -731,17 +836,16 @@ namespace TinyGenerator.Pages.Stories
 
             if (!string.IsNullOrWhiteSpace(s.Folder))
             {
-                actions.Add(new { id = "gen_tts_json", title = "Genera JSON TTS", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateTtsJson", id = s.Id }, Request.Scheme) });
+                // Combined operation to prepare TTS schema: generate schema, normalize characters, assign voices, normalize sentiments
+                actions.Add(new { id = "prepare_tts_schema", title = "Prepara TTS schema", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "PrepareTtsSchema", id = s.Id }, Request.Scheme) });
+
                 actions.Add(new { id = "gen_tts", title = "Genera TTS", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateTts", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "gen_ambience", title = "Genera Audio Ambientale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateAmbience", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "gen_fx", title = "Genera Effetti Sonori", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateFx", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "gen_music", title = "Genera Musica", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateMusic", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "mix_final", title = "Mix Audio Finale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "MixFinalAudio", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "final_mix_play", title = "Ascolta Mix Finale", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "FinalMixAudio", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "assign_voices", title = "Assegna voci", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AssignVoices", id = s.Id }, Request.Scheme) });
                 actions.Add(new { id = "tts_playlist", title = "Ascolta sequenza TTS", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "TtsPlaylist", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "normalize_chars", title = "Normalizza nomi personaggi", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "NormalizeCharacterNames", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "normalize_sentiments", title = "Normalizza sentimenti", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "NormalizeSentiments", id = s.Id }, Request.Scheme) });
             }
 
             // Delete

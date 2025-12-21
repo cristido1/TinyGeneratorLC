@@ -12,7 +12,7 @@ namespace TinyGenerator.Services
 {
     public sealed class CommandDispatcherOptions
     {
-        public int MaxParallelCommands { get; set; } = 1;
+        public int MaxParallelCommands { get; set; } = 3;
     }
 
     internal sealed class CommandWorkItem

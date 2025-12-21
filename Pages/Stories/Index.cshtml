@@ -24,7 +24,20 @@
 
 <div class="page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
-        <input id="quickFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:260px;" placeholder="Cerca..." />
+            <select name="pageSize" class="form-select form-select-sm" style="width:80px;">
+                @{ var _sizes = new[] {10,25,50}; }
+                @foreach(var s in _sizes) {
+                    if (s == Model.PageSize) {
+                        <option value="@s" selected>@s</option>
+                    } else {
+                        <option value="@s">@s</option>
+                    }
+                }
+            </select>
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
+        </form>
         <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="testTtsSchema()"><i class="bi bi-box"></i> Test TTS</button>
             <form method="post" asp-page-handler="DeleteLowRated" onsubmit="return confirm('Eliminare tutte le storie con valutazione media <50 e almeno 2 valutazioni? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
                 <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-trash"></i> Elimina storie scadenti</button>
@@ -58,7 +71,132 @@
         </div>
     </div>
 
-    <div id="storiesGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
+    <div style="height: calc(100vh - 200px); width:100%; overflow:auto;">
+        <style>
+            .stories-table-wrapper { border: 2px solid #ccc; border-radius: 8px; overflow: hidden; }
+            .stories-table-wrapper table { margin-bottom: 0; border-radius: 0; }
+
+            /* Grigietto pager styles */
+            #pager { padding: 8px 12px; text-align: right; }
+            #pager .pagination { margin: 0; display: inline-flex; gap: 4px; }
+            #pager .page-link {
+                background: #f3f4f6; /* very light gray */
+                color: #333;
+                border: 1px solid #d7d7d7;
+                min-width: 38px;
+                text-align: center;
+            }
+            #pager .page-item.active .page-link {
+                background: #e9ecef; /* slightly darker */
+                color: #222;
+                border-color: #cfcfcf;
+            }
+            #pager .page-item.disabled .page-link { opacity: 0.6; }
+        </style>
+        <div class="stories-table-wrapper">
+        <table class="table table-striped table-hover" id="storiesTable">
+            <thead class="table-light">
+                <tr>
+                    <th data-col="id">Id</th>
+                    <th data-col="timestamp">Timestamp</th>
+                    <th data-col="title">Titolo</th>
+                    <th data-col="prompt">Prompt</th>
+                    <th data-col="status">Status</th>
+                    <th data-col="model">Modello</th>
+                    <th data-col="folder">Cartella</th>
+                    <th data-col="assets">Assets</th>
+                    <th data-col="chars">Caratteri</th>
+                    <th data-col="test">Test</th>
+                    <th data-col="score">Score</th>
+                    <th data-col="eval">Valutazione</th>
+                    <th data-col="approved">Approved</th>
+                    <th data-col="actions">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach(var s in Model.Stories)
+                {
+                    <tr>
+                        <td data-col="id">@s.Id</td>
+                        <td data-col="timestamp">@((DateTime.TryParse(s.Timestamp, out var _dt)) ? _dt.ToString("dd/MM/yyyy HH:mm") : s.Timestamp)</td>
+                        <td data-col="title">@(!string.IsNullOrWhiteSpace(s.Title) ? s.Title : "<span class='text-muted'>-</span>")</td>
+                        <td data-col="prompt" title="@s.Prompt">@((s.Prompt ?? "").Length>120 ? (s.Prompt.Substring(0,120)+"...") : s.Prompt)</td>
+                        <td data-col="status">@(!string.IsNullOrWhiteSpace(s.Status) ? s.Status : "-")</td>
+                        <td data-col="model">@s.Model</td>
+                        <td data-col="folder">@s.Folder</td>
+                        <td data-col="assets">
+                            @if (s.GeneratedTtsJson) { <span title="TTS JSON" class="text-primary me-1"><i class="bi bi-file-earmark-text-fill"></i></span>; }
+                            @if (s.GeneratedTts) { <span title="TTS audio" class="text-success me-1"><i class="bi bi-volume-up-fill"></i></span>; }
+                            @if (s.GeneratedAmbient) { <span title="Ambience" class="text-info me-1"><i class="bi bi-cloud-fill"></i></span>; }
+                            @if (s.GeneratedEffects) { <span title="FX" class="text-warning me-1"><i class="bi bi-lightning-charge-fill"></i></span>; }
+                            @if (s.GeneratedMusic) { <span title="Music" class="text-muted me-1"><i class="bi bi-music-note-beamed"></i></span>; }
+                            @if (s.GeneratedMixedAudio) {
+                                <span title="Final mix" class="text-danger me-1"><i class="bi bi-play-circle-fill"></i></span>
+                                <audio controls style="vertical-align:middle;max-width:180px;" preload="none">
+                                    <source src="/stories_folder/@s.Folder/final_mix.wav" type="audio/wav" />
+                                    Il tuo browser non supporta l'audio.
+                                </audio>
+                            }
+                        </td>
+                        <td data-col="chars" class="text-end">@s.CharCount</td>
+                        <td data-col="test">@((s.TestRunId>0) ? $"Run {s.TestRunId}" : "-")</td>
+                        <td data-col="score">@s.Score</td>
+                        <td data-col="eval">@((s.Evaluations!=null && s.Evaluations.Any()) ? (s.Evaluations.Average(e=>e.TotalScore)*100.0/40.0).ToString("F1") + "/100" : "-")</td>
+                        <td data-col="approved">@(s.Approved ? "✅" : "❌")</td>
+                        <td data-col="actions">
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Azioni</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    @foreach(var a in Model.GetActionsForStory(s))
+                                    {
+                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
+                                        var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
+                                        var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "GET";
+                                        var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
+                                        var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
+                                        var iconClass = id switch
+                                        {
+                                            // Add icon for prepare_tts_schema
+                                            "prepare_tts_schema" => "bi bi-magic",
+                                            "gen_tts" => "bi bi-volume-up-fill",
+                                            "gen_ambience" => "bi bi-cloud-fill",
+                                            "gen_fx" => "bi bi-lightning-charge-fill",
+                                            "gen_music" => "bi bi-music-note-beamed",
+                                            "mix_final" => "bi bi-play-circle-fill",
+                                            "final_mix_play" => "bi bi-play-btn",
+                                            "tts_playlist" => "bi bi-list-music",
+                                            
+                                            "details" => "bi bi-eye",
+                                            "edit" => "bi bi-pencil",
+                                            "advance" => "bi bi-arrow-right-circle",
+                                            "delete" => "bi bi-trash-fill",
+                                            _ => "bi bi-gear"
+                                        };
+                                        if (method == "GET")
+                                        {
+                                            <li><a class="dropdown-item" href="@url" target="_blank"><i class="@iconClass me-2"></i>@title</a></li>
+                                        }
+                                        else
+                                        {
+                                            <li>
+                                                <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
+                                                    @Html.AntiForgeryToken()
+                                                    <button type="submit" class="dropdown-item"><i class="@iconClass me-2"></i>@title</button>
+                                                </form>
+                                            </li>
+                                        }
+                                    }
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        </div>
+
+        <div id="pager" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
+    </div>
 </div>
 
 <form id="bulkEvaluateForm" method="post" asp-page-handler="EvaluateAll"></form>
@@ -85,5 +223,5 @@
 @section Scripts {
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" />
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
-    <script src="/js/stories/index.js"></script>
+    <script src="/js/shared/list-ui.js"></script>
 }

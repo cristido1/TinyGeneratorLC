@@ -23,6 +23,9 @@ namespace TinyGenerator.Models
         [Column("prompt")]
         public string Prompt { get; set; } = string.Empty;
         
+        [Column("title")]
+        public string? Title { get; set; }
+        
         [Column("story")]
         public string Story { get; set; } = string.Empty;
         

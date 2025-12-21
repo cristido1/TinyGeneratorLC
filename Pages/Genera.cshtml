@@ -9,6 +9,10 @@
     <form id="genForm">
         @Html.AntiForgeryToken()
         <div style="margin-bottom:10px">
+            <label for="Title" class="note-title">Titolo della storia</label>
+            <input class="keep-input font-monospace" id="Title" name="Title" style="width:100%; padding:10px; font-size:0.95rem;" value="@Model.Title" maxlength="120" required />
+        </div>
+        <div style="margin-bottom:10px">
             <label for="Prompt" class="note-title">Inserisci il prompt della storia</label>
             <textarea class="keep-input font-monospace" id="Prompt" name="Prompt" rows="8" style="width:100%; padding:10px; font-size:0.95rem;" required>@Model.Prompt</textarea>
         </div>

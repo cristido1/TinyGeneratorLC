@@ -29,6 +29,9 @@ namespace TinyGenerator.Pages.Stories
         public string StoryText { get; set; } = string.Empty;
 
         [BindProperty]
+        public string Title { get; set; } = string.Empty;
+
+        [BindProperty]
         public int? StatusId { get; set; }
 
         [BindProperty]
@@ -56,7 +59,7 @@ namespace TinyGenerator.Pages.Stories
                 "create_story",
                 async ctx =>
                 {
-                    var cmd = new CreateStoryCommand(_stories, Prompt, StoryText, AgentId, StatusId);
+                    var cmd = new CreateStoryCommand(_stories, Prompt, StoryText, AgentId, StatusId, Title);
                     return await cmd.ExecuteAsync(ctx.CancellationToken);
                 },
                 runId: runId,

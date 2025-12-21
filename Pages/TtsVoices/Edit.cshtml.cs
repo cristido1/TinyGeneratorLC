@@ -50,6 +50,7 @@ namespace TinyGenerator.Pages.TtsVoices
             existing.TemplateWav = Voice.TemplateWav;
             existing.Archetype = Voice.Archetype;
             existing.Notes = Voice.Notes;
+            existing.Disabled = Voice.Disabled;
             existing.UpdatedAt = DateTime.UtcNow.ToString("o");
 
             _db.UpdateTtsVoice(existing);

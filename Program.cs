@@ -300,7 +300,15 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
     app.UseHttpsRedirection();
 }
+// Serve wwwroot as default static files
 app.UseStaticFiles();
+// Serve stories_folder as static files under /stories_folder
+app.UseStaticFiles(new StaticFileOptions {
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
+        Path.Combine(builder.Environment.ContentRootPath, "stories_folder")
+    ),
+    RequestPath = "/stories_folder"
+});
 app.UseRouting();
 app.UseSession();
 app.UseAuthorization();

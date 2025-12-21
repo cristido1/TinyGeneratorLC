@@ -13,7 +13,15 @@ namespace TinyGenerator.Pages.TtsVoices
         private readonly DatabaseService _db;
         private readonly TtsService _tts;
 
-        public List<TtsVoice> Voices { get; set; } = new();
+        // Server-side paging/filtering properties required by the standard
+        public IReadOnlyList<TtsVoice> Items { get; set; } = Array.Empty<TtsVoice>();
+        public int PageIndex { get; set; } = 1; // 1-based
+        public int PageSize { get; set; } = 25;
+        public int TotalCount { get; set; } = 0;
+        public string? Search { get; set; }
+        public string? OrderBy { get; set; }
+        public string? OrderDir { get; set; } = "asc";
+        public bool ShowDisabled { get; set; } = false;
 
         public IndexModel(DatabaseService db, TtsService tts)
         {
@@ -25,11 +33,56 @@ namespace TinyGenerator.Pages.TtsVoices
         {
             try
             {
-                Voices = _db.ListTtsVoices() ?? new List<TtsVoice>();
+                // Read querystring parameters according to the standard
+                if (Request.Query.ContainsKey("page") && int.TryParse(Request.Query["page"], out var p)) PageIndex = Math.Max(1, p);
+                if (Request.Query.ContainsKey("pageSize") && int.TryParse(Request.Query["pageSize"], out var ps)) PageSize = Math.Max(1, ps);
+                if (Request.Query.ContainsKey("search")) Search = Request.Query["search"].ToString();
+                if (Request.Query.ContainsKey("orderBy")) OrderBy = Request.Query["orderBy"].ToString();
+                if (Request.Query.ContainsKey("orderDir")) OrderDir = Request.Query["orderDir"].ToString();
+
+                // showDisabled toggles whether to include disabled voices
+                if (Request.Query.ContainsKey("showDisabled"))
+                {
+                    var sd = Request.Query["showDisabled"].ToString();
+                    ShowDisabled = sd == "1" || sd.Equals("true", StringComparison.OrdinalIgnoreCase);
+                }
+
+                var all = _db.ListTtsVoices(onlyEnabled: !ShowDisabled) ?? new List<TtsVoice>();
+                IEnumerable<TtsVoice> filtered = all;
+                if (!string.IsNullOrWhiteSpace(Search))
+                {
+                    var q = Search.Trim();
+                    filtered = filtered.Where(v => (v.Name ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                        || (v.VoiceId ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                        || (v.Model ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                        || (v.Language ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase));
+                }
+
+                TotalCount = filtered.Count();
+
+                // Simple server-side ordering
+                if (!string.IsNullOrWhiteSpace(OrderBy))
+                {
+                    bool asc = string.IsNullOrWhiteSpace(OrderDir) || OrderDir.Equals("asc", StringComparison.OrdinalIgnoreCase);
+                    filtered = (OrderBy) switch
+                    {
+                        "name" => asc ? filtered.OrderBy(v => v.Name) : filtered.OrderByDescending(v => v.Name),
+                        "voiceId" => asc ? filtered.OrderBy(v => v.VoiceId) : filtered.OrderByDescending(v => v.VoiceId),
+                        "score" => asc ? filtered.OrderBy(v => v.Score) : filtered.OrderByDescending(v => v.Score),
+                        "gender" => asc ? filtered.OrderBy(v => v.Gender) : filtered.OrderByDescending(v => v.Gender),
+                        "archetype" => asc ? filtered.OrderBy(v => v.Archetype) : filtered.OrderByDescending(v => v.Archetype),
+                        _ => asc ? filtered.OrderBy(v => v.Name) : filtered.OrderByDescending(v => v.Name)
+                    };
+                }
+
+                // PageIndex is 1-based
+                var skip = (PageIndex - 1) * PageSize;
+                Items = filtered.Skip(skip).Take(PageSize).ToList();
             }
             catch
             {
-                Voices = new List<TtsVoice>();
+                Items = Array.Empty<TtsVoice>();
+                TotalCount = 0;
             }
         }
 
@@ -49,6 +102,24 @@ namespace TinyGenerator.Pages.TtsVoices
                     errors = syncResult.Errors,
                     voices
                 });
+            }
+            catch (Exception ex)
+            {
+                return new JsonResult(new { error = ex.Message }) { StatusCode = 500 };
+            }
+        }
+
+        // Toggle Disabled flag via AJAX
+        public IActionResult OnPostToggleDisabled(int id, bool disabled)
+        {
+            try
+            {
+                if (id <= 0) return new JsonResult(new { error = "Invalid id" }) { StatusCode = 400 };
+                var v = _db.GetTtsVoiceById(id);
+                if (v == null) return new JsonResult(new { error = "Voice not found" }) { StatusCode = 404 };
+                v.Disabled = disabled;
+                _db.UpdateTtsVoice(v);
+                return new JsonResult(new { success = true, id = id, disabled = disabled });
             }
             catch (Exception ex)
             {
@@ -252,11 +323,28 @@ namespace TinyGenerator.Pages.TtsVoices
                 await Task.CompletedTask;
                 if (id <= 0) return new JsonResult(new { error = "Invalid id" }) { StatusCode = 400 };
                 _db.DeleteTtsVoiceById(id);
-                return new JsonResult(new { success = true });
+
+                var isAjax = (Request.Headers.ContainsKey("X-Requested-With") && Request.Headers["X-Requested-With"] == "XMLHttpRequest")
+                    || Request.Headers.ContainsKey("Accept") && Request.Headers["Accept"].ToString().Contains("application/json");
+
+                if (isAjax)
+                {
+                    return new JsonResult(new { success = true });
+                }
+                else
+                {
+                    TempData["TtsVoiceMessage"] = "Voce eliminata";
+                    return RedirectToPage();
+                }
             }
             catch (Exception ex)
             {
-                return new JsonResult(new { error = ex.Message }) { StatusCode = 500 };
+                if ((Request.Headers.ContainsKey("X-Requested-With") && Request.Headers["X-Requested-With"] == "XMLHttpRequest")
+                    || (Request.Headers.ContainsKey("Accept") && Request.Headers["Accept"].ToString().Contains("application/json")))
+                {
+                    return new JsonResult(new { error = ex.Message }) { StatusCode = 500 };
+                }
+                return StatusCode(500, ex.Message);
             }
         }
 
@@ -323,7 +411,18 @@ namespace TinyGenerator.Pages.TtsVoices
 
                 _db.UpdateTtsVoiceTemplateWavById(v.Id, filename);
 
-                return new JsonResult(new { success = true, filename });
+                var isAjax = (Request.Headers.ContainsKey("X-Requested-With") && Request.Headers["X-Requested-With"] == "XMLHttpRequest")
+                    || Request.Headers.ContainsKey("Accept") && Request.Headers["Accept"].ToString().Contains("application/json");
+
+                if (isAjax)
+                {
+                    return new JsonResult(new { success = true, filename });
+                }
+                else
+                {
+                    TempData["TtsVoiceMessage"] = "Sample rigenerato";
+                    return RedirectToPage();
+                }
             }
             catch (Exception ex)
             {

@@ -77,6 +77,11 @@ La Razor Page include SOLO questi script.
 - Checkbox generate da JS
 - Nessuna logica Razor per visibilità colonne
 
+NOTE SUL MENU COLONNE
+- Il menu delle colonne è un singolo dropdown nella toolbar ("Colonne visibili").
+- Il codice client costruisce checkbox leggendo `th[data-col]` e salva preferenze in `localStorage` con chiave `stories_cols_v1`.
+- Il JS deve funzionare anche se i file vengono inseriti dopo `DOMContentLoaded` (controllare `document.readyState`).
+
 7) PAGINAZIONE UI
 - Un solo container <div id="pager">
 - JS costruisce:
@@ -94,12 +99,13 @@ La Razor Page include SOLO questi script.
 - NESSUN sorting client-side
 
 9) AZIONI DI RIGA
-- Bottoni o menu per riga
-- Azioni eseguite tramite:
-  - <form method="post" asp-page-handler="X">
-- Niente fetch salvo casi particolari
-- Niente dropdown annidati complessi
-- Menu globale se necessario
+- Usare UN SOLO dropdown per riga (bottone "Azioni") invece di decine di bottoni inline.
+- All'interno del dropdown:
+  - Le azioni `GET` sono link `<a href="...">` e possono aprire in nuova scheda se appropriato.
+  - Le azioni `POST` devono essere implementate come `<form method="post" action="...">` con `@Html.AntiForgeryToken()` e un `<button class="dropdown-item">`.
+  - Se l'azione è distruttiva usare `confirm=true` e mostrare una conferma (SweetAlert2 opzionale).
+- I metadati delle azioni devono essere centralizzati nel PageModel, ad es. `GetActionsForStory(StoryRecord s)` che ritorna: `{ id, title, method, url, confirm? }`.
+- Questo garantisce che la UI sia semplice, compatta e che tutte le logiche di autorizzazione/visibilità restino server-side.
 
 10) COSA È VIETATO
 - AG Grid / DevExtreme / DataTables
@@ -114,6 +120,38 @@ La Razor Page include SOLO questi script.
 - localStorage per preferenze UI
 - SweetAlert per conferme
 - Bootstrap puro
+
+12) TIMESTAMP
+- I timestamp devono essere formattati server-side fino al minuto (es. `dd/MM/yyyy HH:mm`) per uniformità nella vista.
+
+13) FLAG ASSET GENERATI
+- Quando viene generato `tts_schema.json`, il server deve aggiornare il flag `generated_tts_json` nella tabella `stories` (best-effort, update SQL diretto) in modo che l'icona/flag nella UI appaia.
+
+14) STILE E UX
+- La tabella può essere avvolta in un contenitore con bordo grigio sottile e angoli arrotondati (es. `border:2px solid #ccc; border-radius:8px;`).
+- Il paginatore deve essere discreto: toni di grigio ("grigietto") con link chiari e lo stato attivo leggermente più scuro.
+
+15) JS CONDIVISO E INIZIALIZZAZIONE
+- File raccomandati in `/wwwroot/js/shared/`:
+  - `column-visibility.js` (genera menu, toggla colonne, salva in localStorage)
+  - `pagination.js` (costruisce il pager da `#pager` data- attributes)
+  - `list-ui.js` (loader semplice che include gli altri e che verifica `document.readyState` prima di chiamare init)
+- Assicurarsi che gli script supportino l'inizializzazione anche se vengono caricati dinamicamente dopo il `DOMContentLoaded` event.
+
+16) NOTE SUL BACKEND
+- Azioni e permessi devono essere calcolati dal backend. La view riceve le azioni pronte per il rendering.
+- Per dataset grandi, implementare filtri/ordinamento/paginazione nel DB (EF/SQL), non in-memory.
+
+CHANGELOG
+- 2025-12-20: Aggiornato standard per includere:
+  - Per-row actions dentro un dropdown (GET link / POST form con antiforgery)
+  - Menu colonne come dropdown singolo con localStorage
+  - Pager con stile grigietto e layout compatto
+  - Timestamp renderizzato fino al minuto
+  - Best-effort DB update per `generated_tts_json` quando si genera `tts_schema.json`
+
+CONTATTI
+- Per modifiche UI, aggiornare `Pages/Stories/Index.cshtml` e `/wwwroot/js/shared/*.js`.
 
 RISULTATO ATTESO
 - Razor Page leggibile

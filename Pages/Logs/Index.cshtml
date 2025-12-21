@@ -87,7 +87,7 @@
             <td class="operation">@(!string.IsNullOrWhiteSpace(log.ThreadScope) ? log.ThreadScope : "-")</td>
             <td class="threadid">@(log.ThreadId > 0 ? log.ThreadId.ToString() : "-")</td>
             <td class="agentname">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
-            <td class="message">@log.Message</td>
+            <td class="message"><span class="text-muted">Premi + per caricare il messaggio</span></td>
             <td class="source">@log.Source</td>
             <td class="actions" style="white-space:nowrap;">
                 <button type="button" class="btn btn-sm btn-outline-secondary btn-analyze me-1">Analizza</button>
@@ -236,7 +236,7 @@
                 stateDuration: -1
             });
 
-            // Build details HTML for a row - ONLY show the message text decoded
+            // Build details HTML for a row - message is fetched lazily from server
             function decodeEscapes(s) {
                 if (!s) return '';
                 // Convert common escaped sequences \r\n, \n, \r, \t
@@ -254,12 +254,9 @@
                 return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             }
 
-            function formatLogDetails(rowNode) {
-                var rawMessage = $(rowNode).find('td.message').text() || '';
-                var decoded = decodeEscapes(rawMessage);
+            function formatLogDetailsFromMessage(message) {
+                var decoded = decodeEscapes(message || '');
                 var safe = htmlEscape(decoded);
-
-                // Show only the decoded message inside a scrollable pre
                 var html = '<div style="padding:8px 12px;font-size:0.95rem;color:#222;background:#f8f9fa;border-radius:4px;">';
                 html += '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid #ddd;padding:8px;margin:0;border-radius:3px;max-height:420px;overflow:auto;">' + safe + '</pre>';
                 html += '</div>';
@@ -271,6 +268,7 @@
                 var btn = $(this);
                 var tr = btn.closest('tr');
                 var row = table.row(tr);
+                var logId = tr.data('id');
 
                 if (row.child.isShown()) {
                     // Close
@@ -278,10 +276,24 @@
                     tr.removeClass('shown');
                     btn.text('+');
                 } else {
-                    // Open
-                    row.child(formatLogDetails(tr)).show();
-                    tr.addClass('shown');
-                    btn.text('−');
+                    // Open: fetch message lazily from server
+                    btn.prop('disabled', true);
+                    $.ajax({
+                        url: '?handler=Message&id=' + encodeURIComponent(logId),
+                        method: 'GET',
+                        success: function (data) {
+                            var msg = (data && data.message) ? data.message : '';
+                            row.child(formatLogDetailsFromMessage(msg)).show();
+                            tr.addClass('shown');
+                            btn.text('−');
+                        },
+                        error: function () {
+                            row.child(formatLogDetailsFromMessage('Impossibile caricare il messaggio')).show();
+                            tr.addClass('shown');
+                            btn.text('−');
+                        },
+                        complete: function () { btn.prop('disabled', false); }
+                    });
                 }
             });
 

@@ -6,6 +6,7 @@ namespace TinyGenerator.Services.Commands
     public class StartMultiStepStoryCommand
     {
         private readonly string _theme;
+        private readonly string? _title;
         private readonly int _writerAgentId;
         private readonly Guid _generationId;
         private readonly DatabaseService _database;
@@ -20,7 +21,8 @@ namespace TinyGenerator.Services.Commands
             DatabaseService database,
             MultiStepOrchestrationService orchestrator,
             ICommandDispatcher dispatcher,
-            ICustomLogger logger)
+            ICustomLogger logger,
+            string? title = null)
         {
             _theme = theme;
             _writerAgentId = writerAgentId;
@@ -29,6 +31,7 @@ namespace TinyGenerator.Services.Commands
             _orchestrator = orchestrator;
             _dispatcher = dispatcher;
             _logger = logger;
+            _title = title;
         }
 
         public async Task ExecuteAsync(CancellationToken ct = default)

@@ -15,21 +15,23 @@ namespace TinyGenerator.Services.Commands
         private readonly StoriesService _stories;
         private readonly string _prompt;
         private readonly string _storyText;
+        private readonly string? _title;
         private readonly int? _agentId;
         private readonly int? _statusId;
 
-        public CreateStoryCommand(StoriesService stories, string prompt, string storyText, int? agentId = null, int? statusId = null)
+        public CreateStoryCommand(StoriesService stories, string prompt, string storyText, int? agentId = null, int? statusId = null, string? title = null)
         {
             _stories = stories ?? throw new ArgumentNullException(nameof(stories));
             _prompt = prompt ?? string.Empty;
             _storyText = storyText ?? string.Empty;
             _agentId = agentId;
             _statusId = statusId;
+            _title = title;
         }
 
         public Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
         {
-            var id = _stories.InsertSingleStory(_prompt, _storyText, agentId: _agentId, statusId: _statusId);
+            var id = _stories.InsertSingleStory(_prompt, _storyText, agentId: _agentId, statusId: _statusId, title: _title);
             return Task.FromResult(new CommandResult(true, $"Storia creata (id={id})"));
         }
     }

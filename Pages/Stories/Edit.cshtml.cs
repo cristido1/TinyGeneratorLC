@@ -31,6 +31,9 @@ namespace TinyGenerator.Pages.Stories
 
         public List<StoryStatus> Statuses { get; set; } = new();
 
+        [BindProperty]
+        public string? Title { get; set; }
+
         public IActionResult OnGet(long id)
         {
             Id = id;
@@ -40,6 +43,7 @@ namespace TinyGenerator.Pages.Stories
             StoryText = s.Story;
             Characters = s.Characters;
             StatusId = s.StatusId;
+            Title = s.Title;
             LoadStatuses();
             return Page();
         }
@@ -53,6 +57,7 @@ namespace TinyGenerator.Pages.Stories
             {
                 _stories.UpdateStoryCharacters(Id, Characters);
             }
+            _stories.UpdateStoryTitle(Id, Title ?? string.Empty);
             return RedirectToPage("/Stories/Details", new { id = Id });
         }
 

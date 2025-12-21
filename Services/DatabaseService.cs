@@ -19,6 +19,16 @@ namespace TinyGenerator.Services;
 
 public sealed class DatabaseService
 {
+    public void UpdateStoryTitle(long storyId, string title)
+    {
+        using var context = CreateDbContext();
+        var story = context.Stories.FirstOrDefault(s => s.Id == storyId);
+        if (story != null)
+        {
+            story.Title = title ?? string.Empty;
+            context.SaveChanges();
+        }
+    }
     private readonly IOllamaMonitorService? _ollamaMonitor;
     private readonly System.Threading.SemaphoreSlim _dbSemaphore = new System.Threading.SemaphoreSlim(1,1);
     private const int EvaluatedStatusId = 2;
@@ -1664,7 +1674,7 @@ SET TotalScore = (
         return (step.RunId, asset.StepId);
     }
 
-    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null)
+    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null)
     {
         using var context = CreateDbContext();
         var ts = DateTime.UtcNow.ToString("o");
@@ -1688,6 +1698,7 @@ SET TotalScore = (
             Timestamp = ts,
             Prompt = prompt ?? string.Empty,
             Story = story ?? string.Empty,
+            Title = title ?? string.Empty,
             CharCount = charCount,
             Eval = eval ?? string.Empty,
             Score = score,
@@ -1797,11 +1808,101 @@ SET TotalScore = (
         }
     }
 
+    /// <summary>
+    /// Set the generated_tts_json flag for a story. Best-effort using a direct SQL update so
+    /// this method can be used even if EF migrations adding these columns have
+    /// not yet been applied. Returns true if the update executed without error.
+    /// </summary>
+    public bool UpdateStoryGeneratedTtsJson(long storyId, bool generated)
+    {
+        try
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var sql = "UPDATE stories SET generated_tts_json = @g WHERE id = @id";
+            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool UpdateStoryGeneratedMusic(long storyId, bool generated)
+    {
+        try
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var sql = "UPDATE stories SET generated_music = @g WHERE id = @id";
+            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool UpdateStoryGeneratedEffects(long storyId, bool generated)
+    {
+        try
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var sql = "UPDATE stories SET generated_effects = @g WHERE id = @id";
+            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool UpdateStoryGeneratedAmbient(long storyId, bool generated)
+    {
+        try
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var sql = "UPDATE stories SET generated_ambient = @g WHERE id = @id";
+            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool UpdateStoryGeneratedMixedAudio(long storyId, bool generated)
+    {
+        try
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var sql = "UPDATE stories SET generated_mixed_audio = @g WHERE id = @id";
+            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     // TTS voices: list and upsert
-    public List<TinyGenerator.Models.TtsVoice> ListTtsVoices()
+    public List<TinyGenerator.Models.TtsVoice> ListTtsVoices(bool onlyEnabled = false)
     {
         using var context = CreateDbContext();
-        var voices = context.TtsVoices.OrderBy(v => v.Name).ToList();
+        var query = context.TtsVoices.AsQueryable();
+        if (onlyEnabled)
+        {
+            query = query.Where(v => !v.Disabled);
+        }
+        var voices = query.OrderBy(v => v.Name).ToList();
         EnsureVoiceDerivedFields(voices);
         return voices;
     }
@@ -1879,6 +1980,18 @@ SET TotalScore = (
         v.UpdatedAt = DateTime.UtcNow.ToString("o");
         context.Entry(existing).CurrentValues.SetValues(v);
         context.SaveChanges();
+    }
+
+    public int InsertTtsVoice(TinyGenerator.Models.TtsVoice v)
+    {
+        if (v == null) throw new ArgumentNullException(nameof(v));
+        using var context = CreateDbContext();
+        var now = DateTime.UtcNow.ToString("o");
+        v.CreatedAt = now;
+        v.UpdatedAt = now;
+        context.TtsVoices.Add(v);
+        context.SaveChanges();
+        return v.Id;
     }
 
     public void UpsertTtsVoice(TinyGenerator.Services.VoiceInfo v, string? model = null)
@@ -3158,6 +3271,19 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
     {
         using var context = CreateDbContext();
         return context.Logs.Where(l => l.ThreadId == threadId).OrderByDescending(l => l.Id).ToList();
+    }
+
+    public LogEntry? GetLogById(long id)
+    {
+        using var context = CreateDbContext();
+        try
+        {
+            return context.Logs.Find(id);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

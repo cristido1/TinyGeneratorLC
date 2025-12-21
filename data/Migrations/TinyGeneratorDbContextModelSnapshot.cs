@@ -752,6 +752,10 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("id");
 
+                    b.Property<int?>("CharactersStep")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("characters_step");
+
                     b.Property<string>("CreatedAt")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -760,6 +764,10 @@ namespace TinyGenerator.Data.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("TEXT")
                         .HasColumnName("description");
+
+                    b.Property<string>("EvaluationSteps")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("evaluation_steps");
 
                     b.Property<string>("Instructions")
                         .HasColumnType("TEXT")
@@ -784,6 +792,10 @@ namespace TinyGenerator.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("task_type");
+
+                    b.Property<string>("TramaSteps")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("trama_steps");
 
                     b.Property<string>("UpdatedAt")
                         .IsRequired()
@@ -906,6 +918,30 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("folder");
 
+                    b.Property<bool>("GeneratedAmbient")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generated_ambient");
+
+                    b.Property<bool>("GeneratedEffects")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generated_effects");
+
+                    b.Property<bool>("GeneratedMixedAudio")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generated_mixed_audio");
+
+                    b.Property<bool>("GeneratedMusic")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generated_music");
+
+                    b.Property<bool>("GeneratedTts")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generated_tts");
+
+                    b.Property<bool>("GeneratedTtsJson")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generated_tts_json");
+
                     b.Property<string>("GenerationId")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -947,6 +983,10 @@ namespace TinyGenerator.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("ts");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("title");
 
                     b.HasKey("Id");
 
@@ -1299,6 +1339,10 @@ namespace TinyGenerator.Data.Migrations
                     b.Property<string>("CreatedAt")
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at");
+
+                    b.Property<bool>("Disabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("disabled");
 
                     b.Property<string>("Gender")
                         .HasColumnType("TEXT")

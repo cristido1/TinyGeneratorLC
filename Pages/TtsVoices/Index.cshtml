@@ -20,261 +20,284 @@
     </div>
 </div>
 
-@if (TempData["TtsVoiceMessage"] != null)
-{
-    <script>
-        document.addEventListener('DOMContentLoaded', function(){
-            try {
-                var msg = '@TempData["TtsVoiceMessage"]'.replace(/\r?\n/g, ' ');
-                var t = new bootstrap.Toast(document.getElementById('ttsToast'));
-                document.getElementById('ttsToastBody').innerText = msg;
-                document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
-                t.show();
-            } catch(e) { /* ignore */ }
-        });
-    </script>
-}
-
 <div class="page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
-        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
-        <div class="ms-auto d-flex gap-1">
+        <form method="get" class="d-flex align-items-center" style="gap:8px;">
+            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:260px;" placeholder="Cerca..." />
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Cerca</button>
+            <div class="form-check ms-2">
+                <input class="form-check-input" type="checkbox" id="showDisabledChk" name="showDisabled" value="1" @(Model.ShowDisabled ? "checked" : "") />
+                <label class="form-check-label" for="showDisabledChk">Mostra disabilitate</label>
+            </div>
+        </form>
+
+            <div class="ms-auto d-flex gap-1">
             <div class="dropdown">
                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
                     <i class="bi bi-layout-three-columns"></i>
                 </button>
-                <ul class="dropdown-menu dropdown-menu-end" id="ttsVoicesGridColVisMenu" style="min-width: 180px;"></ul>
+                <ul class="dropdown-menu dropdown-menu-end" id="ttsVoicesColsMenu" style="min-width: 220px;"></ul>
             </div>
-            <button id="refreshVoicesBtn" class="btn btn-sm btn-outline-secondary">Sync Voices</button>
-            <a class="btn btn-sm btn-primary" href="/TtsVoices/Edit">Nuovo</a>
+            <form id="ttsRefreshForm2" method="post" asp-page-handler="Refresh" class="d-inline">
+                @Html.AntiForgeryToken()
+                <button id="refreshVoicesBtn" class="btn btn-sm btn-outline-secondary" type="submit">Sync Voices</button>
+            </form>
+            <a class="btn btn-sm btn-primary" href="/TtsVoices/Create">Nuovo</a>
         </div>
     </div>
 
-    <div id="ttsVoicesGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
+    <div class="card" style="border:2px solid #ddd; border-radius:8px; padding:12px;">
+        <table class="table table-sm table-striped mb-0">
+            <thead>
+                <tr>
+                    <th data-col="actions">Azioni</th>
+                    <th data-col="name"><a href="?orderBy=name">Nome</a></th>
+                    <th data-col="voiceId">VoiceId</th>
+                    <th data-col="model">Model</th>
+                    <th data-col="language">Language</th>
+                    <th data-col="gender" data-sort="gender" class="sortable">Gender <span class="sort-indicator ms-1"></span></th>
+                    <th data-col="age">Age</th>
+                    <th data-col="confidence">Confidence</th>
+                    <th data-col="score" data-sort="score" class="sortable">Score <span class="sort-indicator ms-1"></span></th>
+                    <th data-col="tags">Tags</th>
+                    <th data-col="template">Template</th>
+                    <th data-col="archetype" data-sort="archetype" class="sortable">Archetype <span class="sort-indicator ms-1"></span></th>
+                    <th data-col="notes">Notes</th>
+                    <th data-col="disabled">Disabled</th>
+                    <th data-col="created">Created</th>
+                    <th data-col="updated">Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var v in Model.Items)
+                {
+                    <tr>
+                        <td data-col="actions">
+                            <div class="d-flex align-items-center" style="gap:6px;">
+                                <button type="button" class="btn btn-sm btn-outline-secondary play-voice-btn" data-voiceid="@(v.VoiceId ?? v.Name ?? string.Empty)" title="Play sample">
+                                    <i class="bi bi-play-fill"></i>
+                                </button>
+                                <div class="dropdown">
+                                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                                    <ul class="dropdown-menu">
+                                        <li><a class="dropdown-item" href="/TtsVoices/Edit?id=@v.Id">Edit</a></li>
+                                        <li>
+                                            <form method="post" asp-page-handler="Regenerate" class="m-0 px-3 py-1">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="id" value="@v.Id" />
+                                                <button type="submit" class="dropdown-item">Rigenera esempio</button>
+                                            </form>
+                                        </li>
+                                        <li>
+                                            <form method="post" asp-page-handler="Delete" class="m-0 px-3 py-1" onsubmit="return confirm('Eliminare questa voce?');">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="id" value="@v.Id" />
+                                                <button type="submit" class="dropdown-item text-danger">Delete</button>
+                                            </form>
+                                        </li>
+                                        <li><a class="dropdown-item" href="?handler=Sample&voiceId=@(Uri.EscapeDataString(v.VoiceId ?? v.Name ?? string.Empty))">Play sample (nuova scheda)</a></li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </td>
+                        <td data-col="name">@v.Name</td>
+                        <td data-col="voiceId">@v.VoiceId</td>
+                        <td data-col="model">@v.Model</td>
+                        <td data-col="language">@v.Language</td>
+                        <td data-col="gender">@v.Gender</td>
+                        <td data-col="age">@v.Age</td>
+                        <td data-col="confidence">@v.Confidence?.ToString("0.##")</td>
+                        <td data-col="score">
+                            <div class="d-flex align-items-center score-control" data-id="@v.Id">
+                                <button type="button" class="btn btn-sm btn-outline-secondary score-decr" title="Decrementa score">-</button>
+                                <span class="mx-2 score-value">@v.Score?.ToString("0.##")</span>
+                                <button type="button" class="btn btn-sm btn-outline-secondary score-incr" title="Incrementa score">+</button>
+                            </div>
+                        </td>
+                        <td data-col="tags">@v.Tags</td>
+                        <td data-col="template">@v.TemplateWav</td>
+                        <td data-col="archetype">@v.Archetype</td>
+                        <td data-col="notes">@v.Notes</td>
+                        <td data-col="disabled">
+                            <input type="checkbox" class="form-check-input toggle-disabled" data-id="@v.Id" @(v.Disabled ? "checked" : "") title="Abilita/Disabilita voce" />
+                        </td>
+                        <td data-col="created">@v.CreatedAt</td>
+                        <td data-col="updated">@v.UpdatedAt</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div id="pager" class="mt-2" data-page="@Model.PageIndex" data-page-size="@Model.PageSize" data-total="@Model.TotalCount" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount"></div>
+    </div>
 </div>
 
-@section Scripts {
-    <script>
-        window.__ttsvoices_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Voices));
-    </script>
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            let rowData = window.__ttsvoices_data || [];
-            const refreshForm = document.getElementById('ttsRefreshForm');
-            const toastEl = document.getElementById('ttsToast');
-            const bsToast = toastEl ? new bootstrap.Toast(toastEl) : null;
+<script src="/js/shared/list-ui.js"></script>
+<script src="/js/shared/table-sort.js"></script>
+<script>
+    // Ensure list-ui initializes after DOM ready and show toast when TempData present
+    document.addEventListener('DOMContentLoaded', () => {
+        if (window.ListUI && typeof window.ListUI.init === 'function') {
+            window.ListUI.init({ storageKey: 'ttsvoices_cols_v1', pagerId: 'pager', colsMenuId: 'ttsVoicesColsMenu' });
+        }
+        if (window.TableSort && typeof window.TableSort.init === 'function') {
+            window.TableSort.init({});
+        }
 
-            function showToast(message) {
-                if (bsToast) {
+        // Show TempData toast if present
+        try {
+            var message = '@(TempData["TtsVoiceMessage"] ?? string.Empty)';
+            if (message && message.length > 0) {
+                var toastEl = document.getElementById('ttsToast');
+                if (toastEl) {
                     document.getElementById('ttsToastBody').innerText = message;
                     document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
+                    var bsToast = new bootstrap.Toast(toastEl);
                     bsToast.show();
+                }
+            }
+        } catch(e) { /* ignore */ }
+    });
+</script>
+<script>
+    // Toggle disabled via AJAX; uses antiforgery token present in hidden form
+    (function(){
+        const tokenEl = document.querySelector('#ttsRefreshForm input[name="__RequestVerificationToken"]');
+        const token = tokenEl ? tokenEl.value : null;
+
+        document.addEventListener('change', function(e){
+            const cb = e.target.closest && e.target.closest('.toggle-disabled');
+            if (!cb) return;
+            const id = cb.getAttribute('data-id');
+            const disabled = cb.checked;
+            if (!id) return;
+            cb.disabled = true;
+            fetch(window.location.pathname + '?handler=ToggleDisabled', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'RequestVerificationToken': token || ''
+                },
+                body: new URLSearchParams({ id: id, disabled: disabled ? 'true' : 'false' })
+            }).then(r => r.json()).then(j => {
+                if (j && j.success) {
+                    // optionally show a small feedback
                 } else {
-                    alert(message);
+                    alert('Errore durante aggiornamento: ' + (j && j.error ? j.error : 'unknown'));
+                    // revert checkbox
+                    cb.checked = !disabled;
                 }
-            }
-
-            const columnDefs = [
-                {
-                    headerName: 'Actions', colId: 'actions', width: 140, suppressColumnsToolPanel: true,
-                    cellRenderer: params => {
-                        const id = params.data.Id;
-                        const voiceId = params.data.VoiceId || '';
-                        return `<div class="d-flex align-items-center gap-1">
-                            <div class="btn-group">
-                                <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">☰</button>
-                                <ul class="dropdown-menu">
-                                    <li><a class="dropdown-item" href="/TtsVoices/Edit?id=${id}">Edit</a></li>
-                                    <li><a class="dropdown-item action-regenerate" href="#" data-id="${id}" data-voiceid="${escapeAttr(voiceId)}">Rigenera esempio</a></li>
-                                    <li><a class="dropdown-item action-delete text-danger" href="#" data-id="${id}">Delete</a></li>
-                                </ul>
-                            </div>
-                            <button class="btn btn-sm btn-outline-primary play-sample" data-voiceid="${escapeAttr(voiceId)}" title="Play sample">▶️</button>
-                        </div>`;
-                    }
-                },
-                { headerName: 'Name', field: 'Name', flex: 1 },
-                { headerName: 'VoiceId', field: 'VoiceId', width: 150 },
-                { headerName: 'Model', field: 'Model', width: 120 },
-                { headerName: 'Language', field: 'Language', width: 100 },
-                { headerName: 'Gender', field: 'Gender', width: 90 },
-                { headerName: 'Age', field: 'Age', width: 80 },
-                { headerName: 'Confidence', field: 'Confidence', width: 100, valueFormatter: p => p.value != null ? p.value.toFixed(2) : '-' },
-                {
-                    headerName: 'Score', field: 'Score', width: 120,
-                    cellRenderer: params => {
-                        const id = params.data.Id;
-                        const val = params.value != null ? params.value : '-';
-                        return `<div class="d-flex align-items-center gap-1">
-                            <button class="btn btn-sm btn-outline-success score-inc" data-id="${id}" title="Increase">+</button>
-                            <span class="fw-semibold score-value" data-id="${id}">${val}</span>
-                            <button class="btn btn-sm btn-outline-danger score-dec" data-id="${id}" title="Decrease">-</button>
-                        </div>`;
-                    }
-                },
-                { headerName: 'Tags', field: 'Tags', width: 150 },
-                { headerName: 'Template', field: 'TemplateWav', width: 120 },
-                { headerName: 'Archetype', field: 'Archetype', width: 120 },
-                { headerName: 'Notes', field: 'Notes', flex: 1 },
-                { headerName: 'Created', field: 'CreatedAt', width: 160, hide: true },
-                { headerName: 'Updated', field: 'UpdatedAt', width: 160, hide: true }
-            ];
-
-            AgGridHelper.init('ttsVoicesGrid', columnDefs, rowData, {
-                storageKey: 'agGrid_ttsVoices_colVis',
-                pageSize: 25
-            });
-
-            // Quick filter
-            document.getElementById('globalFilter')?.addEventListener('input', e => {
-                window.ttsVoicesGridApi?.setQuickFilter(e.target.value);
-            });
-
-            // Refresh/sync voices
-            document.getElementById('refreshVoicesBtn').addEventListener('click', async function() {
-                const btn = this;
-                if (!refreshForm) return;
-                btn.disabled = true;
-                const oldText = btn.textContent;
-                btn.textContent = 'Syncing...';
-                try {
-                    const body = new FormData(refreshForm);
-                    const r = await fetch('?handler=Refresh', { method: 'POST', body, credentials: 'same-origin' });
-                    if (!r.ok) throw new Error('Server returned ' + r.status);
-                    const json = await r.json();
-                    if (json && json.voices) {
-                        rowData = json.voices;
-                        window.ttsVoicesGridApi?.setGridOption('rowData', rowData);
-                        const addedCount = json.added || 0;
-                        const updatedCount = json.updated || 0;
-                        let msg = addedCount > 0 ? `Aggiunte ${addedCount} voci` : 'Aggiornamento completato';
-                        if (updatedCount > 0) msg += ` (${updatedCount} aggiornate)`;
-                        showToast(msg);
-                    } else {
-                        throw new Error(json?.error || 'Invalid response');
-                    }
-                } catch (ex) {
-                    showToast('Aggiornamento fallito: ' + ex.message);
-                } finally {
-                    btn.disabled = false;
-                    btn.textContent = oldText;
-                }
-            });
-
-            // Grid click handlers
-            document.getElementById('ttsVoicesGrid').addEventListener('click', async e => {
-                // Play sample
-                const playBtn = e.target.closest('.play-sample');
-                if (playBtn) {
-                    const voiceId = playBtn.dataset.voiceid;
-                    if (!voiceId) return;
-                    try {
-                        const resp = await fetch('?handler=Sample&voiceId=' + encodeURIComponent(voiceId));
-                        if (!resp.ok) throw new Error('Sample not available');
-                        const arr = await resp.arrayBuffer();
-                        const blob = new Blob([arr], { type: resp.headers.get('content-type') || 'audio/*' });
-                        const url = URL.createObjectURL(blob);
-                        const audio = new Audio(url);
-                        audio.play().catch(e => console.warn('play failed', e));
-                        audio.onended = () => URL.revokeObjectURL(url);
-                    } catch (ex) {
-                        showToast('Play failed: ' + ex.message);
-                    }
-                }
-
-                // Score increment/decrement
-                const scoreBtn = e.target.closest('.score-inc, .score-dec');
-                if (scoreBtn) {
-                    const id = scoreBtn.dataset.id;
-                    if (!id) return;
-                    const delta = scoreBtn.classList.contains('score-inc') ? 1 : -1;
-                    scoreBtn.disabled = true;
-                    try {
-                        const body = new FormData(refreshForm);
-                        body.append('id', id);
-                        body.append('delta', delta);
-                        const res = await fetch('?handler=AdjustScore', { method: 'POST', body, credentials: 'same-origin' });
-                        if (!res.ok) throw new Error('Server returned ' + res.status);
-                        const json = await res.json();
-                        if (json?.success) {
-                            document.querySelectorAll(`.score-value[data-id="${id}"]`).forEach(el => el.textContent = json.score);
-                            // Update rowData
-                            const item = rowData.find(r => r.Id == id);
-                            if (item) item.Score = json.score;
-                        } else {
-                            throw new Error(json?.error || 'Unknown error');
-                        }
-                    } catch (ex) {
-                        showToast('Score update failed: ' + ex.message);
-                    } finally {
-                        scoreBtn.disabled = false;
-                    }
-                }
-
-                // Delete
-                const deleteBtn = e.target.closest('.action-delete');
-                if (deleteBtn) {
-                    e.preventDefault();
-                    const id = deleteBtn.dataset.id;
-                    if (!id || !confirm('Eliminare questa voce?')) return;
-                    try {
-                        const body = new FormData(refreshForm);
-                        body.append('id', id);
-                        const res = await fetch('?handler=Delete', { method: 'POST', body, credentials: 'same-origin' });
-                        if (!res.ok) throw new Error('Server returned ' + res.status);
-                        const json = await res.json();
-                        if (json?.success) {
-                            rowData = rowData.filter(r => r.Id != id);
-                            window.ttsVoicesGridApi?.setGridOption('rowData', rowData);
-                            showToast('Voce eliminata');
-                        } else {
-                            throw new Error(json?.error || 'Unknown error');
-                        }
-                    } catch (ex) {
-                        showToast('Delete failed: ' + ex.message);
-                    }
-                }
-
-                // Regenerate sample
-                const regenBtn = e.target.closest('.action-regenerate');
-                if (regenBtn) {
-                    e.preventDefault();
-                    const id = regenBtn.dataset.id;
-                    const voiceId = regenBtn.dataset.voiceid;
-                    if (!id || !confirm('Rigenerare il sample per questa voce?')) return;
-                    try {
-                        const body = new FormData(refreshForm);
-                        body.append('id', id);
-                        const res = await fetch('?handler=Regenerate', { method: 'POST', body, credentials: 'same-origin' });
-                        if (!res.ok) throw new Error('Server returned ' + res.status);
-                        const json = await res.json();
-                        if (json?.success) {
-                            showToast('Sample rigenerato');
-                            // Auto-play regenerated sample
-                            if (voiceId) {
-                                const resp = await fetch('?handler=Sample&voiceId=' + encodeURIComponent(voiceId));
-                                if (resp.ok) {
-                                    const arr = await resp.arrayBuffer();
-                                    const blob = new Blob([arr], { type: resp.headers.get('content-type') || 'audio/*' });
-                                    const url = URL.createObjectURL(blob);
-                                    const audio = new Audio(url);
-                                    audio.play().catch(() => {});
-                                    audio.onended = () => URL.revokeObjectURL(url);
-                                }
-                            }
-                        } else {
-                            throw new Error(json?.error || 'Unknown error');
-                        }
-                    } catch (ex) {
-                        showToast('Regenerate failed: ' + ex.message);
-                    }
-                }
-            });
-
-            function escapeAttr(text) {
-                if (!text) return '';
-                return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
-            }
+            }).catch(err => {
+                console.error('Toggle error', err);
+                alert('Errore durante aggiornamento');
+                cb.checked = !disabled;
+            }).finally(()=> cb.disabled = false);
         });
-    </script>
-}
+
+        // Also ensure the 'Mostra disabilitate' checkbox submits the form properly
+        const showChk = document.getElementById('showDisabledChk');
+        if (showChk){
+            showChk.addEventListener('change', function(){
+                // submit the parent GET form preserving search
+                const form = showChk.closest('form');
+                if (form && form.method && form.method.toLowerCase() === 'get'){
+                    // ensure checked value is present as 1 or removed
+                    if (showChk.checked) {
+                        // append hidden input to ensure parameter is present
+                        // set name already present; form will submit value=1
+                    } else {
+                        // remove value so server sees absence -> default false
+                    }
+                    form.submit();
+                } else {
+                    // fallback: reload with param
+                    const url = new URL(window.location.href);
+                    if (showChk.checked) url.searchParams.set('showDisabled','1'); else url.searchParams.delete('showDisabled');
+                    url.searchParams.set('page','1');
+                    window.location.href = url.toString();
+                }
+            });
+        }
+    })();
+</script>
+<script>
+    // Inline score +/- handlers
+    (function(){
+        const tokenEl = document.querySelector('#ttsRefreshForm input[name="__RequestVerificationToken"]');
+        const token = tokenEl ? tokenEl.value : null;
+
+        document.addEventListener('click', function(e){
+            const inc = e.target.closest && e.target.closest('.score-incr');
+            const dec = e.target.closest && e.target.closest('.score-decr');
+            const btn = inc || dec;
+            if (!btn) return;
+            const control = btn.closest && btn.closest('.score-control');
+            if (!control) return;
+            const id = control.getAttribute('data-id');
+            if (!id) return;
+            const delta = inc ? 1 : -1;
+
+            // disable buttons while request in flight
+            const buttons = control.querySelectorAll('button');
+            buttons.forEach(b => b.disabled = true);
+
+            fetch(window.location.pathname + '?handler=AdjustScore', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'RequestVerificationToken': token || ''
+                },
+                body: new URLSearchParams({ id: id, delta: delta.toString() })
+            }).then(r => r.json()).then(j => {
+                if (j && j.success) {
+                    // update displayed score
+                    const span = control.querySelector('.score-value');
+                    if (span) span.innerText = (j.score !== undefined ? j.score : (parseFloat(span.innerText || '0') + delta)).toString();
+                } else {
+                    alert('Errore aggiornando score: ' + (j && j.error ? j.error : 'unknown'));
+                }
+            }).catch(err => {
+                console.error('Adjust score error', err);
+                alert('Errore durante aggiornamento score');
+            }).finally(()=> buttons.forEach(b => b.disabled = false));
+        });
+    })();
+</script>
+<script>
+    // Global audio player reused for inline playback
+    (function(){
+        let currentUrl = null;
+        let audio = document.createElement('audio');
+        audio.id = 'ttsInlinePlayer';
+        audio.style.display = 'none';
+        document.body.appendChild(audio);
+
+        async function playVoice(voiceId, btn) {
+            if (!voiceId) return;
+            try {
+                btn.disabled = true;
+                const resp = await fetch(`/TtsVoices?handler=Sample&voiceId=${encodeURIComponent(voiceId)}`);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                if (currentUrl) URL.revokeObjectURL(currentUrl);
+                currentUrl = url;
+                audio.src = url;
+                audio.style.display = 'block';
+                await audio.play();
+            } catch (err) {
+                console.error('Playback error', err);
+                alert('Errore durante la riproduzione: ' + (err?.message || err));
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest && e.target.closest('.play-voice-btn');
+            if (!btn) return;
+            const voiceId = btn.getAttribute('data-voiceid');
+            playVoice(voiceId, btn);
+        });
+    })();
+</script>

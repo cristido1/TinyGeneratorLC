@@ -61,7 +61,9 @@ namespace TinyGenerator.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    return (false, null, $"HTTP {response.StatusCode}: {responseBody}");
+                    // Extract 'detail' field from error response as per API spec
+                    var errorDetail = ExtractErrorDetail(responseBody) ?? responseBody;
+                    return (false, null, $"HTTP {response.StatusCode}: {errorDetail}");
                 }
 
                 var result = JsonSerializer.Deserialize<GenerationResponse>(responseBody, 
@@ -69,10 +71,12 @@ namespace TinyGenerator.Services
 
                 if (result == null || !result.Success)
                 {
-                    return (false, null, "Failed to parse response or generation was not successful");
+                    return (false, null, result?.Error ?? "Generazione non riuscita o risposta non valida");
                 }
 
-                return (true, result.FileUrl, null);
+                // Support both 'url' and 'file_url' response formats
+                var fileUrl = result.Url ?? result.FileUrl;
+                return (true, fileUrl, null);
             }
             catch (Exception ex)
             {
@@ -115,7 +119,9 @@ namespace TinyGenerator.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    return (false, null, $"HTTP {response.StatusCode}: {responseBody}");
+                    // Extract 'detail' field from error response as per API spec
+                    var errorDetail = ExtractErrorDetail(responseBody) ?? responseBody;
+                    return (false, null, $"HTTP {response.StatusCode}: {errorDetail}");
                 }
 
                 var result = JsonSerializer.Deserialize<GenerationResponse>(responseBody, 
@@ -123,10 +129,12 @@ namespace TinyGenerator.Services
 
                 if (result == null || !result.Success)
                 {
-                    return (false, null, "Failed to parse response or generation was not successful");
+                    return (false, null, result?.Error ?? "Generazione non riuscita o risposta non valida");
                 }
 
-                return (true, result.FileUrl, null);
+                // Support both 'url' and 'file_url' response formats
+                var fileUrl = result.Url ?? result.FileUrl;
+                return (true, fileUrl, null);
             }
             catch (Exception ex)
             {
@@ -165,9 +173,36 @@ namespace TinyGenerator.Services
             public bool Success { get; set; }
             public string? FilePath { get; set; }
             public string? FileUrl { get; set; }
+            public string? Url { get; set; }
             public string? Prompt { get; set; }
             public float Duration { get; set; }
             public string? GeneratedAt { get; set; }
+            public string? Error { get; set; }
+            public string? Detail { get; set; }
+        }
+
+        /// <summary>
+        /// Extracts 'detail' field from error response JSON as per API spec.
+        /// </summary>
+        private static string? ExtractErrorDetail(string responseBody)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(responseBody);
+                if (doc.RootElement.TryGetProperty("detail", out var detail))
+                {
+                    return detail.GetString();
+                }
+                if (doc.RootElement.TryGetProperty("error", out var error))
+                {
+                    return error.GetString();
+                }
+            }
+            catch
+            {
+                // Not valid JSON, return null
+            }
+            return null;
         }
     }
 }

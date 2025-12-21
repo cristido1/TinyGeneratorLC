@@ -46,6 +46,9 @@ namespace TinyGenerator.Models
         
         [Column("notes")]
         public string? Notes { get; set; }
+
+        [Column("disabled")]
+        public bool Disabled { get; set; } = false;
         
         // template_wav stores the sample wav filename (relative to wwwroot/data_voices_samples)
         // metadata and sample_path were removed from DB schema; template_wav now holds the sample filename

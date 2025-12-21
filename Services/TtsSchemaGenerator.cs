@@ -196,6 +196,25 @@ namespace TinyGenerator.Services
                 // Parse the tag content
                 var (character, emotion) = ParseTag(tagContent);
 
+                // Some models write the emotion immediately AFTER the tag as a parenthetical,
+                // e.g. "[DR. MARCUS THOMPSON] (con curiosità) testo...".
+                // Detect a leading parenthetical in the text and treat it as the emotion
+                // (equivalent to having written [personaggio, emozione]). Remove it from
+                // the TTS text so it does not get spoken.
+                var leadingParenEmotion = (string?)null;
+                var parenMatch = Regex.Match(text ?? string.Empty, @"^\s*\(([^)]+)\)\s*[,:-]?\s*(.*)$", RegexOptions.Singleline);
+                if (parenMatch.Success)
+                {
+                    leadingParenEmotion = parenMatch.Groups[1].Value.Trim();
+                    text = parenMatch.Groups[2].Value.Trim();
+                    _logger?.Log("Debug", "TtsSchemaGenerator", $"Detected leading parenthetical emotion: '{leadingParenEmotion}' for tag '{tagContent}'");
+                }
+
+                if (!string.IsNullOrWhiteSpace(leadingParenEmotion) && (string.IsNullOrWhiteSpace(emotion) || emotion == "neutral"))
+                {
+                    emotion = leadingParenEmotion.ToLowerInvariant();
+                }
+
                 if (string.IsNullOrWhiteSpace(text))
                 {
                     continue; // Skip empty phrases
@@ -396,7 +415,7 @@ namespace TinyGenerator.Services
                 return;
             }
 
-            var voices = _database.ListTtsVoices();
+            var voices = _database.ListTtsVoices(onlyEnabled: true);
             if (voices == null || !voices.Any())
             {
                 _logger?.Log("Warning", "TtsSchemaGenerator", "No voices available in database");

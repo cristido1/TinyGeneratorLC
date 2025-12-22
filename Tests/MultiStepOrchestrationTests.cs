@@ -153,8 +153,33 @@ namespace TinyGenerator.Tests
             var checker = new TinyGenerator.Services.ResponseCheckerService(null!, null!, logger, httpFactory);
             var ttsResult = checker.ValidateTtsSchemaResponse(json, chunk, 0.90);
 
+            // Diagnostic: normalize and report which extracted texts are not found in original
+            string NormalizeForTest(string s)
+            {
+                if (string.IsNullOrWhiteSpace(s)) return string.Empty;
+                var normalized = System.Text.RegularExpressions.Regex.Replace(s, @"[.,!?;:\\""\'\-\(\)\[\]]", "");
+                normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ");
+                return normalized.Trim().ToLowerInvariant();
+            }
+
+            var normalizedOriginal = NormalizeForTest(chunk);
+            var extractedList = ttsResult.ExtractedToolCalls.Select(tc => new {
+                tc.FunctionName,
+                Text = tc.Arguments.ContainsKey("text") ? tc.Arguments["text"]?.ToString() : null,
+                Normalized = NormalizeForTest(tc.Arguments.ContainsKey("text") ? tc.Arguments["text"]?.ToString() : null)
+            }).ToList();
+
+            var missingParts = new System.Collections.Generic.List<string>();
+            foreach (var e in extractedList)
+            {
+                if (!string.IsNullOrWhiteSpace(e.Normalized) && normalizedOriginal.IndexOf(e.Normalized, StringComparison.OrdinalIgnoreCase) < 0)
+                    missingParts.Add($"{e.FunctionName}:{(e.Text?.Length ?? 0)}chars");
+            }
+
+            var diag = $"Coverage={ttsResult.CoveragePercent:P1}, OriginalChars={ttsResult.OriginalChars}, CoveredChars={ttsResult.CoveredChars}, Remaining={ttsResult.RemainingChars}, MissingParts={string.Join('|', missingParts)}, Errors={string.Join(';', ttsResult.Errors)}, Warnings={string.Join(';', ttsResult.Warnings)}";
+
             // Assert - we expect the reconstructed tool_calls to cover most of the chunk
-            Assert.True(ttsResult.IsValid, "Expected TTS coverage to be valid after reconstruction");
+            Assert.True(ttsResult.IsValid, $"Expected TTS coverage to be valid after reconstruction. {diag}");
         }
 
         // Minimal IHttpClientFactory stub for tests

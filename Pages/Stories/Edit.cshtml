@@ -12,6 +12,26 @@
                             <label class="form-label">Titolo</label>
                             <input class="form-control" asp-for="Title" />
                         </div>
+                        <div class="mb-3">
+                            <label class="form-label">Agente (opzionale)</label>
+                            <select class="form-select" asp-for="AgentId">
+                                <option value="">-- nessuno --</option>
+                                @foreach(var ag in Model.Agents)
+                                {
+                                    <option value="@ag.Id" selected="@((Model.AgentId==ag.Id)?"selected":"")">@ag.Name (@ag.Role)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Modello (opzionale)</label>
+                            <select class="form-select" asp-for="ModelId">
+                                <option value="">-- nessuno --</option>
+                                @foreach(var m in Model.Models)
+                                {
+                                    <option value="@m.Id" selected="@((Model.ModelId==m.Id)?"selected":"")">@m.Name (@m.Provider)</option>
+                                }
+                            </select>
+                        </div>
             <div class="mb-3">
                 <label class="form-label">Id</label>
                 <input class="form-control" asp-for="Id" disabled />

@@ -5,90 +5,124 @@
     ViewData["PageDescription"] = "Monitora i modelli Ollama in esecuzione";
 }
 
-<p>Questa pagina mostra i modelli caricati da Ollama (aggiornamento automatico ogni 20s). Viene anche mostrato l'ultimo prompt inviato per ciascun modello dall'app.</p>
+<div class="d-flex align-items-center mb-2">
+    <div class="me-2">
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="" class="form-control form-control-sm" placeholder="Cerca..." />
+            <button type="submit" class="btn btn-sm btn-outline-primary">Cerca</button>
+        </form>
+    </div>
+    <div class="ms-auto d-flex align-items-center" style="gap:.5rem;">
+        <button id="refreshBtn" class="btn btn-sm btn-primary">Aggiorna</button>
+        <div class="dropdown">
+            <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" id="colsMenu" data-bs-toggle="dropdown">Colonne</button>
+            <ul class="dropdown-menu" aria-labelledby="colsMenu"></ul>
+        </div>
+    </div>
+</div>
 
-<button id="refreshBtn" class="btn btn-sm btn-primary">Aggiorna</button>
-<table class="table mt-2 datatable">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Id</th>
-            <th>Size</th>
-            <th>Processor</th>
-            <th>Context</th>
-            <th>Until</th>
-            <th>Actions</th>
-            <th>Last prompt (preview)</th>
-        </tr>
-    </thead>
-    <tbody id="tblBody">
-    </tbody>
-</table>
+<div class="border p-2 rounded">
+    <table class="table table-sm mb-0">
+        <thead>
+            <tr>
+                <th data-col="name">Name</th>
+                <th data-col="id">Id</th>
+                <th data-col="size">Size</th>
+                <th data-col="processor">Processor</th>
+                <th data-col="context">Context</th>
+                <th data-col="until">Until</th>
+                <th data-col="actions">Actions</th>
+                <th data-col="lastPrompt">Last prompt (preview)</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (Model.Models != null && Model.Models.Count > 0)
+            {
+                foreach (var m in Model.Models)
+                {
+                    <tr>
+                        <td data-col="name">@m.Name</td>
+                        <td data-col="id">@m.Id</td>
+                        <td data-col="size">@m.Size</td>
+                        <td data-col="processor">@m.Processor</td>
+                        <td data-col="context">@m.Context</td>
+                        <td data-col="until">@((DateTime.TryParse(m.Until, out var dt)) ? dt.ToString("dd/MM/yyyy HH:mm") : (!string.IsNullOrWhiteSpace(m.Until) ? m.Until : "-"))</td>
+                        <td data-col="actions">
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">Azioni</button>
+                                <div class="dropdown-menu p-2">
+                                    <div class="input-group input-group-sm mb-2">
+                                        <input type="number" min="512" step="512" value="8192" class="form-control context-input" data-model="@m.Name" style="width:120px;" />
+                                        <button class="btn btn-sm btn-outline-primary start-with-context" data-model="@m.Name">Start</button>
+                                    </div>
+                                    <a href="#" class="dropdown-item preview-link" data-model="@m.Name">Preview prompt</a>
+                                </div>
+                            </div>
+                        </td>
+                        <td data-col="lastPrompt"><button class="btn btn-sm btn-link preview-btn" data-model="@m.Name">Preview</button></td>
+                    </tr>
+                }
+            }
+            else
+            {
+                <tr><td colspan="8">No models running</td></tr>
+            }
+        </tbody>
+    </table>
+</div>
 
+<div id="pager" class="mt-2"></div>
+
+<script src="/js/shared/list-ui.js"></script>
 <script>
-    async function fetchModels() {
+    // Minimal wiring: preview and start actions for server-side rendered rows
+    async function fetchAllModelsJson() {
         try {
             const res = await fetch('/OllamaMonitor?handler=Models');
-            if (!res.ok) return;
-            const models = await res.json();
-            const body = document.getElementById('tblBody');
-            body.innerHTML = '';
-            for (const m of models) {
-                const row = document.createElement('tr');
-                // actions: input for context and a button to start model with that context
-                const actionsHtml = `
-                    <div class="input-group input-group-sm">
-                      <input type="number" min="512" step="512" value="8192" class="form-control context-input" style="width:110px" />
-                      <button class="btn btn-sm btn-outline-primary start-with-context">Start</button>
-                    </div>`;
-
-                row.innerHTML = `<td>${m.name}</td><td>${m.id}</td><td>${m.size}</td><td>${m.processor}</td><td>${m.context}</td><td>${m.until}</td><td>${actionsHtml}</td><td><button class='btn btn-sm btn-link' data-prompt='${encodeURIComponent(m.lastPrompt)}'>Preview</button> ${m.lastPrompt || ''}</td>`;
-                body.appendChild(row);
-            }
-            // attach click handlers for preview buttons
-            document.querySelectorAll('#tblBody button[data-prompt]').forEach(b => {
-                b.addEventListener('click', e => {
-                    const btn = e.currentTarget;
-                    const p = decodeURIComponent(btn.getAttribute('data-prompt') || '');
-                    showInfo('Prompt Preview', p || 'No prompt recorded');
-                });
-            });
-
-            // attach handlers for Start buttons
-            document.querySelectorAll('#tblBody .start-with-context').forEach((btn, idx) => {
-                btn.addEventListener('click', async e => {
-                    const tr = e.currentTarget.closest('tr');
-                    const modelName = tr.children[0].innerText;
-                    const input = tr.querySelector('.context-input');
-                    const contextVal = parseInt(input.value) || 8192;
-                    const confirmed = await showConfirm(
-                        'Start Model',
-                        `Start model ${modelName} with context ${contextVal}? This may use significant resources.`
-                    );
-                    if (!confirmed) return;
-                    try {
-                        btn.disabled = true;
-                        btn.innerText = 'Starting...';
-                        const res = await fetch('/OllamaMonitor?handler=StartWithContext', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ model: modelName, context: contextVal })
-                        });
-                        const j = await res.json();
-                        showSuccess('Completed', 'Start command completed. Output:\n' + (j.runOutput || j.stopOutput || JSON.stringify(j)));
-                    } catch (err) {
-                        showError('Error', 'Error starting model: ' + err);
-                    } finally {
-                        btn.disabled = false;
-                        btn.innerText = 'Start';
-                    }
-                });
-            });
-        } catch (e) { console.error(e); }
+            if (!res.ok) return [];
+            return await res.json();
+        } catch (e) { console.error(e); return []; }
     }
 
-    document.getElementById('refreshBtn').addEventListener('click', () => fetchModels());
-    
-    // Auto-refresh every 20 seconds and fetch immediately on page load
-    fetchModels();
-    setInterval(fetchModels, 20000);
+    async function showPromptForModel(modelName) {
+        const models = await fetchAllModelsJson();
+        const m = models.find(x => x.name === modelName);
+        const p = m ? (m.lastPrompt || '') : '';
+        showInfo('Prompt Preview', p || 'No prompt recorded');
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', async () => {
+        // simple refresh: reload the page to let server re-render
+        location.reload();
+    });
+
+    document.querySelectorAll('.preview-btn, .preview-link').forEach(b => {
+        b.addEventListener('click', async e => {
+            e.preventDefault();
+            const model = e.currentTarget.getAttribute('data-model');
+            await showPromptForModel(model);
+        });
+    });
+
+    document.querySelectorAll('.start-with-context').forEach(btn => {
+        btn.addEventListener('click', async e => {
+            const model = btn.getAttribute('data-model');
+            const tr = btn.closest('tr');
+            const input = tr.querySelector('.context-input');
+            const contextVal = parseInt(input.value) || 8192;
+            const confirmed = await showConfirm('Start Model', `Start model ${model} with context ${contextVal}? This may use significant resources.`);
+            if (!confirmed) return;
+            try {
+                btn.disabled = true; btn.innerText = 'Starting...';
+                const res = await fetch('/OllamaMonitor?handler=StartWithContext', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: model, context: contextVal })
+                });
+                const j = await res.json();
+                showSuccess('Completed', 'Start command completed. Output:\n' + (j.runOutput || j.stopOutput || JSON.stringify(j)));
+            } catch (err) {
+                showError('Error', 'Error starting model: ' + err);
+            } finally { btn.disabled = false; btn.innerText = 'Start'; }
+        });
+    });
 </script>

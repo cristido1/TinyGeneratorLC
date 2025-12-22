@@ -71,11 +71,27 @@ namespace TinyGenerator.Services.Commands
 
                 _logger.Log("Information", "MultiStep", $"Using template: {template.Name}");
 
-                // Build config with characters_step if defined in template
+                // Build config with characters_step (and title if provided) so it persists across reloads
                 string? configOverrides = null;
-                if (template.CharactersStep.HasValue)
+                try
                 {
-                    configOverrides = JsonSerializer.Serialize(new { characters_step = template.CharactersStep.Value });
+                    var cfg = new Dictionary<string, object>();
+                    if (template.CharactersStep.HasValue)
+                    {
+                        cfg["characters_step"] = template.CharactersStep.Value;
+                    }
+                    if (!string.IsNullOrWhiteSpace(_title))
+                    {
+                        cfg["title"] = _title;
+                    }
+                    if (cfg.Count > 0)
+                    {
+                        configOverrides = JsonSerializer.Serialize(cfg);
+                    }
+                }
+                catch
+                {
+                    configOverrides = null;
                 }
 
                 // Don't create story record yet - will be created after successful generation

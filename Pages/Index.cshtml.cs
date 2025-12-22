@@ -30,8 +30,9 @@ public class IndexModel : PageModel
     public class TopStory
     {
         public long Id { get; set; }
-        public string Prompt { get; set; } = "";
-        public string Model { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Agent { get; set; } = "";
+        public bool GeneratedMixedAudio { get; set; }
         public double AvgEvalScore { get; set; }
         public string Timestamp { get; set; } = "";
     }
@@ -81,8 +82,9 @@ public class IndexModel : PageModel
             TopStories = topStoriesData.Select(s => new TopStory
             {
                 Id = s.Id,
-                Prompt = s.Prompt.Length > 60 ? s.Prompt.Substring(0, 60) + "..." : s.Prompt,
-                Model = s.Model,
+                Title = s.Title.Length > 60 ? s.Title.Substring(0, 60) + "..." : s.Title,
+                Agent = s.Agent,
+                GeneratedMixedAudio = s.GeneratedMixedAudio,
                 AvgEvalScore = s.AvgScore,
                 Timestamp = s.Timestamp
             }).ToList();

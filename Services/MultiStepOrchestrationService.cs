@@ -554,9 +554,9 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 fullPrompt = $"{chunkIntro}{fullPrompt}";
             }
 
-            // Create timeout for this step (5 minutes)
+            // Create timeout for this step (20 minutes)
             using var stepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            stepCts.CancelAfter(TimeSpan.FromMinutes(5));
+            stepCts.CancelAfter(TimeSpan.FromMinutes(20));
 
             _logger.Log("Information", "MultiStep", $"Invoking executor agent: {executorAgent.Name} (model: {executorAgent.ModelName})");
             if (_logger is CustomLogger cl3) await cl3.FlushAsync();
@@ -1764,7 +1764,7 @@ RIASSUNTO:";
                 var loop = new ReActLoopOrchestrator(orchestrator, _logger, modelBridge: bridge);
 
                 using var stepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                stepCts.CancelAfter(TimeSpan.FromMinutes(5));
+                stepCts.CancelAfter(TimeSpan.FromMinutes(20));
 
                 var result = await loop.ExecuteAsync(fullPrompt, stepCts.Token);
                 var output = result.FinalResponse ?? string.Empty;
@@ -1894,25 +1894,66 @@ RIASSUNTO:";
                 if (execution.EntityId.HasValue)
                 {
                     // Story already exists, update it
-                    _database.UpdateStoryById(
-                        execution.EntityId.Value,
-                        story: merged,
-                        agentId: agent?.Id,
-                        modelId: modelId);
-                    
-                    _logger.Log("Information", "MultiStep", $"Updated story {execution.EntityId.Value} with final text");
+                    try
+                    {
+                        _logger.Log("Debug", "MultiStep", $"Updating existing story {execution.EntityId.Value} with final text (length {merged?.Length ?? 0})");
+                        var ok = _database.UpdateStoryById(
+                            execution.EntityId.Value,
+                            story: merged,
+                            agentId: agent?.Id,
+                            modelId: modelId);
+                        _logger.Log(ok ? "Information" : "Warning", "MultiStep", $"UpdateStoryById returned {ok} for story {execution.EntityId.Value}");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Log("Error", "MultiStep", $"Exception updating story {execution.EntityId.Value}: {ex.Message}");
+                    }
                 }
                 else
                 {
                     // Create story only now with the complete text
                     var prompt = execution.InitialContext ?? "[No prompt]";
-                    var storyId = _database.InsertSingleStory(prompt, merged, agentId: agent?.Id, modelId: modelId);
-                    
-                    // Update execution with the new entity ID
-                    execution.EntityId = storyId;
-                    _database.UpdateTaskExecution(execution);
-                    
-                    _logger.Log("Information", "MultiStep", $"Created story {storyId} with final text on successful completion");
+                    // Try to read a title from execution.Config if provided
+                    string? title = null;
+                    if (!string.IsNullOrWhiteSpace(execution.Config))
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(execution.Config);
+                            var root = doc.RootElement;
+                            if (root.TryGetProperty("title", out var titleProp))
+                            {
+                                title = titleProp.GetString();
+                            }
+                        }
+                        catch
+                        {
+                            // ignore parse errors
+                        }
+                    }
+
+                    try
+                    {
+                        _logger.Log("Debug", "MultiStep", $"Inserting new story (prompt len={prompt?.Length ?? 0}, merged len={merged?.Length ?? 0}, title present={(!string.IsNullOrWhiteSpace(title))})");
+                        var storyId = _database.InsertSingleStory(prompt, merged, agentId: agent?.Id, modelId: modelId, title: title);
+                        _logger.Log("Information", "MultiStep", $"InsertSingleStory returned id {storyId}");
+
+                        // Update execution with the new entity ID
+                        execution.EntityId = storyId;
+                        try
+                        {
+                            _database.UpdateTaskExecution(execution);
+                            _logger.Log("Information", "MultiStep", $"Updated execution {execution.Id} with EntityId={storyId}");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.Log("Error", "MultiStep", $"Failed to update TaskExecution with EntityId {storyId}: {ex.Message}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Log("Error", "MultiStep", $"Exception inserting story: {ex.Message}");
+                    }
                 }
 
                 // Extract and save characters if characters_step is configured

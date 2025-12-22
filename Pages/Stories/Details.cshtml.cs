@@ -265,5 +265,20 @@ namespace TinyGenerator.Pages.Stories
                 return StatusCode(500, ex.Message);
             }
         }
+
+        public IActionResult OnPostDeleteEvaluation(long id, long storyId)
+        {
+            try
+            {
+                _db.DeleteStoryEvaluationById(id);
+                TempData["StatusMessage"] = "Valutazione eliminata.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to delete evaluation {Id}", id);
+                TempData["ErrorMessage"] = "Errore eliminazione valutazione: " + ex.Message;
+            }
+            return RedirectToPage("/Stories/Details", new { id = storyId });
+        }
     }
 }

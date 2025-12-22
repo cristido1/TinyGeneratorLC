@@ -8,10 +8,12 @@ namespace TinyGenerator.Pages.Stories
     public class EditModel : PageModel
     {
         private readonly StoriesService _stories;
+        private readonly DatabaseService _database;
 
-        public EditModel(StoriesService stories)
+        public EditModel(StoriesService stories, DatabaseService database)
         {
             _stories = stories;
+            _database = database;
         }
 
         [BindProperty(SupportsGet = true)]
@@ -29,7 +31,15 @@ namespace TinyGenerator.Pages.Stories
         [BindProperty]
         public int? StatusId { get; set; }
 
+        [BindProperty]
+        public int? AgentId { get; set; }
+
+        [BindProperty]
+        public int? ModelId { get; set; }
+
         public List<StoryStatus> Statuses { get; set; } = new();
+        public List<Agent> Agents { get; set; } = new();
+        public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
 
         [BindProperty]
         public string? Title { get; set; }
@@ -44,7 +54,11 @@ namespace TinyGenerator.Pages.Stories
             Characters = s.Characters;
             StatusId = s.StatusId;
             Title = s.Title;
+            AgentId = s.AgentId;
+            ModelId = s.ModelId;
             LoadStatuses();
+            LoadAgents();
+            LoadModels();
             return Page();
         }
 
@@ -52,7 +66,7 @@ namespace TinyGenerator.Pages.Stories
         {
             if (Id <= 0) return BadRequest();
             LoadStatuses();
-            _stories.UpdateStoryById(Id, StoryText, null, null, StatusId, updateStatus: true);
+            _stories.UpdateStoryById(Id, StoryText, ModelId, AgentId, StatusId, updateStatus: true);
             if (!string.IsNullOrEmpty(Characters))
             {
                 _stories.UpdateStoryCharacters(Id, Characters);
@@ -70,6 +84,30 @@ namespace TinyGenerator.Pages.Stories
             catch
             {
                 Statuses = new List<StoryStatus>();
+            }
+        }
+
+        private void LoadAgents()
+        {
+            try
+            {
+                Agents = _database.ListAgents().Where(a => a.IsActive).ToList();
+            }
+            catch
+            {
+                Agents = new List<Agent>();
+            }
+        }
+
+        private void LoadModels()
+        {
+            try
+            {
+                Models = _database.ListModels().ToList();
+            }
+            catch
+            {
+                Models = new List<TinyGenerator.Models.ModelInfo>();
             }
         }
     }

@@ -35,6 +35,14 @@
                                     <span class="float-end">Score: @e.Score</span>
                                 </div>
                                 <pre style="white-space:pre-wrap; margin-top:8px;">@e.RawJson</pre>
+                                <div class="mt-2 text-end">
+                                    <form method="post" asp-page-handler="DeleteEvaluation" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="id" value="@e.Id" />
+                                        <input type="hidden" name="storyId" value="@Model.Story?.Id" />
+                                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Eliminare questa valutazione?');">Elimina valutazione</button>
+                                    </form>
+                                </div>
                             </div>
                         </div>
                     }

@@ -360,6 +360,42 @@ public sealed class DatabaseService
     }
 
     /// <summary>
+    /// Returns a paged, optionally filtered and ordered list of models with total count.
+    /// This helper implements server-side filtering, sorting and paging for model lists.
+    /// </summary>
+    public (List<ModelInfo> Items, int TotalCount) GetPagedModels(string? search, string? orderBy, int pageIndex, int pageSize)
+    {
+        using var context = CreateDbContext();
+        var query = context.Models.AsNoTracking().AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            query = query.Where(m => m.Name.Contains(s) || m.Provider.Contains(s) || (m.Note ?? string.Empty).Contains(s));
+        }
+
+        // Simple orderBy handling (name, provider, createdat, updatedat)
+        if (!string.IsNullOrWhiteSpace(orderBy))
+        {
+            var ob = orderBy.ToLowerInvariant();
+            if (ob == "provider") query = query.OrderBy(m => m.Provider);
+            else if (ob == "createdat") query = query.OrderByDescending(m => m.CreatedAt);
+            else if (ob == "updatedat") query = query.OrderByDescending(m => m.UpdatedAt);
+            else query = query.OrderBy(m => m.Name);
+        }
+        else
+        {
+            query = query.OrderBy(m => m.Name);
+        }
+
+        var total = query.Count();
+        if (pageIndex < 1) pageIndex = 1;
+        if (pageSize <= 0) pageSize = 25;
+        var items = query.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
+        return (items, total);
+    }
+
+    /// <summary>
     /// Return a lightweight summary of the latest test run for the given model id, or null if none.
     /// </summary>
     public (int runId, string testCode, bool passed, long? durationMs, string? runDate)? GetLatestTestRunSummaryById(int modelId)
@@ -841,6 +877,42 @@ public sealed class DatabaseService
         };
 
         return query.ToList();
+    }
+
+    /// <summary>
+    /// Return a paged list of TestDefinitions (active only) with total count. PageIndex starts at 1.
+    /// </summary>
+    public (List<TestDefinition> Items, int TotalCount) GetPagedTestDefinitions(int pageIndex, int pageSize, string? search = null, string? sortBy = null, bool ascending = true)
+    {
+        if (pageIndex < 1) pageIndex = 1;
+        if (pageSize <= 0) pageSize = 25;
+        using var context = CreateDbContext();
+        IQueryable<TestDefinition> query = context.TestDefinitions.Where(t => t.Active);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var q = search.ToLower();
+            query = query.Where(t =>
+                (t.GroupName != null && t.GroupName.ToLower().Contains(q)) ||
+                (t.Library != null && t.Library.ToLower().Contains(q)) ||
+                (t.FunctionName != null && t.FunctionName.ToLower().Contains(q)) ||
+                (t.Prompt != null && t.Prompt.ToLower().Contains(q)));
+        }
+
+        // Sort
+        var col = (sortBy ?? "id").ToLowerInvariant();
+        query = col switch
+        {
+            "group" or "groupname" => ascending ? query.OrderBy(t => t.GroupName) : query.OrderByDescending(t => t.GroupName),
+            "library" => ascending ? query.OrderBy(t => t.Library) : query.OrderByDescending(t => t.Library),
+            "function" or "functionname" => ascending ? query.OrderBy(t => t.FunctionName) : query.OrderByDescending(t => t.FunctionName),
+            "priority" => ascending ? query.OrderBy(t => t.Priority) : query.OrderByDescending(t => t.Priority),
+            _ => ascending ? query.OrderBy(t => t.Id) : query.OrderByDescending(t => t.Id)
+        };
+
+        var total = query.Count();
+        var items = query.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
+        return (items, total);
     }
 
     public TestDefinition? GetTestDefinitionById(int id)
@@ -3616,6 +3688,39 @@ WHERE Id = @modelId;";
         return context.StoriesStatus.OrderBy(s => s.Step).ThenBy(s => s.Code).ToList();
     }
 
+    /// <summary>
+    /// Return paged StoryStatus entries with optional search and sort. PageIndex starts at 1.
+    /// </summary>
+    public (List<StoryStatus> Items, int TotalCount) GetPagedStoryStatuses(int pageIndex, int pageSize, string? search = null, string? sortBy = null, bool ascending = true)
+    {
+        if (pageIndex < 1) pageIndex = 1;
+        if (pageSize <= 0) pageSize = 25;
+        using var context = CreateDbContext();
+        IQueryable<StoryStatus> query = context.StoriesStatus;
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var q = search.ToLower();
+            query = query.Where(s =>
+                (s.Code != null && s.Code.ToLower().Contains(q)) ||
+                (s.Description != null && s.Description.ToLower().Contains(q)) ||
+                (s.FunctionName != null && s.FunctionName.ToLower().Contains(q)));
+        }
+
+        var col = (sortBy ?? "step").ToLowerInvariant();
+        query = col switch
+        {
+            "code" => ascending ? query.OrderBy(s => s.Code) : query.OrderByDescending(s => s.Code),
+            "description" => ascending ? query.OrderBy(s => s.Description) : query.OrderByDescending(s => s.Description),
+            "step" => ascending ? query.OrderBy(s => s.Step) : query.OrderByDescending(s => s.Step),
+            _ => ascending ? query.OrderBy(s => s.Step) : query.OrderByDescending(s => s.Step)
+        };
+
+        var total = query.Count();
+        var items = query.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
+        return (items, total);
+    }
+
     public StoryStatus? GetStoryStatusById(int id)
     {
         using var context = CreateDbContext();
@@ -4145,24 +4250,42 @@ WHERE Id = @modelId;";
     /// <summary>
     /// Top 10 storie per media valutazioni dalla tabella stories_evaluations
     /// </summary>
-    public List<(long Id, string Prompt, string Model, double AvgScore, string Timestamp)> GetTopStoriesByEvaluation(int top = 10)
+    public List<(long Id, string Title, string Agent, double AvgScore, string Timestamp, bool GeneratedMixedAudio)> GetTopStoriesByEvaluation(int top = 10)
     {
         using var conn = CreateConnection();
         conn.Open();
         var sql = @"
             SELECT 
                 s.id AS Id,
-                COALESCE(s.prompt, '') AS Prompt,
-                COALESCE(m.Name, '') AS Model,
+                COALESCE(s.title, '') AS Title,
+                COALESCE(a.name, '') AS Agent,
                 AVG(se.total_score) AS AvgScore,
                 COALESCE(s.ts, '') AS Timestamp
             FROM stories s
             INNER JOIN stories_evaluations se ON se.story_id = s.id
+            LEFT JOIN agents a ON s.agent_id = a.id
             LEFT JOIN models m ON s.model_id = m.Id
             GROUP BY s.id
             ORDER BY AvgScore DESC
             LIMIT @top";
-        return conn.Query<(long Id, string Prompt, string Model, double AvgScore, string Timestamp)>(sql, new { top }).ToList();
+        var list = conn.Query(sql, new { top }).Select(r => (
+            Id: (long)r.Id,
+            Title: (string)r.Title,
+            Agent: (string)r.Agent,
+            AvgScore: (double)r.AvgScore,
+            Timestamp: (string)r.Timestamp,
+            GeneratedMixedAudio: ((IDictionary<string, object>)r).ContainsKey("GeneratedMixedAudio") ? Convert.ToBoolean(((IDictionary<string, object>)r)["GeneratedMixedAudio"]) : false
+        )).ToList();
+        // The query above doesn't include GeneratedMixedAudio column in SQL because SQLite cannot reference it via aggregate grouping easily; retrieve generated flag separately
+        foreach (var i in Enumerable.Range(0, list.Count))
+        {
+            try {
+                var gid = list[i].Id;
+                var gm = conn.QuerySingleOrDefault<bool?>("SELECT generated_mixed_audio FROM stories WHERE id = @id", new { id = gid }) ?? false;
+                list[i] = (list[i].Id, list[i].Title, list[i].Agent, list[i].AvgScore, list[i].Timestamp, gm);
+            } catch { }
+        }
+        return list;
     }
 
     /// <summary>

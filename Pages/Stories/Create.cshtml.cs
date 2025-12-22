@@ -32,6 +32,9 @@ namespace TinyGenerator.Pages.Stories
         public string Title { get; set; } = string.Empty;
 
         [BindProperty]
+        public int? ModelId { get; set; }
+
+        [BindProperty]
         public int? StatusId { get; set; }
 
         [BindProperty]
@@ -39,11 +42,13 @@ namespace TinyGenerator.Pages.Stories
 
         public List<StoryStatus> Statuses { get; set; } = new();
         public List<Agent> Agents { get; set; } = new();
+        public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
 
         public IActionResult OnGet()
         {
             LoadStatuses();
             LoadAgents();
+            LoadModels();
             return Page();
         }
 
@@ -59,7 +64,7 @@ namespace TinyGenerator.Pages.Stories
                 "create_story",
                 async ctx =>
                 {
-                    var cmd = new CreateStoryCommand(_stories, Prompt, StoryText, AgentId, StatusId, Title);
+                    var cmd = new CreateStoryCommand(_stories, Prompt, StoryText, AgentId, StatusId, Title, ModelId);
                     return await cmd.ExecuteAsync(ctx.CancellationToken);
                 },
                 runId: runId,
@@ -98,6 +103,18 @@ namespace TinyGenerator.Pages.Stories
             catch
             {
                 Agents = new List<Agent>();
+            }
+        }
+
+        private void LoadModels()
+        {
+            try
+            {
+                Models = _database.ListModels().ToList();
+            }
+            catch
+            {
+                Models = new List<TinyGenerator.Models.ModelInfo>();
             }
         }
     }

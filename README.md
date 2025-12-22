@@ -1,163 +1,69 @@
 # TinyGenerator
 
-> **NOTA IMPORTANTE PER GLI SVILUPPATORI**
->
-> Questo progetto è stato migrato da Microsoft Semantic Kernel a LangChain.NET. Tutte le nuove funzionalità devono utilizzare LangChain per l'orchestrazione degli agenti e l'invocazione delle funzioni. Il codice legacy di Semantic Kernel è mantenuto solo per compatibilità durante la transizione.
+Applicazione web ASP.NET Core per generare storie tramite un pipeline multi-agente con modelli locali Ollama. L'orchestrazione è **LangChain-first**, con componenti legacy di Semantic Kernel mantenuti per compatibilità.
 
-Un'applicazione web ASP.NET Core per la generazione di storie usando agenti AI basati su LangChain e modelli locali Ollama.
+## Panorama rapido
 
-## Descrizione
-
-TinyGenerator permette di creare storie complete attraverso un processo strutturato che utilizza agenti AI specializzati. Gli agenti seguono un approccio ReAct (Reasoning + Acting) per generare narrazioni coerenti utilizzando tool specializzati per manipolazione testo, memoria persistente, operazioni matematiche, e altro.
-
-## Caratteristiche Principali
-
-- **Generazione basata su LangChain**: Utilizza LangChain.NET per orchestrare agenti AI con tool calling
-- **Agenti specializzati**: Agenti writer e evaluator basati su modelli locali Ollama
-- **Tool System completo**: Oltre 10 tool specializzati (text, math, memory, time, filesystem, TTS, etc.)
-- **ReAct Loop**: Implementazione completa del pattern Reasoning + Acting per tool usage
-- **Controllo costi e token**: Monitoraggio dettagliato dei costi di generazione
-- **Persistenza completa**: Database SQLite per storie, log, agenti, modelli, valutazioni
-- **Interfaccia utente moderna**: Design responsive con Bootstrap 5 e DataTables
-- **SignalR**: Aggiornamenti real-time del progresso durante la generazione
-- **Logging configurabile**: Sistema di logging avanzato con filtri per request/response JSON
-- **Test framework**: Suite completa per testare function calling e tool execution
+- **Multi-agente**: writer ed evaluator con tool calling ReAct; selezione automatica della storia migliore.
+- **Strumenti pronti**: testo, memoria persistente SQLite, HTTP, filesystem, math/time, TTS, AudioCraft e tool TTS schema.
+- **UI Razor + SignalR**: progressi in tempo reale, dashboard admin con Bootstrap 5 e DataTables.
+- **Persistenza unica**: SQLite per agenti, modelli, storie, log, test e memoria vettoriale.
+- **Command dispatcher**: coda asincrona configurabile per generazione, valutazione e TTS.
+- **Logging e notifiche**: logger su DB con regole `app_events` e broadcast via SignalR.
 
 ## Requisiti
 
-- **.NET 9.0**
-- **SQLite**
-- **Ollama** con modelli locali:
-  - Modelli principali: `phi3:mini-128k`, `llama3.1:8b`, `qwen2.5:7b`
-  - Modelli leggeri: `qwen2.5:3b`, `llama3.2:3b`
+- .NET 10.0 SDK
+- SQLite (usato localmente tramite file `data/storage.db`)
+- Ollama in esecuzione locale con modelli suggeriti: `phi3:mini-128k`, `llama3.1:8b`, `qwen2.5:7b`, `qwen2.5:3b`, `llama3.2:3b`
+- (Opzionale) Server TTS esterno raggiungibile via HTTP
 
-## Installazione
+## Setup rapido
 
-1. **Clona il repository:**
-   ```bash
-   git clone https://github.com/cristido1/TinyGeneratorLC.git
-   cd TinyGeneratorLC
-   ```
+1) Clona il repo
+```
+git clone https://github.com/cristido1/TinyGeneratorLC.git
+cd TinyGeneratorLC
+```
 
-2. **Installa dipendenze:**
-   ```bash
-   dotnet restore
-   ```
+2) Ripristina i pacchetti
+```
+dotnet restore
+```
 
-3. **Configura Ollama:**
-   ```bash
-   # Avvia Ollama
-   ./scripts/start_ollama.sh
+3) Avvia Ollama e scarica i modelli
+- Windows: `ollama_start.bat`
+- Linux/macOS: `./start_ollama.sh`
+- Poi esegui `ollama pull` per i modelli indicati sopra.
 
-   # Scarica i modelli richiesti
-   ollama pull phi3:mini-128k
-   ollama pull llama3.1:8b
-   ollama pull qwen2.5:7b
-   ollama pull qwen2.5:3b
-   ollama pull llama3.2:3b
-   ```
+4) Configura (opzionale) `appsettings.secrets.json` per endpoint personalizzati, chiavi o override TTS.
 
-4. **Avvia l'applicazione:**
-   ```bash
-   dotnet run
-   ```
+5) Avvia l'app
+```
+dotnet run
+```
+Apri http://localhost:5077.
 
-5. **Apri nel browser:** http://localhost:5077
+## Come funziona
 
-## Utilizzo
+### Flusso di generazione
+1. L'utente inserisce un tema in `Genera`.
+2. Il sistema avvia un comando di generazione tramite `CommandDispatcher`.
+3. Ogni agente writer (attivo nel DB) genera una bozza usando tool LangChain.
+4. Gli evaluator attivi valutano le bozze e assegnano un punteggio.
+5. La storia con punteggio migliore sopra soglia viene salvata (stato "production").
+6. SignalR aggiorna in tempo reale UI e log.
 
-### Generazione Storie
-1. Nella pagina principale, inserisci un tema per la storia
-2. Seleziona il tipo di generazione (Tutti/A/B/C agenti)
-3. Monitora il progresso real-time via SignalR
-4. La storia viene valutata automaticamente e salvata se supera il punteggio minimo
+### Componenti chiave
+- **Services/**: orchestrazione (LangChainKernelFactory, LangChainToolFactory, LangChainAgentService), multi-step pipeline (MultiStepOrchestrationService, ResponseCheckerService), persistenza (DatabaseService), memoria (PersistentMemoryService), logging (CustomLogger), gestione modelli Ollama, TTS.
+- **CommandDispatcher**: coda in background con parallelismo configurabile per comandi di generazione/valutazione/TTS.
+- **Skills/**: tool richiamabili dagli agenti (text, math, memory, time, filesystem, http, tts api, audiocraft, evaluator, tts schema, story writer, ecc.).
+- **Pages/**: Razor Pages per generazione (`Genera`), home (`Index`), amministrazione (`Admin`, `Agents`, `Models`, `Stories`, `Logs`, `Tests`, `Chat`).
+- **Hubs/ProgressHub**: aggiornamenti real-time su stato comandi e log.
+- **Models/**: entità per agenti, modelli, storie, valutazioni, test, embedding.
 
-### Amministrazione
-- **Agenti**: Gestisci agenti AI con configurazioni JSON personalizzate
-- **Modelli**: Testa function calling sui modelli Ollama
-- **Log**: Visualizza log dettagliati con filtri per categoria
-- **Storie**: Gestisci storie generate e valutazioni
-- **Test**: Esegui test di function calling e tool execution
-
-## Architettura
-
-### Servizi Core (`Services/`)
-- **LangChain Services**:
-  - `LangChainChatBridge`: Bridge per chiamate ai modelli con tool support
-  - `ReActLoopOrchestrator`: Implementazione del pattern ReAct
-  - `HybridLangChainOrchestrator`: Orchestrazione ibrida LangChain + legacy
-  - `LangChainKernelFactory`: Factory per creazione orchestratori
-  - `LangChainAgentService`: Gestione agenti con configurazioni DB
-
-- **Command Pattern**:
-  - `CommandDispatcher`: Dispatcher asincrono per l'esecuzione dei comandi con tracking dello stato
-  - `IStoryCommand`: Interfaccia per comandi relativi alle storie
-  - Comandi disponibili in `Services/Commands/`:
-    - `StartMultiStepStoryCommand`: Avvia generazione storia multi-step
-    - `ExecuteMultiStepTaskCommand`: Esegue task multi-step
-    - `ResumeMultiStepTaskCommand`: Riprende task interrotti
-  - Tutti i comandi principali (evaluation, TTS, generation) devono essere eseguiti tramite `CommandDispatcher.Enqueue()`
-
-- **Tool System**:
-  - `LangChainToolFactory`: Factory per creazione tool specializzati
-  - Tool implementati in `Skills/`: TextTool, MathTool, MemoryTool, TimeTool, etc.
-
-- **Persistence & Monitoring**:
-  - `DatabaseService`: Gestione database SQLite
-- `CustomLogger`: Logging configurabile con batching che ora gestisce anche progressi, agenti, modelli occupati e notifiche via SignalR seguendo le regole di `app_events`.
-- `app_events`: Tabella di configurazione degli eventi (`event_type`, `enabled`, `logged`, `notified`) che governa quali eventi vengono salvati e notificati in tempo reale.
-
-- **External Services**:
-  - `OllamaManagementService`: Gestione modelli Ollama
-  - `TtsService`: Text-to-Speech via API esterna
-  - `CostController`: Monitoraggio costi token
-
-### Tool Disponibili (`Skills/`)
-- **BaseLangChainTool**: Classe base astratta per tool
-- **TextTool**: Manipolazione testo (toupper, tolower, trim, substring, etc.)
-- **MathTool**: Operazioni aritmetiche (add, subtract, multiply, divide)
-- **MemoryTool**: Memoria persistente SQLite (remember, recall, forget)
-- **TimeTool**: Operazioni temporali (now, today, adddays, addhours)
-- **FileSystemTool**: Operazioni file system
-- **HttpTool**: Chiamate HTTP
-- **TtsApiTool**: Text-to-Speech via API
-- **AudioCraftTool**: Generazione audio
-- **StoryWriterTool**: Scrittura storie assistita
-- **EvaluatorTool**: Valutazione storie (la legacy StoryEvaluatorTool è stata rimossa — usare EvaluatorTool)
-- **TtsSchemaTool**: Gestione schemi TTS
-
-### Interfaccia Utente (`Pages/`)
-- **Pagine principali**:
-  - `Index`: Homepage con generazione storie
-  - `Genera`: Pagina generazione con progresso real-time
-  - `Admin`: Dashboard amministrativa
-
-- **Gestione**:
-  - `Agents/`: CRUD agenti con configurazioni JSON
-  - `Models/`: Test modelli e function calling
-  - `Stories/`: Gestione storie generate
-  - `Logs/`: Visualizzazione log filtrati
-
-- **Test & Monitoraggio**:
-  - `LangChainTest`: Test framework LangChain
-  - `OllamaMonitor`: Monitoraggio modelli Ollama
-  - `Chat`: Interfaccia chat diretta
-
-### Modelli Dati (`Models/`)
-- **Agent.cs**: Configurazione agenti
-- **ModelInfo.cs**: Metadati modelli
-- **StoryRecord.cs**: Storie generate
-- **LogEntry.cs**: Record log
-- **TestDefinition.cs**: Definizioni test
-
-### API (`Controllers/`)
-- **StoriesApiController**: API REST per storie
-- **LogsApiController**: API per log
-- **ChatController**: Controller chat
-
-## Configurazione
-
-### appsettings.json
+### Configurazione
+Esempio minimale da `appsettings.json`:
 ```json
 {
   "AppLog": {
@@ -172,41 +78,45 @@ TinyGenerator permette di creare storie complete attraverso un processo struttur
   }
 }
 ```
+Variabili ambiente utili: `TTS_HOST`, `TTS_PORT`, `TTS_TIMEOUT_SECONDS`.
 
 ### Database
-Il database SQLite (`data/storage.db`) contiene:
-- `agents`: Configurazioni agenti
-- `models`: Metadati modelli
-- `stories`: Storie generate
-- `tts_voices`: Catalogo delle voci TTS importate (usato dagli agenti e dai fallback automatici)
-- `logs`: Record di log
-- `calls`: Tracciamento function calls
-- `Log_analysis`: Risultati delle analisi sui log collegati ai comandi eseguiti
+- File: `data/storage.db` (EF Core + Dapper). Si crea/aggiorna all'avvio se mancano tabelle.
+- Tabelle principali: `agents`, `models`, `stories`, `calls`, `logs`, `log_analysis`, `test_definitions`, `tts_voices`, memoria vettoriale.
+- Script di popolamento esempio in `populate_*.sql`; usa `sqlite3 data/storage.db < populate_agents.sql` per caricarli.
 
-## Workflow di Sviluppo
+## Uso dell'app
 
-1. **Aggiunta Tool**: Implementare classe in `Skills/` ereditando `BaseLangChainTool`
-2. **Registrazione**: Aggiungere al `LangChainToolFactory.CreateOrchestratorWithTools()`
-3. **Test**: Creare test in `Tests/` per validare function calling
-4. **UI**: Aggiungere pagine Razor se necessario
+- **Genera una storia**: vai su `Genera`, inserisci il tema, scegli generazione completa (tutti gli agenti) o un singolo writer, osserva il progresso in tempo reale.
+- **Test modelli**: pagina `Models` per eseguire prompt di prova e verificare tool/function calling.
+- **Gestione agenti**: pagina `Agents` per abilitare/disabilitare agenti, modificare prompt e skill (JSON nel DB).
+- **Log e storie**: pagine `Logs` e `Stories` per consultare output, punteggi e versioni salvate.
+- **Chat**: interfaccia chat diretta con un modello selezionato (usa gli stessi connettori).
 
-## Best Practices
+## Testing e qualità
 
-- **LangChain First**: Tutte le nuove funzionalità usano LangChain
-- **Command Pattern**: Tutti i comandi principali (generazione storie, valutazioni, TTS, etc.) devono implementare il pattern Command e utilizzare il `CommandDispatcher` per l'esecuzione asincrona e il tracking dello stato. Vedere `Services/Commands/` per esempi.
-- **Tool Schema**: Mantenere description concise nei tool schemas
-- **Logging**: Usare `ICustomLogger` per logging consistente
-- **Database**: Usare Dapper per query, transazioni per operazioni critiche
-- **UI**: Bootstrap 5 + DataTables per tabelle, SignalR per real-time
-- **Error Handling**: Fail-fast per problemi di integrazione, graceful degradation per errori runtime
+- Test automatizzati: `dotnet test` (xUnit). La suite include verifiche su tool LangChain, orchestrazione e persistenza.
+- Monitoraggio: pagina `Logs` e `ProgressHub` per osservare eventi live; `app_events` governa cosa viene loggato/notificato.
 
-## Contributi
+## Best practice di sviluppo
 
-Contributi benvenuti! Seguire il workflow:
-1. Fork del repository
-2. Branch per feature (`feature/nome-feature`)
-3. Pull request con descrizione dettagliata
-4. Code review obbligatoria
+- Preferire l'orchestrazione LangChain per nuove feature; il codice Semantic Kernel resta solo per retrocompatibilità.
+- Aggiungi nuovi tool in `Skills/`, registra in `LangChainToolFactory` e, se necessario, esponi in `execution_plans/`.
+- Per nuove pipeline multi-step, usa il `CommandDispatcher` e il `MultiStepOrchestrationService` per preservare tracciamento e ripartenza.
+- Mantieni le descrizioni dei tool concise; evita parsing ad-hoc delle risposte modello quando puoi usare function/tool calling.
+- Usa `ICustomLogger` per log consistenti e evita cicli DI (database logger è asincrono).
+
+## Script utili
+
+- `start_ollama.sh` / `ollama_start.bat`: avvio rapido di Ollama.
+- `populate_*.sql`: popolamento dati di esempio (agenti, modelli, step templates, status, voci TTS).
+- `scripts/` e `execution_plans/`: piani e prompt base per agenti ReAct.
+
+## Contribuire
+
+1. Apri una branch feature (`feature/nome-feature`).
+2. Aggiungi/aggiorna test rilevanti.
+3. Apri una pull request descrivendo cambi, impatti e test eseguiti.
 
 ## Licenza
 

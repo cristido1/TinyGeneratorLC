@@ -7,16 +7,17 @@
 
 <div class="page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
-        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+            <button type="submit" class="btn btn-sm btn-outline-primary">Cerca</button>
+        </form>
         <div class="ms-auto d-flex gap-1 align-items-center">
             <div class="form-check me-2">
                 <input class="form-check-input" type="checkbox" id="chkShowDisabled" checked="@Model.ShowDisabled" onchange="window.location.href='?ShowDisabled=' + (this.checked ? 'true' : 'false');" />
                 <label class="form-check-label" for="chkShowDisabled">Show Disabled</label>
             </div>
             <div class="dropdown">
-                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
-                    <i class="bi bi-layout-three-columns"></i>
-                </button>
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">Colonne</button>
                 <ul class="dropdown-menu dropdown-menu-end" id="testDefsGridColVisMenu" style="min-width: 180px;"></ul>
             </div>
             <button id="refreshBtn" class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
@@ -24,7 +25,61 @@
         </div>
     </div>
 
-    <div id="testDefsGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
+    <div class="border p-2 rounded">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th data-col="group">Group</th>
+                    <th data-col="library">Library</th>
+                    <th data-col="function">Function</th>
+                    <th data-col="priority">Priority</th>
+                    <th data-col="timeout">Timeout (s)</th>
+                    <th data-col="testType">Test Type</th>
+                    <th data-col="allowedPlugins">Allowed Plugins</th>
+                    <th data-col="responseFormat">Response Format</th>
+                    <th data-col="executionPlan">Execution Plan</th>
+                    <th data-col="active">Active</th>
+                    <th data-col="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (Model.Definitions != null && Model.Definitions.Count > 0)
+                {
+                    foreach (var d in Model.Definitions)
+                    {
+                        <tr>
+                            <td data-col="group">@d.GroupName</td>
+                            <td data-col="library">@d.Library</td>
+                            <td data-col="function">@d.FunctionName</td>
+                            <td data-col="priority">@d.Priority</td>
+                            <td data-col="timeout">@(d.TimeoutSecs > 0 ? d.TimeoutSecs.ToString() : "")</td>
+                            <td data-col="testType">@d.TestType</td>
+                            <td data-col="allowedPlugins">@d.AllowedPlugins</td>
+                            <td data-col="responseFormat">@d.JsonResponseFormat</td>
+                            <td data-col="executionPlan">@d.ExecutionPlan</td>
+                            <td data-col="active">@(d.Active ? "Yes" : "No")</td>
+                            <td data-col="actions">
+                                <div class="dropdown">
+                                    <button class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">Azioni</button>
+                                    <div class="dropdown-menu p-2">
+                                        <a class="dropdown-item" href="/TestDefinitions/Edit?id=@d.Id">Edit</a>
+                                        <a class="dropdown-item" href="/TestDefinitions/Delete?id=@d.Id">Delete</a>
+                                        <a class="dropdown-item preview-prompt" href="#" data-id="@d.Id">Show Prompt</a>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                }
+                else
+                {
+                    <tr><td colspan="11">No test definitions</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div id="pager" class="mt-2"></div>
 </div>
 
 <!-- Details Modal for Prompt -->
@@ -46,58 +101,31 @@
 </div>
 
 @section Scripts {
-    <script>
-        window.__testdefs_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Definitions));
-    </script>
+    <script src="/js/shared/list-ui.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const rowData = window.__testdefs_data || [];
-
-            const columnDefs = [
-                { headerName: 'Group', field: 'GroupName', width: 120 },
-                { headerName: 'Library', field: 'Library', width: 100 },
-                { headerName: 'Function', field: 'FunctionName', flex: 1 },
-                { headerName: 'Priority', field: 'Priority', width: 90 },
-                { headerName: 'Timeout (s)', field: 'TimeoutSecs', width: 100, valueFormatter: p => p.value > 0 ? p.value : '' },
-                { headerName: 'Test Type', field: 'TestType', width: 100 },
-                { headerName: 'Allowed Plugins', field: 'AllowedPlugins', width: 130 },
-                { headerName: 'Response Format', field: 'JsonResponseFormat', width: 130 },
-                { headerName: 'Execution Plan', field: 'ExecutionPlan', width: 130 },
-                { headerName: 'Active', field: 'Active', width: 80, valueFormatter: p => p.value ? 'Yes' : 'No' },
-                {
-                    headerName: 'Actions', colId: 'actions', width: 180, suppressColumnsToolPanel: true,
-                    cellRenderer: params => {
-                        const id = params.data.Id;
-                        const hasPrompt = params.data.Prompt && params.data.Prompt.trim().length > 0;
-                        return `<button class="btn btn-sm btn-outline-secondary me-1 btn-details" data-id="${id}" ${!hasPrompt ? 'disabled' : ''} title="Show prompt">+</button>` +
-                               `<a class="btn btn-sm btn-outline-primary me-1" href="/TestDefinitions/Edit?id=${id}">Edit</a>` +
-                               `<a class="btn btn-sm btn-outline-danger" href="/TestDefinitions/Delete?id=${id}">Delete</a>`;
-                    }
-                }
-            ];
-
-            AgGridHelper.init('testDefsGrid', columnDefs, rowData, {
-                storageKey: 'agGrid_testDefs_colVis',
-                pageSize: 25
-            });
-
-            // Quick filter
-            document.getElementById('globalFilter')?.addEventListener('input', e => {
-                window.testDefsGridApi?.setQuickFilter(e.target.value);
-            });
-
-            // Grid click handlers
-            document.getElementById('testDefsGrid').addEventListener('click', e => {
-                const detailsBtn = e.target.closest('.btn-details');
-                if (detailsBtn && !detailsBtn.disabled) {
-                    const id = parseInt(detailsBtn.dataset.id);
-                    const item = rowData.find(r => r.Id === id);
-                    if (item && item.Prompt) {
-                        document.querySelector('#promptModalBody pre').textContent = item.Prompt;
+            // Preview prompt handler: read prompt from server-side rendered dataset via data-id lookup
+            document.querySelectorAll('.preview-prompt').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    e.preventDefault();
+                    const id = parseInt(btn.getAttribute('data-id'));
+                    // find the matching definition in the DOM (simple search)
+                    const row = btn.closest('tr');
+                    // server-side we didn't render the full prompt to avoid long cells; fetch via endpoint if needed
+                    fetch('/TestDefinitions/DetailsPrompt?id=' + id).then(r => r.text()).then(txt => {
+                        document.querySelector('#promptModalBody pre').textContent = txt || 'No prompt';
                         new bootstrap.Modal(document.getElementById('promptModal')).show();
-                    }
-                }
+                    }).catch(err => {
+                        console.error(err);
+                        showError('Error', 'Unable to fetch prompt');
+                    });
+                });
             });
+
+            // Initialize column visibility menu from data-col
+            if (window.listUi && typeof window.listUi.init === 'function') {
+                window.listUi.init(document, { storageKey: 'testdefs_cols_v1' });
+            }
         });
     </script>
 }

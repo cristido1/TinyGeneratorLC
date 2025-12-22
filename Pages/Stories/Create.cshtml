@@ -9,6 +9,10 @@
         <h3>Crea nuova storia</h3>
         <form method="post">
             <div class="mb-3">
+                <label class="form-label">Titolo</label>
+                <input class="form-control" asp-for="Title" />
+            </div>
+            <div class="mb-3">
                 <label class="form-label">Prompt</label>
                 <input class="form-control" asp-for="Prompt" />
             </div>
@@ -33,6 +37,16 @@
                     @foreach (var agent in Model.Agents)
                     {
                         <option value="@agent.Id">@agent.Name (@agent.Role)</option>
+                    }
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Modello (opzionale)</label>
+                <select class="form-select" asp-for="ModelId">
+                    <option value="">-- nessuno --</option>
+                    @foreach (var m in Model.Models)
+                    {
+                        <option value="@m.Id">@m.Name (@m.Provider)</option>
                     }
                 </select>
             </div>

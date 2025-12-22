@@ -6,25 +6,72 @@
 
 <div class="stories-page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
-        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+            <input type="hidden" name="pageSize" value="@Model.PageSize" />
+            <input type="hidden" name="orderBy" value="@Model.OrderBy" />
+            <input type="hidden" name="ascending" value="@Model.Ascending" />
+            <button type="submit" class="btn btn-sm btn-outline-primary">Cerca</button>
+        </form>
         <div class="ms-auto d-flex gap-1">
             <div class="dropdown">
-                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" id="colVisBtn" data-bs-toggle="dropdown" aria-expanded="false" title="Colonne visibili">
-                    <i class="bi bi-layout-three-columns"></i>
-                </button>
-                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;">
-                    <!-- populated by JS -->
-                </ul>
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" id="colVisBtn" data-bs-toggle="dropdown" aria-expanded="false">Colonne</button>
+                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
             </div>
             <button id="refreshBtn" class="btn btn-sm btn-outline-secondary">Refresh</button>
             <a class="btn btn-sm btn-primary" asp-page="./Create">Nuovo</a>
         </div>
     </div>
 
-    <div id="storiesGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
-</div>
+    <div class="border p-2 rounded">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th data-col="step">Step</th>
+                    <th data-col="code">Code</th>
+                    <th data-col="description">Description</th>
+                    <th data-col="operation">Operation</th>
+                    <th data-col="agentType">Agent Type</th>
+                    <th data-col="function">Function</th>
+                    <th data-col="caption">Caption</th>
+                    <th data-col="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (Model.Statuses != null && Model.Statuses.Count > 0)
+                {
+                    foreach (var s in Model.Statuses)
+                    {
+                        <tr>
+                            <td data-col="step">@s.Step</td>
+                            <td data-col="code">@s.Code</td>
+                            <td data-col="description">@s.Description</td>
+                            <td data-col="operation">@s.OperationType</td>
+                            <td data-col="agentType">@s.AgentType</td>
+                            <td data-col="function">@s.FunctionName</td>
+                            <td data-col="caption">@s.CaptionToExecute</td>
+                            <td data-col="actions">
+                                <div class="dropdown">
+                                    <button class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">Azioni</button>
+                                    <div class="dropdown-menu p-2">
+                                        <a class="dropdown-item" href="/StoriesStatus/Edit?id=@s.Id">Edit</a>
+                                        <a class="dropdown-item" href="/StoriesStatus/Delete?id=@s.Id">Delete</a>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                }
+                else
+                {
+                    <tr><td colspan="8">No statuses</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
 
-<script type="application/json" id="storiesGridData">@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Statuses))</script>
+    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
+</div>
 
 <!-- Details modal -->
 <div class="modal fade" id="statusDetailsModal" tabindex="-1" aria-hidden="true">
@@ -47,8 +94,27 @@
 }
 
 @section Scripts {
+    <script src="/js/shared/list-ui.js"></script>
     <script>
-        window.__stories_initial_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Statuses));
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('refreshBtn')?.addEventListener('click', () => location.reload());
+
+            // Wire actions dropdown links (edit/delete already server links)
+            document.querySelectorAll('.preview-prompt').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    e.preventDefault();
+                    const id = btn.getAttribute('data-id');
+                    fetch('/StoriesStatus/DetailsPrompt?id=' + id).then(r => r.text()).then(txt => {
+                        document.querySelector('#statusDetailsModal .modal-body').textContent = txt || 'No details';
+                        new bootstrap.Modal(document.getElementById('statusDetailsModal')).show();
+                    });
+                });
+            });
+
+            if (window.listUi && typeof window.listUi.init === 'function') {
+                window.listUi.init(document, { storageKey: 'storiesstatus_cols_v1', pagerId: 'pager' });
+                // provide pager data attributes to the shared pagination logic
+            }
+        });
     </script>
-    <script src="/js/storiesstatus.js"></script>
 }

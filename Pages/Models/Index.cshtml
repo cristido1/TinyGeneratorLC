@@ -1,4 +1,97 @@
-@page "/Models/index"
+@page
+@model TinyGenerator.Pages.Models.IndexModel
 @{
-    Response.Redirect("/Models", permanent: false);
+    ViewData["Title"] = "Models";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>Models</h3>
+    <div class="btn-toolbar">
+        <div class="me-2">
+            <a class="btn btn-primary" asp-page="Edit">Create model</a>
+        </div>
+        <div class="dropdown">
+            <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="colVisBtn" data-bs-toggle="dropdown" aria-expanded="false">Colonne visibili</button>
+            <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu"></ul>
+        </div>
+    </div>
+</div>
+
+<form method="get" class="row g-2 mb-3">
+    <div class="col-auto">
+        <input name="search" value="@Model.Search" class="form-control" placeholder="Cerca..." />
+        <input type="hidden" name="pageSize" value="@Model.PageSize" />
+        <input type="hidden" name="orderBy" value="@Model.OrderBy" />
+        <input type="hidden" name="ascending" value="@Model.Ascending" />
+    </div>
+    <div class="col-auto">
+        <button type="submit" class="btn btn-secondary">Cerca</button>
+    </div>
+</form>
+
+<div class="card" style="border:2px solid #ccc; border-radius:8px;">
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0" id="modelsTable">
+            <thead class="table-light">
+                <tr>
+                    <th data-col="name">Name</th>
+                    <th data-col="provider">Provider</th>
+                    <th data-col="endpoint">Endpoint</th>
+                    <th data-col="enabled">Enabled</th>
+                    <th data-col="notools">NoTools</th>
+                    <th data-col="function_calling">FuncCallScore</th>
+                    <th data-col="test_duration">LastTestSec</th>
+                    <th data-col="created">Created</th>
+                    <th data-col="updated">Updated</th>
+                    <th data-col="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in Model.Items)
+                {
+                    <tr>
+                        <td data-col="name">@item.Name</td>
+                        <td data-col="provider">@item.Provider</td>
+                        <td data-col="endpoint">@item.Endpoint</td>
+                        <td data-col="enabled">@(item.Enabled ? "Yes" : "No")</td>
+                        <td data-col="notools">@(item.NoTools ? "Yes" : "No")</td>
+                        <td data-col="function_calling">@item.FunctionCallingScore</td>
+                        <td data-col="test_duration">@((item.TestDurationSeconds.HasValue) ? item.TestDurationSeconds.Value.ToString("0.0") : "-")</td>
+                        <td data-col="created">@((!string.IsNullOrWhiteSpace(item.CreatedAt) && DateTime.TryParse(item.CreatedAt, out var cdt)) ? cdt.ToString("dd/MM/yyyy HH:mm") : "-")</td>
+                        <td data-col="updated">@((!string.IsNullOrWhiteSpace(item.UpdatedAt) && DateTime.TryParse(item.UpdatedAt, out var udt)) ? udt.ToString("dd/MM/yyyy HH:mm") : "-")</td>
+                        <td data-col="actions">
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" asp-page="Edit" asp-route-id="@item.Id">Edit</a></li>
+                                    <li>
+                                        <form method="post" class="d-inline" asp-page-handler="Delete" onsubmit="return confirm('Eliminare il modello @item.Name?');">
+                                            <input type="hidden" name="name" value="@item.Name" />
+                                            <button type="submit" class="dropdown-item">Delete</button>
+                                        </form>
+                                    </li>
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="pager" class="mt-3" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
+
+@section Scripts {
+    <script src="/js/shared/column-visibility.js"></script>
+    <script src="/js/shared/pagination.js"></script>
+    <script src="/js/shared/list-ui.js"></script>
+    <script>
+        // Initialize List UI (will build columns menu and pager)
+        document.addEventListener('DOMContentLoaded', function(){
+            if (window.ListUI && typeof window.ListUI.init === 'function'){
+                window.ListUI.init({ tableSelector: '#modelsTable', colsMenuId: 'colVisMenu', storageKey: 'models_cols_v1', pagerId: 'pager' });
+            }
+        });
+    </script>
 }

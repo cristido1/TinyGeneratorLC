@@ -462,11 +462,13 @@ namespace TinyGenerator.Pages.Stories
             
             if (System.IO.File.Exists(mp3Path))
             {
-                return PhysicalFile(mp3Path, "audio/mpeg", "final_mix.mp3");
+                var r = new PhysicalFileResult(mp3Path, "audio/mpeg") { FileDownloadName = "final_mix.mp3", EnableRangeProcessing = true };
+                return r;
             }
             if (System.IO.File.Exists(wavPath))
             {
-                return PhysicalFile(wavPath, "audio/wav", "final_mix.wav");
+                var r = new PhysicalFileResult(wavPath, "audio/wav") { FileDownloadName = "final_mix.wav", EnableRangeProcessing = true };
+                return r;
             }
             
             return NotFound("File audio finale non trovato");
@@ -491,7 +493,8 @@ namespace TinyGenerator.Pages.Stories
                 _ => "application/octet-stream"
             };
 
-            return PhysicalFile(filePath, contentType);
+            var pres = new PhysicalFileResult(filePath, contentType) { EnableRangeProcessing = true };
+            return pres;
         }
 
         public IActionResult OnGetTtsPlaylist(long id)

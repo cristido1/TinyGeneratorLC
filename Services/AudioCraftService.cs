@@ -31,12 +31,12 @@ namespace TinyGenerator.Services
         /// </summary>
         /// <param name="prompt">Text description of the music to generate</param>
         /// <param name="durationSeconds">Duration in seconds (default 10.0)</param>
-        /// <param name="modelName">Model to use (default: facebook/musicgen-small)</param>
+        /// <param name="modelName">Model to use (default: facebook/musicgen-medium)</param>
         /// <returns>Tuple with success flag, generated file URL, and error message if any</returns>
         public async Task<(bool success, string? fileUrl, string? error)> GenerateMusicAsync(
             string prompt,
             float durationSeconds = 10.0f,
-            string modelName = "facebook/musicgen-small",
+            string modelName = "facebook/musicgen-medium",
             float temperature = 1.0f,
             int topK = 250,
             float topP = 0.0f)

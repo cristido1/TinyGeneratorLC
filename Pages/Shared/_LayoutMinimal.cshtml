@@ -8,9 +8,6 @@
     <link href="~/lib/bootstrap-icons/bootstrap-icons.css" rel="stylesheet" />
     <link rel="stylesheet" href="~/css/sidebar.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <!-- AG Grid CSS (shared) -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-grid.css" />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-theme-alpine.css" />
     @await RenderSectionAsync("Styles", required: false)
 </head>
 <body class="has-sidebar">
@@ -78,9 +75,6 @@
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/lib/signalr/signalr.min.js"></script>
     <script src="~/js/sidebar.js" asp-append-version="true"></script>
-    <!-- AG Grid JS (shared) -->
-    <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/dist/ag-grid-community.min.js"></script>
-    <script src="~/js/aggrid-common.js" asp-append-version="true"></script>
     <!-- Command panel for active commands -->
     <script src="~/js/command-panel.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)

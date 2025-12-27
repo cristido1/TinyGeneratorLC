@@ -69,7 +69,11 @@ namespace TinyGenerator.Services
             }
 
             // Track pending ambience - only applied to the FIRST phrase after the AMBIENTE tag
+            // NOTE: Ambience now stores environment description for future image generation, NOT for audio
             string? pendingAmbience = null;
+            
+            // Track pending ambient sounds (from [RUMORI: ...] tag) - these are used for AudioCraft generation
+            string? pendingAmbientSounds = null;
             
             // Track pending FX for the next phrase
             string? pendingFxDescription = null;
@@ -77,6 +81,9 @@ namespace TinyGenerator.Services
             
             // Track pending music for the next phrase
             string? pendingMusicDescription = null;
+
+            // Track pending emotion from [EMOZIONE: xxx] tag - applies to the next character
+            string? pendingEmotion = null;
 
             // Process each tag and extract the following text
             for (int i = 0; i < matches.Count; i++)
@@ -89,7 +96,20 @@ namespace TinyGenerator.Services
                 int textEnd = (i + 1 < matches.Count) ? matches[i + 1].Index : storyText.Length;
                 var text = storyText.Substring(textStart, textEnd - textStart).Trim();
 
-                // Handle AMBIENTE/AMBIENTAZIONE tags - extract description and apply to FIRST phrase only
+                // Handle standalone [EMOZIONE: xxx] tag - store for next character
+                if (tagContent.StartsWith("EMOZIONE", StringComparison.OrdinalIgnoreCase))
+                {
+                    var colonIndex = tagContent.IndexOf(':');
+                    if (colonIndex >= 0)
+                    {
+                        pendingEmotion = tagContent.Substring(colonIndex + 1).Trim().ToLowerInvariant();
+                        _logger?.Log("Debug", "TtsSchemaGenerator", 
+                            $"Parsed standalone EMOZIONE tag: '{pendingEmotion}'");
+                    }
+                    continue;
+                }
+
+                // Handle AMBIENTE/AMBIENTAZIONE tags - extract description for future image generation (NOT for audio)
                 if (tagContent.StartsWith("AMBIENTE", StringComparison.OrdinalIgnoreCase) ||
                     tagContent.StartsWith("AMBIENTAZIONE", StringComparison.OrdinalIgnoreCase))
                 {
@@ -99,7 +119,21 @@ namespace TinyGenerator.Services
                     {
                         pendingAmbience = tagContent.Substring(colonIndex + 1).Trim();
                         _logger?.Log("Debug", "TtsSchemaGenerator", 
-                            $"Parsed ambience (will apply to first phrase only): '{pendingAmbience}'");
+                            $"Parsed ambiente/ambientazione (for future image generation): '{pendingAmbience}'");
+                    }
+                    continue;
+                }
+
+                // Handle RUMORI tags - extract ambient sounds description for AudioCraft generation
+                if (tagContent.StartsWith("RUMORI", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Extract ambient sounds description from tag content (everything after the colon)
+                    var colonIndex = tagContent.IndexOf(':');
+                    if (colonIndex >= 0)
+                    {
+                        pendingAmbientSounds = tagContent.Substring(colonIndex + 1).Trim();
+                        _logger?.Log("Debug", "TtsSchemaGenerator", 
+                            $"Parsed ambient sounds (for AudioCraft): '{pendingAmbientSounds}'");
                     }
                     continue;
                 }
@@ -215,6 +249,14 @@ namespace TinyGenerator.Services
                     emotion = leadingParenEmotion.ToLowerInvariant();
                 }
 
+                // Apply pending emotion from standalone [EMOZIONE: xxx] tag if no emotion was found yet
+                if (!string.IsNullOrWhiteSpace(pendingEmotion) && (string.IsNullOrWhiteSpace(emotion) || emotion == "neutral"))
+                {
+                    emotion = pendingEmotion;
+                    _logger?.Log("Debug", "TtsSchemaGenerator", $"Applied pending emotion '{pendingEmotion}' to character '{character}'");
+                    pendingEmotion = null; // Reset after use
+                }
+
                 if (string.IsNullOrWhiteSpace(text))
                 {
                     continue; // Skip empty phrases
@@ -275,14 +317,16 @@ namespace TinyGenerator.Services
                     Text = CleanText(text),
                     Emotion = string.IsNullOrWhiteSpace(emotion) ? "neutral" : emotion,
                     Ambience = pendingAmbience,
+                    AmbientSounds = pendingAmbientSounds,
                     FxDescription = pendingFxDescription,
                     FxDuration = pendingFxDuration,
                     MusicDescription = pendingMusicDescription,
                     MusicDuration = pendingMusicDescription != null ? 10 : null // Fixed 10 seconds for music
                 };
 
-                // Reset pending ambience, FX, and music after applying to phrase (applied only once)
+                // Reset pending ambience, ambient sounds, FX, and music after applying to phrase (applied only once)
                 pendingAmbience = null;
+                pendingAmbientSounds = null;
                 pendingFxDescription = null;
                 pendingFxDuration = null;
                 pendingMusicDescription = null;
@@ -300,7 +344,13 @@ namespace TinyGenerator.Services
         }
 
         /// <summary>
-        /// Parses a tag like "NARRATORE" or "Mario, arrabbiato" into character and emotion.
+        /// Parses a tag like "NARRATORE", "Mario, arrabbiato", or "PERSONAGGIO: Nome | EMOZIONE: emotion" into character and emotion.
+        /// Supported formats:
+        ///   - NARRATORE
+        ///   - personaggio, emozione
+        ///   - PERSONAGGIO: Nome | EMOZIONE: emotion
+        ///   - PERSONAGGIO: Nome
+        ///   - just a name (without emotion)
         /// </summary>
         private (string character, string emotion) ParseTag(string tagContent)
         {
@@ -308,6 +358,19 @@ namespace TinyGenerator.Services
             if (tagContent.Equals("NARRATORE", StringComparison.OrdinalIgnoreCase))
             {
                 return ("Narratore", "neutral");
+            }
+
+            // Check for "PERSONAGGIO: Nome | EMOZIONE: emotion" format
+            var personaggioMatch = Regex.Match(tagContent, 
+                @"^PERSONAGGIO:\s*(?<name>[^|]+?)\s*(?:\|\s*EMOZIONE:\s*(?<emo>.+))?\s*$", 
+                RegexOptions.IgnoreCase);
+            if (personaggioMatch.Success)
+            {
+                var name = personaggioMatch.Groups["name"].Value.Trim();
+                var emo = personaggioMatch.Groups["emo"].Success 
+                    ? personaggioMatch.Groups["emo"].Value.Trim().ToLowerInvariant() 
+                    : "neutral";
+                return (name, emo);
             }
 
             // Check for "personaggio, emozione" format

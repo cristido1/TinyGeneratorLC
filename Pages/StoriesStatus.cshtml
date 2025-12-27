@@ -1,55 +1,143 @@
 @page "/StoriesStatus/legacy"
 @model TinyGenerator.Pages.StoriesStatusModel
 @{
-    ViewData["Title"] = "Stories Status";
+    ViewData["Title"] = "Stories Status (Legacy)";
 }
 
-<div class="container-fluid mt-3">
-    <div class="d-flex align-items-center mb-3">
-        <div>
-            <h2 class="mb-0">Storie — Stato</h2>
-            <small class="text-muted">Pannello di monitoraggio delle storie generate</small>
-        </div>
-        <div class="ms-auto">
-            <div class="btn-toolbar" role="toolbar">
-                <div class="input-group me-2">
-                    <input id="globalFilter" type="search" class="form-control" placeholder="Cerca..." aria-label="Cerca">
-                    <button id="clearFilter" class="btn btn-outline-secondary">Clear</button>
-                </div>
-                <div class="btn-group me-2">
-                    <button id="columnToggle" class="btn btn-outline-primary">Colonne</button>
-                    <button id="refreshBtn" class="btn btn-outline-secondary">Refresh</button>
-                    <a class="btn btn-primary" href="/Stories/Create">Nuova storia</a>
-                </div>
+<div class="page-wrapper">
+    <div class="d-flex mb-2 align-items-center toolbar-row">
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+            <select name="pageSize" class="form-select form-select-sm" style="width:90px;">
+                @{ var sizes = new[] { 10, 25, 50 }; }
+                @foreach (var s in sizes)
+                {
+                    if (s == Model.PageSize)
+                    {
+                        <option value="@s" selected>@s</option>
+                    }
+                    else
+                    {
+                        <option value="@s">@s</option>
+                    }
+                }
+            </select>
+            <input type="hidden" name="orderBy" value="@Model.OrderBy" />
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
+        </form>
+        <div class="ms-auto d-flex gap-1">
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
+                    <i class="bi bi-layout-three-columns"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
             </div>
+            <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
+            <a class="btn btn-sm btn-primary" href="/StoriesStatus/Create">Nuovo</a>
         </div>
     </div>
 
-    <div class="card shadow-sm">
-        <div class="card-body">
-            <div id="gridToolbar" class="mb-2 d-flex align-items-center">
-                <div class="me-3">Page size:
-                    <select id="pageSizeSelect" class="form-select form-select-sm d-inline-block" style="width: auto;">
-                        <option value="10">10</option>
-                        <option value="25" selected>25</option>
-                        <option value="50">50</option>
-                    </select>
-                </div>
-                <div class="ms-auto">
-                    <button id="prevPage" class="btn btn-sm btn-outline-secondary me-1">Prev</button>
-                    <button id="nextPage" class="btn btn-sm btn-outline-secondary">Next</button>
-                    <span class="ms-2" id="paginationInfo"></span>
-                </div>
-            </div>
+    <div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
+        <table class="table table-sm table-striped mb-0" id="storiesStatusTable">
+            <thead class="table-light">
+                <tr>
+                    <th data-col="step"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "step" })">Step</a></th>
+                    <th data-col="code"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "code" })">Code</a></th>
+                    <th data-col="description"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "description" })">Description</a></th>
+                    <th data-col="operation">Operation</th>
+                    <th data-col="agenttype">Agent Type</th>
+                    <th data-col="function">Function</th>
+                    <th data-col="caption">Caption</th>
+                    <th data-col="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in Model.Items)
+                {
+                    <tr data-id="@s.Id"
+                        data-code="@s.Code"
+                        data-description="@s.Description"
+                        data-step="@s.Step"
+                        data-color="@s.Color"
+                        data-operation="@s.OperationType"
+                        data-agenttype="@s.AgentType"
+                        data-function="@s.FunctionName"
+                        data-caption="@s.CaptionToExecute">
+                        <td data-col="step">@s.Step</td>
+                        <td data-col="code">@s.Code</td>
+                        <td data-col="description">@s.Description</td>
+                        <td data-col="operation">@s.OperationType</td>
+                        <td data-col="agenttype">@s.AgentType</td>
+                        <td data-col="function">@s.FunctionName</td>
+                        <td data-col="caption">@s.CaptionToExecute</td>
+                        <td data-col="actions">
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="/StoriesStatus/Edit?id=@s.Id">Edit</a></li>
+                                    <li><a class="dropdown-item" href="/StoriesStatus/Delete?id=@s.Id">Delete</a></li>
+                                    <li><button class="dropdown-item action-details" type="button">Details</button></li>
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
 
-            <div id="storiesGrid" class="ag-theme-alpine" style="height:600px;width:100%;"></div>
+    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
+</div>
+
+<!-- Details modal -->
+<div class="modal fade" id="statusDetailsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Status details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
         </div>
     </div>
 </div>
 
 @section Scripts {
-    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/dist/styles/ag-grid.css" />
-    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/dist/styles/ag-theme-alpine.css" />
-    <script src="https://unpkg.com/ag-grid-community/dist/ag-grid-community.min.noStyle.js"></script>
-    <script src="/js/storiesstatus.js"></script>
+    <script src="/js/shared/pagination.js"></script>
+    <script src="/js/shared/list-ui.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.ListUI && typeof window.ListUI.init === 'function') {
+                window.ListUI.init({ tableSelector: '#storiesStatusTable', colsMenuId: 'colVisMenu', storageKey: 'storiesstatus_cols_v1', pagerId: 'pager' });
+            }
+
+            document.querySelectorAll('.action-details').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tr = btn.closest('tr');
+                    if (!tr) return;
+                    const data = tr.dataset;
+                    const body = document.querySelector('#statusDetailsModal .modal-body');
+                    body.innerHTML = `
+                        <p><strong>Code:</strong> ${escapeHtml(data.code || '')}</p>
+                        <p><strong>Description:</strong> ${escapeHtml(data.description || '')}</p>
+                        <p><strong>Step:</strong> ${escapeHtml(data.step || '')}</p>
+                        <p><strong>Color:</strong> ${escapeHtml(data.color || '')}</p>
+                        <p><strong>Operation Type:</strong> ${escapeHtml(data.operation || '')}</p>
+                        <p><strong>Agent Type:</strong> ${escapeHtml(data.agenttype || '')}</p>
+                        <p><strong>Function Name:</strong> ${escapeHtml(data.function || '')}</p>
+                        <p><strong>Caption:</strong> ${escapeHtml(data.caption || '')}</p>
+                    `;
+                    new bootstrap.Modal(document.getElementById('statusDetailsModal')).show();
+                });
+            });
+        });
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
+        }
+    </script>
 }

@@ -14,20 +14,30 @@ namespace TinyGenerator.Pages
             _database = database;
         }
 
-        // Expose a simple DTO list for AG Grid
-        public List<StoryRecord> GridData { get; set; } = new List<StoryRecord>();
+        public IReadOnlyList<StoryStatus> Items { get; set; } = Array.Empty<StoryStatus>();
+        public int PageIndex { get; set; } = 1;
+        public int PageSize { get; set; } = 25;
+        public int TotalCount { get; set; }
+        public string? Search { get; set; }
+        public string? OrderBy { get; set; }
 
         public void OnGet()
         {
-            // Retrieve lightweight list of stories for the grid
-            // PageModel must not implement filtering/sorting/pagination logic
+            if (int.TryParse(Request.Query["page"], out var p) && p > 0) PageIndex = p;
+            if (int.TryParse(Request.Query["pageSize"], out var ps) && ps > 0) PageSize = ps;
+            Search = string.IsNullOrWhiteSpace(Request.Query["search"]) ? null : Request.Query["search"].ToString();
+            OrderBy = string.IsNullOrWhiteSpace(Request.Query["orderBy"]) ? null : Request.Query["orderBy"].ToString();
+
             try
             {
-                GridData = _database.GetAllStories() ?? new List<StoryRecord>();
+                var (items, total) = _database.GetPagedStoryStatuses(PageIndex, PageSize, Search, OrderBy);
+                Items = items;
+                TotalCount = total;
             }
             catch
             {
-                GridData = new List<StoryRecord>();
+                Items = Array.Empty<StoryStatus>();
+                TotalCount = 0;
             }
         }
     }

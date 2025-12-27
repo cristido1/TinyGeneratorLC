@@ -15,7 +15,7 @@ namespace TinyGenerator.Services
         public int MaxParallelCommands { get; set; } = 3;
     }
 
-    internal sealed class CommandWorkItem
+    internal sealed class CommandWorkItem : IComparable<CommandWorkItem>
     {
         public string RunId { get; }
         public string OperationName { get; }
@@ -25,6 +25,8 @@ namespace TinyGenerator.Services
         public TaskCompletionSource<CommandResult> Completion { get; }
         public long OperationNumber { get; }
         public string? AgentName { get; }
+        public int Priority { get; }
+        public long EnqueueSequence { get; }
 
         public CommandWorkItem(
             string runId,
@@ -33,6 +35,8 @@ namespace TinyGenerator.Services
             IReadOnlyDictionary<string, string>? metadata,
             Func<CommandContext, Task<CommandResult>> handler,
             long operationNumber,
+            int priority,
+            long enqueueSequence,
             string? agentName = null)
         {
             RunId = runId;
@@ -41,20 +45,35 @@ namespace TinyGenerator.Services
             Metadata = metadata;
             Handler = handler;
             OperationNumber = operationNumber;
+            Priority = priority;
+            EnqueueSequence = enqueueSequence;
             AgentName = agentName;
             Completion = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public int CompareTo(CommandWorkItem? other)
+        {
+            if (other == null) return -1;
+            // Prima per priorità (1 = massima, numeri più bassi = priorità più alta)
+            var priorityComparison = Priority.CompareTo(other.Priority);
+            if (priorityComparison != 0) return priorityComparison;
+            // A parità di priorità, FIFO (sequence più bassa = più vecchio)
+            return EnqueueSequence.CompareTo(other.EnqueueSequence);
         }
     }
 
     public sealed class CommandDispatcher : IHostedService, ICommandDispatcher, IDisposable
     {
-        private readonly Channel<CommandWorkItem> _queue;
+        private readonly PriorityQueue<CommandWorkItem, CommandWorkItem> _queue = new();
+        private readonly object _queueLock = new();
+        private readonly SemaphoreSlim _queueSemaphore = new(0);
         private readonly int _parallelism;
         private readonly ICustomLogger? _logger;
         private readonly Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? _hubContext;
         private readonly List<Task> _workers = new();
         private CancellationTokenSource? _cts;
         private long _counter;
+        private long _enqueueCounter;
         private bool _disposed;
         private readonly ConcurrentDictionary<string, CommandState> _active = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, CommandState> _completed = new(StringComparer.OrdinalIgnoreCase);
@@ -67,11 +86,6 @@ namespace TinyGenerator.Services
             _parallelism = Math.Max(1, options?.Value?.MaxParallelCommands ?? 2);
             _logger = logger;
             _hubContext = hubContext;
-            _queue = Channel.CreateUnbounded<CommandWorkItem>(new UnboundedChannelOptions
-            {
-                SingleWriter = false,
-                SingleReader = false
-            });
         }
 
         public CommandHandle Enqueue(
@@ -79,7 +93,8 @@ namespace TinyGenerator.Services
             Func<CommandContext, Task<CommandResult>> handler,
             string? runId = null,
             string? threadScope = null,
-            IReadOnlyDictionary<string, string>? metadata = null)
+            IReadOnlyDictionary<string, string>? metadata = null,
+            int priority = 2)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             if (_disposed) throw new ObjectDisposedException(nameof(CommandDispatcher));
@@ -91,13 +106,15 @@ namespace TinyGenerator.Services
                 : runId.Trim();
 
             var opNumber = LogScope.GenerateOperationId();
+            var enqueueSeq = Interlocked.Increment(ref _enqueueCounter);
             var agentName = metadata != null && metadata.TryGetValue("agentName", out var an) ? an : null;
-            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, agentName);
+            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, priority, enqueueSeq, agentName);
 
-            if (!_queue.Writer.TryWrite(workItem))
+            lock (_queueLock)
             {
-                throw new InvalidOperationException("La coda comandi non accetta nuovi elementi.");
+                _queue.Enqueue(workItem, workItem);
             }
+            _queueSemaphore.Release();
 
             var state = new CommandState
             {
@@ -135,7 +152,6 @@ namespace TinyGenerator.Services
         {
             try
             {
-                _queue.Writer.TryComplete();
                 _cts?.Cancel();
             }
             catch { }
@@ -151,9 +167,20 @@ namespace TinyGenerator.Services
         {
             try
             {
-                while (await _queue.Reader.WaitToReadAsync(stoppingToken).ConfigureAwait(false))
+                while (!stoppingToken.IsCancellationRequested)
                 {
-                    while (_queue.Reader.TryRead(out var workItem))
+                    await _queueSemaphore.WaitAsync(stoppingToken).ConfigureAwait(false);
+                    
+                    CommandWorkItem? workItem = null;
+                    lock (_queueLock)
+                    {
+                        if (_queue.TryDequeue(out workItem, out _))
+                        {
+                            // Item dequeued successfully
+                        }
+                    }
+
+                    if (workItem != null)
                     {
                         await ProcessWorkItemAsync(workItem, stoppingToken).ConfigureAwait(false);
                     }
@@ -341,6 +368,7 @@ namespace TinyGenerator.Services
             }
             catch { }
             _cts?.Dispose();
+            _queueSemaphore?.Dispose();
         }
 
         public async Task<CommandResult> WaitForCompletionAsync(string runId, CancellationToken cancellationToken = default)

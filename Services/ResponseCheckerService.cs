@@ -40,9 +40,74 @@ namespace TinyGenerator.Services
             int threadId,
             string? agentName = null,
             string? modelName = null,
-            string? taskType = null)
+            string? taskType = null,
+            int? currentStepNumber = null,
+            Models.StepTemplate? stepTemplate = null,
+            Models.TaskExecution? execution = null)
         {
             _logger.Log("Information", "MultiStep", $"Starting writer-specific validation - Agent: {agentName}, Model: {modelName}");
+
+            // VALIDAZIONE MINIMO CARATTERI TRAMA (PRIMA del response_checker)
+            // Controlla se:
+            // 1. Lo step corrente è configurato come step di trama (TramaSteps)
+            // 2. È stato impostato un numero minimo di caratteri per la trama (MinCharsTrama)
+            // Se entrambe le condizioni sono vere, verifica che la trama abbia almeno MinCharsTrama caratteri
+            // Se la validazione fallisce, ritorna errore SENZA chiamare il response_checker
+            if (currentStepNumber.HasValue && stepTemplate != null && stepTemplate.MinCharsTrama.HasValue && stepTemplate.MinCharsTrama > 0)
+            {
+                if (stepTemplate.ParsedTramaSteps.Contains(currentStepNumber.Value))
+                {
+                    if (modelOutput.Length < stepTemplate.MinCharsTrama.Value)
+                    {
+                        _logger.Log("Warning", "MultiStep", 
+                            $"Step {currentStepNumber} output too short for trama: {modelOutput.Length} chars < {stepTemplate.MinCharsTrama} required");
+                        return new ValidationResult
+                        {
+                            IsValid = false,
+                            Reason = $"La trama non ha abbastanza caratteri. Richiesti: {stepTemplate.MinCharsTrama} caratteri, ottenuti: {modelOutput.Length}. Scrivi una trama più completa.",
+                            NeedsRetry = true,
+                            SemanticScore = null
+                        };
+                    }
+                    else
+                    {
+                        _logger.Log("Information", "MultiStep",
+                            $"Step {currentStepNumber} trama validation passed: {modelOutput.Length} chars >= {stepTemplate.MinCharsTrama} required");
+                    }
+                }
+            }
+
+            // VALIDAZIONE MINIMO CARATTERI STORIA COMPLETA (PRIMA del response_checker)
+            // Controlla se:
+            // 1. Lo step corrente è lo step della storia completa (FullStoryStep)
+            // 2. È stato impostato un numero minimo di caratteri per la storia (MinCharsStory)
+            // Se entrambe le condizioni sono vere, verifica che la storia abbia almeno MinCharsStory caratteri
+            // Se la validazione fallisce, ritorna errore SENZA chiamare il response_checker
+            if (currentStepNumber.HasValue && stepTemplate != null && stepTemplate.FullStoryStep.HasValue && 
+                currentStepNumber == stepTemplate.FullStoryStep && 
+                stepTemplate.MinCharsStory.HasValue && stepTemplate.MinCharsStory > 0)
+            {
+                if (modelOutput.Length < stepTemplate.MinCharsStory.Value)
+                {
+                    _logger.Log("Warning", "MultiStep", 
+                        $"Step {currentStepNumber} output too short for full story: {modelOutput.Length} chars < {stepTemplate.MinCharsStory} required");
+                    return new ValidationResult
+                    {
+                        IsValid = false,
+                        Reason = $"La storia è troppo breve. Richiesti: {stepTemplate.MinCharsStory} caratteri, ottenuti: {modelOutput.Length}. Scrivi una storia più completa con più dettagli.",
+                        NeedsRetry = true,
+                        SemanticScore = null
+                    };
+                }
+                else
+                {
+                    _logger.Log("Information", "MultiStep",
+                        $"Step {currentStepNumber} full story validation passed: {modelOutput.Length} chars >= {stepTemplate.MinCharsStory} required");
+                }
+            }
+
+            // Detect if this is a plot/outline step (trama)
+            bool isPlotStep = IsPlotOutlineStep(stepInstruction);
 
             double? semanticScore = null;
             try
@@ -58,6 +123,48 @@ namespace TinyGenerator.Services
                 _logger.Log("Warning", "MultiStep", $"Semantic alignment calculation failed: {ex.Message}");
             }
 
+            // For plot/outline steps, perform pre-checker validation (semantic + length)
+            // without consulting response_checker agent
+            if (isPlotStep)
+            {
+                // Check semantic alignment for plot steps (must be >= 0.60)
+                if (semanticScore.HasValue && semanticScore.Value < 0.60)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Plot outline semantic score {semanticScore.Value:F2} below threshold 0.60");
+                    return new ValidationResult
+                    {
+                        IsValid = false,
+                        Reason = $"La trama non è sufficientemente coerente con la richiesta (punteggio: {semanticScore.Value:F2}/1.0). Riscrivi una trama che segua più strettamente le istruzioni.",
+                        NeedsRetry = true,
+                        SemanticScore = semanticScore
+                    };
+                }
+
+                // Check minimum length for plot steps (at least 150 characters)
+                if (modelOutput.Length < 150)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Plot outline too short: {modelOutput.Length} chars");
+                    return new ValidationResult
+                    {
+                        IsValid = false,
+                        Reason = "La trama è troppo corta. Scrivi una trama più dettagliata con almeno 150 caratteri.",
+                        NeedsRetry = true,
+                        SemanticScore = semanticScore
+                    };
+                }
+
+                // If pre-checks pass for plot step, accept it without calling response_checker
+                _logger.Log("Information", "MultiStep", $"Plot outline passed pre-checks (semantic: {semanticScore?.ToString("F2") ?? "N/A"}, length: {modelOutput.Length} chars)");
+                return new ValidationResult
+                {
+                    IsValid = true,
+                    Reason = "La trama è coerente e ha una lunghezza adeguata.",
+                    NeedsRetry = false,
+                    SemanticScore = semanticScore
+                };
+            }
+
+            // For non-plot steps, use the standard response_checker validation
             // If semantic threshold is provided in validationCriteria, enforce it early
             if (semanticScore.HasValue && validationCriteria != null && validationCriteria.ContainsKey("semantic_threshold"))
             {
@@ -102,7 +209,8 @@ namespace TinyGenerator.Services
             }
 
             var criteriaJson = validationCriteria != null ? JsonSerializer.Serialize(validationCriteria) : "{}";
-            var semanticInfo = semanticScore.HasValue ? $"Semantic Alignment Score: {semanticScore.Value:F2} (0-1 scale)" : string.Empty;
+            // For non-plot steps, include semantic score in prompt; for plot steps already validated above
+            var semanticInfo = semanticScore.HasValue && !isPlotStep ? $"Semantic Alignment Score: {semanticScore.Value:F2} (0-1 scale)" : string.Empty;
 
             var sb = new StringBuilder();
             // Include agent-level prompt/instructions if present so DB-managed instructions are honored
@@ -199,7 +307,9 @@ namespace TinyGenerator.Services
             int threadId,
             string? agentName = null,
             string? modelName = null,
-            string? taskType = null)
+            string? taskType = null,
+            int? currentStepNumber = null,
+            Models.StepTemplate? stepTemplate = null)
         {
             _logger.Log("Information", "MultiStep", $"Starting step validation - Agent: {agentName}, Model: {modelName}");
             await Task.CompletedTask;
@@ -218,6 +328,55 @@ namespace TinyGenerator.Services
                     NeedsRetry = true,
                     SemanticScore = null
                 };
+            }
+
+            // VALIDAZIONE MINIMO CARATTERI TRAMA
+            if (currentStepNumber.HasValue && stepTemplate != null && stepTemplate.MinCharsTrama.HasValue && stepTemplate.MinCharsTrama > 0)
+            {
+                if (stepTemplate.ParsedTramaSteps.Contains(currentStepNumber.Value))
+                {
+                    if (modelOutput.Length < stepTemplate.MinCharsTrama.Value)
+                    {
+                        _logger.Log("Warning", "MultiStep", 
+                            $"Step {currentStepNumber} output too short for trama: {modelOutput.Length} chars < {stepTemplate.MinCharsTrama} required");
+                        return new ValidationResult
+                        {
+                            IsValid = false,
+                            Reason = $"La trama non ha abbastanza caratteri. Richiesti: {stepTemplate.MinCharsTrama} caratteri, ottenuti: {modelOutput.Length}. Scrivi una trama più completa.",
+                            NeedsRetry = true,
+                            SemanticScore = null
+                        };
+                    }
+                    else
+                    {
+                        _logger.Log("Information", "MultiStep",
+                            $"Step {currentStepNumber} trama validation passed: {modelOutput.Length} chars >= {stepTemplate.MinCharsTrama} required");
+                    }
+                }
+            }
+
+            // VALIDAZIONE MINIMO CARATTERI STORIA COMPLETA (FullStoryStep + MinCharsStory)
+            if (currentStepNumber.HasValue && stepTemplate != null && stepTemplate.FullStoryStep.HasValue && 
+                currentStepNumber == stepTemplate.FullStoryStep && 
+                stepTemplate.MinCharsStory.HasValue && stepTemplate.MinCharsStory > 0)
+            {
+                if (modelOutput.Length < stepTemplate.MinCharsStory.Value)
+                {
+                    _logger.Log("Warning", "MultiStep", 
+                        $"Step {currentStepNumber} output too short for full story: {modelOutput.Length} chars < {stepTemplate.MinCharsStory} required");
+                    return new ValidationResult
+                    {
+                        IsValid = false,
+                        Reason = $"La storia è troppo breve. Richiesti: {stepTemplate.MinCharsStory} caratteri, ottenuti: {modelOutput.Length}. Scrivi una storia più completa con più dettagli.",
+                        NeedsRetry = true,
+                        SemanticScore = null
+                    };
+                }
+                else
+                {
+                    _logger.Log("Information", "MultiStep",
+                        $"Step {currentStepNumber} full story validation passed: {modelOutput.Length} chars >= {stepTemplate.MinCharsStory} required");
+                }
             }
 
             // Additional deterministic checks could be added here (length, simple required tokens, etc.)
@@ -804,6 +963,19 @@ namespace TinyGenerator.Services
             // Collapse multiple spaces
             normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ");
             return normalized.Trim().ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// Detect if the step instruction is for a plot/outline (trama) step.
+        /// </summary>
+        private bool IsPlotOutlineStep(string stepInstruction)
+        {
+            if (string.IsNullOrWhiteSpace(stepInstruction)) return false;
+
+            var lowerInstruction = stepInstruction.ToLowerInvariant();
+            var plotKeywords = new[] { "trama", "plot", "outline", "story outline", "schema narrativo", "struttura della storia" };
+
+            return plotKeywords.Any(kw => lowerInstruction.Contains(kw, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

@@ -68,7 +68,8 @@ namespace TinyGenerator.Services
                     ["ts"] = DateTime.UtcNow.ToString("o"),
                     ["agentName"] = "memory_backfill_worker",
                     ["modelName"] = "embedding_model"
-                });
+                },
+                priority: 4);  // Priorità bassa per embedding
 
             _ = handle.CompletionTask.ContinueWith(t => OnCommandCompleted(t), TaskScheduler.Default);
         }

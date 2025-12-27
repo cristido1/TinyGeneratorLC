@@ -3,12 +3,19 @@
 
 // Write your JavaScript code.
 document.addEventListener('DOMContentLoaded', function () {
+	// Note: sidebar functionality is now handled by sidebar.js
+	// This code is kept for compatibility but should not interfere
 	const toggle = document.querySelector('.nav-toggle');
 	const body = document.body;
 	const overlay = document.querySelector('.sidebar-overlay');
-	const sidebar = document.querySelector('.sidebar');
+	const sidebar = document.querySelector('.sidebar'); // OLD sidebar, not .app-sidebar
     const collapseBtn = document.querySelector('.sidebar-collapse');
     const COLLAPSE_KEY = 'tg_sidebar_collapsed';
+
+	// Only run if OLD sidebar exists (not .app-sidebar)
+	if (!sidebar || sidebar.classList.contains('app-sidebar')) {
+		return; // Exit early, let sidebar.js handle it
+	}
 
 	function openSidebar() {
 		body.classList.add('sidebar-open');

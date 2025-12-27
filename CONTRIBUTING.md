@@ -1,11 +1,11 @@
 # CONTRIBUTING — Linee guida per sviluppatori
 
-Questo progetto utilizza agenti costruiti con Microsoft Semantic Kernel. Prima di contribuire, leggere e rispettare le regole qui sotto.
+Questo progetto utilizza agenti costruiti con LangChain C# e una custom ReAct loop implementation. Prima di contribuire, leggere e rispettare le regole qui sotto.
 
 ## Principi obbligatori
-- Tutte le integrazioni che richiedono "function-calling" devono registrare e usare funzioni/skill tramite Semantic Kernel (IKernel, skill registration, function invocation). Evitare soluzioni basate su parsing libero di testo prodotto dal modello per attivare azioni produttive in produzione.
+- Tutte le integrazioni che richiedono "tool calling" devono registrare tools tramite `LangChainToolFactory` ereditando da `BaseLangChainTool`. Ogni tool deve esporre schema OpenAI-compatible e implementare `ExecuteAsync()`. Evitare soluzioni basate su parsing libero di testo prodotto dal modello per attivare azioni produttive in produzione.
 - Non creare o usare "funzioni inventate" direttamente nei prompt degli agenti che possano alterare il comportamento degli agenti writer o evaluator. I prompt di produzione devono rimanere separati dai test e non devono contenere marker che generano side-effect non controllati.
-- I test che verificano la capacità di function-calling dei modelli devono essere isolati e lanciati esplicitamente dall'interfaccia di amministrazione (es. `Pages/Models`) o tramite test automatici — non devono essere inclusi nelle pipeline di generazione normale.
+- I test che verificano la capacità di tool-calling dei modelli devono essere isolati e lanciati esplicitamente dall'interfaccia di amministrazione (es. `Pages/Models`) o tramite test automatici — non devono essere inclusi nelle pipeline di generazione normale.
 
 ## Dove registrare le funzioni
 - Registra skill native nel Kernel (es. `kernel.RegisterFunction(...)` o tramite gli helper del pacchetto SK) per:

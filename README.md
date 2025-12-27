@@ -1,22 +1,24 @@
 # TinyGenerator
 
-Applicazione web ASP.NET Core per generare storie tramite un pipeline multi-agente con modelli locali Ollama. L'orchestrazione è **LangChain-first**, con componenti legacy di Semantic Kernel mantenuti per compatibilità.
+Applicazione web ASP.NET Core per generare storie e asset audio con una pipeline multi-agente LangChain su modelli locali Ollama.
 
 ## Panorama rapido
 
-- **Multi-agente**: writer ed evaluator con tool calling ReAct; selezione automatica della storia migliore.
-- **Strumenti pronti**: testo, memoria persistente SQLite, HTTP, filesystem, math/time, TTS, AudioCraft e tool TTS schema.
+- **Multi-agente**: writer, evaluator e response checker con tool calling ReAct e retry automatici.
+- **Multi-step orchestration**: chunking, guardrail sui tool, validazione semantica e coverage per TTS schema.
+- **TTS schema**: trascrizione chunk-by-chunk in `tts_schema.json` con timeline, voci, ambience, FX e musica.
+- **AudioCraft + TTS**: integrazione opzionale con AudioCraft (MusicGen/AudioGen) e server TTS HTTP.
 - **UI Razor + SignalR**: progressi in tempo reale, dashboard admin con Bootstrap 5 e DataTables.
-- **Persistenza unica**: SQLite per agenti, modelli, storie, log, test e memoria vettoriale.
-- **Command dispatcher**: coda asincrona configurabile per generazione, valutazione e TTS.
-- **Logging e notifiche**: logger su DB con regole `app_events` e broadcast via SignalR.
+- **Persistenza unica**: SQLite (EF Core + Dapper) per agenti, modelli, storie, test, log e memoria vettoriale.
+- **Testing completo**: suite xUnit per validazione ReAct loop, tool schemas, e orchestrazione.
 
 ## Requisiti
 
 - .NET 10.0 SDK
-- SQLite (usato localmente tramite file `data/storage.db`)
-- Ollama in esecuzione locale con modelli suggeriti: `phi3:mini-128k`, `llama3.1:8b`, `qwen2.5:7b`, `qwen2.5:3b`, `llama3.2:3b`
-- (Opzionale) Server TTS esterno raggiungibile via HTTP
+- SQLite (file locale `data/storage.db`)
+- Ollama in esecuzione locale con modelli LLM e embeddings (es. `phi3:mini-128k`, `llama3.1:8b`, `qwen2.5:7b`, `qwen2.5:3b`, `nomic-embed-text`)
+- (Opzionale) Server TTS HTTP (default `http://127.0.0.1:8004`)
+- (Opzionale) AudioCraft API (default `http://localhost:8003`)
 
 ## Setup rapido
 
@@ -48,19 +50,28 @@ Apri http://localhost:5077.
 
 ### Flusso di generazione
 1. L'utente inserisce un tema in `Genera`.
-2. Il sistema avvia un comando di generazione tramite `CommandDispatcher`.
-3. Ogni agente writer (attivo nel DB) genera una bozza usando tool LangChain.
-4. Gli evaluator attivi valutano le bozze e assegnano un punteggio.
-5. La storia con punteggio migliore sopra soglia viene salvata (stato "production").
-6. SignalR aggiorna in tempo reale UI e log.
+2. Il sistema avvia un comando tramite `CommandDispatcher`.
+3. Ogni agente writer attivo genera una bozza usando tool LangChain.
+4. Gli evaluator assegnano un punteggio; la storia migliore sopra soglia viene salvata (stato "production").
+5. SignalR aggiorna la UI in tempo reale.
+
+### Pipeline TTS
+- Lo schema TTS viene prodotto chunk-by-chunk con `MultiStepOrchestrationService`.
+- La copertura testuale viene validata prima di procedere al chunk successivo.
+- Alla fine viene salvato `tts_schema.json` nella cartella storia.
+
+### Output e storage
+- `stories_folder/<id>_*`: contiene `story.txt`, `tts_schema.json` e asset audio generati.
+- `stories_folder` e' servita come static files su `/stories_folder`.
+- Database unico in `data/storage.db`, con migrazioni EF Core e aggiornamenti Dapper all'avvio.
 
 ### Componenti chiave
-- **Services/**: orchestrazione (LangChainKernelFactory, LangChainToolFactory, LangChainAgentService), multi-step pipeline (MultiStepOrchestrationService, ResponseCheckerService), persistenza (DatabaseService), memoria (PersistentMemoryService), logging (CustomLogger), gestione modelli Ollama, TTS.
-- **CommandDispatcher**: coda in background con parallelismo configurabile per comandi di generazione/valutazione/TTS.
-- **Skills/**: tool richiamabili dagli agenti (text, math, memory, time, filesystem, http, tts api, audiocraft, evaluator, tts schema, story writer, ecc.).
+- **Services/**: orchestrazione LangChain, multi-step pipeline, TTS, AudioCraft, persistenza, logging.
+- **CommandDispatcher**: coda in background con parallelismo configurabile per generazione/valutazione/TTS.
+- **Skills/**: tool richiamabili dagli agenti (text, memory, http, filesystem, tts, audiocraft, tts schema, evaluator, writer, ecc.).
 - **Pages/**: Razor Pages per generazione (`Genera`), home (`Index`), amministrazione (`Admin`, `Agents`, `Models`, `Stories`, `Logs`, `Tests`, `Chat`).
 - **Hubs/ProgressHub**: aggiornamenti real-time su stato comandi e log.
-- **Models/**: entità per agenti, modelli, storie, valutazioni, test, embedding.
+- **Models/**: entita' per agenti, modelli, storie, valutazioni, test, embedding.
 
 ### Configurazione
 Esempio minimale da `appsettings.json`:
@@ -75,6 +86,11 @@ Esempio minimale da `appsettings.json`:
   },
   "Ollama": {
     "endpoint": "http://localhost:11434"
+  },
+  "Memory": {
+    "Embeddings": {
+      "Model": "nomic-embed-text:latest"
+    }
   }
 }
 ```
@@ -83,33 +99,33 @@ Variabili ambiente utili: `TTS_HOST`, `TTS_PORT`, `TTS_TIMEOUT_SECONDS`.
 ### Database
 - File: `data/storage.db` (EF Core + Dapper). Si crea/aggiorna all'avvio se mancano tabelle.
 - Tabelle principali: `agents`, `models`, `stories`, `calls`, `logs`, `log_analysis`, `test_definitions`, `tts_voices`, memoria vettoriale.
-- Script di popolamento esempio in `populate_*.sql`; usa `sqlite3 data/storage.db < populate_agents.sql` per caricarli.
+- Script di popolamento in `populate_*.sql`; usa `sqlite3 data/storage.db < populate_agents.sql` per caricarli.
 
 ## Uso dell'app
 
-- **Genera una storia**: vai su `Genera`, inserisci il tema, scegli generazione completa (tutti gli agenti) o un singolo writer, osserva il progresso in tempo reale.
-- **Test modelli**: pagina `Models` per eseguire prompt di prova e verificare tool/function calling.
-- **Gestione agenti**: pagina `Agents` per abilitare/disabilitare agenti, modificare prompt e skill (JSON nel DB).
-- **Log e storie**: pagine `Logs` e `Stories` per consultare output, punteggi e versioni salvate.
-- **Chat**: interfaccia chat diretta con un modello selezionato (usa gli stessi connettori).
+- **Genera una storia**: pagina `Genera`, tema + modalita' (tutti gli agenti o singolo writer).
+- **Test modelli**: pagina `Models` per test function calling e tool support.
+- **Gestione agenti**: pagina `Agents` per abilitare/disabilitare agenti e modificare prompt/skill.
+- **Log e storie**: pagine `Logs` e `Stories` per output, punteggi e versioni salvate.
+- **Chat**: interfaccia chat diretta con un modello selezionato.
 
-## Testing e qualità
+## Testing e qualita'
 
-- Test automatizzati: `dotnet test` (xUnit). La suite include verifiche su tool LangChain, orchestrazione e persistenza.
-- Monitoraggio: pagina `Logs` e `ProgressHub` per osservare eventi live; `app_events` governa cosa viene loggato/notificato.
+- Test automatizzati: `dotnet test` (xUnit).
+- Monitoraggio: pagina `Logs` e `ProgressHub` per eventi live.
 
 ## Best practice di sviluppo
 
-- Preferire l'orchestrazione LangChain per nuove feature; il codice Semantic Kernel resta solo per retrocompatibilità.
-- Aggiungi nuovi tool in `Skills/`, registra in `LangChainToolFactory` e, se necessario, esponi in `execution_plans/`.
-- Per nuove pipeline multi-step, usa il `CommandDispatcher` e il `MultiStepOrchestrationService` per preservare tracciamento e ripartenza.
-- Mantieni le descrizioni dei tool concise; evita parsing ad-hoc delle risposte modello quando puoi usare function/tool calling.
-- Usa `ICustomLogger` per log consistenti e evita cicli DI (database logger è asincrono).
+- Preferire LangChain per nuove feature; Semantic Kernel resta solo per retrocompatibilita'.
+- Aggiungi nuovi tool in `Skills/` e registrali in `LangChainToolFactory`.
+- Per nuove pipeline multi-step, usa `CommandDispatcher` e `MultiStepOrchestrationService`.
+- Mantieni i tool prompt concisi e sfrutta function/tool calling quando possibile.
+- Usa `ICustomLogger` per log consistenti e notifiche realtime.
 
 ## Script utili
 
 - `start_ollama.sh` / `ollama_start.bat`: avvio rapido di Ollama.
-- `populate_*.sql`: popolamento dati di esempio (agenti, modelli, step templates, status, voci TTS).
+- `populate_*.sql`: popolamento dati di esempio (agenti, modelli, step templates, voci TTS).
 - `scripts/` e `execution_plans/`: piani e prompt base per agenti ReAct.
 
 ## Contribuire

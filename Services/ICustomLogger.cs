@@ -19,10 +19,10 @@ namespace TinyGenerator.Services
         void LogResponse(string modelName, string response);
 
         // Log raw request JSON
-        void LogRequestJson(string modelName, string requestJson);
+        void LogRequestJson(string modelName, string requestJson, int? threadId = null);
 
         // Log raw response JSON
-        void LogResponseJson(string modelName, string responseJson);
+        void LogResponseJson(string modelName, string responseJson, int? threadId = null);
 
         void Start(string runId);
         Task AppendAsync(string runId, string message, string? extraClass = null);

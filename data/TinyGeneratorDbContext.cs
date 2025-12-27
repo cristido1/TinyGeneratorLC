@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using TinyGenerator.Models;
 
 namespace TinyGenerator.Data;
@@ -8,6 +9,13 @@ public class TinyGeneratorDbContext : DbContext
     public TinyGeneratorDbContext(DbContextOptions<TinyGeneratorDbContext> options)
         : base(options)
     {
+    }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        // Suppress PendingModelChangesWarning - we're manually managing migrations
+        optionsBuilder.ConfigureWarnings(warnings =>
+            warnings.Ignore(RelationalEventId.PendingModelChangesWarning));
     }
 
     // DbSets using existing table names via [Table] attribute on models
@@ -42,6 +50,6 @@ public class TinyGeneratorDbContext : DbContext
         base.OnModelCreating(modelBuilder);
         
         // Minimal configuration - rely on DataAnnotations on model classes
-        // Only configure relationships if needed
+        // Foreign keys with SetNull are handled by shadow keys, not explicit FK constraints for SQLite compatibility
     }
 }

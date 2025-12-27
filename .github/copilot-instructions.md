@@ -1,42 +1,50 @@
 # AI Coding Assistant Instructions for TinyGenerator
 
 ## Project Overview
-TinyGenerator is an ASP.NET Core web application that generates stories using AI agents powered by Microsoft Semantic Kernel (SK). It orchestrates multiple writer agents (using local Ollama models) and evaluator agents to produce coherent, structured narratives. The app uses Razor Pages for UI, SignalR for real-time progress updates, and SQLite for persistence.
+TinyGenerator is an ASP.NET Core web application that generates stories using AI agents powered by LangChain C#. It orchestrates multiple writer agents (using local Ollama models) and evaluator agents to produce coherent, structured narratives through a custom ReAct loop implementation. The app uses Razor Pages for UI, SignalR for real-time progress updates, and SQLite for persistence.
 
 ## Architecture
 - **Core Service**: `FullStoryPipelineCommand` coordinates story generation via all active writer agents (dynamically loaded from DB), evaluates outputs with all active evaluator agents, and selects the best story for production.
-- **Kernel Management**: `KernelFactory` creates SK kernels with Ollama/OpenAI connectors and registers custom plugins (skills) like `TextPlugin`, `MemorySkill`, `TtsApiSkill`.
-- **Persistence**: `DatabaseService` handles SQLite storage for stories, logs, models, agents, and test results.
+- **Orchestrator Management**: `LangChainKernelFactory` creates `HybridLangChainOrchestrator` instances with Ollama/OpenAI clients and registers tools (Text, Math, Memory, HTTP, TTS, etc.).
+- **Multi-Step Execution**: `MultiStepOrchestrationService` manages step-by-step story generation with validation, retry logic, and progress tracking.
+- **Persistence**: `DatabaseService` handles SQLite storage (EF Core + Dapper) for stories, logs, models, agents, test results, and vector embeddings.
 - **UI**: Razor Pages (e.g., `Genera.cshtml`) with Bootstrap/DataTables for admin interfaces. SignalR (`ProgressHub`) for live generation updates.
-- **Agents**: Defined in DB with JSON configs for skills, prompts, and execution plans. Active agents get dedicated kernels at startup.
-- **Skills/Plugins**: Custom classes in `Skills/` with `[KernelFunction]` methods for text manipulation, memory, TTS, etc.
+- **Agents**: Defined in DB with JSON configs for tools, prompts, and multi-step templates. Active agents get dedicated orchestrators at startup.
+- **Tools**: Custom classes in `Skills/` inheriting `BaseLangChainTool` with OpenAI-compatible function schemas for text manipulation, memory, filesystem, HTTP, TTS, AudioCraft, etc.
 
 ## Key Workflows
 - **Build**: `dotnet build` or VS Code task "build".
 - **Run/Debug**: `dotnet run` or `dotnet watch run` (task "watch") for hot reload. Debug via VS Code launch settings.
-- **Test Models**: Use `Pages/Models.cshtml` to run function-calling tests on Ollama models. Tests execute prompts and verify SK function invocations.
-- **Generate Stories**: Via `Pages/Genera.cshtml` - inputs theme, selects a single writer or launches Full Pipeline (all active writers compete, best story goes to production), monitors progress via SignalR.
-- **Admin**: Manage agents, models, logs in admin pages using DataTables for CRUD.
+- **Test Models**: Use `Pages/Models.cshtml` to run function-calling tests on Ollama models. Tests execute prompts via `LangChainTestService` and verify tool invocations with retry logic.
+- **Generate Stories**: Via `Pages/Genera.cshtml` - inputs theme, selects a single writer or launches Full Pipeline (all active writers compete via `CommandDispatcher`, best story with score >= 7 goes to production), monitors progress via SignalR.
+- **Multi-Step Pipeline**: Stories generated chunk-by-chunk through `step_templates` with automatic validation, retry, and coherence checks.
+- **Admin**: Manage agents, models, logs, tests, step templates in admin pages using Ag Grid for CRUD operations (single filter, persistent columns, pagination).
 
 ## Conventions
-- **Semantic Kernel Integration**: All AI interactions must use SK's function-calling mechanism. No parsing model outputs for actions - register skills properly.
-- **Agent Prompts**: Keep production prompts separate from test prompts. Avoid "invented" functions in agent instructions.
-- **Skill Registration**: Plugins added via `builder.Plugins.AddFromObject(skill, "alias")` in `KernelFactory`. Use `[KernelFunction("name")]` with descriptions.
-- **Database**: Use Dapper for queries. Tables: models, agents, stories, calls, test_definitions, etc.
-- **UI Patterns**: Razor Pages with Tag Helpers (`asp-for`), Bootstrap 5, DataTables for tables. Centralize JS/CSS in `_Layout.cshtml`.
-- **Logging**: Custom `ICustomLogger` to DB. Broadcast logs via `NotificationService` and SignalR.
-- **Startup**: Initializes DB schema, seeds models/voices, creates kernels for active agents.
-- **Error Handling**: Fail-fast on SK issues to highlight integration problems. Use try-catch for best-effort operations.
+- **LangChain Integration**: All AI interactions use OpenAI-compatible tool schemas. Tools must inherit `BaseLangChainTool` and implement `GetSchema()` + `ExecuteAsync()`.
+- **Agent Prompts**: Keep production prompts separate from test prompts. Avoid "invented" functions in agent instructions - only reference registered tools.
+- **Tool Registration**: Tools registered in `LangChainToolFactory.CreateOrchestratorWithTools()`. Each tool exposes JSON schemas via `GetFunctionSchemas()`.
+- **ReAct Loop**: Custom implementation in `ReActLoopOrchestrator` with explicit control flow, tool call parsing, retry logic, and timeout handling.
+- **Database**: EF Core for entities (stories, agents, models), Dapper for embeddings/raw queries. Tables: stories, agents, models, task_executions, step_templates, test_definitions, etc.
+- **UI Patterns**: **This is a Razor Pages project** - prefer Razor Pages native features (form handlers, page models, postback, callbacks) over JavaScript solutions. Use JavaScript only when significantly more advantageous. All data grids must use **Ag Grid** with single column filter, persistent visible column selection, and pagination. Use Tag Helpers (`asp-for`, `asp-page-handler`), Bootstrap 5 for styling. Centralize JS/CSS in `_Layout.cshtml`.
+- **Logging**: Custom `ICustomLogger` writes to `app_events` table. Broadcast logs via SignalR `ProgressHub`.
+- **Command Queue**: `CommandDispatcher` manages background tasks with priority queue and configurable parallelism (default 3).
+- **Startup**: Initializes DB schema, seeds models/voices, creates orchestrators for active agents with multi-step templates.
+- **Error Handling**: Fail-fast on tool invocation errors to highlight integration problems. Use retry logic for recoverable failures.
 
 ## Examples
-- **Adding a Skill**: Create class in `Skills/` with methods like `[KernelFunction("calculate")] public double Add(double a, double b) => a + b;`. Register in `KernelFactory` if allowed.
-- **Agent Config**: Agents have `Skills` (JSON array e.g. `["text", "memory"]`), `Prompt`, `Instructions`. Parsed at startup to enable plugins.
-- **Story Generation**: Writers use models like `phi3:mini-128k`. Evaluators score on JSON format (e.g. `{"score": 8}`). Best story saved if score >= 7.
-- **Tests**: `TestService` invokes agents with prompts, checks responses against `ExpectedPromptValue` or `ValidScoreRange`.
+- **Adding a Tool**: Create class in `Skills/` inheriting `BaseLangChainTool`. Implement `GetSchema()` returning OpenAI function schema and `ExecuteAsync(string input)` parsing JSON args. Register in `LangChainToolFactory` allowed tools list.
+- **Agent Config**: Agents have `Skills` (JSON array e.g. `["text", "memory"]`), `Prompt`, `Instructions`, and optional `MultiStepTemplateId`. Parsed at startup to enable tools.
+- **Multi-Step Generation**: Writers execute step-by-step via `step_templates` with automatic chunking, validation, and retry. Each step has its own tools, prompt, and success criteria.
+- **Story Pipeline**: Writers use models like `phi3:mini-128k`, `llama3.1:8b`, `qwen2.5:7b`. Evaluators score stories on JSON format (e.g. `{"score": 8}`). Best story with score >= 7 goes to production.
+- **Tests**: `LangChainTestService` invokes agents via ReAct loop, validates tool calls, checks responses against `ExpectedPromptValue` or `ValidScoreRange`, tracks retry attempts.
 
 ## Notes
-- Models hardcoded in `StoryGeneratorService` but configurable via DB for agents.
-- TTS via external API, voices seeded from service.
-- Memory is persistent SQLite via `PersistentMemoryService`.
-- Avoid fallbacks that bypass SK - prefer failing tests to expose issues.</content>
+- Models configured in DB `models` table. Agents reference models via `model_name` field.
+- TTS via external HTTP API (default `http://127.0.0.1:8004`), voices seeded from `/voices` endpoint at startup.
+- AudioCraft integration for music/ambience generation (optional, default `http://localhost:8003`).
+- Memory is persistent SQLite via `PersistentMemoryService` with vector embeddings (Ollama `nomic-embed-text`).
+- Tool schemas must be OpenAI-compatible. Use `CreateFunctionSchema()` helper in `BaseLangChainTool`.
+- Avoid fallbacks that bypass tool calling - prefer failing tests to expose integration issues.
+- Priority system: 1 = highest (TTS/audio), 2 = normal (generation), 3+ = low priority background tasks.</content>
 <parameter name="filePath">/Users/cristianodonaggio/Documents/ai/TinyGenerator/.github/copilot-instructions.md

@@ -769,9 +769,21 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("evaluation_steps");
 
+                    b.Property<int?>("FullStoryStep")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("full_story_step");
+
                     b.Property<string>("Instructions")
                         .HasColumnType("TEXT")
                         .HasColumnName("instructions");
+
+                    b.Property<int?>("MinCharsStory")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("min_chars_story");
+
+                    b.Property<int?>("MinCharsTrama")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("min_chars_trama");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -969,6 +981,14 @@ namespace TinyGenerator.Data.Migrations
                     b.Property<double>("Score")
                         .HasColumnType("REAL")
                         .HasColumnName("score");
+
+                    b.Property<int?>("SerieEpisode")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("serie_episode");
+
+                    b.Property<int?>("SerieId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("serie_id");
 
                     b.Property<int?>("StatusId")
                         .HasColumnType("INTEGER")

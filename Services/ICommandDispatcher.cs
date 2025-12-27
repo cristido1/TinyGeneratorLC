@@ -37,7 +37,8 @@ namespace TinyGenerator.Services
             Func<CommandContext, Task<CommandResult>> handler,
             string? runId = null,
             string? threadScope = null,
-            IReadOnlyDictionary<string, string>? metadata = null);
+            IReadOnlyDictionary<string, string>? metadata = null,
+            int priority = 2);
 
         IReadOnlyList<CommandSnapshot> GetActiveCommands();
         void UpdateStep(string runId, int current, int max, string? stepDescription = null);

@@ -55,6 +55,9 @@ namespace TinyGenerator.Services
             List<Dictionary<string, object>> tools,
             CancellationToken ct = default)
         {
+            // Capture threadId at the start of the call for consistent logging
+            int? currentThreadId = (int?)LogScope.CurrentOperationId;
+
             if (_logger != null)
             {
                 await _logger.ModelRequestStartedAsync(_modelId).ConfigureAwait(false);
@@ -172,7 +175,7 @@ namespace TinyGenerator.Services
                     "application/json");
 
                 _logger?.Log("Info", "LangChainBridge", $"Calling model {_modelId} at {fullUrl}");
-                _logger?.LogRequestJson(_modelId, requestJson);
+                _logger?.LogRequestJson(_modelId, requestJson, currentThreadId);
 
                 var httpRequest = new HttpRequestMessage(HttpMethod.Post, fullUrl)
                 {
@@ -190,7 +193,7 @@ namespace TinyGenerator.Services
                 var responseContent = await response.Content.ReadAsStringAsync(ct);
                 
                 _logger?.Log("Info", "LangChainBridge", $"Model responded (status={response.StatusCode})");
-                _logger?.LogResponseJson(_modelId, responseContent);
+                _logger?.LogResponseJson(_modelId, responseContent, currentThreadId);
 
                 if (!response.IsSuccessStatusCode)
                 {

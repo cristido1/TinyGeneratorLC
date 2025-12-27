@@ -4,72 +4,149 @@
     ViewData["Title"] = "Models";
 }
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h3>Models</h3>
-    <div class="btn-toolbar">
-        <div class="me-2">
-            <a class="btn btn-primary" asp-page="Edit">Create model</a>
-        </div>
-        <div class="dropdown">
-            <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="colVisBtn" data-bs-toggle="dropdown" aria-expanded="false">Colonne visibili</button>
-            <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu"></ul>
-        </div>
-    </div>
-</div>
+@if (TempData["TestResultMessage"] != null)
+{
+    <div class="alert alert-success">@TempData["TestResultMessage"]</div>
+}
+@if (TempData["ErrorMessage"] != null)
+{
+    <div class="alert alert-danger">@TempData["ErrorMessage"]</div>
+}
 
-<form method="get" class="row g-2 mb-3">
-    <div class="col-auto">
-        <input name="search" value="@Model.Search" class="form-control" placeholder="Cerca..." />
-        <input type="hidden" name="pageSize" value="@Model.PageSize" />
-        <input type="hidden" name="orderBy" value="@Model.OrderBy" />
-        <input type="hidden" name="ascending" value="@Model.Ascending" />
+<div class="page-wrapper">
+    <div class="d-flex mb-2 align-items-center toolbar-row">
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+            <select name="pageSize" class="form-select form-select-sm" style="width:90px;">
+                @{ var sizes = new[] { 10, 25, 50 }; }
+                @foreach (var s in sizes)
+                {
+                    if (s == Model.PageSize)
+                    {
+                        <option value="@s" selected>@s</option>
+                    }
+                    else
+                    {
+                        <option value="@s">@s</option>
+                    }
+                }
+            </select>
+            <label class="form-check form-check-inline mb-0 ms-2">
+                <input name="showDisabled" class="form-check-input" type="checkbox" value="true" @(Model.ShowDisabled ? "checked" : "") />
+                <span class="form-check-label small">Mostra disabilitati</span>
+            </label>
+            <input type="hidden" name="orderBy" value="@Model.OrderBy" />
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
+        </form>
+        <div class="ms-auto d-flex gap-1 flex-wrap">
+            <form method="post" class="d-flex gap-1">
+                @Html.AntiForgeryToken()
+                <select name="Group" class="form-select form-select-sm" style="max-width:180px;">
+                    @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
+                    {
+                        <option value="@g">@g</option>
+                    }
+                </select>
+                <button class="btn btn-sm btn-outline-success" type="submit" formaction="?handler=RunAll" title="Run Group"><i class="bi bi-play-fill"></i> Group</button>
+                <button class="btn btn-sm btn-outline-primary" type="submit" formaction="?handler=RunAll" title="Run All"><i class="bi bi-collection-play"></i> All</button>
+                <button class="btn btn-sm btn-outline-warning" type="submit" formaction="?handler=PurgeDisabledOllama" title="Purge Disabled"><i class="bi bi-trash3"></i> Purge</button>
+                <button class="btn btn-sm btn-outline-secondary" type="submit" formaction="?handler=RefreshContexts" title="Refresh Contexts"><i class="bi bi-arrow-repeat"></i> Ctx</button>
+                <button class="btn btn-sm btn-outline-info" type="submit" formaction="?handler=AddOllamaModels" title="Discover Ollama"><i class="bi bi-search"></i> Discover</button>
+                <button class="btn btn-sm btn-outline-secondary" type="submit" formaction="?handler=RecalculateScores" title="Recalc Scores"><i class="bi bi-calculator"></i> Recalc</button>
+            </form>
+            <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
+                    <i class="bi bi-layout-three-columns"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
+            <a class="btn btn-sm btn-primary" href="/Models/Edit">Nuovo</a>
+        </div>
     </div>
-    <div class="col-auto">
-        <button type="submit" class="btn btn-secondary">Cerca</button>
-    </div>
-</form>
 
-<div class="card" style="border:2px solid #ccc; border-radius:8px;">
-    <div class="card-body p-0">
-        <table class="table table-sm mb-0" id="modelsTable">
+    <div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
+        <table class="table table-sm table-striped mb-0" id="modelsTable">
             <thead class="table-light">
                 <tr>
-                    <th data-col="name">Name</th>
-                    <th data-col="provider">Provider</th>
-                    <th data-col="endpoint">Endpoint</th>
-                    <th data-col="enabled">Enabled</th>
+                    <th data-col="name"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "name", showDisabled = Model.ShowDisabled })">Name</a></th>
+                    <th data-col="provider"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "provider", showDisabled = Model.ShowDisabled })">Provider</a></th>
+                    <th data-col="note">Note</th>
+                    <th data-col="local">Local</th>
+                    <th data-col="maxctx">MaxCtx</th>
+                    <th data-col="ctxtouse">CtxToUse</th>
+                    <th data-col="total">Total</th>
+                    <th data-col="base">Base</th>
+                    <th data-col="texteval">TextEval</th>
+                    <th data-col="writer">Writer</th>
+                    <th data-col="tts">TTS</th>
+                    <th data-col="music">Music</th>
+                    <th data-col="fx">FX</th>
+                    <th data-col="ambient">Ambient</th>
                     <th data-col="notools">NoTools</th>
-                    <th data-col="function_calling">FuncCallScore</th>
-                    <th data-col="test_duration">LastTestSec</th>
-                    <th data-col="created">Created</th>
-                    <th data-col="updated">Updated</th>
+                    <th data-col="duration">Duration</th>
+                    <th data-col="costin">Cost In</th>
+                    <th data-col="costout">Cost Out</th>
+                    <th data-col="createdat"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "createdat", showDisabled = Model.ShowDisabled })">Created</a></th>
                     <th data-col="actions">Actions</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach (var item in Model.Items)
+                @foreach (var m in Model.Items)
                 {
+                    var hasResults = m.TestDurationSeconds > 0;
                     <tr>
-                        <td data-col="name">@item.Name</td>
-                        <td data-col="provider">@item.Provider</td>
-                        <td data-col="endpoint">@item.Endpoint</td>
-                        <td data-col="enabled">@(item.Enabled ? "Yes" : "No")</td>
-                        <td data-col="notools">@(item.NoTools ? "Yes" : "No")</td>
-                        <td data-col="function_calling">@item.FunctionCallingScore</td>
-                        <td data-col="test_duration">@((item.TestDurationSeconds.HasValue) ? item.TestDurationSeconds.Value.ToString("0.0") : "-")</td>
-                        <td data-col="created">@((!string.IsNullOrWhiteSpace(item.CreatedAt) && DateTime.TryParse(item.CreatedAt, out var cdt)) ? cdt.ToString("dd/MM/yyyy HH:mm") : "-")</td>
-                        <td data-col="updated">@((!string.IsNullOrWhiteSpace(item.UpdatedAt) && DateTime.TryParse(item.UpdatedAt, out var udt)) ? udt.ToString("dd/MM/yyyy HH:mm") : "-")</td>
+                        <td data-col="name">@m.Name</td>
+                        <td data-col="provider">
+                            @if (m.Provider?.ToLower() == "ollama")
+                            {
+                                <span class="badge bg-success">ollama</span>
+                            }
+                            else if (m.Provider?.ToLower() == "openai")
+                            {
+                                <span class="badge bg-warning text-dark">openai</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-secondary">@m.Provider</span>
+                            }
+                        </td>
+                        <td data-col="note">@m.Note</td>
+                        <td data-col="local">@(m.IsLocal ? "Yes" : "No")</td>
+                        <td data-col="maxctx">@m.MaxContext</td>
+                        <td data-col="ctxtouse">@m.ContextToUse</td>
+                        <td data-col="total">@(hasResults ? m.TotalScore.ToString("0.0") : "-")</td>
+                        <td data-col="base">@(hasResults ? m.BaseScore.ToString("0.0") : "-")</td>
+                        <td data-col="texteval">@(hasResults ? m.TextEvalScore.ToString("0.0") : "-")</td>
+                        <td data-col="writer">@(hasResults ? m.WriterScore.ToString("0.0") : "-")</td>
+                        <td data-col="tts">@(hasResults ? m.TtsScore.ToString("0.0") : "-")</td>
+                        <td data-col="music">@(hasResults ? m.MusicScore.ToString("0.0") : "-")</td>
+                        <td data-col="fx">@(hasResults ? m.FxScore.ToString("0.0") : "-")</td>
+                        <td data-col="ambient">@(hasResults ? m.AmbientScore.ToString("0.0") : "-")</td>
+                        <td data-col="notools">@(m.NoTools ? "✓" : "")</td>
+                        <td data-col="duration">@((m.TestDurationSeconds.HasValue) ? m.TestDurationSeconds.Value.ToString("0.00") : "-")</td>
+                        <td data-col="costin">@m.CostInPerToken.ToString("0.00000")</td>
+                        <td data-col="costout">@m.CostOutPerToken.ToString("0.00000")</td>
+                        <td data-col="createdat">@(string.IsNullOrWhiteSpace(m.CreatedAt) ? "-" : DateTime.Parse(m.CreatedAt).ToString("dd/MM/yy HH:mm"))</td>
                         <td data-col="actions">
                             <div class="dropdown">
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" asp-page="Edit" asp-route-id="@item.Id">Edit</a></li>
-                                    <li>
-                                        <form method="post" class="d-inline" asp-page-handler="Delete" onsubmit="return confirm('Eliminare il modello @item.Name?');">
-                                            <input type="hidden" name="name" value="@item.Name" />
-                                            <button type="submit" class="dropdown-item">Delete</button>
-                                        </form>
-                                    </li>
+                                    <li><a class="dropdown-item" href="/Models/Edit?name=@Uri.EscapeDataString(m.Name)">Edit</a></li>
+                                    <li><a class="dropdown-item" href="/Chat?model=@Uri.EscapeDataString(m.Name)">💬 Chat</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><h6 class="dropdown-header">Run Tests</h6></li>
+                                    @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
+                                    {
+                                        <li>
+                                            <form method="post" action="?handler=RunGroup" class="m-0">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="Model" value="@m.Name" />
+                                                <input type="hidden" name="Group" value="@g" />
+                                                <button type="submit" class="dropdown-item">▶️ @g</button>
+                                            </form>
+                                        </li>
+                                    }
                                 </ul>
                             </div>
                         </td>
@@ -78,18 +155,16 @@
             </tbody>
         </table>
     </div>
+
+    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" data-show-disabled="@(Model.ShowDisabled ? "true" : "")"></div>
 </div>
 
-<div id="pager" class="mt-3" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
-
 @section Scripts {
-    <script src="/js/shared/column-visibility.js"></script>
     <script src="/js/shared/pagination.js"></script>
     <script src="/js/shared/list-ui.js"></script>
     <script>
-        // Initialize List UI (will build columns menu and pager)
-        document.addEventListener('DOMContentLoaded', function(){
-            if (window.ListUI && typeof window.ListUI.init === 'function'){
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.ListUI && typeof window.ListUI.init === 'function') {
                 window.ListUI.init({ tableSelector: '#modelsTable', colsMenuId: 'colVisMenu', storageKey: 'models_cols_v1', pagerId: 'pager' });
             }
         });

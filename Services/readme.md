@@ -1,5 +1,5 @@
 - Obiettivo del programma è generare dei file audio lunghi almeno 10 minuti con una storia parlata con una voce per il narratore e una voce per ciascun personaggio, poi vengono aggiunti i rumori ambientali, poi gli effetti sonori, poi la musica nei momenti salienti che non deve superare il 30% della durata dell'audio.
-- per fare questo usiamo degli agenti semantic kernel con skill e memoria.
+- per fare questo usiamo degli agenti LangChain con tools e memoria.
 - Lista agenti
   - 2 Agenti Scrittori con prompt iniziale diverso, possibilmente due modelli diversi
     

@@ -44,6 +44,18 @@
         
         // Highlight active nav item based on current path
         highlightActiveNav();
+        
+        // Debug: check if Models link works
+        const modelsLink = document.querySelector('.sidebar-link-models');
+        if (modelsLink) {
+            modelsLink.addEventListener('click', function(e) {
+                console.log('Models link clicked!');
+                console.log('Default prevented?', e.defaultPrevented);
+                console.log('Target:', e.target);
+                console.log('Current target:', e.currentTarget);
+                console.log('href:', this.getAttribute('href'));
+            });
+        }
     }
     
     function highlightActiveNav() {

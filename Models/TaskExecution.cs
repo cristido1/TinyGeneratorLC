@@ -223,6 +223,27 @@ namespace TinyGenerator.Models
         [Column("trama_steps")]
         public string? TramaSteps { get; set; }
         
+        /// <summary>
+        /// Minimum number of characters required for the trama (plot).
+        /// If null or 0, no validation is performed.
+        /// </summary>
+        [Column("min_chars_trama")]
+        public int? MinCharsTrama { get; set; }
+        
+        /// <summary>
+        /// Minimum number of characters required for the complete story.
+        /// If null or 0, no validation is performed.
+        /// </summary>
+        [Column("min_chars_story")]
+        public int? MinCharsStory { get; set; }
+        
+        /// <summary>
+        /// Step number that generates the full story (e.g., 9 means step 9 produces the final story).
+        /// Used to identify where to collect the complete narrative output.
+        /// </summary>
+        [Column("full_story_step")]
+        public int? FullStoryStep { get; set; }
+        
         [Column("created_at")]
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
         

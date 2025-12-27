@@ -17,6 +17,49 @@
         check();
     }
 
+    // Helper function to escape HTML
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Helper function to copy text to clipboard
+    window.copyToClipboard = function(text, event) {
+        event.stopPropagation();
+        event.preventDefault();
+        
+        // Decodifica il testo se necessario
+        const decodedText = text.replace(/\\'/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        
+        navigator.clipboard.writeText(decodedText).then(() => {
+            // Visual feedback
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.textContent = '✅ Copiato!';
+            setTimeout(() => {
+                btn.textContent = originalText;
+            }, 2000);
+        }).catch(err => {
+            console.error('Fallback: copia via execCommand', err);
+            // Fallback per browser vecchi
+            const textarea = document.createElement('textarea');
+            textarea.value = decodedText;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.textContent = '✅ Copiato!';
+            setTimeout(() => {
+                btn.textContent = originalText;
+            }, 2000);
+        });
+    };
+
     waitForSignalR(initCommandPanel);
 
     function initCommandPanel() {
@@ -221,8 +264,30 @@
                     modelShort = modelShort.substring(0, modelShort.indexOf(':'));
                 }
 
+                // Extract storyId from metadata if present
+                const metadata = c.metadata || c.Metadata || {};
+                const storyId = metadata.storyId || metadata.StoryId;
+                const storyIdBadge = storyId ? ` <span style="
+                    background: rgba(0,0,0,0.1);
+                    padding: 1px 6px;
+                    border-radius: 3px;
+                    font-size: 10px;
+                    font-weight: normal;
+                " title="ID Storia">📖 ${storyId}</span>` : '';
+
                 const errorMessage = c.errorMessage || c.ErrorMessage;
-                const errorMsg = errorMessage ? `<div style="color:#dc3545; font-size:11px; margin-top:4px;">⚠️ ${errorMessage}</div>` : '';
+                const errorMsg = errorMessage ? `
+                    <div style="color:#dc3545; font-size:11px; margin-top:6px; user-select: text; cursor: text;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:6px;">
+                            <div style="flex:1;">⚠️ ${escapeHtml(errorMessage)}</div>
+                            <button onclick="copyToClipboard('${escapeHtml(errorMessage).replace(/'/g, "\\'")}', event)" style="
+                                background: #dc3545; color: #fff; border: none; padding: 2px 6px; 
+                                border-radius: 3px; font-size: 10px; cursor: pointer; white-space: nowrap;
+                                flex-shrink: 0; padding-top: 0px; padding-bottom: 0px; line-height: 1.2;
+                            ">📋 Copia</button>
+                        </div>
+                    </div>
+                ` : '';
 
                 return `
                     <div style="
@@ -231,9 +296,10 @@
                         border-radius: 6px;
                         padding: 8px 10px;
                         margin-bottom: 6px;
+                        user-select: text;
                     ">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <strong>${statusIcon} ${op}</strong>
+                            <strong>${statusIcon} ${op}${storyIdBadge}</strong>
                             <span style="font-size:11px; opacity:0.8;">${statusDisplay}${stepInfo}${retryInfo}</span>
                         </div>
                         <div style="font-size:11px; color:#555; margin-top:4px;">

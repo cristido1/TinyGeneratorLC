@@ -57,8 +57,8 @@ builder.Services.AddHttpClient("default");
 // Tokenizer (try to use local tokenizer library if installed; fallback inside service)
 builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_base"));
 
-// === Semantic Kernel + memoria SQLite ===
-// RIMOSSA la registrazione di IKernel: ora si usa solo Kernel reale tramite KernelFactory
+// === LangChain Orchestration + memoria SQLite ===
+// LangChain orchestrators managed by LangChainKernelFactory for all agents
 
 // Ollama monitor service (used for discovering/running local Ollama models)
 // Instantiate without ICustomLogger to avoid circular dependency (DatabaseService -> IOllamaMonitorService -> ICustomLogger -> DatabaseService)
@@ -103,6 +103,9 @@ builder.Services.AddSingleton<CommandDispatcher>(sp =>
     ));
 builder.Services.AddSingleton<ICommandDispatcher>(sp => sp.GetRequiredService<CommandDispatcher>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>());
+
+// Auto-summarize service (batch summarization at startup and every hour)
+builder.Services.AddHostedService<AutoSummarizeService>();
 
 // Sentiment mapping service (embedding-based + agent fallback)
 builder.Services.AddSingleton<SentimentMappingService>(sp => new SentimentMappingService(
@@ -229,6 +232,16 @@ catch (Exception ex)
 // Perform database initialization via helper
 var dbInit = app.Services.GetService<TinyGenerator.Services.DatabaseService>();
 StartupTasks.InitializeDatabaseIfNeeded(dbInit, logger);
+
+// Apply any pending manual migrations (for when EF migrations are disabled)
+try
+{
+    dbInit?.ApplyPendingManualMigrations();
+}
+catch (Exception ex)
+{
+    logger?.LogWarning(ex, "[Startup] Failed to apply manual migrations: {msg}", ex.Message);
+}
 
 // Startup model actions
 // NOTE: The application does NOT run the function-calling capability tests at startup.

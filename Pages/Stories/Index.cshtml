@@ -40,9 +40,12 @@
         </form>
         <a class="btn btn-sm btn-success ms-2" asp-page="Create"><i class="bi bi-plus-lg"></i> Nuova storia</a>
         <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="testTtsSchema()"><i class="bi bi-box"></i> Test TTS</button>
-            <form method="post" asp-page-handler="DeleteLowRated" onsubmit="return confirm('Eliminare tutte le storie con valutazione media <50 e almeno 2 valutazioni? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
-                <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-trash"></i> Elimina storie scadenti</button>
-            </form>
+        <form method="post" asp-page-handler="BatchSummarize" onsubmit="return confirm('Avviare la generazione batch dei riassunti per tutte le storie con valutazione >= 60?')" style="display:inline-block; margin-left:8px;">
+            <button type="submit" class="btn btn-sm btn-outline-info ms-2"><i class="bi bi-file-text"></i> Riassunti Batch</button>
+        </form>
+        <form method="post" asp-page-handler="DeleteLowRated" onsubmit="return confirm('Eliminare tutte le storie con valutazione media <50 e almeno 2 valutazioni? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
+            <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-trash"></i> Elimina storie scadenti</button>
+        </form>
         <div class="dropdown ms-2">
             <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
                 <i class="bi bi-check2-all"></i> Valuta tutti
@@ -72,9 +75,9 @@
         </div>
     </div>
 
-    <div style="height: calc(100vh - 200px); width:100%; overflow:auto;">
+    <div style="height: calc(100vh - 200px); width:100%; overflow-x:auto; overflow-y:auto;">
         <style>
-            .stories-table-wrapper { border: 2px solid #ccc; border-radius: 8px; overflow: hidden; }
+            .stories-table-wrapper { border: 2px solid #ccc; border-radius: 8px; overflow: visible; }
             .stories-table-wrapper table { margin-bottom: 0; border-radius: 0; }
 
             /* Grigietto pager styles */
@@ -122,7 +125,10 @@
                         <td data-col="id">@s.Id</td>
                         <td data-col="timestamp">@((DateTime.TryParse(s.Timestamp, out var _dt)) ? _dt.ToString("dd/MM/yyyy HH:mm") : s.Timestamp)</td>
                         <td data-col="title">@(!string.IsNullOrWhiteSpace(s.Title) ? s.Title : "<span class='text-muted'>-</span>")</td>
-                        <td data-col="prompt" title="@s.Prompt">@((s.Prompt ?? "").Length>120 ? (s.Prompt.Substring(0,120)+"...") : s.Prompt)</td>
+                        @{
+                            var promptSafe = s.Prompt ?? string.Empty;
+                        }
+                        <td data-col="prompt" title="@promptSafe">@((promptSafe.Length > 120) ? (promptSafe.Substring(0, 120) + "...") : promptSafe)</td>
                         <td data-col="status">@(!string.IsNullOrWhiteSpace(s.Status) ? s.Status : "-")</td>
                         <td data-col="agent">@s.Agent</td>
                         <td data-col="model">@s.Model</td>
@@ -134,11 +140,7 @@
                             @if (s.GeneratedEffects) { <span title="FX" class="text-warning me-1"><i class="bi bi-lightning-charge-fill"></i></span>; }
                             @if (s.GeneratedMusic) { <span title="Music" class="text-muted me-1"><i class="bi bi-music-note-beamed"></i></span>; }
                             @if (s.GeneratedMixedAudio) {
-                                <span title="Final mix" class="text-danger me-1"><i class="bi bi-play-circle-fill"></i></span>
-                                <audio controls style="vertical-align:middle;max-width:180px;" preload="none">
-                                    <source src="/stories_folder/@s.Folder/final_mix.wav" type="audio/wav" />
-                                    Il tuo browser non supporta l'audio.
-                                </audio>
+                                <button type="button" class="btn btn-sm btn-link p-0 me-2 play-final-mix-btn" data-story-id="@s.Id" title="Play final mix"><i class="bi bi-play-circle-fill" style="color:#0d6efd;font-size:1.25rem;"></i></button>
                             }
                         </td>
                         <td data-col="chars" class="text-end">@s.CharCount</td>
@@ -150,43 +152,114 @@
                             <div class="dropdown">
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Azioni</button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    @foreach(var a in Model.GetActionsForStory(s))
-                                    {
+                                    @{
+                                        // Build action lists, remove listen commands, and separate edit/delete
+                                        var rawActions = Model.GetActionsForStory(s)?.ToList() ?? new List<object>();
+                                        // Filter out listen commands by id or title
+                                        rawActions = rawActions.Where(a => {
                                             var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
-                                        var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
-                                        var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "GET";
-                                        var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
-                                        var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
-                                        var iconClass = id switch
+                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
+                                            if (id == "final_mix_play" || id == "tts_playlist") return false;
+                                            if (!string.IsNullOrWhiteSpace(title) && (title.Equals("Ascolta mix finale", StringComparison.OrdinalIgnoreCase) || title.Equals("Ascolta sequenza tts", StringComparison.OrdinalIgnoreCase))) return false;
+                                            return true;
+                                        }).ToList();
+
+                                        // Extract edit and delete
+                                        object? editAction = rawActions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "") == "edit");
+                                        if (editAction != null) rawActions.Remove(editAction);
+                                        object? deleteAction = rawActions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "") == "delete");
+                                        if (deleteAction != null) rawActions.Remove(deleteAction);
+
+                                        // Render remaining actions first
+                                        foreach(var a in rawActions)
                                         {
-                                            // Add icon for prepare_tts_schema
-                                            "prepare_tts_schema" => "bi bi-magic",
-                                            "gen_tts" => "bi bi-volume-up-fill",
-                                            "gen_ambience" => "bi bi-cloud-fill",
-                                            "gen_fx" => "bi bi-lightning-charge-fill",
-                                            "gen_music" => "bi bi-music-note-beamed",
-                                            "mix_final" => "bi bi-play-circle-fill",
-                                            "final_mix_play" => "bi bi-play-btn",
-                                            "tts_playlist" => "bi bi-list-music",
-                                            
-                                            "details" => "bi bi-eye",
-                                            "edit" => "bi bi-pencil",
-                                            "advance" => "bi bi-arrow-right-circle",
-                                            "delete" => "bi bi-trash-fill",
-                                            _ => "bi bi-gear"
-                                        };
-                                        if (method == "GET")
-                                        {
-                                            <li><a class="dropdown-item" href="@url" target="_blank"><i class="@iconClass me-2"></i>@title</a></li>
+                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
+                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
+                                            var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "GET";
+                                            var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
+                                            var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
+                                            var iconClass = id switch
+                                            {
+                                                "prepare_tts_schema" => "bi bi-magic",
+                                                "gen_tts" => "bi bi-volume-up-fill",
+                                                "gen_ambience" => "bi bi-cloud-fill",
+                                                "gen_fx" => "bi bi-lightning-charge-fill",
+                                                "gen_music" => "bi bi-music-note-beamed",
+                                                "mix_final" => "bi bi-play-circle-fill",
+                                                "final_mix_play" => "bi bi-play-btn",
+                                                "tts_playlist" => "bi bi-list-music",
+                                                "details" => "bi bi-eye",
+                                                "edit" => "bi bi-pencil",
+                                                "advance" => "bi bi-arrow-right-circle",
+                                                "delete" => "bi bi-trash-fill",
+                                                _ => "bi bi-gear"
+                                            };
+                                            if (method == "GET")
+                                            {
+                                                <li><a class="dropdown-item" href="@url" target="_blank"><i class="@iconClass me-2"></i>@title</a></li>
+                                            }
+                                            else
+                                            {
+                                                <li>
+                                                    <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
+                                                        @Html.AntiForgeryToken()
+                                                        <button type="submit" class="dropdown-item"><i class="@iconClass me-2"></i>@title</button>
+                                                    </form>
+                                                </li>
+                                            }
                                         }
-                                        else
+
+                                        // Render edit action next
+                                        if (editAction != null)
                                         {
-                                            <li>
-                                                <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
-                                                    @Html.AntiForgeryToken()
-                                                    <button type="submit" class="dropdown-item"><i class="@iconClass me-2"></i>@title</button>
-                                                </form>
-                                            </li>
+                                            var a = editAction;
+                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
+                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
+                                            var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "GET";
+                                            var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
+                                            var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
+                                            var iconClass = "bi bi-pencil";
+                                            if (method == "GET")
+                                            {
+                                                <li><a class="dropdown-item" href="@url" target="_blank"><i class="@iconClass me-2"></i>@title</a></li>
+                                            }
+                                            else
+                                            {
+                                                <li>
+                                                    <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
+                                                        @Html.AntiForgeryToken()
+                                                        <button type="submit" class="dropdown-item"><i class="@iconClass me-2"></i>@title</button>
+                                                    </form>
+                                                </li>
+                                            }
+
+                                            // Separator after Edit
+                                            <li><hr class="dropdown-divider" /></li>
+                                        }
+
+                                        // Render delete action last (in red)
+                                        if (deleteAction != null)
+                                        {
+                                            var a = deleteAction;
+                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
+                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
+                                            var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "POST";
+                                            var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
+                                            var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
+                                            var iconClass = "bi bi-trash-fill";
+                                            if (method == "GET")
+                                            {
+                                                <li><a class="dropdown-item text-danger" href="@url" target="_blank"><i class="@iconClass me-2 text-danger"></i>@title</a></li>
+                                            }
+                                            else
+                                            {
+                                                <li>
+                                                    <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
+                                                        @Html.AntiForgeryToken()
+                                                        <button type="submit" class="dropdown-item text-danger"><i class="@iconClass me-2 text-danger"></i>@title</button>
+                                                    </form>
+                                                </li>
+                                            }
                                         }
                                     }
                                 </ul>
@@ -204,6 +277,54 @@
 
 <form id="bulkEvaluateForm" method="post" asp-page-handler="EvaluateAll"></form>
 <audio id="ttsPlaylistAudio" class="d-none"></audio>
+
+<!-- Modal per riprodurre final mix dalla pagina Stories -->
+<div class="modal fade" id="finalMixModal" tabindex="-1" aria-labelledby="finalMixModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="finalMixModalLabel">Riproduci Final Mix</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-center">
+                <audio id="homeFinalMixAudio" controls preload="none" style="width:100%;">
+                    Il tuo browser non supporta l'audio.
+                </audio>
+                <div id="finalMixInfo" class="mt-2 text-muted small"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Chiudi</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function(){
+        document.addEventListener('click', function(e){
+            var btn = e.target.closest && e.target.closest('.play-final-mix-btn');
+            if (!btn) return;
+            var storyId = btn.getAttribute('data-story-id');
+            if (!storyId) return;
+            e.preventDefault();
+            var audio = document.getElementById('homeFinalMixAudio');
+            var info = document.getElementById('finalMixInfo');
+            audio.pause();
+            audio.src = '/Stories/Index?handler=FinalMixAudio&id=' + encodeURIComponent(storyId);
+            audio.load();
+            info.textContent = 'Caricamento...';
+            var modalEl = document.getElementById('finalMixModal');
+            var modal = new bootstrap.Modal(modalEl);
+            modal.show();
+            audio.onloadedmetadata = function(){
+                info.textContent = 'Durata: ' + Math.floor((audio.duration||0)/60) + 'm ' + Math.round((audio.duration||0)%60) + 's';
+                audio.play().catch(()=>{});
+            };
+            audio.onerror = function(){ info.textContent = 'Impossibile caricare l\'audio.'; };
+            modalEl.addEventListener('hidden.bs.modal', function(){ audio.pause(); audio.removeAttribute('src'); audio.load(); info.textContent=''; }, { once: true });
+        });
+    })();
+</script>
 
 <!-- Coherence details modal -->
 <div class="modal fade" id="coherenceModal" tabindex="-1" aria-labelledby="coherenceModalLabel" aria-hidden="true">

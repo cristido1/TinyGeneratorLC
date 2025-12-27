@@ -49,6 +49,27 @@
             </div>
 
             <div class="mb-3">
+                <label asp-for="Template.MinCharsTrama" class="form-label">Min Chars Trama</label>
+                <input asp-for="Template.MinCharsTrama" type="number" class="form-control" min="0" placeholder="Es. 2000" style="max-width: 150px;" />
+                <span asp-validation-for="Template.MinCharsTrama" class="text-danger"></span>
+                <div class="form-text">Numero minimo di caratteri richiesti per la trama. Lasciare vuoto se non applicabile.</div>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Template.MinCharsStory" class="form-label">Min Chars Story</label>
+                <input asp-for="Template.MinCharsStory" type="number" class="form-control" min="0" placeholder="Es. 5000" style="max-width: 150px;" />
+                <span asp-validation-for="Template.MinCharsStory" class="text-danger"></span>
+                <div class="form-text">Numero minimo di caratteri richiesti per la storia completa. Lasciare vuoto se non applicabile.</div>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Template.FullStoryStep" class="form-label">Full Story Step</label>
+                <input asp-for="Template.FullStoryStep" type="number" class="form-control" min="1" max="20" placeholder="Es. 9" style="max-width: 120px;" />
+                <span asp-validation-for="Template.FullStoryStep" class="text-danger"></span>
+                <div class="form-text">Numero dello step che genera la storia completa finale. Lasciare vuoto se non applicabile.</div>
+            </div>
+
+            <div class="mb-3">
                 <label asp-for="Template.Description" class="form-label">Description</label>
                 <textarea asp-for="Template.Description" class="form-control" rows="3" maxlength="500"></textarea>
                 <span asp-validation-for="Template.Description" class="text-danger"></span>

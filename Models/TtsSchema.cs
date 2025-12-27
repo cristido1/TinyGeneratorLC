@@ -21,8 +21,15 @@ public class TtsPhrase
     /// <summary>
     /// Background ambient sound/setting description (e.g., "spaceship_hum", "wind", "crowd_murmur").
     /// Used to generate background sounds during audio mixing.
+    /// NOTE: This field now stores AMBIENTE descriptions for future image generation. It is NO LONGER used for ambient sounds.
     /// </summary>
     public string? Ambience { get; set; }
+    
+    /// <summary>
+    /// Ambient sounds description (from [RUMORI: ...] tag).
+    /// This is the prompt sent to AudioCraft to generate background ambient sounds.
+    /// </summary>
+    public string? AmbientSounds { get; set; }
     
     /// <summary>
     /// Sound effect description to generate (from [FX, duration, description] tag).

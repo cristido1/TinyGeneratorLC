@@ -1,14 +1,9 @@
 OBIETTIVO
 Definire uno standard per una pagina Razor Pages di tipo “lista/griglia”
-con rendering server-side, senza componenti grid JS (AG Grid, DevExtreme, ecc.).
+con rendering server-side, con griglia AG Grid.
 
 PRINCIPI FONDAMENTALI
 - Razor Pages è il controller della pagina
-- Il backend decide SEMPRE (dati, paging, sorting)
-- Il frontend rende solo UI e interazioni leggere
-- NESSUNA SPA
-- NESSUN framework JS
-- JS solo per UX riusabile (colonne, menu, paginazione)
 
 STRUTTURA GENERALE DELLA PAGINA
 

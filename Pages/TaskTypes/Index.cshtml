@@ -6,20 +6,98 @@
 
 <div class="page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
-        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+            <select name="pageSize" class="form-select form-select-sm" style="width:90px;">
+                @{ var sizes = new[] { 10, 25, 50 }; }
+                @foreach (var s in sizes)
+                {
+                    if (s == Model.PageSize)
+                    {
+                        <option value="@s" selected>@s</option>
+                    }
+                    else
+                    {
+                        <option value="@s">@s</option>
+                    }
+                }
+            </select>
+            <input type="hidden" name="orderBy" value="@Model.OrderBy" />
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
+        </form>
         <div class="ms-auto d-flex gap-1">
             <div class="dropdown">
                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
                     <i class="bi bi-layout-three-columns"></i>
                 </button>
-                <ul class="dropdown-menu dropdown-menu-end" id="taskTypesGridColVisMenu" style="min-width: 180px;"></ul>
+                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
             </div>
             <button id="refreshBtn" class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
             <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#modalEdit" onclick="openCreateModal()">Nuovo</button>
         </div>
     </div>
 
-    <div id="taskTypesGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
+    <div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
+        <table class="table table-sm table-striped mb-0" id="taskTypesTable">
+            <thead class="table-light">
+                <tr>
+                    <th data-col="code"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "code" })">Code</a></th>
+                    <th data-col="description"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "description" })">Description</a></th>
+                    <th data-col="executor"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "executor" })">Executor Role</a></th>
+                    <th data-col="checker"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "checker" })">Checker Role</a></th>
+                    <th data-col="merge"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "merge" })">Merge Strategy</a></th>
+                    <th data-col="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in Model.Items)
+                {
+                    <tr data-code="@item.Code"
+                        data-description="@item.Description"
+                        data-executor="@item.DefaultExecutorRole"
+                        data-checker="@item.DefaultCheckerRole"
+                        data-merge="@item.OutputMergeStrategy"
+                        data-validation="@item.ValidationCriteria">
+                        <td data-col="code">@item.Code</td>
+                        <td data-col="description">@item.Description</td>
+                        <td data-col="executor">@item.DefaultExecutorRole</td>
+                        <td data-col="checker">@item.DefaultCheckerRole</td>
+                        <td data-col="merge">@item.OutputMergeStrategy</td>
+                        <td data-col="actions">
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    @foreach (var action in Model.GetActionList(item))
+                                    {
+                                        if (action.Method == "CLIENT")
+                                        {
+                                            var cls = action.Id == "details" ? "action-details" : "action-edit";
+                                            <li><button class="dropdown-item @cls" type="button">@action.Title</button></li>
+                                        }
+                                        else if (action.Method == "POST")
+                                        {
+                                            <li>
+                                                <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Delete task type?')" : "true")">
+                                                    @Html.AntiForgeryToken()
+                                                    @foreach (var field in action.Fields)
+                                                    {
+                                                        <input type="hidden" name="@field.Key" value="@field.Value" />
+                                                    }
+                                                    <button type="submit" class="dropdown-item">@action.Title</button>
+                                                </form>
+                                            </li>
+                                        }
+                                    }
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
 </div>
 
 <!-- Modal -->
@@ -27,6 +105,7 @@
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <form method="post" asp-page-handler="Save">
+                @Html.AntiForgeryToken()
                 <div class="modal-header">
                     <h5 class="modal-title" id="modalTitle">Create Task Type</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -86,113 +165,70 @@
 </div>
 
 @section Scripts {
-    <script>
-        window.__tasktypes_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.TaskTypes));
-    </script>
+    <script src="/js/shared/pagination.js"></script>
+    <script src="/js/shared/list-ui.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const rowData = window.__tasktypes_data || [];
-
-            const columnDefs = [
-                { headerName: 'Code', field: 'Code', flex: 1 },
-                { headerName: 'Description', field: 'Description', flex: 2 },
-                { headerName: 'Executor Role', field: 'DefaultExecutorRole', width: 150 },
-                { headerName: 'Checker Role', field: 'DefaultCheckerRole', width: 150 },
-                { headerName: 'Merge Strategy', field: 'OutputMergeStrategy', width: 160 },
-                {
-                    headerName: 'Actions', colId: 'actions', width: 200, suppressColumnsToolPanel: true,
-                    cellRenderer: params => {
-                        const code = params.data.Code;
-                        return `<button class="btn btn-sm btn-outline-secondary me-1 btn-details" data-code="${escapeAttr(code)}">+</button>` +
-                               `<button class="btn btn-sm btn-outline-primary me-1 btn-edit" data-code="${escapeAttr(code)}">Edit</button>` +
-                               `<button class="btn btn-sm btn-outline-danger btn-delete" data-code="${escapeAttr(code)}">Delete</button>`;
-                    }
-                }
-            ];
-
-            AgGridHelper.init('taskTypesGrid', columnDefs, rowData, {
-                storageKey: 'agGrid_taskTypes_colVis',
-                pageSize: 25
-            });
-
-            // Quick filter
-            document.getElementById('globalFilter')?.addEventListener('input', e => {
-                window.taskTypesGridApi?.setQuickFilter(e.target.value);
-            });
-
-            // Grid click handlers
-            document.getElementById('taskTypesGrid').addEventListener('click', e => {
-                const detailsBtn = e.target.closest('.btn-details');
-                if (detailsBtn) {
-                    const code = detailsBtn.dataset.code;
-                    const item = rowData.find(r => r.Code === code);
-                    if (item) showDetails(item);
-                }
-                
-                const editBtn = e.target.closest('.btn-edit');
-                if (editBtn) {
-                    const code = editBtn.dataset.code;
-                    const item = rowData.find(r => r.Code === code);
-                    if (item) openEditModal(item);
-                }
-
-                const deleteBtn = e.target.closest('.btn-delete');
-                if (deleteBtn) {
-                    const code = deleteBtn.dataset.code;
-                    if (confirm('Delete task type ' + code + '?')) {
-                        const form = document.createElement('form');
-                        form.method = 'POST';
-                        form.innerHTML = `<input type="hidden" name="code" value="${escapeAttr(code)}"/>`;
-                        form.action = '?handler=Delete';
-                        document.body.appendChild(form);
-                        form.submit();
-                    }
-                }
-            });
-
-            function showDetails(item) {
-                const body = document.getElementById('detailsModalBody');
-                body.innerHTML = `
-                    <dl class="row mb-0">
-                        <dt class="col-sm-4">Code</dt><dd class="col-sm-8">${escapeHtml(item.Code)}</dd>
-                        <dt class="col-sm-4">Description</dt><dd class="col-sm-8">${escapeHtml(item.Description || '')}</dd>
-                        <dt class="col-sm-4">Executor Role</dt><dd class="col-sm-8">${escapeHtml(item.DefaultExecutorRole || '')}</dd>
-                        <dt class="col-sm-4">Checker Role</dt><dd class="col-sm-8">${escapeHtml(item.DefaultCheckerRole || '')}</dd>
-                        <dt class="col-sm-4">Merge Strategy</dt><dd class="col-sm-8">${escapeHtml(item.OutputMergeStrategy || '')}</dd>
-                    </dl>
-                    ${item.ValidationCriteria ? `<hr/><strong>Validation Criteria:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow:auto;">${escapeHtml(item.ValidationCriteria)}</pre>` : ''}
-                `;
-                new bootstrap.Modal(document.getElementById('detailsModal')).show();
+            if (window.ListUI && typeof window.ListUI.init === 'function') {
+                window.ListUI.init({ tableSelector: '#taskTypesTable', colsMenuId: 'colVisMenu', storageKey: 'tasktypes_cols_v1', pagerId: 'pager' });
             }
 
-            window.openEditModal = function(item) {
-                document.getElementById('modalTitle').textContent = 'Edit Task Type: ' + item.Code;
-                document.getElementById('codeInput').value = item.Code;
-                document.getElementById('descInput').value = item.Description || '';
-                document.getElementById('execRole').value = item.DefaultExecutorRole || '';
-                document.getElementById('checkRole').value = item.DefaultCheckerRole || '';
-                document.getElementById('mergeStrategy').value = item.OutputMergeStrategy || '';
-                document.getElementById('validationCriteria').value = item.ValidationCriteria || '';
-                new bootstrap.Modal(document.getElementById('modalEdit')).show();
-            };
+            document.querySelectorAll('.action-details').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tr = btn.closest('tr');
+                    if (!tr) return;
+                    showDetails(tr.dataset);
+                });
+            });
 
-            window.openCreateModal = function() {
-                document.getElementById('modalTitle').textContent = 'Create Task Type';
-                document.getElementById('codeInput').value = '';
-                document.getElementById('descInput').value = '';
-                document.getElementById('execRole').value = '';
-                document.getElementById('checkRole').value = '';
-                document.getElementById('mergeStrategy').value = '';
-                document.getElementById('validationCriteria').value = '';
-            };
-
-            function escapeHtml(text) {
-                if (!text) return '';
-                return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
-            }
-            function escapeAttr(text) {
-                return escapeHtml(text).replace(/'/g, '&#39;');
-            }
+            document.querySelectorAll('.action-edit').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tr = btn.closest('tr');
+                    if (!tr) return;
+                    openEditModal(tr.dataset);
+                });
+            });
         });
+
+        function showDetails(data) {
+            const body = document.getElementById('detailsModalBody');
+            body.innerHTML = `
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Code</dt><dd class="col-sm-8">${escapeHtml(data.code || '')}</dd>
+                    <dt class="col-sm-4">Description</dt><dd class="col-sm-8">${escapeHtml(data.description || '')}</dd>
+                    <dt class="col-sm-4">Executor Role</dt><dd class="col-sm-8">${escapeHtml(data.executor || '')}</dd>
+                    <dt class="col-sm-4">Checker Role</dt><dd class="col-sm-8">${escapeHtml(data.checker || '')}</dd>
+                    <dt class="col-sm-4">Merge Strategy</dt><dd class="col-sm-8">${escapeHtml(data.merge || '')}</dd>
+                </dl>
+                ${data.validation ? `<hr/><strong>Validation Criteria:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow:auto;">${escapeHtml(data.validation)}</pre>` : '' }
+            `;
+            new bootstrap.Modal(document.getElementById('detailsModal')).show();
+        }
+
+        function openEditModal(data) {
+            document.getElementById('modalTitle').textContent = 'Edit Task Type: ' + (data.code || '');
+            document.getElementById('codeInput').value = data.code || '';
+            document.getElementById('descInput').value = data.description || '';
+            document.getElementById('execRole').value = data.executor || '';
+            document.getElementById('checkRole').value = data.checker || '';
+            document.getElementById('mergeStrategy').value = data.merge || '';
+            document.getElementById('validationCriteria').value = data.validation || '';
+            new bootstrap.Modal(document.getElementById('modalEdit')).show();
+        }
+
+        function openCreateModal() {
+            document.getElementById('modalTitle').textContent = 'Create Task Type';
+            document.getElementById('codeInput').value = '';
+            document.getElementById('descInput').value = '';
+            document.getElementById('execRole').value = '';
+            document.getElementById('checkRole').value = '';
+            document.getElementById('mergeStrategy').value = '';
+            document.getElementById('validationCriteria').value = '';
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
+        }
     </script>
 }

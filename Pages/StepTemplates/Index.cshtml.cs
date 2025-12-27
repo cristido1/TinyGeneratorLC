@@ -16,11 +16,89 @@ namespace TinyGenerator.Pages.StepTemplates
             _db = db;
         }
 
-        public List<StepTemplate> Templates { get; set; } = new();
+        public sealed class StepTemplateListItem
+        {
+            public long Id { get; set; }
+            public string Name { get; set; } = string.Empty;
+            public string TaskType { get; set; } = string.Empty;
+            public string? Description { get; set; }
+            public string? Instructions { get; set; }
+            public string StepPrompt { get; set; } = string.Empty;
+            public string? CreatedAt { get; set; }
+            public string? UpdatedAt { get; set; }
+            public int StepCount { get; set; }
+            public int? MinCharsTrama { get; set; }
+            public int? MinCharsStory { get; set; }
+            public int? FullStoryStep { get; set; }
+        }
+
+        public IReadOnlyList<StepTemplateListItem> Items { get; set; } = Array.Empty<StepTemplateListItem>();
+        public int PageIndex { get; set; } = 1;
+        public int PageSize { get; set; } = 25;
+        public int TotalCount { get; set; }
+        public string? Search { get; set; }
+        public string? OrderBy { get; set; }
 
         public void OnGet()
         {
-            Templates = _db.ListStepTemplates();
+            if (int.TryParse(Request.Query["page"], out var p) && p > 0) PageIndex = p;
+            if (int.TryParse(Request.Query["pageSize"], out var ps) && ps > 0) PageSize = ps;
+            Search = string.IsNullOrWhiteSpace(Request.Query["search"]) ? null : Request.Query["search"].ToString();
+            OrderBy = string.IsNullOrWhiteSpace(Request.Query["orderBy"]) ? null : Request.Query["orderBy"].ToString();
+
+            var (items, total) = _db.GetPagedStepTemplates(PageIndex, PageSize, Search, OrderBy);
+            TotalCount = total;
+            Items = items.Select(t => new StepTemplateListItem
+            {
+                Id = t.Id,
+                Name = t.Name ?? string.Empty,
+                TaskType = t.TaskType ?? string.Empty,
+                Description = t.Description,
+                Instructions = t.Instructions,
+                StepPrompt = t.StepPrompt ?? string.Empty,
+                CreatedAt = t.CreatedAt,
+                UpdatedAt = t.UpdatedAt,
+                StepCount = Regex.Matches(t.StepPrompt ?? string.Empty, @"^\d+\.", RegexOptions.Multiline).Count,
+                MinCharsTrama = t.MinCharsTrama,
+                MinCharsStory = t.MinCharsStory,
+                FullStoryStep = t.FullStoryStep
+            }).ToList();
+        }
+
+        public sealed class RowAction
+        {
+            public string Id { get; set; } = string.Empty;
+            public string Title { get; set; } = string.Empty;
+            public string Method { get; set; } = "GET";
+            public string Url { get; set; } = string.Empty;
+            public bool Confirm { get; set; }
+            public Dictionary<string, string> Fields { get; set; } = new();
+        }
+
+        public IEnumerable<RowAction> GetActionsForTemplate(StepTemplateListItem item)
+        {
+            return new List<RowAction>
+            {
+                new RowAction { Id = "details", Title = "Details", Method = "CLIENT", Url = "#" },
+                new RowAction { Id = "edit", Title = "Edit", Method = "GET", Url = $"/StepTemplates/Edit?id={item.Id}" },
+                new RowAction
+                {
+                    Id = "copy",
+                    Title = "Copy",
+                    Method = "POST",
+                    Url = "?handler=Copy",
+                    Fields = new Dictionary<string, string> { ["id"] = item.Id.ToString() }
+                },
+                new RowAction
+                {
+                    Id = "delete",
+                    Title = "Delete",
+                    Method = "POST",
+                    Url = "?handler=Delete",
+                    Confirm = true,
+                    Fields = new Dictionary<string, string> { ["id"] = item.Id.ToString() }
+                }
+            };
         }
 
         public IActionResult OnPostSave(
@@ -29,7 +107,10 @@ namespace TinyGenerator.Pages.StepTemplates
             string taskType,
             string? description,
             string stepPrompt,
-            string? instructions)
+            string? instructions,
+            int? minCharsTrama,
+            int? minCharsStory,
+            int? fullStoryStep)
         {
             if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(taskType) || string.IsNullOrWhiteSpace(stepPrompt))
             {
@@ -53,6 +134,9 @@ namespace TinyGenerator.Pages.StepTemplates
                 Description = description,
                 Instructions = string.IsNullOrWhiteSpace(instructions) ? null : instructions,
                 StepPrompt = stepPrompt,
+                MinCharsTrama = minCharsTrama,
+                MinCharsStory = minCharsStory,
+                FullStoryStep = fullStoryStep,
                 CreatedAt = id == 0 ? DateTime.UtcNow.ToString("o") : string.Empty,
                 UpdatedAt = DateTime.UtcNow.ToString("o")
             };
@@ -114,6 +198,12 @@ namespace TinyGenerator.Pages.StepTemplates
                 StepPrompt = template.StepPrompt,
                 Instructions = template.Instructions,
                 Description = template.Description,
+                CharactersStep = template.CharactersStep,
+                EvaluationSteps = template.EvaluationSteps,
+                TramaSteps = template.TramaSteps,
+                MinCharsTrama = template.MinCharsTrama,
+                MinCharsStory = template.MinCharsStory,
+                FullStoryStep = template.FullStoryStep,
                 CreatedAt = DateTime.UtcNow.ToString("o"),
                 UpdatedAt = DateTime.UtcNow.ToString("o")
             };

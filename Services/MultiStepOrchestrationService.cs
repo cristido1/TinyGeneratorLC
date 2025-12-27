@@ -398,15 +398,16 @@ namespace TinyGenerator.Services
                 : string.Empty;
             
             // If the step prompt already contains the chunk via placeholders, avoid prepending it again
-            // For "story" task type, don't prepend the chunk if it's the InitialContext (first step)
-            // because it's already included via {{PROMPT}} or in the system message
-            var isStoryWithInitialContext = execution.TaskType == "story" 
-                && execution.CurrentStep == 1 
-                && chunkText == execution.InitialContext;
+            // For "story" task type, NEVER prepend chunks because the workflow is:
+            //   Step 1: Generate trama from InitialContext (user theme)
+            //   Step 2: Generate characters from Step 1 output
+            //   Step 3: Generate full story from previous steps
+            // Chunks only make sense for "tts_schema" where each step processes a different chunk
+            var isStoryTask = string.Equals(execution.TaskType, "story", StringComparison.OrdinalIgnoreCase);
             
             var chunkIntro = !hasChunkPlaceholder 
                 && !string.IsNullOrWhiteSpace(chunkText)
-                && !isStoryWithInitialContext
+                && !isStoryTask  // Never prepend chunks for story task type
                 ? $"### CHUNK {execution.CurrentStep}\n{chunkText}\n\n"
                 : string.Empty;
 
@@ -624,6 +625,8 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - loop.ExecuteAsync completed");
                 Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.FinalResponse is null: {result.FinalResponse == null}");
                 Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.FinalResponse length: {result.FinalResponse?.Length ?? 0}");
+                Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.Success: {result.Success}, result.Error: {result.Error ?? "(null)"}");
+                Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.IterationCount: {result.IterationCount}, result.ExecutedTools count: {result.ExecutedTools?.Count ?? 0}");
                 if (!string.IsNullOrWhiteSpace(result.FinalResponse))
                 {
                     Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.FinalResponse preview: {result.FinalResponse.Substring(0, Math.Min(200, result.FinalResponse.Length))}");
@@ -643,7 +646,8 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                     if (string.IsNullOrWhiteSpace(output))
                     {
                         Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - Output is empty! result object: {result != null}, FinalResponse: '{result?.FinalResponse ?? "(null)"}'");
-                        throw new InvalidOperationException("Executor agent produced empty output");
+                        _logger.Log("Error", "MultiStep", $"Executor agent produced empty output. Success={result.Success}, Error={result.Error}, Iterations={result.IterationCount}, ExecutedTools={result.ExecutedTools?.Count ?? 0}");
+                        throw new InvalidOperationException($"Executor agent produced empty output. Model: {executorModelName}, Success: {result.Success}, Error: {result.Error ?? "none"}, Iterations: {result.IterationCount}");
                     }
                 }
             }
@@ -669,6 +673,13 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
 
             ValidationResult baseValidation;
 
+            // Get step template for validation checks (MinCharsStory, MinCharsTrama, etc.)
+            Models.StepTemplate? stepTemplate = null;
+            if (executorAgent.MultiStepTemplateId.HasValue)
+            {
+                stepTemplate = _database.GetStepTemplateById(executorAgent.MultiStepTemplateId.Value);
+            }
+
             // Task-specific deterministic checks (e.g., TTS coverage) are executed here
             if (string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
             {
@@ -689,7 +700,7 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
             }
             else
             {
-                // Generic deterministic/basic checks (no LLM invocation)
+                // Generic deterministic/basic checks including MinCharsStory validation
                 baseValidation = await _checkerService.ValidateStepOutputAsync(
                     stepInstruction,
                     output,
@@ -697,7 +708,9 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                     threadId,
                     executorAgent.Name,
                     executorAgent.ModelName,
-                    execution.TaskType
+                    execution.TaskType,
+                    execution.CurrentStep,
+                    stepTemplate
                 );
             }
 
@@ -758,6 +771,8 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
 
                 if (!string.IsNullOrWhiteSpace(executorAgent.Role) && writerRoles.Contains(executorAgent.Role))
                 {
+                    // stepTemplate already retrieved above for baseValidation
+
                     var writerValidation = await _checkerService.ValidateWriterResponseAsync(
                         stepInstruction,
                         output,
@@ -765,7 +780,10 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                         threadId,
                         executorAgent.Name,
                         executorAgent.ModelName,
-                        execution.TaskType
+                        execution.TaskType,
+                        execution.CurrentStep,
+                        stepTemplate,
+                        execution
                     );
 
                     validationResult = writerValidation;
@@ -1856,6 +1874,135 @@ RIASSUNTO:";
                 throw new InvalidOperationException($"Task type {execution.TaskType} not found");
             }
 
+            // SALVATAGGIO STORIA COMPLETA: Se siamo allo step full_story_step, salva la storia con titolo estratto
+            var agent = await GetExecutorAgentAsync(execution, threadId);
+            Models.StepTemplate? stepTemplate = null;
+            if (agent?.MultiStepTemplateId.HasValue == true)
+            {
+                stepTemplate = _database.GetStepTemplateById(agent.MultiStepTemplateId.Value);
+            }
+
+            if (stepTemplate?.FullStoryStep.HasValue == true && execution.CurrentStep >= stepTemplate.FullStoryStep)
+            {
+                // Get all steps for the full_story_step number, then pick the one with the longest output
+                // (in case there were multiple attempts, we want the successful one with actual content)
+                var fullStoryStepCandidates = steps.Where(s => s.StepNumber == stepTemplate.FullStoryStep.Value).ToList();
+                var fullStoryStep = fullStoryStepCandidates
+                    .OrderByDescending(s => (s.StepOutput ?? string.Empty).Length)
+                    .FirstOrDefault();
+                    
+                if (fullStoryStep != null && !string.IsNullOrWhiteSpace(fullStoryStep.StepOutput))
+                {
+                    try
+                    {
+                        var storyText = fullStoryStep.StepOutput;
+                        string? title = null;
+
+                        // Prova a estrarre il titolo dalla prima riga se contiene "Titolo:" o "Title:"
+                        var lines = storyText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                        if (lines.Length > 0)
+                        {
+                            var firstLine = lines[0].Trim();
+                            if (firstLine.Contains("Titolo:", StringComparison.OrdinalIgnoreCase) || 
+                                firstLine.Contains("Title:", StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Estrai il titolo dopo "Titolo:" o "Title:"
+                                var colonIndex = firstLine.IndexOf(":");
+                                if (colonIndex >= 0 && colonIndex < firstLine.Length - 1)
+                                {
+                                    title = firstLine.Substring(colonIndex + 1).Trim();
+                                }
+                            }
+                        }
+
+                        // Se non c'è titolo trovato, usa il valore da Config se presente
+                        if (string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(execution.Config))
+                        {
+                            try
+                            {
+                                using var doc = JsonDocument.Parse(execution.Config);
+                                var root = doc.RootElement;
+                                if (root.TryGetProperty("title", out var titleProp))
+                                {
+                                    title = titleProp.GetString();
+                                }
+                            }
+                            catch
+                            {
+                                // ignore parse errors
+                            }
+                        }
+
+                        _logger.Log("Information", "MultiStep", 
+                            $"Full story step {stepTemplate.FullStoryStep} completed: saving story with title='{title}', length={storyText.Length}");
+
+                        // Se execution.EntityId non esiste ancora, crea la storia
+                        if (!execution.EntityId.HasValue)
+                        {
+                            var modelOverride = GetExecutionModelOverride(execution);
+                            int? modelId = null;
+
+                            if (!string.IsNullOrWhiteSpace(modelOverride))
+                            {
+                                var modelInfoByName = _database.GetModelInfo(modelOverride);
+                                modelId = modelInfoByName?.Id;
+                            }
+
+                            if (modelId == null && agent?.ModelId != null)
+                            {
+                                modelId = agent.ModelId;
+                            }
+
+                            var prompt = execution.InitialContext ?? "[No prompt]";
+                            var storyId = _database.InsertSingleStory(
+                                prompt: prompt, 
+                                story: storyText, 
+                                agentId: agent?.Id, 
+                                modelId: modelId, 
+                                title: title);
+                            
+                            execution.EntityId = storyId;
+                            _database.UpdateTaskExecution(execution);
+                            _logger.Log("Information", "MultiStep", 
+                                $"Created new story {storyId} from full_story_step with title='{title}'");
+                        }
+                        else
+                        {
+                            // Story esiste già, aggiorna il titolo se necessario
+                            if (!string.IsNullOrWhiteSpace(title))
+                            {
+                                _database.UpdateStoryTitle(execution.EntityId.Value, title);
+                                _logger.Log("Information", "MultiStep", 
+                                    $"Updated story {execution.EntityId.Value} title to '{title}'");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Log("Error", "MultiStep", 
+                            $"Error saving story from full_story_step {stepTemplate.FullStoryStep}: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    // Log why story was not saved
+                    var candidatesCount = fullStoryStepCandidates?.Count ?? 0;
+                    var outputLength = fullStoryStep?.StepOutput?.Length ?? 0;
+                    _logger.Log("Warning", "MultiStep", 
+                        $"Could not save story from full_story_step {stepTemplate.FullStoryStep}: " +
+                        $"candidates={candidatesCount}, selectedOutputLength={outputLength}, " +
+                        $"step found={fullStoryStep != null}, output empty={string.IsNullOrWhiteSpace(fullStoryStep?.StepOutput)}");
+                }
+            }
+
+            // If full_story_step was configured and completed, story is already saved - skip merge and further updates
+            if (stepTemplate?.FullStoryStep.HasValue == true && execution.CurrentStep >= stepTemplate.FullStoryStep)
+            {
+                _logger.Log("Information", "MultiStep", 
+                    $"Full story step {stepTemplate.FullStoryStep} was already saved. Skipping merge and final update.");
+                return "Story already saved from full_story_step";
+            }
+
             // Apply merge strategy
             string merged;
             if (taskTypeInfo.OutputMergeStrategy == "accumulate_chapters")
@@ -1876,7 +2023,6 @@ RIASSUNTO:";
             // Create or update story entity
             if (execution.TaskType == "story")
             {
-                var agent = await GetExecutorAgentAsync(execution, threadId);
                 var modelOverride = GetExecutionModelOverride(execution);
                 int? modelId = null;
 
@@ -1935,7 +2081,9 @@ RIASSUNTO:";
                     try
                     {
                         _logger.Log("Debug", "MultiStep", $"Inserting new story (prompt len={prompt?.Length ?? 0}, merged len={merged?.Length ?? 0}, title present={(!string.IsNullOrWhiteSpace(title))})");
-                        var storyId = _database.InsertSingleStory(prompt, merged, agentId: agent?.Id, modelId: modelId, title: title);
+                        var safePrompt = prompt ?? string.Empty;
+                        var safeMerged = merged ?? string.Empty;
+                        var storyId = _database.InsertSingleStory(safePrompt, safeMerged, agentId: agent?.Id, modelId: modelId, title: title);
                         _logger.Log("Information", "MultiStep", $"InsertSingleStory returned id {storyId}");
 
                         // Update execution with the new entity ID
@@ -2095,7 +2243,7 @@ RIASSUNTO:";
 
             _logger.Log("Information", "MultiStep", $"Execution {executionId} completed successfully");
 
-            return merged;
+            return merged ?? string.Empty;
         }
 
         private async Task<string> MergeChapters(List<TaskExecutionStep> steps, TaskExecution execution, int threadId, CancellationToken ct = default)

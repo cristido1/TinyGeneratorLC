@@ -6,20 +6,119 @@
 
 <div class="page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
-        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+            <select name="modelFilter" class="form-select form-select-sm" style="max-width:220px;">
+                <option value="">Tutti i modelli</option>
+                <option value="__none__" selected="@(Model.ModelFilter == "__none__" ? "selected" : null)">Nessun modello</option>
+                @foreach (var m in Model.Models)
+                {
+                    if (!string.IsNullOrWhiteSpace(m.Name))
+                    {
+                        <option value="@m.Name" selected="@(Model.ModelFilter == m.Name ? "selected" : null)">@m.Name</option>
+                    }
+                }
+            </select>
+            <select name="pageSize" class="form-select form-select-sm" style="width:90px;">
+                @{ var sizes = new[] { 10, 25, 50 }; }
+                @foreach (var s in sizes)
+                {
+                    if (s == Model.PageSize)
+                    {
+                        <option value="@s" selected>@s</option>
+                    }
+                    else
+                    {
+                        <option value="@s">@s</option>
+                    }
+                }
+            </select>
+            <input type="hidden" name="orderBy" value="@Model.OrderBy" />
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
+        </form>
         <div class="ms-auto d-flex gap-1">
             <div class="dropdown">
                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
                     <i class="bi bi-layout-three-columns"></i>
                 </button>
-                <ul class="dropdown-menu dropdown-menu-end" id="agentsGridColVisMenu" style="min-width: 180px;"></ul>
+                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
             </div>
             <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
             <a class="btn btn-sm btn-primary" asp-page="./Create">Nuovo</a>
         </div>
     </div>
 
-    <div id="agentsGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
+    <div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
+        <table class="table table-sm table-striped mb-0" id="agentsTable">
+            <thead class="table-light">
+                <tr>
+                    <th data-col="name"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "name" })">Name</a></th>
+                    <th data-col="role"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "role" })">Role</a></th>
+                    <th data-col="model"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "model" })">Model</a></th>
+                    <th data-col="temp"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "temperature" })">Temp</a></th>
+                    <th data-col="topp"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "topp" })">TopP</a></th>
+                    <th data-col="voice"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "voice" })">Voice</a></th>
+                    <th data-col="skills"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "skills" })">Skills</a></th>
+                    <th data-col="multistep">MultiStep Template</th>
+                    <th data-col="json">JSON Format</th>
+                    <th data-col="active">Active</th>
+                    <th data-col="actions">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var agent in Model.Items)
+                {
+                    <tr data-id="@agent.Id" data-name="@agent.Name" data-role="@agent.Role">
+                        <td data-col="name">@agent.Name</td>
+                        <td data-col="role">@agent.Role</td>
+                        <td data-col="model">@(!string.IsNullOrWhiteSpace(agent.ModelName) ? agent.ModelName : agent.ModelId?.ToString() ?? "-")</td>
+                        <td data-col="temp">@((agent.Temperature.HasValue) ? agent.Temperature.Value.ToString("0.00") : "-")</td>
+                        <td data-col="topp">@((agent.TopP.HasValue) ? agent.TopP.Value.ToString("0.00") : "-")</td>
+                        <td data-col="voice">@(!string.IsNullOrWhiteSpace(agent.VoiceName) ? agent.VoiceName : agent.VoiceId?.ToString() ?? "-")</td>
+                        <td data-col="skills">@agent.Skills</td>
+                        <td data-col="multistep">@(!string.IsNullOrWhiteSpace(agent.MultiStepTemplateName) ? agent.MultiStepTemplateName : "-")</td>
+                        <td data-col="json">@agent.JsonResponseFormat</td>
+                        <td data-col="active">@(agent.IsActive ? "Yes" : "No")</td>
+                        <td data-col="actions">
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    @foreach (var action in Model.GetActionsForAgent(agent))
+                                    {
+                                        if (action.Method == "GET")
+                                        {
+                                            <li><a class="dropdown-item" href="@action.Url">@action.Title</a></li>
+                                        }
+                                        else if (action.Method == "POST")
+                                        {
+                                            <li>
+                                                <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Are you sure?')" : "true")">
+                                                    @Html.AntiForgeryToken()
+                                                    @foreach (var field in action.Fields)
+                                                    {
+                                                        <input type="hidden" name="@field.Key" value="@field.Value" />
+                                                    }
+                                                    <button type="submit" class="dropdown-item">@action.Title</button>
+                                                </form>
+                                            </li>
+                                        }
+                                        else if (action.Method == "CLIENT")
+                                        {
+                                            var agentId = action.Fields.ContainsKey("agentId") ? action.Fields["agentId"] : "";
+                                            var agentName = action.Fields.ContainsKey("agentName") ? action.Fields["agentName"] : "";
+                                            <li><button type="button" class="dropdown-item action-generate" data-agent-id="@agentId" data-agent-name="@agentName">@action.Title</button></li>
+                                        }
+                                    }
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" data-model-filter="@Model.ModelFilter"></div>
 </div>
 
 <!-- Story Generation Modal -->
@@ -31,6 +130,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form method="post" asp-page-handler="GenerateStory" id="storyForm">
+                @Html.AntiForgeryToken()
                 <div class="modal-body">
                     <input type="hidden" name="AgentId" id="modalAgentId" />
                     <div class="mb-3">
@@ -49,79 +149,24 @@
 </div>
 
 @section Scripts {
-    <script>
-        window.__agents_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Agents));
-    </script>
+    <script src="/js/shared/pagination.js"></script>
+    <script src="/js/shared/list-ui.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const rowData = window.__agents_data || [];
+            if (window.ListUI && typeof window.ListUI.init === 'function') {
+                window.ListUI.init({ tableSelector: '#agentsTable', colsMenuId: 'colVisMenu', storageKey: 'agents_cols_v1', pagerId: 'pager' });
+            }
 
-            const columnDefs = [
-                { headerName: 'Name', field: 'Name', flex: 1 },
-                { headerName: 'Role', field: 'Role', width: 120 },
-                { headerName: 'Model', field: 'ModelName', flex: 1, cellRenderer: p => p.value || p.data.ModelId || '' },
-                { headerName: 'Temp', field: 'Temperature', width: 80, cellRenderer: p => p.value != null ? p.value.toFixed(2) : '-' },
-                { headerName: 'TopP', field: 'TopP', width: 80, cellRenderer: p => p.value != null ? p.value.toFixed(2) : '-' },
-                { headerName: 'Voice', field: 'VoiceName', width: 120, cellRenderer: p => p.value || p.data.VoiceId || '' },
-                { headerName: 'Skills', field: 'Skills', flex: 1 },
-                { headerName: 'JSON Format', field: 'JsonResponseFormat', width: 120, cellRenderer: p => p.value || '-' },
-                {
-                    headerName: 'Actions', colId: 'actions', width: 260, suppressColumnsToolPanel: true, pinned: 'right',
-                    cellRenderer: params => {
-                        const id = params.data.Id;
-                        const name = params.data.Name;
-                        const role = (params.data.Role || '').toLowerCase();
-                        let generateBtn = '';
-                        if (role === 'writer') {
-                            generateBtn = `<button type="button" class="btn btn-sm btn-outline-success me-1 generate-story-btn" data-agent-id="${id}" data-agent-name="${escapeAttr(name)}"><i class="bi bi-pencil-square"></i></button>`;
-                        }
-                        return `
-                            <a class="btn btn-sm btn-outline-primary me-1" href="/Agents/Edit?id=${id}">Edit</a>
-                            <button type="button" class="btn btn-sm btn-outline-secondary me-1 clone-btn" data-id="${id}">Duplica</button>
-                            ${generateBtn}
-                            <button type="button" class="btn btn-sm btn-outline-danger delete-btn" data-id="${id}">Delete</button>
-                        `;
-                    }
-                }
-            ];
-
-            AgGridHelper.init('agentsGrid', columnDefs, rowData, {
-                storageKey: 'agGrid_agents_colVis',
-                pageSize: 25
-            });
-
-            // Quick filter
-            document.getElementById('globalFilter')?.addEventListener('input', e => {
-                window.agentsGridApi?.setQuickFilter(e.target.value);
-            });
-
-            // Grid click handlers
-            document.getElementById('agentsGrid').addEventListener('click', e => {
-                const cloneBtn = e.target.closest('.clone-btn');
-                if (cloneBtn) {
-                    const id = cloneBtn.dataset.id;
-                    postAction('Clone', { id: id });
-                }
-
-                const deleteBtn = e.target.closest('.delete-btn');
-                if (deleteBtn) {
-                    const id = deleteBtn.dataset.id;
-                    if (confirm('Are you sure you want to delete this agent?')) {
-                        postAction('Delete', { id: id });
-                    }
-                }
-
-                const generateBtn = e.target.closest('.generate-story-btn');
-                if (generateBtn) {
-                    const agentId = generateBtn.dataset.agentId;
-                    const agentName = generateBtn.dataset.agentName;
-                    document.getElementById('modalAgentId').value = agentId;
-                    document.querySelector('#storyModal .modal-title').textContent = `Generate Story - ${agentName}`;
+            document.querySelectorAll('.action-generate').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const agentId = btn.getAttribute('data-agent-id');
+                    const agentName = btn.getAttribute('data-agent-name') || '';
+                    document.getElementById('modalAgentId').value = agentId || '';
+                    document.querySelector('#storyModal .modal-title').textContent = 'Generate Story - ' + agentName;
                     new bootstrap.Modal(document.getElementById('storyModal')).show();
-                }
+                });
             });
 
-            // Restore last theme from localStorage
             const STORAGE_KEY = 'lastStoryTheme';
             const storyThemeInput = document.getElementById('storyThemeInput');
             const lastTheme = localStorage.getItem(STORAGE_KEY);
@@ -129,7 +174,6 @@
                 storyThemeInput.value = lastTheme;
             }
 
-            // Save theme on form submit
             const storyForm = document.getElementById('storyForm');
             if (storyForm) {
                 storyForm.addEventListener('submit', () => {
@@ -138,37 +182,6 @@
                         localStorage.setItem(STORAGE_KEY, theme);
                     }
                 });
-            }
-
-            function postAction(handler, data) {
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = `?handler=${handler}`;
-                for (const key in data) {
-                    const input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = key;
-                    input.value = data[key];
-                    form.appendChild(input);
-                }
-                const token = document.querySelector('input[name=__RequestVerificationToken]');
-                if (token) {
-                    const tokenInput = document.createElement('input');
-                    tokenInput.type = 'hidden';
-                    tokenInput.name = '__RequestVerificationToken';
-                    tokenInput.value = token.value;
-                    form.appendChild(tokenInput);
-                }
-                document.body.appendChild(form);
-                form.submit();
-            }
-
-            function escapeHtml(text) {
-                if (!text) return '';
-                return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
-            }
-            function escapeAttr(text) {
-                return escapeHtml(text).replace(/'/g, '&#39;');
             }
         });
     </script>

@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using TinyGenerator.Models;
 using TinyGenerator.Skills;
+using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Services;
 
@@ -193,13 +194,13 @@ public sealed class StoriesService
 
                 if (!byFolder.TryGetValue(folderName, out var story))
                 {
-                    _customLogger?.Append(null, $"[Scan] Folder '{folderName}' contains final_mix.wav but no DB story found.");
+                    _customLogger?.Append("live-logs", $"[Scan] Folder '{folderName}' contains final_mix.wav but no DB story found.");
                     continue;
                 }
 
                 if (audioStatus == null)
                 {
-                    _customLogger?.Append(null, "[Scan] Status code 'audio_master_generated' not found in DB.");
+                    _customLogger?.Append("live-logs", "[Scan] Status code 'audio_master_generated' not found in DB.");
                     break;
                 }
 
@@ -213,16 +214,16 @@ public sealed class StoriesService
                 if (ok)
                 {
                     updatedCount++;
-                    _customLogger?.Append(null, $"[Scan] Story {story.Id} ('{folderName}') status updated to {audioStatus.Code}.");
+                    _customLogger?.Append("live-logs", $"[Scan] Story {story.Id} ('{folderName}') status updated to {audioStatus.Code}.");
                 }
                 else
                 {
-                    _customLogger?.Append(null, $"[Scan] Failed to update story {story.Id} ('{folderName}').");
+                    _customLogger?.Append("live-logs", $"[Scan] Failed to update story {story.Id} ('{folderName}').");
                 }
             }
             catch (Exception ex)
             {
-                _customLogger?.Append(null, $"[Scan] Exception scanning '{dir}': {ex.Message}");
+                _customLogger?.Append("live-logs", $"[Scan] Exception scanning '{dir}': {ex.Message}");
             }
         }
 
@@ -421,6 +422,49 @@ public sealed class StoriesService
                 var avgScore = afterEvaluations.Average(e => e.TotalScore);
                 _customLogger?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
                 TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
+                
+                // Se score > 60, avvia riassunto automatico con priorità bassa
+                if (avgScore > 60 && _commandDispatcher != null)
+                {
+                    try
+                    {
+                        var summarizerAgent = _database.ListAgents()
+                            .FirstOrDefault(a => a.Role == "summarizer" && a.IsActive);
+                        
+                        if (summarizerAgent != null)
+                        {
+                            var summarizeRunId = Guid.NewGuid().ToString();
+                            var cmd = new Commands.SummarizeStoryCommand(
+                                storyId,
+                                _database,
+                                _kernelFactory!,
+                                _customLogger!);
+                            
+                            _commandDispatcher.Enqueue(
+                                "SummarizeStory",
+                                async ctx => {
+                                    bool success = await cmd.ExecuteAsync(ctx.CancellationToken);
+                                    return new CommandResult(success, success ? "Summary generated" : "Failed to generate summary");
+                                },
+                                runId: summarizeRunId,
+                                metadata: new Dictionary<string, string>
+                                {
+                                    ["storyId"] = storyId.ToString(),
+                                    ["storyTitle"] = story.Title ?? "Untitled",
+                                    ["triggeredBy"] = "auto_evaluation",
+                                    ["evaluationScore"] = avgScore.ToString("F2")
+                                },
+                                priority: 3);
+                            
+                            _customLogger?.Append(runId, $"[{storyId}] Auto-summarization enqueued (score: {avgScore:F2})");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to enqueue auto-summarization for story {StoryId}", storyId);
+                    }
+                }
+                
                 return (true, avgScore, null);
             }
         }
@@ -887,11 +931,11 @@ public sealed class StoriesService
         }
         var result = string.Join(" ", cleaned);
         
-        // Remove punctuation that TTS might read as words (e.g., "punto", "punto punto")
-        // Keep punctuation that affects intonation: , ; : ? !
-        // Remove: . .. ... and multiple dots, also standalone punctuation
-        result = Regex.Replace(result, @"\.{2,}", " ");  // Replace multiple dots with space
-        result = Regex.Replace(result, @"(?<!\d)\.(?!\d)", " ");  // Remove single dots except in numbers
+        // Normalize punctuation for TTS:
+        // - Keep essential punctuation for pauses and intonation: . , ; : ? !
+        // - Convert multiple dots (... or ..) to single dot
+        // - Normalize whitespace
+        result = Regex.Replace(result, @"\.{2,}", ".");  // Multiple dots → single dot
         result = Regex.Replace(result, @"\s+", " ");  // Normalize whitespace
         return result.Trim();
     }
@@ -1070,6 +1114,10 @@ public sealed class StoriesService
                         // also remove ambience/fx/music references and their timing
                         item.Remove("ambienceFile");
                         item.Remove("AmbienceFile");
+                        item.Remove("ambience_file");
+                        item.Remove("ambient_sound_file");
+                        item.Remove("ambientSoundFile");
+                        item.Remove("AmbientSoundFile");
                         item.Remove("fx_file");
                         item.Remove("fxFile");
                         item.Remove("musicFile");
@@ -1144,7 +1192,10 @@ public sealed class StoriesService
                         }
                     }
 
-                    File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                    if (root != null)
+                    {
+                        File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1192,7 +1243,10 @@ public sealed class StoriesService
                         }
                     }
 
-                    File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                    if (root != null)
+                    {
+                        File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1227,20 +1281,36 @@ public sealed class StoriesService
                         {
                             foreach (var item in arr.OfType<JsonObject>())
                             {
+                                // Clean old ambience_file references (legacy)
                                 var amb = item.TryGetPropertyValue("ambienceFile", out var a1) ? a1?.ToString() : null;
                                 if (!string.IsNullOrWhiteSpace(amb)) DeleteIfExists(Path.Combine(folderPath, amb));
+                                amb = item.TryGetPropertyValue("ambience_file", out var a2) ? a2?.ToString() : null;
+                                if (!string.IsNullOrWhiteSpace(amb)) DeleteIfExists(Path.Combine(folderPath, amb));
+                                
+                                // Clean new ambient_sound_file references
+                                var asf = item.TryGetPropertyValue("ambient_sound_file", out var a3) ? a3?.ToString() : null;
+                                if (!string.IsNullOrWhiteSpace(asf)) DeleteIfExists(Path.Combine(folderPath, asf));
+                                asf = item.TryGetPropertyValue("ambientSoundFile", out var a4) ? a4?.ToString() : null;
+                                if (!string.IsNullOrWhiteSpace(asf)) DeleteIfExists(Path.Combine(folderPath, asf));
 
                                 item.Remove("ambienceFile");
                                 item.Remove("AmbienceFile");
+                                item.Remove("ambience_file");
+                                item.Remove("ambient_sound_file");
+                                item.Remove("ambientSoundFile");
+                                item.Remove("AmbientSoundFile");
                             }
                         }
                     }
 
-                    File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                    if (root != null)
+                    {
+                        File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                    }
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogWarning(ex, "Unable to update schema when cleaning ambience for story {Id}", storyId);
+                    _logger?.LogWarning(ex, "Unable to update schema when cleaning ambient sounds for story {Id}", storyId);
                 }
             }
 
@@ -1254,7 +1324,7 @@ public sealed class StoriesService
         }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Error cleaning ambience for story {Id}", storyId);
+            _logger?.LogWarning(ex, "Error cleaning ambient sounds for story {Id}", storyId);
         }
     }
 
@@ -2469,9 +2539,10 @@ public sealed class StoriesService
 
             byte[] audioBytes;
             int? durationFromResult;
+            string cleanText;
             try
             {
-                var cleanText = CleanTtsText(text);
+                cleanText = CleanTtsText(text);
                 if (string.IsNullOrWhiteSpace(cleanText))
                 {
                     _customLogger?.Append(runId, $"[{story.Id}] Salto frase vuota dopo pulizia (character={characterName})");
@@ -2491,6 +2562,10 @@ public sealed class StoriesService
             try
             {
                 await File.WriteAllBytesAsync(filePath, audioBytes);
+                
+                // Save TTS text to .txt file with same name
+                var txtFilePath = Path.ChangeExtension(filePath, ".txt");
+                await File.WriteAllTextAsync(txtFilePath, $"[{characterName}, {emotion}]\n{cleanText}");
             }
             catch (Exception ex)
             {
@@ -2840,16 +2915,16 @@ public sealed class StoriesService
             return (false, err);
         }
 
-        // Build list of ambience segments: group consecutive phrases with same ambience
+        // Build list of ambient sound segments: group consecutive phrases with same ambient_sounds
         var ambienceSegments = ExtractAmbienceSegments(phraseEntries);
         if (ambienceSegments.Count == 0)
         {
-            var msg = "Nessun segmento ambientale trovato nella timeline (nessuna proprietà 'ambience' presente)";
+            var msg = "Nessun segmento ambient sounds trovato nella timeline (nessuna proprietà 'ambient_sounds' presente - usa il tag [RUMORI: ...])";
             _customLogger?.Append(runId, $"[{story.Id}] {msg}");
             return (true, msg);
         }
 
-        _customLogger?.Append(runId, $"[{story.Id}] Trovati {ambienceSegments.Count} segmenti ambientali da generare");
+        _customLogger?.Append(runId, $"[{story.Id}] Trovati {ambienceSegments.Count} segmenti ambient sounds da generare");
 
         // Create AudioCraft tool
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
@@ -2940,6 +3015,12 @@ public sealed class StoriesService
                         var audioBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
                         await File.WriteAllBytesAsync(localFilePath, audioBytes);
                         _customLogger?.Append(runId, $"[{story.Id}] Salvato: {localFileName}");
+                        
+                        // Save prompt to .txt file with same name
+                        var promptFileName = Path.ChangeExtension(localFileName, ".txt");
+                        var promptFilePath = Path.Combine(folderPath, promptFileName);
+                        await File.WriteAllTextAsync(promptFilePath, segment.AmbiencePrompt);
+                        _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt: {promptFileName}");
                     }
                     else
                     {
@@ -2953,12 +3034,12 @@ public sealed class StoriesService
                     continue;
                 }
 
-                // Update tts_schema.json: add ambience_file to each phrase in this segment
+                // Update tts_schema.json: add ambient_sound_file to each phrase in this segment
                 foreach (var entryIndex in segment.EntryIndices)
                 {
                     if (entryIndex >= 0 && entryIndex < phraseEntries.Count)
                     {
-                        phraseEntries[entryIndex]["ambience_file"] = localFileName;
+                        phraseEntries[entryIndex]["ambient_sound_file"] = localFileName;
                     }
                 }
             }
@@ -2992,10 +3073,15 @@ public sealed class StoriesService
 
     private sealed record AmbienceSegment(string AmbiencePrompt, int StartMs, int DurationMs, List<int> EntryIndices);
 
+    /// <summary>
+    /// Extracts ambient sound segments from timeline entries.
+    /// Uses the 'ambient_sounds' property (from [RUMORI: ...] tag) instead of 'ambience'.
+    /// The 'ambience' property is now reserved for future image generation.
+    /// </summary>
     private static List<AmbienceSegment> ExtractAmbienceSegments(List<JsonObject> entries)
     {
         var segments = new List<AmbienceSegment>();
-        string? currentAmbience = null;
+        string? currentAmbientSounds = null;
         int segmentStartMs = 0;
         int currentEndMs = 0;
         var currentEntryIndices = new List<int>();
@@ -3003,7 +3089,8 @@ public sealed class StoriesService
         for (int i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            var ambience = ReadString(entry, "ambience") ?? ReadString(entry, "Ambience");
+            // Read from ambient_sounds (new [RUMORI: ...] tag) instead of ambience
+            var ambientSounds = ReadString(entry, "ambient_sounds") ?? ReadString(entry, "ambientSounds") ?? ReadString(entry, "AmbientSounds");
             
             // Read startMs and endMs using TryReadNumber
             int startMs = 0;
@@ -3014,25 +3101,25 @@ public sealed class StoriesService
                 endMs = (int)endVal;
             if (endMs == 0) endMs = startMs;
 
-            // If ambience changes, save the current segment
-            if (!string.IsNullOrWhiteSpace(currentAmbience) && 
-                (ambience != currentAmbience || string.IsNullOrWhiteSpace(ambience)))
+            // If ambient sounds change, save the current segment
+            if (!string.IsNullOrWhiteSpace(currentAmbientSounds) && 
+                (ambientSounds != currentAmbientSounds || string.IsNullOrWhiteSpace(ambientSounds)))
             {
                 var duration = currentEndMs - segmentStartMs;
                 if (duration > 0 && currentEntryIndices.Count > 0)
                 {
-                    segments.Add(new AmbienceSegment(currentAmbience!, segmentStartMs, duration, new List<int>(currentEntryIndices)));
+                    segments.Add(new AmbienceSegment(currentAmbientSounds!, segmentStartMs, duration, new List<int>(currentEntryIndices)));
                 }
-                currentAmbience = null;
+                currentAmbientSounds = null;
                 currentEntryIndices.Clear();
             }
 
             // Start or continue a segment
-            if (!string.IsNullOrWhiteSpace(ambience))
+            if (!string.IsNullOrWhiteSpace(ambientSounds))
             {
-                if (currentAmbience == null)
+                if (currentAmbientSounds == null)
                 {
-                    currentAmbience = ambience;
+                    currentAmbientSounds = ambientSounds;
                     segmentStartMs = startMs;
                 }
                 currentEndMs = endMs > 0 ? endMs : startMs;
@@ -3041,12 +3128,12 @@ public sealed class StoriesService
         }
 
         // Add final segment if any
-        if (!string.IsNullOrWhiteSpace(currentAmbience) && currentEntryIndices.Count > 0)
+        if (!string.IsNullOrWhiteSpace(currentAmbientSounds) && currentEntryIndices.Count > 0)
         {
             var duration = currentEndMs - segmentStartMs;
             if (duration > 0)
             {
-                segments.Add(new AmbienceSegment(currentAmbience!, segmentStartMs, duration, new List<int>(currentEntryIndices)));
+                segments.Add(new AmbienceSegment(currentAmbientSounds!, segmentStartMs, duration, new List<int>(currentEntryIndices)));
             }
         }
 
@@ -3285,6 +3372,12 @@ public sealed class StoriesService
                         var audioBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
                         await File.WriteAllBytesAsync(localFilePath, audioBytes);
                         _customLogger?.Append(runId, $"[{story.Id}] Salvato: {localFileName}");
+                        
+                        // Save prompt to .txt file with same name
+                        var promptFileName = Path.ChangeExtension(localFileName, ".txt");
+                        var promptFilePath = Path.Combine(folderPath, promptFileName);
+                        await File.WriteAllTextAsync(promptFilePath, description);
+                        _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt: {promptFileName}");
                     }
                     else
                     {
@@ -3459,6 +3552,13 @@ public sealed class StoriesService
         int musicCounter = 0;
         string? lastMusicDescription = null;
 
+        // Count total music tracks to generate
+        var explicitMusicCount = phraseEntries
+            .Select(e => ReadString(e, "musicDescription") ?? ReadString(e, "MusicDescription") ?? ReadString(e, "music_description"))
+            .Where(desc => !string.IsNullOrWhiteSpace(desc))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
         // If no writer-specified music instructions exist, generate music automatically
         var anyMusicRequested = phraseEntries.Any(e =>
             !string.IsNullOrWhiteSpace(ReadString(e, "musicDescription") ?? ReadString(e, "MusicDescription") ?? ReadString(e, "music_description")));
@@ -3509,11 +3609,11 @@ public sealed class StoriesService
 
             var autoTargets = new List<(JsonObject Entry, string Prompt)>();
             if (angryTarget != null)
-                autoTargets.Add((angryTarget, "musica da camera leggera e chiara di 10 secondi"));
+                autoTargets.Add((angryTarget, "musica da camera leggera e chiara di 20 secondi"));
             if (sadTarget != null)
-                autoTargets.Add((sadTarget, "musica da camera leggera e chiara di 10 secondi"));
+                autoTargets.Add((sadTarget, "musica da camera leggera e chiara di 20 secondi"));
             if (happyTarget != null)
-                autoTargets.Add((happyTarget, "musica da camera leggera e chiara di 10 secondi"));
+                autoTargets.Add((happyTarget, "musica da camera leggera e chiara di 20 secondi"));
 
             // If no emotion targets found, create periodic background music every 30 seconds
             if (autoTargets.Count == 0)
@@ -3535,19 +3635,22 @@ public sealed class StoriesService
                 {
                     // Find the phrase that starts at or before t, otherwise the first phrase
                     var candidate = phraseEntries.LastOrDefault(pe => ReadStartMs(pe) <= t) ?? phraseEntries.First();
-                    autoTargets.Add((candidate, "musica da camera leggera e chiara di 10 secondi"));
+                    autoTargets.Add((candidate, "musica da camera leggera e chiara di 20 secondi"));
                 }
             }
 
             // Generate music for autoTargets, avoiding overlaps
+            var totalAutoMusic = autoTargets.Count;
+            _customLogger?.Append(runId, $"[{story.Id}] Generazione {totalAutoMusic} brani musicali automatici");
+            
             long lastMusicEndMs = -1;
             foreach (var (entry, prompt) in autoTargets)
             {
                 try
                 {
                     musicCounter++;
-                    _customLogger?.Append(runId, $"[{story.Id}] Generazione musica automatica {musicCounter}: {prompt}");
-                    var (success, fileUrl, error) = await musicService.GenerateMusicAsync(prompt, 10.0f);
+                    _customLogger?.Append(runId, $"[{story.Id}] Generazione musica automatica {musicCounter}/{totalAutoMusic}: {prompt}");
+                    var (success, fileUrl, error) = await musicService.GenerateMusicAsync(prompt, 20.0f);
                     if (!success || string.IsNullOrWhiteSpace(fileUrl))
                     {
                         var msg = error ?? "Nessuna URL restituita dal servizio musicale";
@@ -3565,10 +3668,16 @@ public sealed class StoriesService
                     }
                     await File.WriteAllBytesAsync(localFilePath, audioBytes);
                     _customLogger?.Append(runId, $"[{story.Id}] Salvata musica automatica: {localFileName}");
+                    
+                    // Save music prompt to .txt file with same name
+                    var promptFileName = Path.ChangeExtension(localFileName, ".txt");
+                    var promptFilePath = Path.Combine(folderPath, promptFileName);
+                    await File.WriteAllTextAsync(promptFilePath, prompt);
+                    _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt musica: {promptFileName}");
 
                     // Attach to entry
                     entry["musicFile"] = localFileName;
-                    entry["musicDuration"] = 10; // seconds
+                    entry["musicDuration"] = 20; // seconds
 
                     // Compute desired start (phrase start + 2000ms)
                     var phraseStart = ReadStartMs(entry);
@@ -3578,7 +3687,7 @@ public sealed class StoriesService
                         desiredStart = lastMusicEndMs + 100; // small gap
                     }
                     entry["musicStartMs"] = desiredStart;
-                    lastMusicEndMs = desiredStart + 10000; // 10s
+                    lastMusicEndMs = desiredStart + 20000; // 20s
                 }
                 catch (Exception ex)
                 {
@@ -3588,6 +3697,12 @@ public sealed class StoriesService
         }
 
         // Generate music for explicit musicDescription entries (as before)
+        if (explicitMusicCount > 0)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] Generazione {explicitMusicCount} brani musicali espliciti");
+        }
+        
+        int explicitCounter = 0;
         foreach (var entry in phraseEntries)
         {
             try
@@ -3606,8 +3721,9 @@ public sealed class StoriesService
 
                 lastMusicDescription = musicDesc;
                 musicCounter++;
+                explicitCounter++;
 
-                _customLogger?.Append(runId, $"[{story.Id}] Generazione musica {musicCounter}: {musicDesc}");
+                _customLogger?.Append(runId, $"[{story.Id}] Generazione musica esplicita {explicitCounter}/{explicitMusicCount}: {musicDesc}");
 
                 // Generate music using MusicGen (20 seconds fixed duration)
                 var (success, fileUrl, error) = await musicService.GenerateMusicAsync(musicDesc, 20.0f);
@@ -3632,6 +3748,12 @@ public sealed class StoriesService
 
                 await File.WriteAllBytesAsync(localFilePath, audioBytes);
                 _customLogger?.Append(runId, $"[{story.Id}] Salvata musica: {localFileName}");
+                
+                // Save music prompt to .txt file with same name
+                var promptFileName = Path.ChangeExtension(localFileName, ".txt");
+                var promptFilePath = Path.Combine(folderPath, promptFileName);
+                await File.WriteAllTextAsync(promptFilePath, musicDesc);
+                _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt musica: {promptFileName}");
 
                 // Update tts_schema.json: add musicFile property if not already set by auto generation
                 if (!entry.ContainsKey("musicFile"))
@@ -3847,57 +3969,28 @@ public sealed class StoriesService
             return (false, err);
         }
 
-        // Step 3: Check for missing ambience audio files
-        var ambienceNeeded = phraseEntries.Any(e => 
-            !string.IsNullOrWhiteSpace(ReadString(e, "ambience") ?? ReadString(e, "Ambience")));
+        // Step 3: Check for missing ambient sound files (from [RUMORI: ...] tag)
+        var ambientSoundsNeeded = phraseEntries.Any(e => 
+            !string.IsNullOrWhiteSpace(ReadString(e, "ambient_sounds") ?? ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds")));
         
-        if (ambienceNeeded)
+        if (ambientSoundsNeeded)
         {
-            var missingAmbience = phraseEntries.Where(e =>
+            var missingAmbientSounds = phraseEntries.Where(e =>
             {
-                var ambience = ReadString(e, "ambience") ?? ReadString(e, "Ambience");
-                if (string.IsNullOrWhiteSpace(ambience)) return false;
-                var ambienceFile = ReadString(e, "ambience_file") ?? ReadString(e, "ambienceFile") ?? ReadString(e, "AmbienceFile");
-                if (string.IsNullOrWhiteSpace(ambienceFile)) return true;
-                return !File.Exists(Path.Combine(folderPath, ambienceFile));
+                var ambientSounds = ReadString(e, "ambient_sounds") ?? ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds");
+                if (string.IsNullOrWhiteSpace(ambientSounds)) return false;
+                var ambientSoundFile = ReadString(e, "ambient_sound_file") ?? ReadString(e, "ambientSoundFile") ?? ReadString(e, "AmbientSoundFile")
+                    ?? ReadString(e, "ambience_file") ?? ReadString(e, "ambienceFile") ?? ReadString(e, "AmbienceFile");
+                if (string.IsNullOrWhiteSpace(ambientSoundFile)) return true;
+                return !File.Exists(Path.Combine(folderPath, ambientSoundFile));
             }).ToList();
 
-            if (missingAmbience.Count > 0)
+            if (missingAmbientSounds.Count > 0)
             {
-                var requiredAmbienceCount = phraseEntries.Count(e => !string.IsNullOrWhiteSpace(ReadString(e, "ambience") ?? ReadString(e, "Ambience")));
-
-                if (story.GeneratedAmbient && requiredAmbienceCount > 0 && missingAmbience.Count == requiredAmbienceCount)
-                {
-                    var err = $"{missingAmbience.Count} file ambience mancanti ma il DB indica ambience già generati. Controlla la cartella {folderPath}.";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
-
-                _customLogger?.Append(runId, $"[{story.Id}] {missingAmbience.Count} file ambience mancanti. Avvio generazione ambience...");
-
-                var ambienceContext = new StoryCommandContext(story, folderPath, null);
-                var (ambiSuccess, ambiMessage) = await GenerateAmbienceAudioInternalAsync(ambienceContext, runId);
-                if (!ambiSuccess)
-                {
-                    var err = $"Generazione ambience fallita: {ambiMessage}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
-
-                // Re-read schema
-                try
-                {
-                    var json = await File.ReadAllTextAsync(schemaPath);
-                    rootNode = JsonNode.Parse(json) as JsonObject;
-                    if (!rootNode!.TryGetPropertyValue("timeline", out timelineNode))
-                        rootNode.TryGetPropertyValue("Timeline", out timelineNode);
-                    timelineArray = (timelineNode as JsonArray) ?? new JsonArray();
-                    phraseEntries = timelineArray.OfType<JsonObject>().Where(IsPhraseEntry).ToList();
-                }
-                catch (Exception ex)
-                {
-                    return (false, $"Errore rilettura schema dopo ambience: {ex.Message}");
-                }
+                var missingList = missingAmbientSounds.Select(e => ReadString(e, "ambient_sounds") ?? ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds")).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+                var err = $"File ambient sound mancanti per alcune frasi; genere necessario prima del mix. Missing count: {missingAmbientSounds.Count}";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
             }
         }
 
@@ -3918,31 +4011,9 @@ public sealed class StoriesService
 
             if (missingFx.Count > 0)
             {
-                _customLogger?.Append(runId, $"[{story.Id}] {missingFx.Count} file FX mancanti. Avvio generazione FX...");
-                
-                var fxContext = new StoryCommandContext(story, folderPath, null);
-                var (fxSuccess, fxMessage) = await GenerateFxAudioInternalAsync(fxContext, runId);
-                if (!fxSuccess)
-                {
-                    var err = $"Generazione FX fallita: {fxMessage}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
-
-                // Re-read schema
-                try
-                {
-                    var json = await File.ReadAllTextAsync(schemaPath);
-                    rootNode = JsonNode.Parse(json) as JsonObject;
-                    if (!rootNode!.TryGetPropertyValue("timeline", out timelineNode))
-                        rootNode.TryGetPropertyValue("Timeline", out timelineNode);
-                    timelineArray = (timelineNode as JsonArray) ?? new JsonArray();
-                    phraseEntries = timelineArray.OfType<JsonObject>().Where(IsPhraseEntry).ToList();
-                }
-                catch (Exception ex)
-                {
-                    return (false, $"Errore rilettura schema dopo FX: {ex.Message}");
-                }
+                var err = $"File FX mancanti per alcune frasi (count: {missingFx.Count}). Generazione automatica non consentita durante il mix; genera prima gli FX.";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
             }
         }
 
@@ -3961,30 +4032,9 @@ public sealed class StoriesService
 
             if (missingMusic.Count > 0)
             {
-                _customLogger?.Append(runId, $"[{story.Id}] {missingMusic.Count} file music mancanti. Avvio generazione music...");
-                var musicContext = new StoryCommandContext(story, folderPath, null);
-                var (musicSuccess, musicMessage) = await GenerateMusicInternalAsync(musicContext, runId);
-                if (!musicSuccess)
-                {
-                    var err = $"Generazione music fallita: {musicMessage}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
-
-                // Re-read schema after music generation
-                try
-                {
-                    var json = await File.ReadAllTextAsync(schemaPath);
-                    rootNode = JsonNode.Parse(json) as JsonObject;
-                    if (!rootNode!.TryGetPropertyValue("timeline", out timelineNode))
-                        rootNode.TryGetPropertyValue("Timeline", out timelineNode);
-                    timelineArray = (timelineNode as JsonArray) ?? new JsonArray();
-                    phraseEntries = timelineArray.OfType<JsonObject>().Where(IsPhraseEntry).ToList();
-                }
-                catch (Exception ex)
-                {
-                    return (false, $"Errore rilettura schema dopo music: {ex.Message}");
-                }
+                var err = $"File music mancanti per alcune frasi (count: {missingMusic.Count}). Generazione automatica non consentita durante il mix; genera prima la musica.";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
             }
         }
 
@@ -4048,7 +4098,9 @@ public sealed class StoriesService
                 if (string.IsNullOrWhiteSpace(narratorVoice)) narratorVoice = NarratorFallbackVoiceName;
                 try
                 {
-                    var ttsResult = await _ttsService.SynthesizeAsync(narratorVoice, story.Title);
+                    // Normalize title for TTS
+                    var ttsSafeTitle = ProsodyNormalizer.NormalizeForTTS(story.Title ?? string.Empty);
+                    var ttsResult = await _ttsService.SynthesizeAsync(narratorVoice, ttsSafeTitle);
                     if (ttsResult != null && !string.IsNullOrWhiteSpace(ttsResult.AudioBase64))
                     {
                         var audioBytes = Convert.FromBase64String(ttsResult.AudioBase64);
@@ -4092,18 +4144,24 @@ public sealed class StoriesService
                 }
             }
 
-            // Ambience file
-            var ambienceFile = ReadString(entry, "ambience_file") ?? ReadString(entry, "ambienceFile") ?? ReadString(entry, "AmbienceFile");
-            if (!string.IsNullOrWhiteSpace(ambienceFile))
+            // Ambient sound file (from [RUMORI: ...] tag, stored in ambient_sound_file or ambience_file)
+            var ambientSoundFile = ReadString(entry, "ambient_sound_file") ?? ReadString(entry, "ambientSoundFile") ?? ReadString(entry, "AmbientSoundFile")
+                ?? ReadString(entry, "ambience_file") ?? ReadString(entry, "ambienceFile") ?? ReadString(entry, "AmbienceFile");
+            if (!string.IsNullOrWhiteSpace(ambientSoundFile))
             {
-                var ambienceFilePath = Path.Combine(folderPath, ambienceFile);
-                if (File.Exists(ambienceFilePath))
+                var ambientSoundFilePath = Path.Combine(folderPath, ambientSoundFile);
+                if (File.Exists(ambientSoundFilePath))
                 {
                     int startMs = 7000;
                     if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
                         startMs = (int)s + 7000;
-                    int durationMs = 30000; // default 30s for ambience
-                    ambienceTrackFiles.Add((ambienceFilePath, startMs, durationMs));
+                    int durationMs = 30000; // default 30s for ambient sounds
+                    ambienceTrackFiles.Add((ambientSoundFilePath, startMs, durationMs));
+                    _customLogger?.Append(runId, $"[{story.Id}] Ambient sound aggiunto: {ambientSoundFile} @ {startMs}ms");
+                }
+                else
+                {
+                    _customLogger?.Append(runId, $"[{story.Id}] [WARN] File ambient sound NON TROVATO: {ambientSoundFilePath}");
                 }
             }
 
@@ -4148,6 +4206,8 @@ public sealed class StoriesService
             }
         }
 
+        _customLogger?.Append(runId, $"[{story.Id}] [DEBUG] Riepilogo file raccolti: {ttsTrackFiles.Count} TTS, {ambienceTrackFiles.Count} ambience, {fxTrackFiles.Count} FX, {musicTrackFiles.Count} music");
+
         // Step 6: Generate ffmpeg command for mixing
         var outputFile = Path.Combine(folderPath, "final_mix.wav");
         var (ffmpegSuccess, ffmpegError) = await MixAudioWithFfmpegAsync(
@@ -4174,7 +4234,7 @@ public sealed class StoriesService
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "ffmpeg",
-                    Arguments = $"-y -i \"{outputFile}\" -codec:a libmp3lame -qscale:a 2 \"{mp3OutputFile}\"",
+                    Arguments = $"-y -i \"{outputFile}\" -codec:a libmp3lame -q:a 0 -b:a 320k \"{mp3OutputFile}\"",  // q:a 0 = massima qualità VBR, -b:a 320k = bitrate massimo
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -4252,267 +4312,339 @@ public sealed class StoriesService
         string runId,
         long storyId)
     {
-        // Build ffmpeg filter_complex for mixing all tracks
-        // We'll create a complex filter that:
-        // 1. Delays each TTS file to its start position
-        // 2. Mixes ambience at lower volume in background
-        // 3. Adds FX at their positions
-        // 4. Mixes everything together
+        // NEW STRATEGY: Create 3 separate tracks, then mix them
+        // Track 1: TTS voices (may require batching if >50 files)
+        // Track 2: Ambience + FX (usually few files, no batching needed)
+        // Track 3: Music (usually few files, no batching needed)
+        // Final: Mix the 3 tracks together
         
-        // Use temporary files for inputs and filter_complex to avoid Windows command line length limit
-        var inputListFile = Path.Combine(folderPath, $"ffmpeg_inputs_{storyId}.txt");
-        var filterScriptFile = Path.Combine(folderPath, $"ffmpeg_filter_{storyId}.txt");
-
-        var filterArgs = new StringBuilder();
-        var inputIndex = 0;
-
-        // Calculate total duration based on last TTS file
-        int totalDurationMs = 0;
-        foreach (var (_, startMs) in ttsFiles)
-        {
-            totalDurationMs = Math.Max(totalDurationMs, startMs + 5000); // Add 5s buffer
-        }
-
-        // Build input list file for ffmpeg concat demuxer won't work here,
-        // so we'll build -i arguments in a different way using a shell script or direct process args
-        // Instead, we'll use -filter_complex_script to handle the filter, but inputs must still be on command line
-        // 
-        // Alternative approach: Build the command in smaller batches using intermediate files
-        // For very large mixes, we'll use a staged approach
-
-        var allInputFiles = new List<string>();
+        _customLogger?.Append(runId, $"[{storyId}] Riepilogo: {ttsFiles.Count} TTS, {ambienceFiles.Count} ambience, {fxFiles.Count} FX, {musicFiles.Count} music");
         
-        // Add TTS inputs
-        var ttsLabels = new List<string>();
-        foreach (var (filePath, startMs) in ttsFiles)
-        {
-            allInputFiles.Add(filePath);
-            var label = $"tts{inputIndex}";
-            var delayMs = startMs;
-            filterArgs.Append($"[{inputIndex}]adelay={delayMs}|{delayMs}[{label}];");
-            ttsLabels.Add($"[{label}]");
-            inputIndex++;
-        }
-
-        // Add ambience inputs (at lower volume, looped if needed)
-        var ambienceLabels = new List<string>();
-        foreach (var (filePath, startMs, durationMs) in ambienceFiles)
-        {
-            allInputFiles.Add(filePath);
-            var label = $"amb{inputIndex}";
-            // Posiziona ogni ambience nel punto giusto, tagliato alla sua durata, volume basso
-            var delayMs = startMs;
-            var endSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            filterArgs.Append($"[{inputIndex}]atrim=start=0:end={endSeconds},adelay={delayMs}|{delayMs},volume=0.08[{label}];");
-            ambienceLabels.Add($"[{label}]");
-            inputIndex++;
-        }
-
-        // Add FX inputs
-        var fxLabels = new List<string>();
-        foreach (var (filePath, startMs) in fxFiles)
-        {
-            allInputFiles.Add(filePath);
-            var label = $"fx{inputIndex}";
-            var delayMs = startMs;
-            filterArgs.Append($"[{inputIndex}]adelay={delayMs}|{delayMs},volume=0.6[{label}];");
-            fxLabels.Add($"[{label}]");
-            inputIndex++;
-        }
-
-        // Add Music inputs (at medium volume, trimmed to duration)
-        var musicLabels = new List<string>();
-        foreach (var (filePath, startMs, durationMs) in musicFiles)
-        {
-            allInputFiles.Add(filePath);
-            var label = $"music{inputIndex}";
-            var delayMs = startMs;
-            var endSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            filterArgs.Append($"[{inputIndex}]atrim=start=0:end={endSeconds},adelay={delayMs}|{delayMs},volume=0.25[{label}];");
-            musicLabels.Add($"[{label}]");
-            inputIndex++;
-        }
-
-        // Mix all together with weights: TTS=1.0, Ambience=0.5 (already reduced volume), FX=0.8, Music=0.3
-        var allLabels = ttsLabels.Concat(ambienceLabels).Concat(fxLabels).Concat(musicLabels).ToList();
-
-        if (allLabels.Count == 0)
-        {
-            return (false, "Nessun file audio da mixare");
-        }
-
-        if (allLabels.Count == 1)
-        {
-            // Single file, just copy
-            filterArgs.Append($"{allLabels[0]}acopy[out]");
-        }
-        else
-        {
-            // Build weights: TTS=1.0, Ambience=0.5, FX=0.8, Music=0.3
-            var weights = new List<string>();
-            for (int w = 0; w < ttsLabels.Count; w++) weights.Add("1");
-            for (int w = 0; w < ambienceLabels.Count; w++) weights.Add("0.5");
-            for (int w = 0; w < fxLabels.Count; w++) weights.Add("0.8");
-            for (int w = 0; w < musicLabels.Count; w++) weights.Add("0.3");
-            var weightsStr = string.Join(" ", weights);
-
-            // Mix all streams with weights, then apply dynamic normalization
-            foreach (var lbl in allLabels)
-            {
-                filterArgs.Append(lbl);
-            }
-            filterArgs.Append($"amix=inputs={allLabels.Count}:duration=longest:dropout_transition=2:weights={weightsStr}:normalize=0[mixed];[mixed]dynaudnorm=p=0.95:s=3[out]");
-        }
-
-        _customLogger?.Append(runId, $"[{storyId}] Esecuzione ffmpeg con {ttsFiles.Count} TTS, {ambienceFiles.Count} ambience, {fxFiles.Count} FX, {musicFiles.Count} music");
-
         try
         {
-            // Build input arguments - if too many files, use staged mixing
-            // Windows has a ~32KB limit on command line via CreateProcess, but practical limit is lower
-            // With paths ~100 chars each + "-i " prefix, 50 files ≈ 5500 chars which is safe
-            const int MaxInputsPerBatch = 50;
+            var trackFiles = new List<string>();
             
-            if (allInputFiles.Count <= MaxInputsPerBatch)
+            // ===== TRACK 1: TTS VOICES =====
+            var ttsTrackFile = Path.Combine(folderPath, $"track_tts_{storyId}.wav");
+            if (ttsFiles.Count > 0)
             {
-                // Write input files list (for reference/debugging)
-                await File.WriteAllLinesAsync(inputListFile, allInputFiles);
+                _customLogger?.Append(runId, $"[{storyId}] Generazione traccia TTS...");
+                var ttsResult = await CreateTtsTrackAsync(folderPath, ttsFiles, ttsTrackFile, runId, storyId);
+                if (!ttsResult.success)
+                {
+                    return ttsResult;
+                }
+                trackFiles.Add(ttsTrackFile);
+            }
             
-                // Write filter_complex script to file to avoid command line length limit
-                await File.WriteAllTextAsync(filterScriptFile, filterArgs.ToString());
-                
-                // Single pass - all inputs fit in command line
-                var inputArgsBuilder = new StringBuilder();
-                foreach (var file in allInputFiles)
+            // ===== TRACK 2: AMBIENCE + FX =====
+            var ambienceFxTrackFile = Path.Combine(folderPath, $"track_ambience_fx_{storyId}.wav");
+            if (ambienceFiles.Count > 0 || fxFiles.Count > 0)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] Generazione traccia ambience+FX...");
+                var ambienceFxResult = await CreateAmbienceFxTrackAsync(folderPath, ambienceFiles, fxFiles, ambienceFxTrackFile, runId, storyId);
+                if (!ambienceFxResult.success)
                 {
-                    inputArgsBuilder.Append($" -i \"{file}\"");
+                    TryDeleteFile(ttsTrackFile);
+                    return ambienceFxResult;
                 }
-                
-                var result = await RunFfmpegProcessAsync(inputArgsBuilder.ToString(), filterScriptFile, outputFile, runId, storyId);
-                
-                // Cleanup temp files
-                TryDeleteFile(inputListFile);
-                TryDeleteFile(filterScriptFile);
-                
-                if (!result.success)
+                trackFiles.Add(ambienceFxTrackFile);
+            }
+            
+            // ===== TRACK 3: MUSIC =====
+            var musicTrackFile = Path.Combine(folderPath, $"track_music_{storyId}.wav");
+            if (musicFiles.Count > 0)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] Generazione traccia music...");
+                var musicResult = await CreateMusicTrackAsync(folderPath, musicFiles, musicTrackFile, runId, storyId);
+                if (!musicResult.success)
                 {
-                    return result;
+                    TryDeleteFile(ttsTrackFile);
+                    TryDeleteFile(ambienceFxTrackFile);
+                    return musicResult;
                 }
+                trackFiles.Add(musicTrackFile);
+            }
+            
+            // ===== FINAL MIX: Combine the 3 tracks =====
+            if (trackFiles.Count == 0)
+            {
+                return (false, "Nessuna traccia audio da mixare");
+            }
+            
+            if (trackFiles.Count == 1)
+            {
+                // Solo una traccia, copia diretta
+                File.Copy(trackFiles[0], outputFile, overwrite: true);
+                TryDeleteFile(trackFiles[0]);
             }
             else
             {
-                // Staged mixing for large number of files
-                _customLogger?.Append(runId, $"[{storyId}] Usando mixing a stadi per {allInputFiles.Count} file");
+                _customLogger?.Append(runId, $"[{storyId}] Mix finale di {trackFiles.Count} tracce...");
+                var finalResult = await MixFinalTracksAsync(trackFiles, outputFile, runId, storyId);
                 
-                var intermediateFiles = new List<string>();
-                var batchIndex = 0;
-                
-                // Process TTS files in batches first
-                for (int i = 0; i < ttsFiles.Count; i += MaxInputsPerBatch)
+                // Cleanup track files
+                foreach (var track in trackFiles)
                 {
-                    var batchFiles = ttsFiles.Skip(i).Take(MaxInputsPerBatch).ToList();
-                    var batchOutput = Path.Combine(folderPath, $"batch_tts_{storyId}_{batchIndex}.wav");
-                    
-                    var batchResult = await MixBatchFilesAsync(folderPath, batchFiles, batchOutput, runId, storyId, batchIndex);
-                    if (!batchResult.success)
-                    {
-                        // Cleanup intermediate files
-                        foreach (var f in intermediateFiles) TryDeleteFile(f);
-                        return batchResult;
-                    }
-                    
-                    intermediateFiles.Add(batchOutput);
-                    batchIndex++;
+                    TryDeleteFile(track);
                 }
-                
-                // Add FX files in batches
-                for (int i = 0; i < fxFiles.Count; i += MaxInputsPerBatch)
-                {
-                    var batchFiles = fxFiles.Skip(i).Take(MaxInputsPerBatch).ToList();
-                    var batchOutput = Path.Combine(folderPath, $"batch_fx_{storyId}_{batchIndex}.wav");
-                    
-                    var batchResult = await MixBatchFilesAsync(folderPath, batchFiles, batchOutput, runId, storyId, batchIndex);
-                    if (!batchResult.success)
-                    {
-                        foreach (var f in intermediateFiles) TryDeleteFile(f);
-                        return batchResult;
-                    }
-                    
-                    intermediateFiles.Add(batchOutput);
-                    batchIndex++;
-                }
-                
-                // Final mix: intermediate files + ambience
-                var finalInputs = new StringBuilder();
-                var finalFilter = new StringBuilder();
-                var finalIndex = 0;
-                var finalLabels = new List<string>();
-                
-                foreach (var intFile in intermediateFiles)
-                {
-                    finalInputs.Append($" -i \"{intFile}\"");
-                    var label = $"int{finalIndex}";
-                    finalFilter.Append($"[{finalIndex}]acopy[{label}];");
-                    finalLabels.Add($"[{label}]");
-                    finalIndex++;
-                }
-                
-                // Add ambience
-                foreach (var (filePath, startMs, durationMs) in ambienceFiles)
-                {
-                    finalInputs.Append($" -i \"{filePath}\"");
-                    var label = $"amb{finalIndex}";
-                    var delayMs = startMs;
-                    var endSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-                    finalFilter.Append($"[{finalIndex}]atrim=start=0:end={endSeconds},adelay={delayMs}|{delayMs},volume=0.05[{label}];");
-                    finalLabels.Add($"[{label}]");
-                    finalIndex++;
-                }
-                
-                // Build weights: high for TTS/FX batches (1.0), low for ambience (already reduced volume)
-                var weights = new List<string>();
-                for (int w = 0; w < intermediateFiles.Count; w++) weights.Add("1");
-                for (int w = 0; w < ambienceFiles.Count; w++) weights.Add("0.3");
-                var weightsStr = string.Join(" ", weights);
-                
-                foreach (var lbl in finalLabels)
-                {
-                    finalFilter.Append(lbl);
-                }
-                // Use weights to prioritize TTS/FX over ambience, then normalize
-                finalFilter.Append($"amix=inputs={finalLabels.Count}:duration=longest:dropout_transition=2:weights={weightsStr}:normalize=0[mixed];[mixed]dynaudnorm=p=0.95:s=3[out]");
-                
-                var finalFilterFile = Path.Combine(folderPath, $"ffmpeg_final_filter_{storyId}.txt");
-                await File.WriteAllTextAsync(finalFilterFile, finalFilter.ToString());
-                
-                var finalResult = await RunFfmpegProcessAsync(finalInputs.ToString(), finalFilterFile, outputFile, runId, storyId);
-                
-                // Cleanup intermediate files (keep filter file on error for debugging)
-                foreach (var f in intermediateFiles) TryDeleteFile(f);
                 
                 if (!finalResult.success)
                 {
-                    _customLogger?.Append(runId, $"[{storyId}] Filter file conservato per debug: {finalFilterFile}");
                     return finalResult;
                 }
-                
-                TryDeleteFile(finalFilterFile);
             }
-
+            
             if (!File.Exists(outputFile))
             {
                 return (false, "ffmpeg non ha creato il file di output");
             }
 
             var fileInfo = new FileInfo(outputFile);
-            _customLogger?.Append(runId, $"[{storyId}] File finale creato: {outputFile} ({fileInfo.Length / 1024} KB)");
+            _customLogger?.Append(runId, $"[{storyId}] File finale creato: {Path.GetFileName(outputFile)} ({fileInfo.Length / 1024} KB)");
             return (true, null);
         }
         catch (Exception ex)
         {
-            _customLogger?.Append(runId, $"[{storyId}] Eccezione ffmpeg: {ex.Message}");
-            return (false, $"Eccezione durante l'esecuzione di ffmpeg: {ex.Message}");
+            _customLogger?.Append(runId, $"[{storyId}] Eccezione durante il mix: {ex.Message}");
+            return (false, $"Eccezione durante il mix: {ex.Message}");
         }
+    }
+    
+    private async Task<(bool success, string? error)> CreateTtsTrackAsync(
+        string folderPath,
+        List<(string FilePath, int StartMs)> ttsFiles,
+        string outputFile,
+        string runId,
+        long storyId)
+    {
+        const int MaxInputsPerBatch = 50;
+        
+        if (ttsFiles.Count <= MaxInputsPerBatch)
+        {
+            // Direct mix - all TTS files fit in one command
+            var inputArgs = new StringBuilder();
+            var filterArgs = new StringBuilder();
+            var labels = new List<string>();
+            
+            for (int i = 0; i < ttsFiles.Count; i++)
+            {
+                var (filePath, startMs) = ttsFiles[i];
+                inputArgs.Append($" -i \"{filePath}\"");
+                var label = $"tts{i}";
+                filterArgs.Append($"[{i}]adelay={startMs}|{startMs}[{label}];");
+                labels.Add($"[{label}]");
+            }
+            
+            foreach (var lbl in labels) filterArgs.Append(lbl);
+            filterArgs.Append($"amix=inputs={labels.Count}:duration=longest:normalize=0[out]");
+            
+            var filterFile = Path.Combine(folderPath, $"filter_tts_{storyId}.txt");
+            await File.WriteAllTextAsync(filterFile, filterArgs.ToString());
+            
+            var result = await RunFfmpegProcessAsync(inputArgs.ToString(), filterFile, outputFile, runId, storyId);
+            TryDeleteFile(filterFile);
+            return result;
+        }
+        else
+        {
+            // Batch processing for many TTS files
+            _customLogger?.Append(runId, $"[{storyId}] TTS: batching {ttsFiles.Count} files...");
+            
+            var batchFiles = new List<string>();
+            for (int i = 0; i < ttsFiles.Count; i += MaxInputsPerBatch)
+            {
+                var batch = ttsFiles.Skip(i).Take(MaxInputsPerBatch).ToList();
+                var batchFile = Path.Combine(folderPath, $"batch_tts_{storyId}_{i / MaxInputsPerBatch}.wav");
+                
+                var batchResult = await CreateTtsBatchAsync(folderPath, batch, batchFile, runId, storyId, i / MaxInputsPerBatch);
+                if (!batchResult.success)
+                {
+                    foreach (var f in batchFiles) TryDeleteFile(f);
+                    return batchResult;
+                }
+                batchFiles.Add(batchFile);
+            }
+            
+            // Merge all batches
+            var mergeResult = await MergeAudioFilesAsync(batchFiles, outputFile, runId, storyId);
+            foreach (var f in batchFiles) TryDeleteFile(f);
+            return mergeResult;
+        }
+    }
+    
+    private async Task<(bool success, string? error)> CreateTtsBatchAsync(
+        string folderPath,
+        List<(string FilePath, int StartMs)> files,
+        string outputFile,
+        string runId,
+        long storyId,
+        int batchIndex)
+    {
+        var inputArgs = new StringBuilder();
+        var filterArgs = new StringBuilder();
+        var labels = new List<string>();
+        
+        _customLogger?.Append(runId, $"[{storyId}] TTS batch {batchIndex}: {files.Count} files");
+        
+        for (int i = 0; i < files.Count; i++)
+        {
+            var (filePath, startMs) = files[i];
+            inputArgs.Append($" -i \"{filePath}\"");
+            var label = $"t{i}";
+            filterArgs.Append($"[{i}]adelay={startMs}|{startMs}[{label}];");
+            labels.Add($"[{label}]");
+        }
+        
+        foreach (var lbl in labels) filterArgs.Append(lbl);
+        filterArgs.Append($"amix=inputs={labels.Count}:duration=longest:normalize=0[out]");
+        
+        var filterFile = Path.Combine(folderPath, $"filter_tts_batch_{storyId}_{batchIndex}.txt");
+        await File.WriteAllTextAsync(filterFile, filterArgs.ToString());
+        
+        var result = await RunFfmpegProcessAsync(inputArgs.ToString(), filterFile, outputFile, runId, storyId);
+        TryDeleteFile(filterFile);
+        return result;
+    }
+    
+    private async Task<(bool success, string? error)> CreateAmbienceFxTrackAsync(
+        string folderPath,
+        List<(string FilePath, int StartMs, int DurationMs)> ambienceFiles,
+        List<(string FilePath, int StartMs)> fxFiles,
+        string outputFile,
+        string runId,
+        long storyId)
+    {
+        var inputArgs = new StringBuilder();
+        var filterArgs = new StringBuilder();
+        var labels = new List<string>();
+        int idx = 0;
+        
+        // Add ambience with timing and volume
+        foreach (var (filePath, startMs, durationMs) in ambienceFiles)
+        {
+            inputArgs.Append($" -i \"{filePath}\"");
+            var label = $"amb{idx}";
+            var endSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+            filterArgs.Append($"[{idx}]atrim=start=0:end={endSeconds},adelay={startMs}|{startMs},volume=0.30[{label}];");
+            labels.Add($"[{label}]");
+            idx++;
+        }
+        
+        // Add FX with timing and volume
+        foreach (var (filePath, startMs) in fxFiles)
+        {
+            inputArgs.Append($" -i \"{filePath}\"");
+            var label = $"fx{idx}";
+            filterArgs.Append($"[{idx}]adelay={startMs}|{startMs},volume=0.90[{label}];");
+            labels.Add($"[{label}]");
+            idx++;
+        }
+        
+        if (labels.Count == 0)
+        {
+            return (false, "Nessun file ambience/FX");
+        }
+        
+        foreach (var lbl in labels) filterArgs.Append(lbl);
+        filterArgs.Append($"amix=inputs={labels.Count}:duration=longest:normalize=0[out]");
+        
+        var filterFile = Path.Combine(folderPath, $"filter_ambience_fx_{storyId}.txt");
+        await File.WriteAllTextAsync(filterFile, filterArgs.ToString());
+        
+        var result = await RunFfmpegProcessAsync(inputArgs.ToString(), filterFile, outputFile, runId, storyId);
+        TryDeleteFile(filterFile);
+        return result;
+    }
+    
+    private async Task<(bool success, string? error)> CreateMusicTrackAsync(
+        string folderPath,
+        List<(string FilePath, int StartMs, int DurationMs)> musicFiles,
+        string outputFile,
+        string runId,
+        long storyId)
+    {
+        var inputArgs = new StringBuilder();
+        var filterArgs = new StringBuilder();
+        var labels = new List<string>();
+        
+        for (int i = 0; i < musicFiles.Count; i++)
+        {
+            var (filePath, startMs, durationMs) = musicFiles[i];
+            inputArgs.Append($" -i \"{filePath}\"");
+            var label = $"m{i}";
+            var endSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+            filterArgs.Append($"[{i}]atrim=start=0:end={endSeconds},adelay={startMs}|{startMs},volume=0.70[{label}];");
+            labels.Add($"[{label}]");
+        }
+        
+        if (labels.Count == 0)
+        {
+            return (false, "Nessun file music");
+        }
+        
+        foreach (var lbl in labels) filterArgs.Append(lbl);
+        filterArgs.Append($"amix=inputs={labels.Count}:duration=longest:normalize=0[out]");
+        
+        var filterFile = Path.Combine(folderPath, $"filter_music_{storyId}.txt");
+        await File.WriteAllTextAsync(filterFile, filterArgs.ToString());
+        
+        var result = await RunFfmpegProcessAsync(inputArgs.ToString(), filterFile, outputFile, runId, storyId);
+        TryDeleteFile(filterFile);
+        return result;
+    }
+    
+    private async Task<(bool success, string? error)> MixFinalTracksAsync(
+        List<string> trackFiles,
+        string outputFile,
+        string runId,
+        long storyId)
+    {
+        // Mix the 3 tracks: TTS (full volume), Ambience+FX (already has volume), Music (already has volume)
+        var inputArgs = new StringBuilder();
+        var filterArgs = new StringBuilder();
+        
+        for (int i = 0; i < trackFiles.Count; i++)
+        {
+            inputArgs.Append($" -i \"{trackFiles[i]}\"");
+            filterArgs.Append($"[{i}]");
+        }
+        
+        // Mix with equal weights, then normalize
+        filterArgs.Append($"amix=inputs={trackFiles.Count}:duration=longest:dropout_transition=2:normalize=0[mixed];[mixed]dynaudnorm=p=0.95:s=3[out]");
+        
+        var filterFile = Path.Combine(Path.GetDirectoryName(outputFile)!, $"filter_final_{storyId}.txt");
+        await File.WriteAllTextAsync(filterFile, filterArgs.ToString());
+        
+        var result = await RunFfmpegProcessAsync(inputArgs.ToString(), filterFile, outputFile, runId, storyId);
+        TryDeleteFile(filterFile);
+        return result;
+    }
+    
+    private async Task<(bool success, string? error)> MergeAudioFilesAsync(
+        List<string> audioFiles,
+        string outputFile,
+        string runId,
+        long storyId)
+    {
+        // Simple concatenation of audio files (no timing, already positioned)
+        var inputArgs = new StringBuilder();
+        var filterArgs = new StringBuilder();
+        
+        for (int i = 0; i < audioFiles.Count; i++)
+        {
+            inputArgs.Append($" -i \"{audioFiles[i]}\"");
+            filterArgs.Append($"[{i}]");
+        }
+        
+        filterArgs.Append($"amix=inputs={audioFiles.Count}:duration=longest:normalize=0[out]");
+        
+        var filterFile = Path.Combine(Path.GetDirectoryName(outputFile)!, $"filter_merge_{storyId}.txt");
+        await File.WriteAllTextAsync(filterFile, filterArgs.ToString());
+        
+        var result = await RunFfmpegProcessAsync(inputArgs.ToString(), filterFile, outputFile, runId, storyId);
+        TryDeleteFile(filterFile);
+        return result;
     }
     
     private async Task<(bool success, string? error)> RunFfmpegProcessAsync(
@@ -4558,7 +4690,9 @@ public sealed class StoriesService
             process.StartInfo.ArgumentList.Add("-ac");
             process.StartInfo.ArgumentList.Add("2");
             process.StartInfo.ArgumentList.Add("-ar");
-            process.StartInfo.ArgumentList.Add("44100");
+            process.StartInfo.ArgumentList.Add("48000");  // Mantenere qualità audio 48kHz (stesso del TTS)
+            process.StartInfo.ArgumentList.Add("-b:a");
+            process.StartInfo.ArgumentList.Add("320k");   // Bitrate alto per qualità master
             process.StartInfo.ArgumentList.Add(outputFile);
             
             process.Start();
@@ -4604,53 +4738,6 @@ public sealed class StoriesService
         }
     }
     
-    private async Task<(bool success, string? error)> MixBatchFilesAsync(
-        string folderPath,
-        List<(string FilePath, int StartMs)> files,
-        string outputFile,
-        string runId,
-        long storyId,
-        int batchIndex)
-    {
-        var inputArgs = new StringBuilder();
-        var filterArgs = new StringBuilder();
-        var labels = new List<string>();
-        
-        for (int i = 0; i < files.Count; i++)
-        {
-            var (filePath, startMs) = files[i];
-            inputArgs.Append($" -i \"{filePath}\"");
-            var label = $"s{i}";
-            filterArgs.Append($"[{i}]adelay={startMs}|{startMs}[{label}];");
-            labels.Add($"[{label}]");
-        }
-        
-        foreach (var lbl in labels)
-        {
-            filterArgs.Append(lbl);
-        }
-        // Disable normalize to preserve original volume levels in batch
-        filterArgs.Append($"amix=inputs={labels.Count}:duration=longest:dropout_transition=2:normalize=0[out]");
-        
-        var batchFilterFile = Path.Combine(folderPath, $"ffmpeg_batch_{storyId}_{batchIndex}.txt");
-        await File.WriteAllTextAsync(batchFilterFile, filterArgs.ToString());
-        
-        _customLogger?.Append(runId, $"[{storyId}] Batch {batchIndex}: {files.Count} files, filter length: {filterArgs.Length} chars");
-        
-        var result = await RunFfmpegProcessAsync(inputArgs.ToString(), batchFilterFile, outputFile, runId, storyId);
-        
-        // Keep filter file on error for debugging
-        if (result.success)
-        {
-            TryDeleteFile(batchFilterFile);
-        }
-        else
-        {
-            _customLogger?.Append(runId, $"[{storyId}] Batch filter conservato: {batchFilterFile}");
-        }
-        
-        return result;
-    }
     
     private void TryDeleteFile(string filePath)
     {
@@ -4796,12 +4883,15 @@ public sealed class StoriesService
     private async Task<(byte[] audioBytes, int? durationMs)> GenerateAudioBytesAsync(string voiceId, string text, string emotion)
     {
         if (string.IsNullOrWhiteSpace(text))
-            throw new InvalidOperationException("Il testo della frase Ã¨ vuoto");
+            throw new InvalidOperationException("Il testo della frase è vuoto");
 
         // Normalize emotion to valid TTS value or fallback to neutral
         var normalizedEmotion = NormalizeEmotionForTts(emotion);
+        
+        // Normalize text for TTS before sending to service
+        var ttsSafeText = ProsodyNormalizer.NormalizeForTTS(text);
 
-        var synthesis = await _ttsService.SynthesizeAsync(voiceId, text, "it", normalizedEmotion);
+        var synthesis = await _ttsService.SynthesizeAsync(voiceId, ttsSafeText, "it", normalizedEmotion);
         if (synthesis == null)
             throw new InvalidOperationException("Il servizio TTS non ha restituito alcun risultato");
 

@@ -234,7 +234,7 @@ namespace TinyGenerator.Pages.Stories
                     var avgTotal = evals.Average(e => e.TotalScore);
                     // TotalScore is out of 40 -> convert to percentage
                     var pct = avgTotal * 100.0 / 40.0;
-                    if (pct < 50.0)
+                    if (pct < 60.0)
                     {
                         toDelete.Add(s);
                     }
@@ -273,6 +273,48 @@ namespace TinyGenerator.Pages.Stories
             catch (Exception ex)
             {
                 TempData["ErrorMessage"] = "Errore durante eliminazione storie: " + ex.Message;
+            }
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostBatchSummarize()
+        {
+            try
+            {
+                var runId = Guid.NewGuid().ToString();
+                var kernelFactory = HttpContext.RequestServices.GetService<ILangChainKernelFactory>();
+                
+                if (kernelFactory == null)
+                {
+                    TempData["ErrorMessage"] = "Kernel factory non disponibile.";
+                    return RedirectToPage();
+                }
+
+                var cmd = new BatchSummarizeStoriesCommand(
+                    _database,
+                    kernelFactory,
+                    _commandDispatcher,
+                    _customLogger!,
+                    minScore: 60);
+
+                _commandDispatcher.Enqueue(
+                    "BatchSummarizeStories",
+                    async ctx => await cmd.ExecuteAsync(ctx.CancellationToken),
+                    runId: runId,
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["minScore"] = "60",
+                        ["agentName"] = "batch_orchestrator",
+                        ["operation"] = "batch_summarize",
+                        ["triggeredBy"] = "manual_ui"
+                    },
+                    priority: 2);
+
+                TempData["StatusMessage"] = $"Batch summarization avviato (run {runId}). I riassunti verranno generati in background.";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore durante avvio batch summarization: " + ex.Message;
             }
             return RedirectToPage();
         }
@@ -778,8 +820,11 @@ namespace TinyGenerator.Pages.Stories
         {
             LoadData();
 
-            var storiesDto = Stories.Select(s => new
+            var storiesDto = Stories.Select(s =>
             {
+                var evals = s.Evaluations ?? new List<StoryEvaluation>();
+                return new
+                {
                 s.Id,
                 Timestamp = DateTime.TryParse(s.Timestamp, out var dt) ? dt.ToString("dd/MM/yyyy HH:mm") : s.Timestamp,
                 Prompt = s.Prompt?.Length > 200 ? s.Prompt.Substring(0, 200) + "..." : s.Prompt,
@@ -800,12 +845,12 @@ namespace TinyGenerator.Pages.Stories
                 s.TestRunId,
                 s.TestStepId,
                 s.Score,
-                EvalScore = (s.Evaluations ?? new List<StoryEvaluation>()).Any() ? ((s.Evaluations.Average(e => e.TotalScore) * 100.0 / 40.0).ToString("F1") + "/100") : "-",
+                EvalScore = evals.Any() ? ((evals.Average(e => e.TotalScore) * 100.0 / 40.0).ToString("F1") + "/100") : "-",
                 Approved = s.Approved,
                 s.HasFinalMix,
                 s.HasVoiceSource,
                 s.Characters,
-                Evaluations = (s.Evaluations ?? new List<StoryEvaluation>()).Select(e => new {
+                Evaluations = evals.Select(e => new {
                     e.Id, e.Model, e.AgentName, e.AgentModel, e.Timestamp, e.TotalScore,
                     e.NarrativeCoherenceScore, e.NarrativeCoherenceDefects,
                     e.OriginalityScore, e.OriginalityDefects,
@@ -814,6 +859,7 @@ namespace TinyGenerator.Pages.Stories
                 }),
                 NextStatus = GetNextStatus(s) is StoryStatus ns ? new { ns.Id, ns.CaptionToExecute, ns.OperationType } : null,
                 Actions = GetActionsForStory(s)
+                };
             }).ToList();
 
             var evaluatorsDto = Evaluators.Select(e => new { e.Id, e.Name, e.Role }).ToList();

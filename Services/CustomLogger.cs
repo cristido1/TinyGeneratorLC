@@ -51,10 +51,10 @@ namespace TinyGenerator.Services
 
         public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null)
         {
-            LogWithChatText(level, category, message, null, exception, state, result);
+            LogWithChatText(level, category, message, null, exception, state, result, null);
         }
 
-        private void LogWithChatText(string level, string category, string message, string? chatText = null, string? exception = null, string? state = null, string? result = null)
+        private void LogWithChatText(string level, string category, string message, string? chatText = null, string? exception = null, string? state = null, string? result = null, int? explicitThreadId = null)
         {
             if (_disposed) return;
 
@@ -85,6 +85,10 @@ namespace TinyGenerator.Services
                 }
             }
 
+            // Use explicit threadId if provided, otherwise fall back to LogScope or managed thread id
+            int effectiveThreadId = explicitThreadId 
+                ?? (int)(LogScope.CurrentOperationId ?? Environment.CurrentManagedThreadId);
+
             var entry = new LogEntry
             {
                 Ts = DateTime.UtcNow.ToString("o"),
@@ -93,7 +97,7 @@ namespace TinyGenerator.Services
                 Message = message ?? string.Empty,
                 Exception = exception,
                 State = state,
-                ThreadId = (int)(LogScope.CurrentOperationId ?? Environment.CurrentManagedThreadId),
+                ThreadId = effectiveThreadId,
                 ThreadScope = scope,
                 AgentName = LogScope.CurrentAgentName,
                 Context = null,
@@ -152,7 +156,7 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Logs raw request JSON
         /// </summary>
-        public void LogRequestJson(string modelName, string requestJson)
+        public void LogRequestJson(string modelName, string requestJson, int? threadId = null)
         {
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] REQUEST_JSON: {requestJson}";
@@ -184,13 +188,13 @@ namespace TinyGenerator.Services
                 chatText = requestJson;
             }
             
-            LogWithChatText("Information", "ModelRequest", message, chatText);
+            LogWithChatText("Information", "ModelRequest", message, chatText, null, null, null, threadId);
         }
 
         /// <summary>
         /// Logs raw response JSON
         /// </summary>
-        public void LogResponseJson(string modelName, string responseJson)
+        public void LogResponseJson(string modelName, string responseJson, int? threadId = null)
         {
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] RESPONSE_JSON: {responseJson}";
@@ -213,7 +217,7 @@ namespace TinyGenerator.Services
                     if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) && messageObj.TryGetProperty("content", out var toolContent))
                     {
                         chatText = toolContent.GetString() ?? responseJson;
-                        LogWithChatText("Information", "ModelResponse", message, chatText);
+                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, null, threadId);
                         return;
                     }
 
@@ -249,7 +253,7 @@ namespace TinyGenerator.Services
                 chatText = responseJson;
             }
 
-            LogWithChatText("Information", "ModelResponse", message, chatText);
+            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, null, threadId);
         }
 
         private async Task OnTimerAsync()

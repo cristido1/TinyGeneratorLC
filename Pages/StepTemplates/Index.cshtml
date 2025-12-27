@@ -7,20 +7,107 @@
 
 <div class="page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
-        <input id="globalFilter" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+        <form method="get" class="d-flex" style="gap:.5rem;">
+            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
+            <select name="pageSize" class="form-select form-select-sm" style="width:90px;">
+                @{ var sizes = new[] { 10, 25, 50 }; }
+                @foreach (var s in sizes)
+                {
+                    if (s == Model.PageSize)
+                    {
+                        <option value="@s" selected>@s</option>
+                    }
+                    else
+                    {
+                        <option value="@s">@s</option>
+                    }
+                }
+            </select>
+            <input type="hidden" name="orderBy" value="@Model.OrderBy" />
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
+        </form>
         <div class="ms-auto d-flex gap-1">
             <div class="dropdown">
                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
                     <i class="bi bi-layout-three-columns"></i>
                 </button>
-                <ul class="dropdown-menu dropdown-menu-end" id="stepTemplatesGridColVisMenu" style="min-width: 180px;"></ul>
+                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
             </div>
             <button id="refreshBtn" class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
             <button class="btn btn-sm btn-primary" onclick="openCreateModal()">Nuovo</button>
         </div>
     </div>
 
-    <div id="stepTemplatesGrid" class="ag-theme-alpine" style="height: calc(100vh - 180px); width: 100%;"></div>
+    <div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
+        <table class="table table-sm table-striped mb-0" id="stepTemplatesTable">
+            <thead class="table-light">
+                <tr>
+                    <th data-col="name"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "name" })">Name</a></th>
+                    <th data-col="tasktype"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "tasktype" })">Task Type</a></th>
+                    <th data-col="description"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "description" })">Description</a></th>
+                    <th data-col="steps">Steps</th>
+                    <th data-col="created"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "created" })">Created</a></th>
+                    <th data-col="actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in Model.Items)
+                {
+                    var created = (!string.IsNullOrWhiteSpace(item.CreatedAt) && DateTime.TryParse(item.CreatedAt, out var cdt))
+                        ? cdt.ToString("dd/MM/yyyy HH:mm")
+                        : "-";
+                    <tr data-id="@item.Id"
+                        data-name="@item.Name"
+                        data-tasktype="@item.TaskType"
+                        data-description="@item.Description"
+                        data-instructions="@item.Instructions"
+                        data-stepprompt="@item.StepPrompt"
+                        data-mincharstrama="@item.MinCharsTrama"
+                        data-mincharsstory="@item.MinCharsStory"
+                        data-fullstorystep="@item.FullStoryStep">
+                        <td data-col="name">@item.Name</td>
+                        <td data-col="tasktype">@item.TaskType</td>
+                        <td data-col="description">@item.Description</td>
+                        <td data-col="steps">@item.StepCount</td>
+                        <td data-col="created">@created</td>
+                        <td data-col="actions">
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    @foreach (var action in Model.GetActionsForTemplate(item))
+                                    {
+                                        if (action.Method == "CLIENT")
+                                        {
+                                            <li><button class="dropdown-item action-details" type="button">@action.Title</button></li>
+                                        }
+                                        else if (action.Method == "GET")
+                                        {
+                                            <li><a class="dropdown-item" href="@action.Url">@action.Title</a></li>
+                                        }
+                                        else if (action.Method == "POST")
+                                        {
+                                            <li>
+                                                <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Delete template?')" : "true")">
+                                                    @Html.AntiForgeryToken()
+                                                    @foreach (var field in action.Fields)
+                                                    {
+                                                        <input type="hidden" name="@field.Key" value="@field.Value" />
+                                                    }
+                                                    <button type="submit" class="dropdown-item">@action.Title</button>
+                                                </form>
+                                            </li>
+                                        }
+                                    }
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
 </div>
 
 <!-- Edit/Create Modal -->
@@ -28,6 +115,7 @@
     <div class="modal-dialog modal-xl">
         <div class="modal-content">
             <form method="post" asp-page-handler="Save">
+                @Html.AntiForgeryToken()
                 <div class="modal-header">
                     <h5 class="modal-title" id="modalTitle">Create Template</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -45,6 +133,29 @@
                         <select class="form-select" id="templateTaskType" name="taskType" required>
                             <option value="story">story</option>
                         </select>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="templateMinCharsTrama" class="form-label">Min Chars Trama</label>
+                                <input type="number" class="form-control" id="templateMinCharsTrama" name="minCharsTrama" min="0" placeholder="Es. 2000" />
+                                <div class="form-text">Numero minimo di caratteri per la trama</div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="templateMinCharsStory" class="form-label">Min Chars Story</label>
+                                <input type="number" class="form-control" id="templateMinCharsStory" name="minCharsStory" min="0" placeholder="Es. 5000" />
+                                <div class="form-text">Numero minimo di caratteri per la storia</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="templateFullStoryStep" class="form-label">Full Story Step</label>
+                        <input type="number" class="form-control" id="templateFullStoryStep" name="fullStoryStep" min="1" max="20" placeholder="Es. 9" style="max-width: 120px;" />
+                        <div class="form-text">Step number che genera la storia completa</div>
                     </div>
 
                     <div class="mb-3">
@@ -92,143 +203,76 @@
 </div>
 
 @section Scripts {
-    <script>
-        window.__steptemplates_data = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Templates));
-    </script>
+    <script src="/js/shared/pagination.js"></script>
+    <script src="/js/shared/list-ui.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const rowData = (window.__steptemplates_data || []).map(t => {
-                // Count numbered steps
-                const stepCount = (t.StepPrompt || '').match(/^\d+\./gm)?.length || 0;
-                return { ...t, StepCount: stepCount };
-            });
-
-            const columnDefs = [
-                { headerName: 'Name', field: 'Name', flex: 1 },
-                { headerName: 'Task Type', field: 'TaskType', width: 120 },
-                { headerName: 'Description', field: 'Description', flex: 2 },
-                { headerName: 'Steps', field: 'StepCount', width: 80 },
-                { headerName: 'Created', field: 'CreatedAt', width: 160, valueFormatter: p => formatDate(p.value) },
-                {
-                    headerName: 'Actions', colId: 'actions', width: 220, suppressColumnsToolPanel: true,
-                    cellRenderer: params => {
-                        const id = params.data.Id;
-                        return `<button class="btn btn-sm btn-outline-secondary me-1 btn-details" data-id="${id}" title="Show details">+</button>` +
-                               `<a class="btn btn-sm btn-outline-primary me-1" href="/StepTemplates/Edit?id=${id}">Edit</a>` +
-                               `<button class="btn btn-sm btn-outline-secondary me-1 btn-copy" data-id="${id}" title="Copy">Copy</button>` +
-                               `<button class="btn btn-sm btn-outline-danger btn-delete" data-id="${id}">Delete</button>`;
-                    }
-                }
-            ];
-
-            AgGridHelper.init('stepTemplatesGrid', columnDefs, rowData, {
-                storageKey: 'agGrid_stepTemplates_colVis',
-                pageSize: 25
-            });
-
-            // Quick filter
-            document.getElementById('globalFilter')?.addEventListener('input', e => {
-                window.stepTemplatesGridApi?.setQuickFilter(e.target.value);
-            });
-
-            // Grid click handlers
-            document.getElementById('stepTemplatesGrid').addEventListener('click', e => {
-                const detailsBtn = e.target.closest('.btn-details');
-                if (detailsBtn) {
-                    const id = parseInt(detailsBtn.dataset.id);
-                    const item = rowData.find(r => r.Id === id);
-                    if (item) showDetails(item);
-                }
-                
-                const copyBtn = e.target.closest('.btn-copy');
-                if (copyBtn) {
-                    const id = copyBtn.dataset.id;
-                    // Submit copy form
-                    const form = document.createElement('form');
-                    form.method = 'POST';
-                    form.innerHTML = `<input type="hidden" name="id" value="${id}"/>`;
-                    form.action = '?handler=Copy';
-                    document.body.appendChild(form);
-                    form.submit();
-                }
-
-                const deleteBtn = e.target.closest('.btn-delete');
-                if (deleteBtn) {
-                    const id = deleteBtn.dataset.id;
-                    const item = rowData.find(r => r.Id == id);
-                    if (confirm('Delete template ' + (item?.Name || id) + '?')) {
-                        const form = document.createElement('form');
-                        form.method = 'POST';
-                        form.innerHTML = `<input type="hidden" name="id" value="${id}"/>`;
-                        form.action = '?handler=Delete';
-                        document.body.appendChild(form);
-                        form.submit();
-                    }
-                }
-            });
-
-            function showDetails(item) {
-                const stepPrompt = item.StepPrompt || '';
-                const instructions = item.Instructions || '';
-                
-                // Parse steps (lines starting with digit followed by dot)
-                const steps = stepPrompt.split('\n').filter(line => /^\d+\./.test(line.trim()));
-                
-                let html = '<div class="p-2">';
-                if (instructions) {
-                    html += '<div class="mb-3"><h6 class="mb-1">Instructions override</h6><pre class="bg-light border p-2" style="max-height:140px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(instructions) + '</pre></div>';
-                }
-                html += '<h6>Template Steps:</h6><ol class="list-group list-group-numbered mt-2">';
-                
-                if (steps.length > 0) {
-                    steps.forEach(step => {
-                        const stepText = step.replace(/^\d+\.\s*/, '').trim();
-                        html += '<li class="list-group-item">' + escapeHtml(stepText) + '</li>';
-                    });
-                } else {
-                    html += '<li class="list-group-item">No numbered steps found</li>';
-                }
-                
-                html += '</ol><hr><strong>Full Step Prompt:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(stepPrompt) + '</pre></div>';
-                
-                document.getElementById('detailsModalBody').innerHTML = html;
-                new bootstrap.Modal(document.getElementById('detailsModal')).show();
+            if (window.ListUI && typeof window.ListUI.init === 'function') {
+                window.ListUI.init({ tableSelector: '#stepTemplatesTable', colsMenuId: 'colVisMenu', storageKey: 'steptemplates_cols_v1', pagerId: 'pager' });
             }
 
-            window.openEditModal = function(item) {
-                document.getElementById('modalTitle').textContent = 'Edit Template: ' + item.Name;
-                document.getElementById('templateId').value = item.Id;
-                document.getElementById('templateName').value = item.Name;
-                document.getElementById('templateTaskType').value = item.TaskType;
-                document.getElementById('templateDescription').value = item.Description || '';
-                document.getElementById('templateInstructions').value = item.Instructions || '';
-                document.getElementById('templateStepPrompt').value = item.StepPrompt || '';
-                new bootstrap.Modal(document.getElementById('modalEditTemplate')).show();
-            };
-
-            window.openCreateModal = function() {
-                document.getElementById('modalTitle').textContent = 'Create Template';
-                document.getElementById('templateId').value = '0';
-                document.getElementById('templateName').value = '';
-                document.getElementById('templateTaskType').value = 'story';
-                document.getElementById('templateDescription').value = '';
-                document.getElementById('templateInstructions').value = '';
-                document.getElementById('templateStepPrompt').value = '';
-                new bootstrap.Modal(document.getElementById('modalEditTemplate')).show();
-            };
-
-            function escapeHtml(text) {
-                if (!text) return '';
-                return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
-            }
-
-            function formatDate(val) {
-                if (!val) return '';
-                try {
-                    const dt = new Date(val);
-                    return dt.toLocaleDateString('it-IT') + ' ' + dt.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
-                } catch { return val; }
-            }
+            document.querySelectorAll('.action-details').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tr = btn.closest('tr');
+                    if (!tr) return;
+                    showDetails(tr.dataset);
+                });
+            });
         });
+
+        function showDetails(data) {
+            const stepPrompt = data.stepprompt || '';
+            const instructions = data.instructions || '';
+            const steps = stepPrompt.split('\n').filter(line => /^\d+\./.test(line.trim()));
+            let html = '<div class="p-2">';
+            if (instructions) {
+                html += '<div class="mb-3"><h6 class="mb-1">Instructions override</h6><pre class="bg-light border p-2" style="max-height:140px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(instructions) + '</pre></div>';
+            }
+            html += '<h6>Template Steps:</h6><ol class="list-group list-group-numbered mt-2">';
+            if (steps.length > 0) {
+                steps.forEach(step => {
+                    const stepText = step.replace(/^\d+\.\s*/, '').trim();
+                    html += '<li class="list-group-item">' + escapeHtml(stepText) + '</li>';
+                });
+            } else {
+                html += '<li class="list-group-item">No numbered steps found</li>';
+            }
+            html += '</ol><hr><strong>Full Step Prompt:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow-y:auto;font-size:0.85rem;">' + escapeHtml(stepPrompt) + '</pre></div>';
+            document.getElementById('detailsModalBody').innerHTML = html;
+            new bootstrap.Modal(document.getElementById('detailsModal')).show();
+        }
+
+        function openEditModal(data) {
+            document.getElementById('modalTitle').textContent = 'Edit Template: ' + (data.name || '');
+            document.getElementById('templateId').value = data.id || '0';
+            document.getElementById('templateName').value = data.name || '';
+            document.getElementById('templateTaskType').value = data.tasktype || 'story';
+            document.getElementById('templateMinCharsTrama').value = data.mincharstrama || '';
+            document.getElementById('templateMinCharsStory').value = data.mincharsstory || '';
+            document.getElementById('templateFullStoryStep').value = data.fullstorystep || '';
+            document.getElementById('templateDescription').value = data.description || '';
+            document.getElementById('templateInstructions').value = data.instructions || '';
+            document.getElementById('templateStepPrompt').value = data.stepprompt || '';
+            new bootstrap.Modal(document.getElementById('modalEditTemplate')).show();
+        }
+
+        function openCreateModal() {
+            document.getElementById('modalTitle').textContent = 'Create Template';
+            document.getElementById('templateId').value = '0';
+            document.getElementById('templateName').value = '';
+            document.getElementById('templateTaskType').value = 'story';
+            document.getElementById('templateMinCharsTrama').value = '';
+            document.getElementById('templateMinCharsStory').value = '';
+            document.getElementById('templateFullStoryStep').value = '';
+            document.getElementById('templateDescription').value = '';
+            document.getElementById('templateInstructions').value = '';
+            document.getElementById('templateStepPrompt').value = '';
+            new bootstrap.Modal(document.getElementById('modalEditTemplate')).show();
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
+        }
     </script>
 }

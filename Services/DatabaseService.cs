@@ -363,10 +363,14 @@ public sealed class DatabaseService
     /// Returns a paged, optionally filtered and ordered list of models with total count.
     /// This helper implements server-side filtering, sorting and paging for model lists.
     /// </summary>
-    public (List<ModelInfo> Items, int TotalCount) GetPagedModels(string? search, string? orderBy, int pageIndex, int pageSize)
+    public (List<ModelInfo> Items, int TotalCount) GetPagedModels(string? search, string? orderBy, int pageIndex, int pageSize, bool showDisabled = true)
     {
         using var context = CreateDbContext();
         var query = context.Models.AsNoTracking().AsQueryable();
+        if (!showDisabled)
+        {
+            query = query.Where(m => m.Enabled);
+        }
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -677,6 +681,77 @@ public sealed class DatabaseService
         return context.Agents.OrderBy(a => a.Name).ToList();
     }
 
+    /// <summary>
+    /// Return a paged list of agents with optional search, sort, and model filter.
+    /// Filtering/sorting/paging are executed in the database.
+    /// </summary>
+    public (List<TinyGenerator.Models.Agent> Items, int TotalCount) GetPagedAgents(
+        string? search,
+        string? orderBy,
+        int pageIndex,
+        int pageSize,
+        string? modelFilter = null)
+    {
+        if (pageIndex < 1) pageIndex = 1;
+        if (pageSize <= 0) pageSize = 25;
+
+        using var context = CreateDbContext();
+        var query =
+            from a in context.Agents.AsNoTracking()
+            join m in context.Models.AsNoTracking() on a.ModelId equals m.Id into mj
+            from m in mj.DefaultIfEmpty()
+            join t in context.StepTemplates.AsNoTracking() on a.MultiStepTemplateId equals (int?)t.Id into tj
+            from t in tj.DefaultIfEmpty()
+            select new { Agent = a, ModelName = m != null ? m.Name : null, TemplateName = t != null ? t.Name : null };
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            query = query.Where(x =>
+                (x.Agent.Name ?? string.Empty).Contains(s) ||
+                (x.Agent.Role ?? string.Empty).Contains(s) ||
+                (x.Agent.Skills ?? string.Empty).Contains(s) ||
+                (x.ModelName ?? string.Empty).Contains(s));
+        }
+
+        if (!string.IsNullOrWhiteSpace(modelFilter))
+        {
+            if (modelFilter.Equals("__none__", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(x => !x.Agent.ModelId.HasValue);
+            }
+            else
+            {
+                query = query.Where(x => (x.ModelName ?? string.Empty) == modelFilter);
+            }
+        }
+
+        var ob = (orderBy ?? "name").ToLowerInvariant();
+        query = ob switch
+        {
+            "role" => query.OrderBy(x => x.Agent.Role).ThenBy(x => x.Agent.Name),
+            "model" => query.OrderBy(x => x.ModelName).ThenBy(x => x.Agent.Name),
+            "temperature" => query.OrderBy(x => x.Agent.Temperature).ThenBy(x => x.Agent.Name),
+            "topp" => query.OrderBy(x => x.Agent.TopP).ThenBy(x => x.Agent.Name),
+            "voice" => query.OrderBy(x => x.Agent.VoiceId).ThenBy(x => x.Agent.Name),
+            "skills" => query.OrderBy(x => x.Agent.Skills).ThenBy(x => x.Agent.Name),
+            _ => query.OrderBy(x => x.Agent.Name)
+        };
+
+        var total = query.Count();
+        var items = query.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
+
+        var result = new List<TinyGenerator.Models.Agent>(items.Count);
+        foreach (var row in items)
+        {
+            row.Agent.ModelName = row.ModelName;
+            row.Agent.MultiStepTemplateName = row.TemplateName;
+            result.Add(row.Agent);
+        }
+
+        return (result, total);
+    }
+
     public TinyGenerator.Models.Agent? GetAgentById(int id)
     {
         using var context = CreateDbContext();
@@ -735,6 +810,149 @@ public sealed class DatabaseService
             context.SaveChanges();
         }
     }
+
+    // ╔══════════════════════════════════════════════════════════════╗
+    // ║ Series Methods                                                ║
+    // ╚══════════════════════════════════════════════════════════════╝
+
+    public Series? GetSeriesById(int id)
+    {
+        using var context = CreateDbContext();
+        return context.Series.Find(id);
+    }
+
+    public List<Series> ListAllSeries()
+    {
+        using var context = CreateDbContext();
+        return context.Series
+            .OrderBy(s => s.Titolo)
+            .ToList();
+    }
+
+    public void IncrementSeriesEpisodeCount(int serieId)
+    {
+        using var context = CreateDbContext();
+        var serie = context.Series.Find(serieId);
+        if (serie != null)
+        {
+            serie.EpisodiGenerati++;
+            context.SaveChanges();
+        }
+    }
+
+    public int InsertSeries(Series serie)
+    {
+        using var context = CreateDbContext();
+        serie.DataInserimento = DateTime.UtcNow;
+        serie.EpisodiGenerati = 0;
+        context.Series.Add(serie);
+        context.SaveChanges();
+        return serie.Id;
+    }
+
+    public void UpdateSeries(Series serie)
+    {
+        if (serie == null) return;
+        using var context = CreateDbContext();
+        context.Series.Update(serie);
+        context.SaveChanges();
+    }
+
+    public void DeleteSeries(int id)
+    {
+        using var context = CreateDbContext();
+        var serie = context.Series.Find(id);
+        if (serie != null)
+        {
+            context.Series.Remove(serie);
+            context.SaveChanges();
+        }
+    }
+
+    /// <summary>
+    /// Apply pending SQL migrations manually (for when EF migrations are disabled).
+    /// This method should be called during startup to ensure database schema is up to date.
+    /// </summary>
+    public void ApplyPendingManualMigrations()
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        // Check if summary column exists
+        var checkSummary = conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='summary'");
+        
+        if (checkSummary == 0)
+        {
+            Console.WriteLine("[DB] Applying migration: AddSummaryToStories");
+            conn.Execute("ALTER TABLE stories ADD COLUMN summary TEXT");
+            conn.Execute("INSERT OR IGNORE INTO __EFMigrationsHistory (MigrationId, ProductVersion) VALUES ('20251227082500_AddSummaryToStories', '10.0.0')");
+            Console.WriteLine("[DB] ✓ Migration AddSummaryToStories applied");
+        }
+
+        // Ensure qwen2.5:7b-instruct model exists
+        var qwenModelExists = conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM models WHERE name = 'qwen2.5:7b-instruct'");
+        
+        if (qwenModelExists == 0)
+        {
+            Console.WriteLine("[DB] Adding qwen2.5:7b-instruct model");
+            conn.Execute(@"INSERT INTO models (name, provider, context_length, created_at, updated_at, note)
+                VALUES ('qwen2.5:7b-instruct', 'ollama', 128000, datetime('now'), datetime('now'), 
+                'Qwen 2.5 7B Instruct - Excellent for summarization with 128k context')");
+            Console.WriteLine("[DB] ✓ qwen2.5:7b-instruct model added");
+        }
+
+        // Check if summarizer agent exists
+        var summarizerExists = conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM agents WHERE role = 'summarizer' AND name = 'Story Summarizer'");
+        
+        if (summarizerExists == 0)
+        {
+            Console.WriteLine("[DB] Creating Story Summarizer agent");
+            
+            // Get model_id for qwen2.5:7b-instruct
+            var modelId = conn.ExecuteScalar<int>(
+                "SELECT id FROM models WHERE name = 'qwen2.5:7b-instruct' LIMIT 1");
+            
+            conn.Execute(@"INSERT INTO agents (
+                name, role, model_id, skills, prompt, instructions, is_active, 
+                created_at, updated_at, notes, temperature, top_p
+            ) VALUES (
+                'Story Summarizer',
+                'summarizer',
+                @modelId,
+                '[]',
+                'You are a professional story summarizer. Read the complete story and generate a concise summary.',
+                'Read the entire story carefully and create a summary of 3-5 sentences that captures:
+1. Main characters and their roles
+2. The central conflict or problem
+3. Key events in chronological order
+4. The resolution (without major spoilers)
+
+The summary should be:
+- Concise but informative (3-5 sentences max)
+- Engaging and encouraging readers to read the full story
+- Written in the same language as the story (Italian for Italian stories)
+- Free of spoilers for major plot twists
+- Focused on the narrative arc
+
+Output only the summary text, nothing else. No introductions, no formatting, just the summary.',
+                1,
+                datetime('now'),
+                datetime('now'),
+                'Summarizer agent using Qwen 2.5 7B with 128k context window',
+                0.3,
+                0.8
+            )", new { modelId });
+            
+            Console.WriteLine("[DB] ✓ Story Summarizer agent created");
+        }
+    }
+
+    // ╔══════════════════════════════════════════════════════════════╗
+    // ║ End of Series Methods                                         ║
+    // ╚══════════════════════════════════════════════════════════════╝
 
     public void UpdateModelTestResults(string modelName, int functionCallingScore, IReadOnlyDictionary<string, bool?> skillFlags, double? testDurationSeconds = null)
     {
@@ -1852,6 +2070,19 @@ SET TotalScore = (
         var storyRecord = context.Stories.Find(storyId);
         if (storyRecord == null) return false;
         storyRecord.Characters = charactersJson;
+        context.SaveChanges();
+        return true;
+    }
+
+    /// <summary>
+    /// Updates the summary field for a story.
+    /// </summary>
+    public bool UpdateStorySummary(long storyId, string summary)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.Summary = summary;
         context.SaveChanges();
         return true;
     }
@@ -3960,6 +4191,45 @@ WHERE Id = @modelId;";
         return context.TaskTypes.OrderBy(t => t.Code).ToList();
     }
 
+    /// <summary>
+    /// Return paged task types with optional search and sort. PageIndex starts at 1.
+    /// </summary>
+    public (List<TinyGenerator.Models.TaskTypeInfo> Items, int TotalCount) GetPagedTaskTypes(
+        int pageIndex,
+        int pageSize,
+        string? search = null,
+        string? orderBy = null)
+    {
+        if (pageIndex < 1) pageIndex = 1;
+        if (pageSize <= 0) pageSize = 25;
+        using var context = CreateDbContext();
+        var query = context.TaskTypes.AsNoTracking().AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            query = query.Where(t =>
+                (t.Code ?? string.Empty).Contains(s) ||
+                (t.Description ?? string.Empty).Contains(s) ||
+                (t.DefaultExecutorRole ?? string.Empty).Contains(s) ||
+                (t.DefaultCheckerRole ?? string.Empty).Contains(s));
+        }
+
+        var ob = (orderBy ?? "code").ToLowerInvariant();
+        query = ob switch
+        {
+            "description" => query.OrderBy(t => t.Description).ThenBy(t => t.Code),
+            "executor" => query.OrderBy(t => t.DefaultExecutorRole).ThenBy(t => t.Code),
+            "checker" => query.OrderBy(t => t.DefaultCheckerRole).ThenBy(t => t.Code),
+            "merge" => query.OrderBy(t => t.OutputMergeStrategy).ThenBy(t => t.Code),
+            _ => query.OrderBy(t => t.Code)
+        };
+
+        var total = query.Count();
+        var items = query.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
+        return (items, total);
+    }
+
     // Upsert a task type by code
     public void UpsertTaskType(TinyGenerator.Models.TaskTypeInfo tt)
     {
@@ -4014,6 +4284,50 @@ WHERE Id = @modelId;";
         return query.OrderBy(s => s.Name).ToList();
     }
 
+    /// <summary>
+    /// Return paged step templates with optional search and sort. PageIndex starts at 1.
+    /// </summary>
+    public (List<TinyGenerator.Models.StepTemplate> Items, int TotalCount) GetPagedStepTemplates(
+        int pageIndex,
+        int pageSize,
+        string? search = null,
+        string? orderBy = null,
+        string? taskType = null)
+    {
+        if (pageIndex < 1) pageIndex = 1;
+        if (pageSize <= 0) pageSize = 25;
+        using var context = CreateDbContext();
+        IQueryable<TinyGenerator.Models.StepTemplate> query = context.StepTemplates.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(taskType))
+        {
+            query = query.Where(s => s.TaskType == taskType);
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            query = query.Where(t =>
+                (t.Name ?? string.Empty).Contains(s) ||
+                (t.TaskType ?? string.Empty).Contains(s) ||
+                (t.Description ?? string.Empty).Contains(s));
+        }
+
+        var ob = (orderBy ?? "name").ToLowerInvariant();
+        query = ob switch
+        {
+            "tasktype" => query.OrderBy(t => t.TaskType).ThenBy(t => t.Name),
+            "description" => query.OrderBy(t => t.Description).ThenBy(t => t.Name),
+            "created" => query.OrderByDescending(t => t.CreatedAt).ThenBy(t => t.Name),
+            "updated" => query.OrderByDescending(t => t.UpdatedAt).ThenBy(t => t.Name),
+            _ => query.OrderBy(t => t.Name)
+        };
+
+        var total = query.Count();
+        var items = query.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
+        return (items, total);
+    }
+
     public void UpsertStepTemplate(TinyGenerator.Models.StepTemplate template)
     {
         using var context = CreateDbContext();
@@ -4024,6 +4338,12 @@ WHERE Id = @modelId;";
             existing.StepPrompt = template.StepPrompt;
             existing.Instructions = template.Instructions;
             existing.Description = template.Description;
+            existing.CharactersStep = template.CharactersStep;
+            existing.EvaluationSteps = template.EvaluationSteps;
+            existing.TramaSteps = template.TramaSteps;
+            existing.MinCharsTrama = template.MinCharsTrama;
+            existing.MinCharsStory = template.MinCharsStory;
+            existing.FullStoryStep = template.FullStoryStep;
             existing.UpdatedAt = DateTime.UtcNow.ToString("o");
         }
         else
@@ -4047,6 +4367,9 @@ WHERE Id = @modelId;";
             existing.CharactersStep = template.CharactersStep;
             existing.EvaluationSteps = template.EvaluationSteps;
             existing.TramaSteps = template.TramaSteps;
+            existing.MinCharsTrama = template.MinCharsTrama;
+            existing.MinCharsStory = template.MinCharsStory;
+            existing.FullStoryStep = template.FullStoryStep;
             existing.UpdatedAt = template.UpdatedAt;
             context.SaveChanges();
         }

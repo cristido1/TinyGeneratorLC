@@ -1,0 +1,149 @@
+
+EMULARE MASTER / DETAIL IN AG GRID COMMUNITY (CON ESEMPIO DI CODICE)
+==================================================================
+
+Questo documento spiega COME emulare un comportamento Master/Detail
+in AG Grid Community (gratuita), includendo un ESEMPIO DI CODICE COMPLETO.
+
+ATTENZIONE:
+AG Grid Community NON supporta Master/Detail nativo.
+La funzionalità ufficiale è SOLO Enterprise.
+
+------------------------------------------------------------------
+ARCHITETTURA DELLA SOLUZIONE
+------------------------------------------------------------------
+
+- Una colonna dedicata gestisce l'espansione
+- Un cellRenderer personalizzato mostra/nasconde il dettaglio
+- Il dettaglio è HTML inserito DENTRO la cella
+- L'altezza riga è automatica
+
+Non esistono righe figlie reali.
+
+------------------------------------------------------------------
+ESEMPIO DI DATI
+------------------------------------------------------------------
+
+rowData = [
+  {
+    id: 1,
+    nome: "Ordine 001",
+    stato: "Aperto",
+    dettaglio: "Descrizione lunga dell'ordine 001"
+  },
+  {
+    id: 2,
+    nome: "Ordine 002",
+    stato: "Chiuso",
+    dettaglio: "Note e informazioni aggiuntive"
+  }
+];
+
+------------------------------------------------------------------
+COLONNE DELLA GRIGLIA
+------------------------------------------------------------------
+
+const columnDefs = [
+  {
+    headerName: "",
+    width: 50,
+    cellRenderer: DetailToggleRenderer
+  },
+  { field: "nome" },
+  { field: "stato" }
+];
+
+------------------------------------------------------------------
+CELL RENDERER DI ESPANSIONE
+------------------------------------------------------------------
+
+function DetailToggleRenderer(params) {
+
+  const container = document.createElement("div");
+
+  const toggle = document.createElement("span");
+  toggle.innerText = "▶";
+  toggle.style.cursor = "pointer";
+  toggle.style.marginRight = "8px";
+
+  const detail = document.createElement("div");
+  detail.style.display = "none";
+  detail.style.padding = "8px 16px";
+  detail.style.background = "#f5f5f5";
+  detail.style.borderLeft = "4px solid #999";
+
+  detail.innerHTML = `
+    <strong>Dettaglio:</strong><br>
+    ${params.data.dettaglio}
+  `;
+
+  toggle.addEventListener("click", () => {
+    const open = detail.style.display === "block";
+    detail.style.display = open ? "none" : "block";
+    toggle.innerText = open ? "▶" : "▼";
+    params.api.resetRowHeights();
+  });
+
+  container.appendChild(toggle);
+  container.appendChild(detail);
+
+  return container;
+}
+
+------------------------------------------------------------------
+OPZIONI DELLA GRIGLIA
+------------------------------------------------------------------
+
+const gridOptions = {
+  columnDefs: columnDefs,
+  rowData: rowData,
+  domLayout: "autoHeight"
+};
+
+------------------------------------------------------------------
+CSS CONSIGLIATO
+------------------------------------------------------------------
+
+.ag-theme-alpine .ag-cell {
+  overflow: visible;
+}
+
+------------------------------------------------------------------
+COMPORTAMENTO
+------------------------------------------------------------------
+
+- Il dettaglio è chiuso di default
+- L'icona ▶ / ▼ controlla il toggle
+- L'altezza riga si adatta automaticamente
+- Sorting e filtering funzionano normalmente
+
+------------------------------------------------------------------
+LIMITI REALI
+------------------------------------------------------------------
+
+- Il dettaglio è contenuto nella cella
+- Nessuna API globale expand/collapse
+- Con molti dettagli aperti, il DOM cresce
+
+------------------------------------------------------------------
+CONFRONTO CON ENTERPRISE
+------------------------------------------------------------------
+
+Community (questa soluzione):
+- manuale
+- più codice
+- controllo totale
+
+Enterprise:
+- master/detail nativo
+- lifecycle gestito
+- API ufficiali
+
+------------------------------------------------------------------
+CONCLUSIONE
+------------------------------------------------------------------
+
+Questa è la MIGLIORE emulazione possibile di Master/Detail
+in AG Grid Community senza licenze a pagamento.
+
+Se il dettaglio è centrale e complesso, valutare Enterprise.

@@ -23,7 +23,8 @@
         </div>
     </div>
 
-    <div id="seriesGrid" class="ag-theme-alpine" style="width: 100%; height: 600px;"></div>
+    <div id="seriesGrid" class="ag-theme-alpine" style="width: 100%;"></div>
+    <div id="seriesDetail" class="mt-3"></div>
 </div>
 
 @section Scripts {
@@ -42,63 +43,129 @@
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li><a class="dropdown-item" href="/Series/Edit?id=${params.data.Id}"><i class="bi bi-pencil"></i> Modifica</a></li>
+                            <li><a class="dropdown-item" href="#" data-action="detail"><i class="bi bi-info-circle"></i> Dettaglio</a></li>
                             <li><a class="dropdown-item text-danger" href="/Series/Delete?id=${params.data.Id}"><i class="bi bi-trash"></i> Elimina</a></li>
                         </ul>
                     </div>
                 `;
+
+                const detailLink = this.eGui.querySelector('[data-action="detail"]');
+                if (detailLink) {
+                    detailLink.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        renderSeriesDetail(params.data);
+                    });
+                }
             }
             getGui() {
                 return this.eGui;
             }
         }
 
-        // Detail cell renderer
-        class DetailCellRenderer {
-            init(params) {
-                this.eGui = document.createElement('div');
-                this.eGui.style.padding = "20px";
-                this.eGui.style.backgroundColor = "#f8f9fa";
-                this.eGui.style.border = "1px solid #dee2e6";
-                this.eGui.style.borderRadius = "4px";
-                this.eGui.style.margin = "10px";
-                
-                const data = params.data;
-                
-                // All available fields from Series model
-                const fields = [
-                    { label: "Ambientazione Base", value: data.AmbientazioneBase, key: "AmbientazioneBase" },
-                    { label: "Premessa Serie", value: data.PremessaSerie, key: "PremessaSerie" },
-                    { label: "Arco Narrativo Serie", value: data.ArcoNarrativoSerie, key: "ArcoNarrativoSerie" },
-                    { label: "Stile Scrittura", value: data.StileScrittura, key: "StileScrittura" },
-                    { label: "Regole Narrative", value: data.RegoleNarrative, key: "RegoleNarrative" },
-                    { label: "Note AI", value: data.NoteAI, key: "NoteAI" }
-                ];
-                
-                let html = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px;">';
-                
-                fields.forEach(field => {
-                    const displayValue = field.value ? field.value : '<em style="color: #adb5bd;">Non specificato</em>';
-                    html += `
-                        <div style="background: white; padding: 12px; border-radius: 4px; border: 1px solid #e9ecef;">
-                            <div style="font-weight: 600; margin-bottom: 8px; color: #495057; font-size: 0.9rem;">${field.label}</div>
-                            <div style="font-size: 0.875rem; white-space: pre-wrap; color: #6c757d; line-height: 1.5;">${displayValue}</div>
-                        </div>
-                    `;
-                });
-                
-                html += '</div>';
-                
-                // Debug: show if no data
-                if (!data.AmbientazioneBase && !data.PremessaSerie && !data.ArcoNarrativoSerie && 
-                    !data.StileScrittura && !data.RegoleNarrative && !data.NoteAI) {
-                    html = '<div style="padding: 20px; text-align: center; color: #6c757d;"><em>Nessun dato aggiuntivo disponibile per questa serie</em></div>';
+        // Detail toggle renderer (emulates master/detail in community bundle)
+        function DetailToggleRenderer(params) {
+            const container = document.createElement('div');
+            container.style.display = 'flex';
+            container.style.alignItems = 'flex-start';
+
+            const toggle = document.createElement('span');
+            toggle.innerText = '▶';
+            toggle.style.cursor = 'pointer';
+            toggle.style.marginRight = '8px';
+
+            const detail = document.createElement('div');
+            detail.style.display = 'none';
+            detail.style.padding = '8px 12px';
+            detail.style.background = '#f8f9fa';
+            detail.style.borderLeft = '4px solid #dee2e6';
+            detail.style.marginTop = '8px';
+
+            const data = params.data || {};
+            const labelMap = {
+                AmbientazioneBase: 'Ambientazione Base',
+                PremessaSerie: 'Premessa Serie',
+                ArcoNarrativoSerie: 'Arco Narrativo Serie',
+                StileScrittura: 'Stile Scrittura',
+                RegoleNarrative: 'Regole Narrative',
+                NoteAI: 'Note AI'
+            };
+
+            let html = '<div style="display: grid; gap:8px;">';
+            Object.keys(labelMap).forEach(key => {
+                const val = data[key] || '';
+                html += `<div><strong>${labelMap[key]}:</strong><div style="white-space:pre-wrap;">${val ? val : '<em style=\"color:#adb5bd\">Non specificato</em>'}</div></div>`;
+            });
+            html += '</div>';
+
+            detail.innerHTML = html;
+
+            toggle.addEventListener('click', () => {
+                const open = detail.style.display === 'block';
+                detail.style.display = open ? 'none' : 'block';
+                toggle.innerText = open ? '▶' : '▼';
+                try { params.api.resetRowHeights(); } catch (e) { }
+            });
+
+            container.appendChild(toggle);
+            container.appendChild(detail);
+            return container;
+        }
+
+        // Render the detail panel below the grid (non-enterprise alternative)
+        function renderSeriesDetail(data) {
+            const panel = document.getElementById('seriesDetail');
+            if (!panel) return;
+
+            const labelMap = {
+                AmbientazioneBase: 'Ambientazione Base',
+                PremessaSerie: 'Premessa Serie',
+                ArcoNarrativoSerie: 'Arco Narrativo Serie',
+                StileScrittura: 'Stile Scrittura',
+                RegoleNarrative: 'Regole Narrative',
+                NoteAI: 'Note AI',
+                EpisodiGenerati: 'Episodi Generati',
+                DataInserimento: 'Data Inserimento',
+                Lingua: 'Lingua'
+            };
+
+            const colDefs = gridOptions.columnDefs || [];
+            const visibleFields = new Set(colDefs.map(c => c.field).filter(Boolean));
+
+            const keys = Object.keys(data).filter(k => !visibleFields.has(k) && k !== 'Timestamp');
+
+            if (keys.length === 0) {
+                panel.innerHTML = '<div class="p-3 text-center text-muted"><em>Nessun dato aggiuntivo disponibile per questa serie</em></div>';
+                return;
+            }
+
+            let html = '<div class="row g-3">';
+            keys.forEach(key => {
+                let value = data[key];
+                if (value === null || value === undefined || value === '') value = '<em class="text-muted">Non specificato</em>';
+                if (key === 'DataInserimento' && data[key]) {
+                    try {
+                        const d = new Date(data[key]);
+                        value = d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' +
+                                d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+                    } catch (e) {}
                 }
-                
-                this.eGui.innerHTML = html;
-            }
-            getGui() {
-                return this.eGui;
-            }
+
+                html += `
+                    <div class="col-12 col-md-6">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6 class="card-title mb-2">${labelMap[key] || key}</h6>
+                                <p class="card-text" style="white-space: pre-wrap;">${value}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+
+            panel.innerHTML = html;
+            panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
 
         // Date formatter
@@ -130,6 +197,15 @@
 
         const gridOptions = {
             columnDefs: [
+                {
+                    headerName: '',
+                    field: 'detailToggle',
+                    width: 48,
+                    cellRenderer: DetailToggleRenderer,
+                    sortable: false,
+                    filter: false,
+                    resizable: false
+                },
                 { 
                     headerName: "Titolo", 
                     field: "Titolo", 
@@ -207,13 +283,11 @@
                 resizable: true
             },
             rowData: seriesData,
-            masterDetail: true,
-            detailCellRenderer: DetailCellRenderer,
-            detailRowHeight: 400,
+            // masterDetail (enterprise) removed - using non-enterprise detail panel below the grid
             pagination: true,
             paginationPageSize: 25,
             paginationPageSizeSelector: [10, 25, 50, 100],
-            domLayout: 'normal',
+            domLayout: 'autoHeight',
             onColumnVisible: saveColumnVisibility,
             onColumnMoved: saveColumnVisibility,
             onGridReady: function(params) {

@@ -82,7 +82,7 @@ Esempio minimale da `appsettings.json`:
     "OtherLogs": false
   },
   "CommandDispatcher": {
-    "MaxParallelCommands": 2
+    "MaxParallelCommands": 1
   },
   "Ollama": {
     "endpoint": "http://localhost:11434"

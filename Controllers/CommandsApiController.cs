@@ -33,6 +33,22 @@ namespace TinyGenerator.Controllers
         }
 
         /// <summary>
+        /// POST /api/commands/cancel/{runId}
+        /// Annulla un comando in coda o in esecuzione.
+        /// </summary>
+        [HttpPost("cancel/{runId}")]
+        public IActionResult CancelCommand(string runId)
+        {
+            var cancelled = _dispatcher.CancelCommand(runId);
+            if (!cancelled)
+            {
+                return NotFound(new { error = $"Comando {runId} non trovato o gia completato." });
+            }
+
+            return Ok(new { runId, message = "Cancel requested" });
+        }
+
+        /// <summary>
         /// POST /api/commands/summarize?storyId=123
         /// Genera il riassunto di una storia usando l'agente Story Summarizer.
         /// </summary>

@@ -18,6 +18,10 @@
         <input class="form-check-input" type="checkbox" id="onlyResultCheckbox" />
         <label class="form-check-label" for="onlyResultCheckbox">Solo log con result</label>
     </div>
+    <div class="col-auto form-check">
+        <input class="form-check-input" type="checkbox" id="onlyModelCheckbox" checked />
+        <label class="form-check-label" for="onlyModelCheckbox">Solo request/response</label>
+    </div>
 </form>
 
 @if (!string.IsNullOrEmpty(Model.StatusMessage))
@@ -32,12 +36,12 @@
             <th style="width:38px;"></th>
             <th>Timestamp</th>
             <th>Level</th>
+            <th>Source</th>
             <th>Result</th>
             <th>Operazione</th>
             <th>ThreadId</th>
             <th>AgentName</th>
             <th>Message</th>
-            <th>Source</th>
             <th>Azioni</th>
         </tr>
     </thead>
@@ -47,7 +51,7 @@
             var src = (log.Source ?? string.Empty).ToLowerInvariant();
             var msg = (log.Message ?? string.Empty).ToLowerInvariant();
             var chat = (log.ChatText ?? string.Empty).ToLowerInvariant();
-            bool isModelSource = src.Contains("ollama") || src.Contains("openai") || src.Contains("model") || src.Contains("llm") || src.Contains("ai");
+            bool isModelSource = src.Contains("ollama") || src.Contains("openai") || src.Contains("model") || src.Contains("llm") || src.Contains("ai") || src.Contains("llama");
             bool isRequest = false;
             bool isResponse = false;
             if (isModelSource)
@@ -61,6 +65,7 @@
             else if (isResponse) rowClass = "log-model-response";
 
         <tr class="@rowClass" data-id="@log.Id"
+            data-source="@log.Source"
             data-ts="@log.Ts" 
             data-threadid="@log.ThreadId" 
             data-threadscope="@log.ThreadScope"
@@ -72,6 +77,15 @@
             <td class="details-control text-center" title="Mostra dettagli"><button class="btn btn-sm btn-outline-secondary" type="button">+</button></td>
             <td class="timestamp">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</td>
             <td class="level">@log.Level</td>
+            <td class="source">
+                @if(log.Source == "ModelResponse"){
+                    <span class="badge bg-warning"><i class="bi bi-chevron-left"></i> Response</span>
+                } else if(log.Source == "ModelRequest"){
+                    <span class="badge bg-success">Request <i class="bi bi-chevron-right"></i></span>
+                } else{
+                    <span>@log.Source</span>
+                }
+            </td>
             <td class="result">
                 @if (!string.IsNullOrWhiteSpace(log.Result))
                 {
@@ -88,7 +102,6 @@
             <td class="threadid">@(log.ThreadId > 0 ? log.ThreadId.ToString() : "-")</td>
             <td class="agentname">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
             <td class="message"><span class="text-muted">Premi + per caricare il messaggio</span></td>
-            <td class="source">@log.Source</td>
             <td class="actions" style="white-space:nowrap;">
                 <button type="button" class="btn btn-sm btn-outline-secondary btn-analyze me-1">Analizza</button>
                 @if (log.Analized)
@@ -167,6 +180,7 @@
     <script>
         $(function () {
             var selectedThreadId = null;
+            var onlyModelCheckbox = $('#onlyModelCheckbox');
             var table = $('#logsTable').DataTable({
                 order: [[1, 'desc']], // timestamp column is now index 1 (0 = details control)
                 pageLength: 25,
@@ -235,6 +249,15 @@
                 stateSaveName: 'DataTables_logs',
                 stateDuration: -1
             });
+
+            $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
+                if (!onlyModelCheckbox.prop('checked')) return true;
+                var row = table.row(dataIndex).node();
+                if (!row) return true;
+                var source = row.getAttribute('data-source');
+                return source === 'ModelResponse' || source === 'ModelRequest';
+            });
+            table.draw();
 
             // Build details HTML for a row - message is fetched lazily from server
             function decodeEscapes(s) {
@@ -317,6 +340,11 @@
                     table.column('.result').search('').draw();
                 }
             });
+            // Filter by model request/response sources
+            onlyModelCheckbox.on('change', function() {
+                table.draw();
+            });
+
 
             $('#btnClearAllLogs').on('click', function() {
                 if (confirm('Sei sicuro di voler cancellare TUTTI i log e le relative analisi? Questa operazione è irreversibile.')) {
@@ -368,3 +396,4 @@
         });
     </script>
 }
+

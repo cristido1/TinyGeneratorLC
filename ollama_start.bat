@@ -3,7 +3,8 @@ REM ollama_start.bat
 REM Avvia il server Ollama su Windows impostando la variabile d'ambiente OLLAMA_CONTEXT_LENGTH
 
 SETLOCAL
-set "OLLAMA_CONTEXT_LENGTH=32768"
+set "OLLAMA_CONTEXT_LENGTH=16384"
+set "OLLAMA_NUM_PARALLEL_DEFAULT=1"
 
 REM Controlla che ollama sia disponibile nel PATH
 where ollama >nul 2>&1
@@ -29,3 +30,6 @@ ENDLOCAL
 REM Alcune alternative (commentate):
 REM ollama serve --port 11434 --num-ctx 2048
 REM ollama serve --port 11435 --num-ctx 8192
+REM ollama serve --port 11435 --num-ctx 16384
+REM ollama serve --port 11435 --num-ctx 32768
+

@@ -60,8 +60,20 @@ namespace TinyGenerator.Services
         /// <param name="model">Model name (e.g., "phi3:mini", "gpt-3.5-turbo")</param>
         /// <param name="temperature">Optional sampling temperature</param>
         /// <param name="topP">Optional top_p value</param>
+        /// <param name="repeatPenalty">Optional repeat penalty value</param>
+        /// <param name="topK">Optional top_k value</param>
+        /// <param name="repeatLastN">Optional repeat_last_n value</param>
+        /// <param name="numPredict">Optional num_predict value</param>
         /// <param name="useMaxTokens">If true, configure the bridge to use the maximum context/tokens allowed for the model.</param>
         /// <returns>Configured chat bridge for the model</returns>
-        LangChainChatBridge CreateChatBridge(string model, double? temperature = null, double? topP = null, bool useMaxTokens = false);
+        LangChainChatBridge CreateChatBridge(
+            string model,
+            double? temperature = null,
+            double? topP = null,
+            double? repeatPenalty = null,
+            int? topK = null,
+            int? repeatLastN = null,
+            int? numPredict = null,
+            bool useMaxTokens = false);
     }
 }

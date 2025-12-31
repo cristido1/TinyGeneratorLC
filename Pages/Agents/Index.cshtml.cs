@@ -13,6 +13,7 @@ namespace TinyGenerator.Pages.Agents
         private readonly DatabaseService _database;
         public IReadOnlyList<Agent> Items { get; set; } = Array.Empty<Agent>();
         public IReadOnlyList<ModelInfo> Models { get; set; } = Array.Empty<ModelInfo>();
+        public IReadOnlyList<string> Roles { get; set; } = Array.Empty<string>();
 
         public int PageIndex { get; set; } = 1;
         public int PageSize { get; set; } = 25;
@@ -36,6 +37,9 @@ namespace TinyGenerator.Pages.Agents
         [BindProperty(SupportsGet = true)]
         public string? ModelFilter { get; set; }
 
+        [BindProperty(SupportsGet = true)]
+        public string? RoleFilter { get; set; }
+
         public void OnGet()
         {
             if (int.TryParse(Request.Query["page"], out var p) && p > 0) PageIndex = p;
@@ -45,7 +49,8 @@ namespace TinyGenerator.Pages.Agents
             try
             {
                 Models = _database.ListModels() ?? new List<ModelInfo>();
-                var (items, total) = _database.GetPagedAgents(Search, OrderBy, PageIndex, PageSize, ModelFilter);
+                Roles = _database.ListAgentRoles() ?? new List<string>();
+                var (items, total) = _database.GetPagedAgents(Search, OrderBy, PageIndex, PageSize, ModelFilter, RoleFilter);
                 Items = items;
                 TotalCount = total;
             }
@@ -169,6 +174,10 @@ namespace TinyGenerator.Pages.Agents
                     Instructions = source.Instructions,
                     Temperature = source.Temperature,
                     TopP = source.TopP,
+                    RepeatPenalty = source.RepeatPenalty,
+                    TopK = source.TopK,
+                    RepeatLastN = source.RepeatLastN,
+                    NumPredict = source.NumPredict,
                     ExecutionPlan = source.ExecutionPlan,
                     IsActive = source.IsActive,
                     MultiStepTemplateId = source.MultiStepTemplateId,

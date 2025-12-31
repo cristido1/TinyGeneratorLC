@@ -509,7 +509,15 @@ public sealed class DatabaseService
         using var context = CreateDbContext();
         
         var now = DateTime.UtcNow.ToString("o");
-        var existing = context.Models.FirstOrDefault(m => m.Name == model.Name);
+        ModelInfo? existing = null;
+        if (model.Id.HasValue)
+        {
+            existing = context.Models.FirstOrDefault(m => m.Id == model.Id);
+        }
+        if (existing == null)
+        {
+            existing = context.Models.FirstOrDefault(m => m.Name == model.Name);
+        }
         
         // Preserve an existing non-zero FunctionCallingScore if the caller didn't set a meaningful score.
         if (existing != null && existing.FunctionCallingScore != 0 && model.FunctionCallingScore == 0)
@@ -681,6 +689,17 @@ public sealed class DatabaseService
         return context.Agents.OrderBy(a => a.Name).ToList();
     }
 
+    public List<string> ListAgentRoles()
+    {
+        using var context = CreateDbContext();
+        return context.Agents.AsNoTracking()
+            .Select(a => a.Role ?? string.Empty)
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Distinct()
+            .OrderBy(r => r)
+            .ToList();
+    }
+
     /// <summary>
     /// Return a paged list of agents with optional search, sort, and model filter.
     /// Filtering/sorting/paging are executed in the database.
@@ -690,7 +709,8 @@ public sealed class DatabaseService
         string? orderBy,
         int pageIndex,
         int pageSize,
-        string? modelFilter = null)
+        string? modelFilter = null,
+        string? roleFilter = null)
     {
         if (pageIndex < 1) pageIndex = 1;
         if (pageSize <= 0) pageSize = 25;
@@ -726,6 +746,12 @@ public sealed class DatabaseService
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(roleFilter))
+        {
+            var rf = roleFilter.Trim().ToLowerInvariant();
+            query = query.Where(x => (x.Agent.Role ?? string.Empty).ToLower() == rf);
+        }
+
         var ob = (orderBy ?? "name").ToLowerInvariant();
         query = ob switch
         {
@@ -733,6 +759,10 @@ public sealed class DatabaseService
             "model" => query.OrderBy(x => x.ModelName).ThenBy(x => x.Agent.Name),
             "temperature" => query.OrderBy(x => x.Agent.Temperature).ThenBy(x => x.Agent.Name),
             "topp" => query.OrderBy(x => x.Agent.TopP).ThenBy(x => x.Agent.Name),
+            "repeatpenalty" => query.OrderBy(x => x.Agent.RepeatPenalty).ThenBy(x => x.Agent.Name),
+            "topk" => query.OrderBy(x => x.Agent.TopK).ThenBy(x => x.Agent.Name),
+            "repeatlastn" => query.OrderBy(x => x.Agent.RepeatLastN).ThenBy(x => x.Agent.Name),
+            "numpredict" => query.OrderBy(x => x.Agent.NumPredict).ThenBy(x => x.Agent.Name),
             "voice" => query.OrderBy(x => x.Agent.VoiceId).ThenBy(x => x.Agent.Name),
             "skills" => query.OrderBy(x => x.Agent.Skills).ThenBy(x => x.Agent.Name),
             _ => query.OrderBy(x => x.Agent.Name)
@@ -917,7 +947,7 @@ public sealed class DatabaseService
             
             conn.Execute(@"INSERT INTO agents (
                 name, role, model_id, skills, prompt, instructions, is_active, 
-                created_at, updated_at, notes, temperature, top_p
+                created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict
             ) VALUES (
                 'Story Summarizer',
                 'summarizer',
@@ -943,7 +973,11 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
                 datetime('now'),
                 'Summarizer agent using Qwen 2.5 7B with 128k context window',
                 0.3,
-                0.8
+                0.8,
+                NULL,
+                NULL,
+                NULL,
+                NULL
             )", new { modelId });
             
             Console.WriteLine("[DB] ✓ Story Summarizer agent created");
@@ -2878,10 +2912,38 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 Console.WriteLine("[DB] Adding top_p column to agents");
                 conn.Execute("ALTER TABLE agents ADD COLUMN top_p REAL DEFAULT NULL");
             }
+
+            var hasAgentRepeatPenalty = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='repeat_penalty'");
+            if (hasAgentRepeatPenalty == 0)
+            {
+                Console.WriteLine("[DB] Adding repeat_penalty column to agents");
+                conn.Execute("ALTER TABLE agents ADD COLUMN repeat_penalty REAL DEFAULT NULL");
+            }
+
+            var hasAgentTopK = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='top_k'");
+            if (hasAgentTopK == 0)
+            {
+                Console.WriteLine("[DB] Adding top_k column to agents");
+                conn.Execute("ALTER TABLE agents ADD COLUMN top_k INTEGER DEFAULT NULL");
+            }
+
+            var hasAgentRepeatLastN = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='repeat_last_n'");
+            if (hasAgentRepeatLastN == 0)
+            {
+                Console.WriteLine("[DB] Adding repeat_last_n column to agents");
+                conn.Execute("ALTER TABLE agents ADD COLUMN repeat_last_n INTEGER DEFAULT NULL");
+            }
+
+            var hasAgentNumPredict = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='num_predict'");
+            if (hasAgentNumPredict == 0)
+            {
+                Console.WriteLine("[DB] Adding num_predict column to agents");
+                conn.Execute("ALTER TABLE agents ADD COLUMN num_predict INTEGER DEFAULT NULL");
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DB] Warning: failed to add temperature/top_p to agents: {ex.Message}");
+            Console.WriteLine($"[DB] Warning: failed to add temperature/top_p/repeat_penalty/top_k/repeat_last_n/num_predict to agents: {ex.Message}");
         }
 
         // Migration: Add note column to models if not exists

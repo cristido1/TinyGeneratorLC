@@ -7,6 +7,7 @@ MODEL_MAPPINGS = {
         'id', 'name', 'role', 'model_id', 'voice_rowid', 'skills', 'config', 
         'json_response_format', 'prompt', 'instructions', 'execution_plan', 
         'is_active', 'created_at', 'updated_at', 'notes', 'temperature', 'top_p',
+        'repeat_penalty', 'top_k', 'repeat_last_n', 'num_predict',
         'multi_step_template_id', 'RowVersion'
     ],
     'stories': [

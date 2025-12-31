@@ -22,7 +22,11 @@ INSERT INTO agents (
     updated_at,
     notes,
     temperature,
-    top_p
+    top_p,
+    repeat_penalty,
+    top_k,
+    repeat_last_n,
+    num_predict
 )
 SELECT 
     'Story Summarizer',
@@ -49,7 +53,11 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
     datetime('now'),
     'Summarizer agent using Qwen 2.5 7B with 128k context window',
     0.3,
-    0.8
+    0.8,
+    NULL,
+    NULL,
+    NULL,
+    NULL
 WHERE NOT EXISTS (SELECT 1 FROM agents WHERE role = 'summarizer' AND name = 'Story Summarizer');
 
 -- Verify the insert

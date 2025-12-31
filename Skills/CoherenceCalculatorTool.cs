@@ -314,7 +314,6 @@ namespace TinyGenerator.Skills
                 var result = JsonSerializer.Serialize(new
                 {
                     success = true,
-                    story_id = CurrentStoryId.Value,
                     global_coherence = input.GlobalCoherence,
                     chunk_count = chunkCount,
                     message = "Global coherence finalized"

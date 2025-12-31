@@ -1,0 +1,79 @@
+@model TinyGenerator.Models.StoryEvaluation
+
+@functions {
+    private string ScoreBadgeClass(double score)
+    {
+        if (score >= 8) return "bg-success";
+        if (score >= 6) return "bg-warning text-dark";
+        if (score >= 4) return "bg-danger";
+        return "bg-secondary";
+    }
+
+    private string TotalBadgeClass(double percent)
+    {
+        if (percent >= 80) return "bg-success";
+        if (percent >= 60) return "bg-warning text-dark";
+        if (percent >= 40) return "bg-danger";
+        return "bg-secondary";
+    }
+}
+
+<div class="card mb-2">
+    <div class="card-body p-2">
+        @{
+            var totalPercent = (Model.TotalScore * 100.0 / 40.0);
+        }
+        <div class="d-flex justify-content-between">
+            <div>
+                <strong>@(string.IsNullOrWhiteSpace(Model.AgentName) ? Model.Model : Model.AgentName)</strong>
+                @if (!string.IsNullOrWhiteSpace(Model.AgentModel))
+                {
+                    <span class="text-muted">(model: @Model.AgentModel)</span>
+                }
+                <span class="text-muted ms-2">@Model.Timestamp</span>
+            </div>
+            <div class="text-end">
+                <span class="me-1">Score:</span>
+                <span class="badge @TotalBadgeClass(totalPercent)">@totalPercent.ToString("F0")/100</span>
+            </div>
+        </div>
+        <div class="row mt-2 g-3">
+            <div class="col-md-6">
+                <div class="d-flex align-items-start gap-2">
+                    <div style="min-width: 180px;">
+                        <div class="small text-muted">Coerenza narrativa</div>
+                        <span class="badge @ScoreBadgeClass(Model.NarrativeCoherenceScore)">@Model.NarrativeCoherenceScore</span>
+                    </div>
+                    <div class="small flex-grow-1">@(!string.IsNullOrWhiteSpace(Model.NarrativeCoherenceDefects) ? Model.NarrativeCoherenceDefects : "-")</div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="d-flex align-items-start gap-2">
+                    <div style="min-width: 180px;">
+                        <div class="small text-muted">Originalita'</div>
+                        <span class="badge @ScoreBadgeClass(Model.OriginalityScore)">@Model.OriginalityScore</span>
+                    </div>
+                    <div class="small flex-grow-1">@(!string.IsNullOrWhiteSpace(Model.OriginalityDefects) ? Model.OriginalityDefects : "-")</div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="d-flex align-items-start gap-2">
+                    <div style="min-width: 180px;">
+                        <div class="small text-muted">Impatto emotivo</div>
+                        <span class="badge @ScoreBadgeClass(Model.EmotionalImpactScore)">@Model.EmotionalImpactScore</span>
+                    </div>
+                    <div class="small flex-grow-1">@(!string.IsNullOrWhiteSpace(Model.EmotionalImpactDefects) ? Model.EmotionalImpactDefects : "-")</div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="d-flex align-items-start gap-2">
+                    <div style="min-width: 180px;">
+                        <div class="small text-muted">Azione</div>
+                        <span class="badge @ScoreBadgeClass(Model.ActionScore)">@Model.ActionScore</span>
+                    </div>
+                    <div class="small flex-grow-1">@(!string.IsNullOrWhiteSpace(Model.ActionDefects) ? Model.ActionDefects : "-")</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

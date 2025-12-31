@@ -99,7 +99,11 @@ namespace TinyGenerator.Services.Commands
                 var bridge = _kernelFactory.CreateChatBridge(
                     summarizerAgent.ModelName ?? "qwen2.5:7b-instruct",
                     summarizerAgent.Temperature,
-                    summarizerAgent.TopP);
+                    summarizerAgent.TopP,
+                    summarizerAgent.RepeatPenalty,
+                    summarizerAgent.TopK,
+                    summarizerAgent.RepeatLastN,
+                    summarizerAgent.NumPredict);
 
                 var messages = new List<ConversationMessage>
                 {

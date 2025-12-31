@@ -95,13 +95,8 @@ namespace TinyGenerator.Services.Commands
                 }
 
                 // Don't create story record yet - will be created after successful generation
-                // Store model info for later use
+                // Store model info for later use (id-only)
                 int? modelId = agent.ModelId;
-                if (!string.IsNullOrWhiteSpace(agent.ModelName))
-                {
-                    var modelInfo = _database.GetModelInfo(agent.ModelName);
-                    if (modelInfo?.Id != null) modelId = modelInfo.Id;
-                }
 
                 // Start task execution without entity (story will be created on success)
                 var executionId = await _orchestrator.StartTaskExecutionAsync(

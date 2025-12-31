@@ -37,6 +37,10 @@ CREATE TABLE agents (
     notes TEXT NULL,
     temperature REAL NULL,
     top_p REAL NULL,
+    repeat_penalty REAL NULL,
+    top_k INTEGER NULL,
+    repeat_last_n INTEGER NULL,
+    num_predict INTEGER NULL,
     multi_step_template_id INTEGER NULL,
     RowVersion BLOB NULL
 );
@@ -49,7 +53,7 @@ CREATE TABLE agents (
 INSERT INTO agents (
     id, name, role, model_id, voice_rowid, skills, config, json_response_format,
     prompt, instructions, execution_plan, is_active, created_at, updated_at, notes,
-    temperature, top_p, multi_step_template_id
+    temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, multi_step_template_id
 )
 SELECT 
     ab.id,
@@ -70,6 +74,10 @@ SELECT
     ab.notes,
     ab.temperature,
     ab.top_p,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
     ab.multi_step_template_id
 FROM agents_backup ab;
 

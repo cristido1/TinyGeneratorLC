@@ -25,7 +25,7 @@ namespace TinyGenerator.Skills
         public string? LastResult { get; set; }
         public long? CurrentStoryId { get; set; }
 
-        private readonly int _storyChunkSize = 1000;
+        private readonly int _storyChunkSize = 2000;
 
         public ChunkFactsExtractorTool(DatabaseService database, ICustomLogger? logger = null) 
             : base("extract_chunk_facts", "Extract objective facts from story chunks", logger)
@@ -219,12 +219,20 @@ namespace TinyGenerator.Skills
 
                 CustomLogger?.Log("Info", "ChunkFactsExtractor", $"[ChunkFactsExtractor] Read story part {input.PartIndex} for story {CurrentStoryId}: chunk_size={_storyChunkSize}, start={start}, length={length}, content_length={chunk.Length}");
 
+                var isLast = input.PartIndex >= totalChunks - 1;
                 var result = JsonSerializer.Serialize(new
                 {
                     part_index = input.PartIndex,
                     total_parts = totalChunks,
+                    is_last = isLast,
                     content = chunk
                 });
+
+                try
+                {
+                    CustomLogger?.Log("Info", "ChunkFactsExtractor", $"[ChunkFactsExtractor] is_last={isLast} for part {input.PartIndex} (total_parts={totalChunks})");
+                }
+                catch { }
 
                 LastFunctionResult = result;
                 return Task.FromResult(result);

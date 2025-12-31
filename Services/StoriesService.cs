@@ -354,7 +354,14 @@ public sealed class StoriesService
                 coherenceTool.CurrentStoryId = story.Id;
             }
             
-            var chatBridge = _kernelFactory.CreateChatBridge(modelName, agent.Temperature, agent.TopP);
+            var chatBridge = _kernelFactory.CreateChatBridge(
+                modelName,
+                agent.Temperature,
+                agent.TopP,
+                agent.RepeatPenalty,
+                agent.TopK,
+                agent.RepeatLastN,
+                agent.NumPredict);
 
             var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
                 ? agent.Instructions
@@ -535,7 +542,14 @@ public sealed class StoriesService
         {
             var orchestrator = _kernelFactory.CreateOrchestrator(modelName, allowedPlugins, agent.Id);
 
-            var chatBridge = _kernelFactory.CreateChatBridge(modelName, agent.Temperature, agent.TopP);
+            var chatBridge = _kernelFactory.CreateChatBridge(
+                modelName,
+                agent.Temperature,
+                agent.TopP,
+                agent.RepeatPenalty,
+                agent.TopK,
+                agent.RepeatLastN,
+                agent.NumPredict);
 
             var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
                 ? agent.Instructions
@@ -781,7 +795,7 @@ public sealed class StoriesService
                 initialContext: story.Story ?? string.Empty,
                 threadId: threadId,
                 templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions,
-                executorModelOverride: model.Name);
+                executorModelOverrideId: model.Id);
 
             if (executionId.HasValue)
             {
@@ -1498,7 +1512,7 @@ public sealed class StoriesService
             builder.AppendLine("You must NOT copy the full story text into this prompt.");
             builder.AppendLine("Instead, use the read_story_part function to retrieve segments of the story (start with part_index=0 and continue requesting parts until you receive \"is_last\": true).");
             builder.AppendLine("Do not invent story content; rely only on the chunks returned by read_story_part.");
-            builder.AppendLine("After you have reviewed the necessary sections, call the evaluate_full_story function exactly once with the provided story_id.");
+            builder.AppendLine("After you have reviewed the necessary sections, call the evaluate_full_story function exactly once. The story_id is managed internally; do not pass it.");
             builder.AppendLine("If you finish your review but fail to call evaluate_full_story, the orchestrator will remind you and ask again up to 3 times â€” you MUST call the function before the evaluation completes.");
             builder.AppendLine("Populate the following scores (0-10): narrative_coherence_score, originality_score, emotional_impact_score, action_score.");
             builder.AppendLine("All score fields MUST be integers between 0 and 10 (use 0 if you cannot determine a score). Do NOT send strings like \"None\".");
@@ -1627,7 +1641,7 @@ public sealed class StoriesService
 
                 if (schema.Timeline.Count == 0)
                 {
-                    return Task.FromResult<(bool, string?)>((false, "Nessuna frase trovata nel testo. Assicurati che il testo contenga tag come [NARRATORE], [personaggio, emozione]"));
+                    return Task.FromResult<(bool, string?)>((false, "Nessuna frase trovata nel testo. Assicurati che il testo contenga tag come [NARRATORE], [personaggio, emozione] o [PERSONAGGIO: Nome] [EMOZIONE: emozione]."));
                 }
 
                 // Assign voices to characters
@@ -2290,6 +2304,55 @@ public sealed class StoriesService
 
         private async Task<(bool success, string? message)> RunParallelAsync(StoryRecord story, List<Agent> evaluators)
         {
+            // If a dispatcher is available, enqueue one command per evaluator and return immediately.
+            if (_service._commandDispatcher != null)
+            {
+                var enqueued = new List<string>();
+                foreach (var evaluator in evaluators)
+                {
+                    try
+                    {
+                        var runId = $"evaluate_story_{story.Id}_agent_{evaluator.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                        var meta = new Dictionary<string, string>
+                        {
+                            ["storyId"] = story.Id.ToString(),
+                            ["agentId"] = evaluator.Id.ToString(),
+                            ["agentName"] = evaluator.Name ?? string.Empty,
+                            ["operation"] = "evaluate_story"
+                        };
+
+                        _service._commandDispatcher.Enqueue(
+                            "evaluate_story",
+                            async ctx =>
+                            {
+                                try
+                                {
+                                    var (success, score, error) = await _service.EvaluateStoryWithAgentAsync(story.Id, evaluator.Id);
+                                    var msg = success ? $"Valutazione completata. Score: {score:F2}" : $"Valutazione fallita: {error}";
+                                    return new CommandResult(success, msg);
+                                }
+                                catch (Exception ex)
+                                {
+                                    return new CommandResult(false, ex.Message);
+                                }
+                            },
+                            runId: runId,
+                            threadScope: $"story/evaluate/agent_{evaluator.Id}",
+                            metadata: meta);
+
+                        enqueued.Add($"{evaluator.Name ?? ("Evaluator " + evaluator.Id)} ({runId})");
+                    }
+                    catch (Exception ex)
+                    {
+                        _service._logger?.LogWarning(ex, "Failed to enqueue evaluation for story {StoryId} agent {AgentId}", story.Id, evaluator.Id);
+                    }
+                }
+
+                var msg = enqueued.Count > 0 ? $"Valutazioni accodate: {string.Join("; ", enqueued)}" : "Nessuna valutazione accodata";
+                return (enqueued.Count > 0, msg);
+            }
+
+            // Fallback: if no dispatcher is available, run in parallel inline (previous behaviour)
             var tasks = evaluators.Select(async evaluator =>
             {
                 try

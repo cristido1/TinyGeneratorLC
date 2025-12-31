@@ -56,7 +56,15 @@ namespace TinyGenerator.Services
             LangChainChatBridge bridge;
             try
             {
-                bridge = _kernelFactory.CreateChatBridge(modelName, agent.Temperature, agent.TopP, useMaxTokens: true);
+                bridge = _kernelFactory.CreateChatBridge(
+                    modelName,
+                    agent.Temperature,
+                    agent.TopP,
+                    agent.RepeatPenalty,
+                    agent.TopK,
+                    agent.RepeatLastN,
+                    agent.NumPredict,
+                    useMaxTokens: true);
             }
             catch (Exception ex)
             {

@@ -121,13 +121,8 @@ namespace TinyGenerator.Services.Commands
                     configOverrides = null;
                 }
 
-                // Store model info for later use
+                // Store model info for later use (id-only)
                 int? modelId = agent.ModelId;
-                if (!string.IsNullOrWhiteSpace(agent.ModelName))
-                {
-                    var modelInfo = _database.GetModelInfo(agent.ModelName);
-                    if (modelInfo?.Id != null) modelId = modelInfo.Id;
-                }
 
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 5: Start task execution                                 ║

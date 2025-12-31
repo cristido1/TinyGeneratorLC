@@ -27,18 +27,27 @@ namespace TinyGenerator.Services
         private readonly ICustomLogger? _logger;
         private readonly LangChainToolFactory _toolFactory;
         private readonly Dictionary<int, HybridLangChainOrchestrator> _agentOrchestrators;
+        private readonly IOllamaMonitorService? _ollamaMonitor;
+        private readonly LlamaService? _llamaService;
+        private readonly object _providerSwitchLock = new();
+        private string? _lastLocalProvider;
+        private string? _lastLocalModelName;
 
         public LangChainKernelFactory(
             IConfiguration config,
             DatabaseService database,
             ICustomLogger? logger = null,
-            LangChainToolFactory? toolFactory = null)
+            LangChainToolFactory? toolFactory = null,
+            IOllamaMonitorService? ollamaMonitor = null,
+            LlamaService? llamaService = null)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _logger = logger;
             _toolFactory = toolFactory ?? throw new ArgumentNullException(nameof(toolFactory));
             _agentOrchestrators = new Dictionary<int, HybridLangChainOrchestrator>();
+            _ollamaMonitor = ollamaMonitor;
+            _llamaService = llamaService;
         }
 
         /// <summary>
@@ -138,11 +147,11 @@ namespace TinyGenerator.Services
                         // Try to resolve model name from database
                         var modelInfo = _database.ListModels()
                             .FirstOrDefault(m => m.Id == agent.ModelId.Value);
-                        actualModel = modelInfo?.Name ?? "phi3:mini";
+                        actualModel = modelInfo?.Name;
                     }
-                    else if (string.IsNullOrEmpty(actualModel))
+                    if (string.IsNullOrEmpty(actualModel))
                     {
-                        actualModel = "phi3:mini"; // Default fallback
+                        throw new InvalidOperationException($"No model configured for agent {agentId}.");
                     }
 
                     // Parse skills from agent JSON config
@@ -237,7 +246,15 @@ namespace TinyGenerator.Services
         /// Create a LangChainChatBridge for direct model communication.
         /// Resolves model endpoint and API key from configuration.
         /// </summary>
-        public LangChainChatBridge CreateChatBridge(string model, double? temperature = null, double? topP = null, bool useMaxTokens = false)
+        public LangChainChatBridge CreateChatBridge(
+            string model,
+            double? temperature = null,
+            double? topP = null,
+            double? repeatPenalty = null,
+            int? topK = null,
+            int? repeatLastN = null,
+            int? numPredict = null,
+            bool useMaxTokens = false)
         {
             try
             {
@@ -247,13 +264,41 @@ namespace TinyGenerator.Services
                     throw new InvalidOperationException($"Model '{model}' not found in database");
                 }
 
+                HandleProviderSwitch(modelInfo, model);
+
                 // Determine endpoint based on model provider
                 string endpoint;
                 string apiKey = "ollama"; // Default for Ollama (no auth required)
+                bool? forceOllama = null;
+                Func<CancellationToken, Task>? beforeCall = null;
+                Func<CancellationToken, Task>? afterCall = null;
 
                 if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
                 {
                     endpoint = _config.GetSection("Ollama:endpoint").Value ?? "http://localhost:11434";
+                    forceOllama = true;
+                }
+                else if (modelInfo.Provider?.Equals("llama.cpp", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    endpoint = modelInfo.Endpoint ?? "http://127.0.0.1:11436";
+                    forceOllama = false;
+                    apiKey = "ollama";
+
+                    var ctxSize = modelInfo.ContextToUse > 0 ? modelInfo.ContextToUse : 32768;
+                    var modelName = modelInfo.Name;
+                    _logger?.Log("Info", "llama.cpp",
+                        $"llama.cpp selected: model={modelName}, ctx={ctxSize}, endpoint={endpoint}");
+                    beforeCall = _ => Task.Run(() =>
+                    {
+                        _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: starting server");
+                        _llamaService?.StartServer(modelName, ctxSize);
+                        _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: start complete");
+                    });
+                    afterCall = _ => Task.Run(() =>
+                    {
+                        _logger?.Log("Info", "llama.cpp", "llama.cpp afterCall: stopping server");
+                        _llamaService?.StopServer();
+                    });
                 }
                 else if (modelInfo.Provider?.Equals("openai", StringComparison.OrdinalIgnoreCase) == true)
                 {
@@ -279,9 +324,14 @@ namespace TinyGenerator.Services
                 _logger?.Log("Info", "LangChainKernelFactory",
                     $"Creating ChatBridge for model '{model}' with provider '{modelInfo.Provider}' and endpoint '{endpoint}'");
 
-                var bridge = new LangChainChatBridge(endpoint, model, apiKey, null, _logger);
+                var logAsLlama = modelInfo.Provider?.Equals("llama.cpp", StringComparison.OrdinalIgnoreCase) == true;
+                var bridge = new LangChainChatBridge(endpoint, model, apiKey, null, _logger, forceOllama, beforeCall, afterCall, logAsLlama);
                 if (temperature.HasValue) bridge.Temperature = temperature.Value;
                 if (topP.HasValue) bridge.TopP = topP.Value;
+                if (repeatPenalty.HasValue) bridge.RepeatPenalty = repeatPenalty.Value;
+                if (topK.HasValue) bridge.TopK = topK.Value;
+                if (repeatLastN.HasValue) bridge.RepeatLastN = repeatLastN.Value;
+                if (numPredict.HasValue) bridge.NumPredict = numPredict.Value;
                 if (useMaxTokens)
                 {
                     var maxTokens = DetermineMaxTokensForModel(modelInfo);
@@ -299,6 +349,62 @@ namespace TinyGenerator.Services
                 throw;
             }
         }
+
+        private void HandleProviderSwitch(ModelInfo modelInfo, string modelName)
+        {
+            var provider = modelInfo.Provider?.Trim();
+            if (string.IsNullOrWhiteSpace(provider))
+            {
+                return;
+            }
+
+            // OpenAI/Azure are external providers: do not manage local memory.
+            if (provider.Equals("openai", StringComparison.OrdinalIgnoreCase) ||
+                provider.Equals("azure", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var normalized = provider.ToLowerInvariant();
+            if (normalized != "ollama" && normalized != "llama.cpp")
+            {
+                return;
+            }
+
+            lock (_providerSwitchLock)
+            {
+                if (!string.IsNullOrWhiteSpace(_lastLocalProvider) &&
+                    !string.Equals(_lastLocalProvider, normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (string.Equals(_lastLocalProvider, "ollama", StringComparison.OrdinalIgnoreCase))
+                    {
+                        StopOllamaModel(_lastLocalModelName);
+                    }
+                    else if (string.Equals(_lastLocalProvider, "llama.cpp", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _llamaService?.StopServer();
+                    }
+                }
+
+                _lastLocalProvider = normalized;
+                _lastLocalModelName = modelName;
+            }
+        }
+
+        private void StopOllamaModel(string? modelName)
+        {
+            if (string.IsNullOrWhiteSpace(modelName) || _ollamaMonitor == null) return;
+            try
+            {
+                _ollamaMonitor.StopModelAsync(modelName).GetAwaiter().GetResult();
+                _logger?.Log("Info", "LangChainKernelFactory", $"Stopped Ollama model '{modelName}' due to provider switch");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Warning", "LangChainKernelFactory", $"Failed to stop Ollama model '{modelName}': {ex.Message}");
+            }
+        }
+
 
         /// <summary>
         /// Return default tool schemas to expose to a model for simple chat scenarios.

@@ -194,18 +194,14 @@ namespace TinyGenerator.Services
 
             // Delegate to the generic checker agent for the remaining checks, but include semantic info in the prompt
             var checkerAgent = _database.ListAgents()
-                .FirstOrDefault(a => a.Role == "response_checker" && a.IsActive);
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    a.Role.Equals("response_checker", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
 
             if (checkerAgent == null)
             {
-                _logger.Log("Warning", "MultiStep", "No active response_checker agent found for writer validation, skipping validation");
-                return new ValidationResult
-                {
-                    IsValid = true,
-                    Reason = "No checker agent available",
-                    NeedsRetry = false,
-                    SemanticScore = null
-                };
+                throw new InvalidOperationException("No active response_checker agent found for writer validation.");
             }
 
             var criteriaJson = validationCriteria != null ? JsonSerializer.Serialize(validationCriteria) : "{}";
@@ -263,7 +259,11 @@ namespace TinyGenerator.Services
             try
             {
                 var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
-                var checkerModelName = modelInfo?.Name ?? "phi3:mini";
+                var checkerModelName = modelInfo?.Name;
+                if (string.IsNullOrWhiteSpace(checkerModelName))
+                {
+                    throw new InvalidOperationException($"Response checker agent \"{checkerAgent.Name}\" has no model configured.");
+                }
 
                 // Push a scope with "Response Checker" as agent name so logs show correctly in ChatLog
                 using var checkerScope = LogScope.Push(
@@ -422,7 +422,10 @@ namespace TinyGenerator.Services
             int attempt)
         {
             var checkerAgent = _database.ListAgents()
-                .FirstOrDefault(a => a.Role == "response_checker" && a.IsActive);
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    a.Role.Equals("response_checker", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
 
             if (checkerAgent == null)
             {
@@ -479,7 +482,12 @@ namespace TinyGenerator.Services
             try
             {
                 var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
-                var checkerModelName = modelInfo?.Name ?? "phi3:mini";
+                var checkerModelName = modelInfo?.Name;
+                if (string.IsNullOrWhiteSpace(checkerModelName))
+                {
+                    _logger.Log("Warning", "ResponseChecker", $"Response checker agent \"{checkerAgent.Name}\" has no model configured.");
+                    return null;
+                }
 
                 // Push a scope with "Response Checker" as agent name so logs show correctly in ChatLog
                 using var checkerScope = LogScope.Push(

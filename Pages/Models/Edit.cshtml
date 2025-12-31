@@ -8,6 +8,7 @@
 
 <form method="post">
     <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+    <input type="hidden" asp-for="Model.Id" />
 
     <div class="mb-3">
         <label class="form-label">Nome</label>
@@ -19,6 +20,7 @@
         <label class="form-label">Provider</label>
         <select asp-for="Model.Provider" class="form-select">
             <option value="ollama">ollama</option>
+            <option value="llama.cpp">llama.cpp</option>
             <option value="openai">openai</option>
         </select>
         <span asp-validation-for="Model.Provider" class="text-danger"></span>
@@ -26,7 +28,7 @@
 
     <div class="mb-3">
         <label class="form-label">Endpoint</label>
-        <input asp-for="Model.Endpoint" class="form-control" placeholder="http://localhost:11434 (leave empty for default)" />
+        <input asp-for="Model.Endpoint" class="form-control" placeholder="http://localhost:11434 or http://localhost:1234 (leave empty for default)" />
         <span asp-validation-for="Model.Endpoint" class="text-danger"></span>
         <small class="form-text text-muted">Custom API endpoint URL (optional)</small>
     </div>

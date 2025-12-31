@@ -19,6 +19,13 @@
                     }
                 }
             </select>
+            <select name="roleFilter" id="roleFilterSelect" class="form-select form-select-sm" style="max-width:220px;">
+                <option value="">Tutti i ruoli</option>
+                @foreach (var r in Model.Roles)
+                {
+                    <option value="@r" selected="@(Model.RoleFilter == r ? "selected" : null)">@r</option>
+                }
+            </select>
             <select name="pageSize" class="form-select form-select-sm" style="width:90px;">
                 @{ var sizes = new[] { 10, 25, 50 }; }
                 @foreach (var s in sizes)
@@ -52,13 +59,17 @@
         <table class="table table-sm table-striped mb-0" id="agentsTable">
             <thead class="table-light">
                 <tr>
-                    <th data-col="name"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "name" })">Name</a></th>
-                    <th data-col="role"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "role" })">Role</a></th>
-                    <th data-col="model"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "model" })">Model</a></th>
-                    <th data-col="temp"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "temperature" })">Temp</a></th>
-                    <th data-col="topp"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "topp" })">TopP</a></th>
-                    <th data-col="voice"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "voice" })">Voice</a></th>
-                    <th data-col="skills"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, orderBy = "skills" })">Skills</a></th>
+                    <th data-col="name"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "name" })">Name</a></th>
+                    <th data-col="role"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "role" })">Role</a></th>
+                    <th data-col="model"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "model" })">Model</a></th>
+                    <th data-col="temp"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "temperature" })">Temp</a></th>
+                    <th data-col="topp"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "topp" })">TopP</a></th>
+                    <th data-col="repeatpenalty"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "repeatpenalty" })">Repeat</a></th>
+                    <th data-col="topk"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "topk" })">TopK</a></th>
+                    <th data-col="repeatlastn"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "repeatlastn" })">Repeat N</a></th>
+                    <th data-col="numpredict"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "numpredict" })">Predict</a></th>
+                    <th data-col="voice"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "voice" })">Voice</a></th>
+                    <th data-col="skills"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "skills" })">Skills</a></th>
                     <th data-col="multistep">MultiStep Template</th>
                     <th data-col="json">JSON Format</th>
                     <th data-col="active">Active</th>
@@ -74,6 +85,10 @@
                         <td data-col="model">@(!string.IsNullOrWhiteSpace(agent.ModelName) ? agent.ModelName : agent.ModelId?.ToString() ?? "-")</td>
                         <td data-col="temp">@((agent.Temperature.HasValue) ? agent.Temperature.Value.ToString("0.00") : "-")</td>
                         <td data-col="topp">@((agent.TopP.HasValue) ? agent.TopP.Value.ToString("0.00") : "-")</td>
+                        <td data-col="repeatpenalty">@((agent.RepeatPenalty.HasValue) ? agent.RepeatPenalty.Value.ToString("0.00") : "-")</td>
+                        <td data-col="topk">@((agent.TopK.HasValue) ? agent.TopK.Value.ToString() : "-")</td>
+                        <td data-col="repeatlastn">@((agent.RepeatLastN.HasValue) ? agent.RepeatLastN.Value.ToString() : "-")</td>
+                        <td data-col="numpredict">@((agent.NumPredict.HasValue) ? agent.NumPredict.Value.ToString() : "-")</td>
                         <td data-col="voice">@(!string.IsNullOrWhiteSpace(agent.VoiceName) ? agent.VoiceName : agent.VoiceId?.ToString() ?? "-")</td>
                         <td data-col="skills">@agent.Skills</td>
                         <td data-col="multistep">@(!string.IsNullOrWhiteSpace(agent.MultiStepTemplateName) ? agent.MultiStepTemplateName : "-")</td>
@@ -118,7 +133,7 @@
         </table>
     </div>
 
-    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" data-model-filter="@Model.ModelFilter"></div>
+    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" data-model-filter="@Model.ModelFilter" data-role-filter="@Model.RoleFilter"></div>
 </div>
 
 <!-- Story Generation Modal -->
@@ -181,6 +196,29 @@
                     if (theme) {
                         localStorage.setItem(STORAGE_KEY, theme);
                     }
+                });
+            }
+
+            const roleFilterSelect = document.getElementById('roleFilterSelect');
+            const roleStorageKey = 'agents_role_filter_v1';
+            if (roleFilterSelect) {
+                const qs = new URLSearchParams(window.location.search);
+                const roleParam = qs.get('roleFilter');
+                if (roleParam === null) {
+                    const stored = localStorage.getItem(roleStorageKey);
+                    if (stored !== null) {
+                        roleFilterSelect.value = stored;
+                        if (stored) {
+                            const form = roleFilterSelect.closest('form');
+                            if (form) form.submit();
+                        }
+                    }
+                } else {
+                    localStorage.setItem(roleStorageKey, roleParam);
+                }
+
+                roleFilterSelect.addEventListener('change', () => {
+                    localStorage.setItem(roleStorageKey, roleFilterSelect.value || '');
                 });
             }
         });

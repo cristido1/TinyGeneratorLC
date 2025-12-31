@@ -84,6 +84,8 @@ namespace TinyGenerator.Services
 
             // Track pending emotion from [EMOZIONE: xxx] tag - applies to the next character
             string? pendingEmotion = null;
+            // Track pending character from [PERSONAGGIO: Nome] tag when text follows after another tag
+            string? pendingCharacter = null;
 
             // Process each tag and extract the following text
             for (int i = 0; i < matches.Count; i++)
@@ -106,6 +108,82 @@ namespace TinyGenerator.Services
                         _logger?.Log("Debug", "TtsSchemaGenerator", 
                             $"Parsed standalone EMOZIONE tag: '{pendingEmotion}'");
                     }
+                    if (!string.IsNullOrWhiteSpace(pendingCharacter) && !string.IsNullOrWhiteSpace(text))
+                    {
+                        var pendingCharacterName = pendingCharacter;
+                        var pendingEmotionValue = string.IsNullOrWhiteSpace(pendingEmotion) ? "neutral" : pendingEmotion;
+                        pendingCharacter = null;
+                        pendingEmotion = null;
+
+                        // Apply pending emotion from standalone [EMOZIONE: xxx] tag if no emotion was found yet
+                        if (string.IsNullOrWhiteSpace(pendingEmotionValue))
+                        {
+                            pendingEmotionValue = "neutral";
+                        }
+
+                        // Try to find matching character from story's character list
+                        var matchedPendingChar = StoryCharacterParser.FindCharacter(storyCharLookup, pendingCharacterName);
+                        string pendingCanonicalName;
+                        string pendingGender = "male";
+
+                        if (matchedPendingChar != null)
+                        {
+                            pendingCanonicalName = matchedPendingChar.Name;
+                            pendingGender = matchedPendingChar.Gender ?? "male";
+                        }
+                        else
+                        {
+                            var normalizedName = NormalizeCharacterName(pendingCharacterName);
+                            pendingCanonicalName = FormatCharacterName(normalizedName);
+                        }
+
+                        var pendingExistingKey = characters.Keys.FirstOrDefault(k => 
+                            k.Equals(pendingCanonicalName, StringComparison.OrdinalIgnoreCase));
+
+                        string pendingCharacterKey;
+                        if (pendingExistingKey != null)
+                        {
+                            pendingCharacterKey = pendingExistingKey;
+                        }
+                        else
+                        {
+                            pendingCharacterKey = pendingCanonicalName;
+                            var ttsChar = new TtsCharacter
+                            {
+                                Name = pendingCharacterKey,
+                                EmotionDefault = "neutral",
+                                Gender = pendingGender
+                            };
+
+                            if (voiceAssignments != null && voiceAssignments.TryGetValue(pendingCharacterKey, out var voiceId))
+                            {
+                                ttsChar.VoiceId = voiceId;
+                            }
+
+                            characters[pendingCharacterKey] = ttsChar;
+                        }
+
+                        var pendingPhrase = new TtsPhrase
+                        {
+                            Character = pendingCharacterKey,
+                            Text = CleanText(text),
+                            Emotion = pendingEmotionValue,
+                            Ambience = pendingAmbience,
+                            AmbientSounds = pendingAmbientSounds,
+                            FxDescription = pendingFxDescription,
+                            FxDuration = pendingFxDuration,
+                            MusicDescription = pendingMusicDescription,
+                            MusicDuration = pendingMusicDescription != null ? 10 : null
+                        };
+
+                        pendingAmbience = null;
+                        pendingAmbientSounds = null;
+                        pendingFxDescription = null;
+                        pendingFxDuration = null;
+                        pendingMusicDescription = null;
+
+                        timeline.Add(pendingPhrase);
+                    }
                     continue;
                 }
 
@@ -113,12 +191,17 @@ namespace TinyGenerator.Services
                 if (tagContent.StartsWith("AMBIENTE", StringComparison.OrdinalIgnoreCase) ||
                     tagContent.StartsWith("AMBIENTAZIONE", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Extract ambience description from tag content (everything after the colon)
+                    // Extract ambience description from tag content (after colon) or from the following text
                     var colonIndex = tagContent.IndexOf(':');
-                    if (colonIndex >= 0)
+                    var desc = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
+                    if (string.IsNullOrWhiteSpace(desc))
                     {
-                        pendingAmbience = tagContent.Substring(colonIndex + 1).Trim();
-                        _logger?.Log("Debug", "TtsSchemaGenerator", 
+                        desc = text ?? string.Empty;
+                    }
+                    if (!string.IsNullOrWhiteSpace(desc))
+                    {
+                        pendingAmbience = desc;
+                        _logger?.Log("Debug", "TtsSchemaGenerator",
                             $"Parsed ambiente/ambientazione (for future image generation): '{pendingAmbience}'");
                     }
                     continue;
@@ -127,12 +210,17 @@ namespace TinyGenerator.Services
                 // Handle RUMORI tags - extract ambient sounds description for AudioCraft generation
                 if (tagContent.StartsWith("RUMORI", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Extract ambient sounds description from tag content (everything after the colon)
+                    // Extract ambient sounds description from tag content (after colon) or from the following text
                     var colonIndex = tagContent.IndexOf(':');
-                    if (colonIndex >= 0)
+                    var desc = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
+                    if (string.IsNullOrWhiteSpace(desc))
                     {
-                        pendingAmbientSounds = tagContent.Substring(colonIndex + 1).Trim();
-                        _logger?.Log("Debug", "TtsSchemaGenerator", 
+                        desc = text ?? string.Empty;
+                    }
+                    if (!string.IsNullOrWhiteSpace(desc))
+                    {
+                        pendingAmbientSounds = desc;
+                        _logger?.Log("Debug", "TtsSchemaGenerator",
                             $"Parsed ambient sounds (for AudioCraft): '{pendingAmbientSounds}'");
                     }
                     continue;
@@ -141,12 +229,17 @@ namespace TinyGenerator.Services
                 // Handle MUSICA tags - extract description and apply to next phrase
                 if (tagContent.StartsWith("MUSICA", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Extract music description from tag content (everything after the colon)
+                    // Extract music description from tag content (after colon) or from the following text
                     var colonIndex = tagContent.IndexOf(':');
-                    if (colonIndex >= 0)
+                    var desc = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
+                    if (string.IsNullOrWhiteSpace(desc))
                     {
-                        pendingMusicDescription = tagContent.Substring(colonIndex + 1).Trim();
-                        _logger?.Log("Debug", "TtsSchemaGenerator", 
+                        desc = text ?? string.Empty;
+                    }
+                    if (!string.IsNullOrWhiteSpace(desc))
+                    {
+                        pendingMusicDescription = desc;
+                        _logger?.Log("Debug", "TtsSchemaGenerator",
                             $"Parsed music description: '{pendingMusicDescription}'");
                     }
                     continue;
@@ -156,6 +249,7 @@ namespace TinyGenerator.Services
                 // [FX: 15 secondi, descrizione effetto sonoro]
                 // [FX: 2 s, clic di tastiera, tintinnio]
                 // [FX: Suono di un clic, durata 0.5 s, chiaro e leggero.]
+                // [FX: 2 s] descrizione su riga successiva
                 // [FX, duration_seconds, description]
                 // [FX, description]
                 if (tagContent.StartsWith("FX", StringComparison.OrdinalIgnoreCase))
@@ -178,6 +272,15 @@ namespace TinyGenerator.Services
                             _logger?.Log("Debug", "TtsSchemaGenerator", 
                                 $"Parsed FX (duration at start): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
                         }
+                        // Pattern 1b: Duration only in tag, description in following text
+                        else if (Regex.IsMatch(afterColon, @"^(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)\s*$", RegexOptions.IgnoreCase))
+                        {
+                            var durationStr = Regex.Match(afterColon, @"^(\d+(?:[.,]\d+)?)").Groups[1].Value.Replace(',', '.');
+                            pendingFxDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
+                            pendingFxDescription = !string.IsNullOrWhiteSpace(text) ? text.Trim() : string.Empty;
+                            _logger?.Log("Debug", "TtsSchemaGenerator",
+                                $"Parsed FX (duration in tag, description in text): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
+                        }
                         // Pattern 2: "durata X s" anywhere in the text - "Descrizione, durata 0.5 s, altro"
                         else
                         {
@@ -191,13 +294,20 @@ namespace TinyGenerator.Services
                                 _logger?.Log("Debug", "TtsSchemaGenerator", 
                                     $"Parsed FX (durata keyword): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
                             }
-                            else
+                            else if (!string.IsNullOrWhiteSpace(afterColon))
                             {
                                 // No duration specified, use default
                                 pendingFxDuration = 5;
                                 pendingFxDescription = afterColon;
                                 _logger?.Log("Debug", "TtsSchemaGenerator", 
                                     $"Parsed FX (no duration, default 5s): description='{pendingFxDescription}'");
+                            }
+                            else if (!string.IsNullOrWhiteSpace(text))
+                            {
+                                pendingFxDuration = 5;
+                                pendingFxDescription = text.Trim();
+                                _logger?.Log("Debug", "TtsSchemaGenerator",
+                                    $"Parsed FX (description in text, default 5s): description='{pendingFxDescription}'");
                             }
                         }
                     }
@@ -223,6 +333,19 @@ namespace TinyGenerator.Services
                             _logger?.Log("Debug", "TtsSchemaGenerator", 
                                 $"Parsed FX (default duration): description='{pendingFxDescription}'");
                         }
+                    }
+                    continue;
+                }
+
+                // If we have [PERSONAGGIO: Nome] with no text before the next tag,
+                // remember it and wait for [EMOZIONE: ...] or the next tag with text.
+                if (tagContent.StartsWith("PERSONAGGIO", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(text))
+                {
+                    var (pendingChar, pendingEmo) = ParseTag(tagContent);
+                    pendingCharacter = pendingChar;
+                    if (!string.IsNullOrWhiteSpace(pendingEmo) && pendingEmo != "neutral")
+                    {
+                        pendingEmotion = pendingEmo;
                     }
                     continue;
                 }
@@ -349,6 +472,7 @@ namespace TinyGenerator.Services
         ///   - NARRATORE
         ///   - personaggio, emozione
         ///   - PERSONAGGIO: Nome | EMOZIONE: emotion
+        ///   - PERSONAGGIO: Nome (emotion can arrive via standalone [EMOZIONE: ...] tag)
         ///   - PERSONAGGIO: Nome
         ///   - just a name (without emotion)
         /// </summary>

@@ -9,8 +9,9 @@ namespace TinyGenerator.Services
 {
     /// <summary>
     /// Parses character list from story generation step output.
-    /// Expected format per line: [NOME] [TITOLO: comandante/ufficiale/dottore...] [SESSO: male/female/robot/alien] [ETA: età]
-    /// Example: Alessandro Carta [TITOLO: comandante] [SESSO: male] [ETA: 45]
+    /// Supports tagged blocks like:
+    /// [NOME: ...] [TITOLO: ... oppure nessuno] [SESSO: male|female|alien|robot]
+    /// [ETA: et? approssimativa] [NOTE: carattere, ruolo, tratti distintivi]
     /// </summary>
     public static class StoryCharacterParser
     {
@@ -24,30 +25,51 @@ namespace TinyGenerator.Services
             if (string.IsNullOrWhiteSpace(text))
                 return characters;
 
-            var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            
-            foreach (var line in lines)
+            var tagged = ParseTaggedCharacterBlocks(text);
+            if (tagged.Count > 0)
             {
-                var trimmed = line.Trim();
-                if (string.IsNullOrWhiteSpace(trimmed))
-                    continue;
-                    
-                // Skip header lines or separators
-                if (trimmed.StartsWith("#") || trimmed.StartsWith("-") || trimmed.StartsWith("="))
-                    continue;
-                
-                // Skip lines that look like section headers
-                if (trimmed.StartsWith("[PERSONAGGI]", StringComparison.OrdinalIgnoreCase) ||
-                    trimmed.StartsWith("PERSONAGGI", StringComparison.OrdinalIgnoreCase) ||
-                    trimmed.StartsWith("LISTA", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var character = ParseCharacterLine(trimmed);
-                if (character != null && !string.IsNullOrWhiteSpace(character.Name))
+                characters.AddRange(tagged);
+            }
+            else
+            {
+                var inlineTagged = ParseInlinePersonaggioTags(text);
+                if (inlineTagged.Count > 0)
                 {
-                    characters.Add(character);
+                    characters.AddRange(inlineTagged);
+                }
+                else
+                {
+                var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                
+                foreach (var line in lines)
+                {
+                    var trimmed = line.Trim();
+                    if (string.IsNullOrWhiteSpace(trimmed))
+                        continue;
+                        
+                    // Skip header lines or separators
+                    if (trimmed.StartsWith("#") || trimmed.StartsWith("-") || trimmed.StartsWith("="))
+                        continue;
+                    
+                    // Skip lines that look like section headers
+                    if (trimmed.StartsWith("[PERSONAGGI]", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("PERSONAGGI", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("LISTA", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var character = ParseCharacterLine(trimmed);
+                    if (character != null && !string.IsNullOrWhiteSpace(character.Name))
+                    {
+                        characters.Add(character);
+                    }
+                }
                 }
             }
+
+            characters = characters
+                .GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
 
             // Add Narratore if not present
             if (!characters.Any(c => c.Name.Equals("Narratore", StringComparison.OrdinalIgnoreCase)))
@@ -108,6 +130,62 @@ namespace TinyGenerator.Services
             
             return character;
         }
+
+        private static List<StoryCharacter> ParseTaggedCharacterBlocks(string text)
+        {
+            var characters = new List<StoryCharacter>();
+            var pattern = @"\[NOME:\s*(?<name>[^\]]+)\]\s*\[TITOLO:\s*(?<title>[^\]]+)\]\s*\[SESSO:\s*(?<gender>[^\]]+)\]\s*(?:\r?\n|\s)*\[(?:ETA|ET[AÀ]):\s*(?<age>[^\]]+)\]\s*\[NOTE:\s*(?<note>[^\]]+)\]";
+            var matches = Regex.Matches(text, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            foreach (Match match in matches)
+            {
+                if (!match.Success) continue;
+                var name = match.Groups["name"].Value.Trim();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                var titleRaw = match.Groups["title"].Value.Trim();
+                var genderRaw = match.Groups["gender"].Value.Trim();
+                var ageRaw = match.Groups["age"].Value.Trim();
+                var noteRaw = match.Groups["note"].Value.Trim();
+
+                var character = new StoryCharacter
+                {
+                    Name = FormatName(name),
+                    Title = string.IsNullOrWhiteSpace(titleRaw) || titleRaw.Equals("nessuno", StringComparison.OrdinalIgnoreCase)
+                        ? null
+                        : titleRaw.ToLowerInvariant(),
+                    Gender = NormalizeGender(genderRaw),
+                    Age = string.IsNullOrWhiteSpace(ageRaw) ? null : ageRaw,
+                    Role = string.IsNullOrWhiteSpace(noteRaw) ? null : noteRaw
+                };
+
+                character.Aliases = GenerateAliases(character.Name, character.Title);
+                characters.Add(character);
+            }
+
+            return characters;
+        }
+
+        private static List<StoryCharacter> ParseInlinePersonaggioTags(string text)
+        {
+            var characters = new List<StoryCharacter>();
+            var matches = Regex.Matches(text, @"\[PERSONAGGIO:\s*(?<name>[^\]]+)\]", RegexOptions.IgnoreCase);
+            foreach (Match match in matches)
+            {
+                if (!match.Success) continue;
+                var name = match.Groups["name"].Value.Trim();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+
+                var character = new StoryCharacter
+                {
+                    Name = FormatName(name),
+                    Gender = "male"
+                };
+                character.Aliases = GenerateAliases(character.Name, character.Title);
+                characters.Add(character);
+            }
+
+            return characters;
+        }
+
 
         /// <summary>
         /// Normalizes gender values to standard format.

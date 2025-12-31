@@ -73,6 +73,33 @@
 
 <div id="pager" class="mt-2"></div>
 
+<div class="border p-2 rounded mt-3">
+    <h6 class="mb-2">Llama.cpp status</h6>
+    <div class="small text-muted mb-2">Endpoint: @Model.LlamaStatus.Endpoint</div>
+    <div class="mb-2">
+        <span class="badge @(Model.LlamaStatus.IsRunning ? "bg-success" : "bg-secondary")">
+            @(Model.LlamaStatus.IsRunning ? "Running" : "Not running")
+        </span>
+        @if (!string.IsNullOrWhiteSpace(Model.LlamaStatus.Error))
+        {
+            <span class="ms-2 text-danger">Error: @Model.LlamaStatus.Error</span>
+        }
+    </div>
+    <div class="mb-2">
+        <button id="killLlamaBtn" class="btn btn-sm btn-outline-danger">Kill llama.cpp</button>
+    </div>
+    @if (Model.LlamaStatus.Models.Count > 0)
+    {
+        <div class="small">
+            <strong>Models:</strong> @string.Join(", ", Model.LlamaStatus.Models)
+        </div>
+    }
+    else
+    {
+        <div class="small text-muted">No model info available.</div>
+    }
+</div>
+
 <script src="/js/shared/list-ui.js"></script>
 <script>
     // Minimal wiring: preview and start actions for server-side rendered rows
@@ -95,6 +122,35 @@
         // simple refresh: reload the page to let server re-render
         location.reload();
     });
+
+    const killBtn = document.getElementById('killLlamaBtn');
+    if (killBtn) {
+        killBtn.addEventListener('click', async () => {
+            const confirmed = (typeof showConfirm === 'function')
+                ? await showConfirm('Kill llama.cpp', 'Stop llama-server.exe?')
+                : confirm('Stop llama-server.exe?');
+            if (!confirmed) return;
+            try {
+                killBtn.disabled = true;
+                const res = await fetch('/OllamaMonitor?handler=KillLlama', { method: 'POST' });
+                const j = await res.json();
+                const msg = j.output || (j.success ? 'Stopped' : 'Failed');
+                if (j.success) {
+                    if (typeof showSuccess === 'function') showSuccess('Completed', msg);
+                    else alert(msg);
+                } else {
+                    if (typeof showError === 'function') showError('Error', msg);
+                    else alert(msg);
+                }
+            } catch (err) {
+                const fallbackMsg = 'Error stopping llama.cpp: ' + err;
+                if (typeof showError === 'function') showError('Error', fallbackMsg);
+                else alert(fallbackMsg);
+            } finally {
+                killBtn.disabled = false;
+            }
+        });
+    }
 
     document.querySelectorAll('.preview-btn, .preview-link').forEach(b => {
         b.addEventListener('click', async e => {

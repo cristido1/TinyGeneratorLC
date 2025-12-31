@@ -60,6 +60,28 @@
         });
     };
 
+    window.cancelCommand = async function(runId, event) {
+        event.stopPropagation();
+        event.preventDefault();
+
+        if (!runId) {
+            return;
+        }
+
+        if (!confirm('Annullare il comando?')) {
+            return;
+        }
+
+        try {
+            const resp = await fetch(`/api/commands/cancel/${encodeURIComponent(runId)}`, { method: 'POST' });
+            if (!resp.ok) {
+                console.error('[CommandPanel] Cancel failed:', await resp.text());
+            }
+        } catch (err) {
+            console.error('[CommandPanel] Cancel error:', err);
+        }
+    };
+
     waitForSignalR(initCommandPanel);
 
     function initCommandPanel() {
@@ -255,6 +277,7 @@
                 const agent = c.agentName || c.AgentName || 'N/A';
                 const op = c.operationName || c.OperationName || c.threadScope || c.ThreadScope || 'N/A';
                 const statusDisplay = c.status || c.Status || '?';
+                const runId = c.runId || c.RunId || '';
 
                 let modelShort = c.modelName || c.ModelName || '';
                 if (modelShort && modelShort.includes('/')) {
@@ -289,6 +312,15 @@
                     </div>
                 ` : '';
 
+                const canCancel = (status === 'queued' || status === 'running') && runId;
+                const cancelButton = canCancel ? `
+                    <button onclick="cancelCommand('${runId.replace(/'/g, "\\'")}', event)" style="
+                        background: #dc3545; color: #fff; border: none; padding: 2px 6px;
+                        border-radius: 3px; font-size: 10px; cursor: pointer; white-space: nowrap;
+                        line-height: 1.2;
+                    ">Annulla</button>
+                ` : '';
+
                 return `
                     <div style="
                         background: ${bgColor};
@@ -300,7 +332,10 @@
                     ">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <strong>${statusIcon} ${op}${storyIdBadge}</strong>
-                            <span style="font-size:11px; opacity:0.8;">${statusDisplay}${stepInfo}${retryInfo}</span>
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <span style="font-size:11px; opacity:0.8;">${statusDisplay}${stepInfo}${retryInfo}</span>
+                                ${cancelButton}
+                            </div>
                         </div>
                         <div style="font-size:11px; color:#555; margin-top:4px;">
                             👤 ${agent} ${modelShort ? '• 🧠 ' + modelShort : ''}

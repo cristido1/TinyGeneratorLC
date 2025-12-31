@@ -53,6 +53,10 @@ CREATE TABLE agents (
     notes TEXT NULL,
     temperature REAL NULL,
     top_p REAL NULL,
+    repeat_penalty REAL NULL,
+    top_k INTEGER NULL,
+    repeat_last_n INTEGER NULL,
+    num_predict INTEGER NULL,
     multi_step_template_id INTEGER NULL,
     RowVersion BLOB NULL
 );

@@ -143,18 +143,25 @@ namespace TinyGenerator.Services
                 Console.WriteLine($"[DEBUG ReActLoop] Added system message (length={_systemMessage.Length})");
             }
             
-            // Add the user prompt (original step instruction)
-            _messageHistory.Add(new ConversationMessage { Role = "user", Content = userPrompt });
-            
             // Add any conversation history messages (e.g., previous response + validation feedback)
-            // These come AFTER the user prompt to maintain proper conversation flow:
-            // System -> User (request) -> Assistant (previous response) -> User (feedback)
+            // These come before the current user prompt so feedback can stay at the end.
             if (_initialExtraMessages != null && _initialExtraMessages.Count > 0)
             {
                 foreach (var m in _initialExtraMessages)
                 {
                     _messageHistory.Add(m);
                     _logger?.Log("Info", "ReActLoop", $"Added conversation history message role={m.Role} len={m.Content?.Length ?? 0}");
+                }
+            }
+
+            // Add the user prompt only if it is not already present in the history.
+            if (!string.IsNullOrWhiteSpace(userPrompt))
+            {
+                var hasUserInHistory = _initialExtraMessages != null
+                    && _initialExtraMessages.Any(m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase));
+                if (!hasUserInHistory)
+                {
+                    _messageHistory.Add(new ConversationMessage { Role = "user", Content = userPrompt });
                 }
             }
 
@@ -206,7 +213,7 @@ namespace TinyGenerator.Services
                         // that case we should prompt it up to 3 times to call the function instead of silently
                         // accepting completion.
 
-                        var finalFunctionCandidates = new[] { "evaluate_full_story", "finalize_global_coherence" };
+                        var finalFunctionCandidates = new[] { "evaluate_full_story" };
 
                         bool expectsFinalFunction = _tools.GetToolSchemas()
                             .Any(s => s.TryGetValue("function", out var funcObj)
@@ -228,9 +235,49 @@ namespace TinyGenerator.Services
                             if (_missingFinalCallAttempts < 3)
                             {
                                 _missingFinalCallAttempts++;
-                                var assistantPrompt = missingFinal.Equals("evaluate_full_story", StringComparison.OrdinalIgnoreCase)
-                                    ? $"You have not called the required function `evaluate_full_story`. Please call `evaluate_full_story` exactly once now, including all required score fields and corresponding *_defects. Retry attempt {_missingFinalCallAttempts} of 3."
-                                    : $"You have not called the required function `finalize_global_coherence`. Please call `finalize_global_coherence` exactly once now with the final global coherence score. Retry attempt {_missingFinalCallAttempts} of 3.";
+                                var assistantPrompt = $"You have not called the required function `evaluate_full_story`. Please call `evaluate_full_story` exactly once now, including all required score fields and corresponding *_defects. Retry attempt {_missingFinalCallAttempts} of 3.";
+                                if (missingFinal.Equals("evaluate_full_story", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var evalTool = _tools.GetToolByFunctionName("evaluate_full_story");
+                                    var readAnyPart = false;
+                                    var hasAllParts = false;
+                                    var nextIndex = 0;
+                                    try
+                                    {
+                                        var requestedPartsProp = evalTool?.GetType().GetProperty("RequestedParts");
+                                        if (requestedPartsProp != null)
+                                        {
+                                            if (requestedPartsProp.GetValue(evalTool) is System.Collections.IEnumerable parts)
+                                            {
+                                                var indices = parts.Cast<object>()
+                                                    .Select(p => Convert.ToInt32(p))
+                                                    .ToList();
+                                                if (indices.Count > 0)
+                                                {
+                                                    readAnyPart = true;
+                                                    nextIndex = indices.Max() + 1;
+                                                }
+                                            }
+                                        }
+
+                                        var hasAllMethod = evalTool?.GetType().GetMethod("HasRequestedAllParts");
+                                        if (hasAllMethod != null)
+                                        {
+                                            var hasAllObj = hasAllMethod.Invoke(evalTool, null);
+                                            if (hasAllObj is bool b) hasAllParts = b;
+                                        }
+                                    }
+                                    catch { }
+
+                                    if (!readAnyPart)
+                                    {
+                                        assistantPrompt = "You have not read any story parts yet. Call `read_story_part` with part_index=0 to begin, then continue until you receive is_last=true.";
+                                    }
+                                    else if (!hasAllParts)
+                                    {
+                                        assistantPrompt = $"You have not read the full story yet. Call `read_story_part` with part_index={nextIndex} to continue, then proceed until is_last=true.";
+                                    }
+                                }
 
                                 _messageHistory.Add(new ConversationMessage
                                 {
@@ -573,8 +620,10 @@ namespace TinyGenerator.Services
                                             _evaluatorMissingPartsWarnings++;
                                             if (_evaluatorMissingPartsWarnings < MaxEvaluatorMissingPartsWarnings)
                                             {
-                                                var assistantPrompt = $"You attempted to evaluate the story before reading all parts. Please read the remaining parts using `read_story_part(part_index)` until the entire story has been provided, then call `evaluate_full_story` again. Warning {_evaluatorMissingPartsWarnings} of {MaxEvaluatorMissingPartsWarnings}.";
-                                                _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = assistantPrompt });
+                                                var instruction = $"Please read the remaining parts using `read_story_part(part_index)` until the entire story has been provided, then call `evaluate_full_story` again. Warning {_evaluatorMissingPartsWarnings} of {MaxEvaluatorMissingPartsWarnings}.";
+                                                var reason = "Evaluation rejected: you attempted to evaluate the story before reading all parts.";
+                                                _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = instruction });
+                                                _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = reason });
                                                 _logger?.Log("Info", "ReActLoop", "Requested evaluator to read remaining parts before evaluation");
                                                 // ask model to retry by continuing loop
                                                 iteration++;
@@ -617,12 +666,18 @@ namespace TinyGenerator.Services
                                             attempts++;
                                             _toolRetryCounts[toolName] = attempts;
 
-                                            var assistantPrompt = $"Required fields missing for `{toolName}`: {missing}. Please call the `{toolName}` function again including these fields. Retry attempt {attempts} of 3.";
+                                            var instruction = $"Please call the `{toolName}` function again including the required fields. Retry attempt {attempts} of 3.";
+                                            var reason = $"Evaluation rejected: required fields missing for `{toolName}`: {missing}.";
 
                                             _messageHistory.Add(new ConversationMessage
                                             {
                                                 Role = "assistant",
-                                                Content = assistantPrompt
+                                                Content = instruction
+                                            });
+                                            _messageHistory.Add(new ConversationMessage
+                                            {
+                                                Role = "assistant",
+                                                Content = reason
                                             });
 
                                             _logger?.Log("Info", "ReActLoop", $"Requested retry {attempts}/3 for {toolName}: {missing}");
@@ -743,11 +798,63 @@ namespace TinyGenerator.Services
                 _logger?.Log("Info", "ReActLoop", $"Response payload: {response}");
                 Console.WriteLine($"[DEBUG CallModelAsync] Response payload (first 500 chars): {(response?.Length > 500 ? response.Substring(0, 500) : response)}");
 
-                // Parse the response to extract tool calls
-                var (textContent, toolCalls) = LangChainChatBridge.ParseChatResponse(response);
-                Console.WriteLine($"[DEBUG CallModelAsync] Parsed response - textContent length: {textContent?.Length ?? 0}, toolCalls count: {toolCalls.Count}");
+                // Parse the response to extract tool calls + finish reason
+                var parsed = LangChainChatBridge.ParseChatResponseWithFinishReason(response);
+                var textContent = parsed.TextContent;
+                var toolCalls = parsed.ToolCalls;
+                var finishReason = parsed.FinishReason;
 
-                _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}: Parsed {toolCalls.Count} tool calls from response");
+                Console.WriteLine($"[DEBUG CallModelAsync] Parsed response - textContent length: {textContent?.Length ?? 0}, toolCalls count: {toolCalls.Count}, finishReason: {finishReason ?? "(null)"}");
+                _logger?.Log("Info", "ReActLoop", $"Iteration {iteration + 1}: Parsed {toolCalls.Count} tool calls from response (finishReason={finishReason ?? "(null)"})");
+
+                // If the model was cut off due to token limit (finish_reason=length) and it isn't emitting tool calls,
+                // ask it to continue exactly from where it stopped. This should not be treated as an error.
+                if (toolCalls.Count == 0 && string.Equals(finishReason, "length", StringComparison.OrdinalIgnoreCase))
+                {
+                    const int maxContinuations = 5;
+                    var continuationPrompt = "Continue EXACTLY from the last written line, preserving all tags.\nThe next block must follow naturally from the previous one.";
+
+                    var combined = textContent ?? string.Empty;
+                    _logger?.Log("Info", "ReActLoop", $"finish_reason=length detected. Attempting up to {maxContinuations} continuation calls.");
+
+                    for (var i = 0; i < maxContinuations; i++)
+                    {
+                        // Add the partial assistant message to the conversation, then ask to continue.
+                        _messageHistory.Add(new ConversationMessage { Role = "assistant", Content = combined });
+                        _messageHistory.Add(new ConversationMessage { Role = "user", Content = continuationPrompt });
+
+                        var contResponse = await _modelBridge.CallModelWithToolsAsync(_messageHistory, toolSchemas);
+                        var contParsed = LangChainChatBridge.ParseChatResponseWithFinishReason(contResponse);
+
+                        // If tool calls appear in continuation, stop auto-continue and let normal flow handle next iteration.
+                        if (contParsed.ToolCalls.Count > 0)
+                        {
+                            _logger?.Log("Info", "ReActLoop", $"Continuation returned tool calls ({contParsed.ToolCalls.Count}); stopping auto-continue.");
+                            textContent = combined;
+                            toolCalls = contParsed.ToolCalls;
+                            finishReason = contParsed.FinishReason;
+                            break;
+                        }
+
+                        var nextText = contParsed.TextContent ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(nextText))
+                        {
+                            _logger?.Log("Warning", "ReActLoop", "Continuation returned empty content; stopping auto-continue.");
+                            break;
+                        }
+
+                        combined += nextText;
+                        textContent = combined;
+                        toolCalls = contParsed.ToolCalls;
+                        finishReason = contParsed.FinishReason;
+
+                        if (!string.Equals(finishReason, "length", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger?.Log("Info", "ReActLoop", $"Continuation completed (finishReason={finishReason ?? "(null)"}).");
+                            break;
+                        }
+                    }
+                }
 
                 // Build response object with tool calls if present
                 var responseObj = new Dictionary<string, object>();

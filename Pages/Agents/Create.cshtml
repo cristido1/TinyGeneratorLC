@@ -33,6 +33,30 @@
             <small class="form-text text-muted">Parametro top_p (opzionale).</small>
         </div>
     </div>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label class="form-label">Repeat Penalty</label>
+            <input asp-for="Agent.RepeatPenalty" class="form-control" type="number" step="0.01" min="0" placeholder="es. 1.1" />
+            <small class="form-text text-muted">Penalita ripetizione (opzionale).</small>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label">Top K</label>
+            <input asp-for="Agent.TopK" class="form-control" type="number" step="1" min="0" placeholder="es. 40" />
+            <small class="form-text text-muted">Campionamento top_k (opzionale).</small>
+        </div>
+    </div>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label class="form-label">Repeat Last N</label>
+            <input asp-for="Agent.RepeatLastN" class="form-control" type="number" step="1" min="0" placeholder="es. 64" />
+            <small class="form-text text-muted">Finestra repeat_last_n (opzionale).</small>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label">Num Predict</label>
+            <input asp-for="Agent.NumPredict" class="form-control" type="number" step="1" min="0" placeholder="es. 512" />
+            <small class="form-text text-muted">Limite num_predict (opzionale).</small>
+        </div>
+    </div>
     <div class="mb-3">
         <label class="form-label">Voice (optional)</label>
         <select asp-for="Agent.VoiceId" class="form-select">

@@ -53,7 +53,7 @@ namespace TinyGenerator.Services
             string? initialContext = null,
             int threadId = 0,
             string? templateInstructions = null,
-            string? executorModelOverride = null)
+            int? executorModelOverrideId = null)
         {
             _logger.Log("Information", "MultiStep", "Starting task execution");
             await Task.CompletedTask;
@@ -91,7 +91,7 @@ namespace TinyGenerator.Services
             }
 
             // Merge any config overrides with template-level instructions so they persist across reloads
-            var mergedConfig = MergeConfigWithTemplateInstructions(configOverrides, templateInstructions, executorModelOverride);
+            var mergedConfig = MergeConfigWithTemplateInstructions(configOverrides, templateInstructions, executorModelOverrideId);
 
             // Create execution record
             var execution = new TaskExecution
@@ -388,6 +388,9 @@ namespace TinyGenerator.Services
             var context = string.Empty;
             List<ConversationMessage>? extraMessages = null;
 
+            // Declare stepTemplate here so it's available to all validation branches
+            Models.StepTemplate? stepTemplate = null;
+
             var hasChunkPlaceholder = stepInstruction.Contains("{{CHUNK_", StringComparison.OrdinalIgnoreCase);
             var chunks = GetChunksForExecution(execution);
             var (stepWithChunks, missingChunk) = ReplaceChunkPlaceholders(stepInstruction, chunks, execution.CurrentStep);
@@ -429,70 +432,83 @@ namespace TinyGenerator.Services
                 };
             }
 
-            // If this is a retry (RetryCount > 0), build conversation history with previous response + feedback
+            // If this is a retry (RetryCount > 0), build conversation history with previous attempts + feedback
             if (execution.RetryCount > 0)
             {
-                var lastAttempt = previousSteps
+                var stepAttempts = previousSteps
                     .Where(s => s.StepNumber == execution.CurrentStep)
-                    .OrderByDescending(s => s.AttemptCount)
-                    .FirstOrDefault();
+                    .OrderBy(s => s.AttemptCount)
+                    .ToList();
 
-                if (lastAttempt?.ParsedValidation != null && !lastAttempt.ParsedValidation.IsValid)
+                if (stepAttempts.Any(s => s.ParsedValidation != null && !s.ParsedValidation.IsValid))
                 {
-                    // Build proper conversation history:
-                    // 1. Assistant's previous response (that was rejected)
-                    // 2. System/User feedback explaining the error
                     extraMessages = new List<ConversationMessage>();
-                    
-                    // Add the previous (rejected) response as assistant message
-                    if (!string.IsNullOrWhiteSpace(lastAttempt.StepOutput))
+
+                    var basePrompt = stepAttempts
+                        .Select(s => s.StepInstruction)
+                        .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
+                    if (string.IsNullOrWhiteSpace(basePrompt))
                     {
-                        extraMessages.Add(new ConversationMessage 
-                        { 
-                            Role = "assistant", 
-                            Content = lastAttempt.StepOutput 
+                        basePrompt = stepInstruction;
+                    }
+                    if (!string.IsNullOrWhiteSpace(basePrompt) && !string.IsNullOrWhiteSpace(context))
+                    {
+                        basePrompt = $"{context}\n\n---\n\n{basePrompt}";
+                    }
+                    if (!string.IsNullOrWhiteSpace(basePrompt) && !string.IsNullOrWhiteSpace(chunkIntro))
+                    {
+                        basePrompt = $"{chunkIntro}{basePrompt}";
+                    }
+                    if (!string.IsNullOrWhiteSpace(basePrompt))
+                    {
+                        extraMessages.Add(new ConversationMessage
+                        {
+                            Role = "user",
+                            Content = basePrompt
                         });
                     }
-                    
-                    // If the previous validation included a SystemMessageOverride, add it as system message
-                    if (!string.IsNullOrWhiteSpace(lastAttempt.ParsedValidation.SystemMessageOverride))
+
+                    foreach (var attempt in stepAttempts)
                     {
-                        extraMessages.Add(new ConversationMessage 
-                        { 
-                            Role = "system", 
-                            Content = lastAttempt.ParsedValidation.SystemMessageOverride 
-                        });
-                    }
-                    else
-                    {
-                        // Add feedback as user message explaining why the response was rejected
-                        var feedbackMessage = string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase)
-                            ? $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
+                        if (!string.IsNullOrWhiteSpace(attempt.StepOutput))
+                        {
+                            extraMessages.Add(new ConversationMessage
+                            {
+                                Role = "assistant",
+                                Content = attempt.StepOutput
+                            });
+                        }
 
-La tua risposta è stata respinta per il seguente motivo:
-{lastAttempt.ParsedValidation.Reason}
+                        var validation = attempt.ParsedValidation;
+                        if (validation != null && !validation.IsValid)
+                        {
+                            if (!string.IsNullOrWhiteSpace(validation.SystemMessageOverride))
+                            {
+                                extraMessages.Add(new ConversationMessage
+                                {
+                                    Role = "system",
+                                    Content = validation.SystemMessageOverride
+                                });
+                            }
+                            else
+                            {
+                                var retryNumber = attempt.AttemptCount;
+                                var feedbackMessage = string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase)
+                                    ? $@"**ATTENZIONE - RETRY {retryNumber}/3**\n\nLa tua risposta e' stata respinta per il seguente motivo:\n{validation.Reason}\n\nRipeti la trascrizione del chunk usando SOLO blocchi:\n[NARRATORE]\nTesto narrativo\n[PERSONAGGIO: Nome | EMOZIONE: emotion]\nTesto parlato\nNON aggiungere altro testo o JSON, copri tutto il chunk senza saltare nulla."
+                                    : $@"**ATTENZIONE - RETRY {retryNumber}/3**\n\nLa tua risposta e' stata respinta per il seguente motivo:\n{validation.Reason}\n\nCorreggi la tua risposta tenendo conto del feedback ricevuto.";
 
-Ripeti la trascrizione del chunk usando SOLO blocchi:
-[NARRATORE]
-Testo narrativo
-[PERSONAGGIO: Nome | EMOZIONE: emotion]
-Testo parlato
-NON aggiungere altro testo o JSON, copri tutto il chunk senza saltare nulla."
-                            : $@"**ATTENZIONE - RETRY {execution.RetryCount}/3**
-
-La tua risposta è stata respinta per il seguente motivo:
-{lastAttempt.ParsedValidation.Reason}
-
-Correggi la tua risposta tenendo conto del feedback ricevuto.";
-                        
-                        extraMessages.Add(new ConversationMessage 
-                        { 
-                            Role = "user", 
-                            Content = feedbackMessage 
-                        });
+                                extraMessages.Add(new ConversationMessage
+                                {
+                                    Role = "user",
+                                    Content = feedbackMessage
+                                });
+                            }
+                        }
                     }
                 }
             }
+            // Get executor agent
+            var executorAgent = await GetExecutorAgentAsync(execution, threadId);
 
             // Measure token count
             int contextTokens = 0;
@@ -502,7 +518,23 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 if (contextTokens > 10000)
                 {
                     _logger.Log($"Context size ({contextTokens} tokens) exceeds 10k, summarizing...", "MultiStep", "Warning");
-                    context = await SummarizeContextAsync(context, threadId, ct);
+                    string? preferredModelName = null;
+                    if (isStoryTask)
+                    {
+                        preferredModelName = _database.GetModelInfoById(executorAgent.ModelId ?? 0)?.Name
+                            ?? executorAgent.ModelName;
+                    }
+                    context = await SummarizeContextAsync(
+                        context,
+                        threadId,
+                        ct,
+                        preferredModelName,
+                        executorAgent.Temperature,
+                        executorAgent.TopP,
+                        executorAgent.RepeatPenalty,
+                        executorAgent.TopK,
+                        executorAgent.RepeatLastN,
+                        executorAgent.NumPredict);
                     contextTokens = _tokenizerService.CountTokens(context);
                     _logger.Log("Information", "MultiStep", $"Context summarized to {contextTokens} tokens");
                 }
@@ -511,9 +543,6 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
             {
                 _logger.Log($"Token counting failed: {ex.Message}, proceeding without summary", "MultiStep", "Warning");
             }
-
-            // Get executor agent
-            var executorAgent = await GetExecutorAgentAsync(execution, threadId);
             
             // Push a nested scope with the agent name for logging
             using var agentScope = LogScope.Push(
@@ -526,9 +555,47 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
             // Check if stepInstruction contains {{PROMPT}} tag
             string fullPrompt;
             var templateInstructions = GetTemplateInstructions(execution);
-            var systemMessage = !string.IsNullOrWhiteSpace(templateInstructions)
-                ? templateInstructions!
-                : executorAgent.Instructions ?? string.Empty;
+            var agentInstructions = executorAgent.Instructions ?? string.Empty;
+            var agentPrompt = executorAgent.Prompt ?? string.Empty;
+            // Requirement: for writer story generation, always add the agent's Instructions as the FIRST system message.
+            // Any other system content (agent prompt, template instructions, story context) should come after.
+            var useAgentInstructionsAsFirstSystemMessage = isStoryTask && !string.IsNullOrWhiteSpace(agentInstructions);
+
+            string systemMessage;
+            string secondarySystemMessage = string.Empty;
+
+            if (useAgentInstructionsAsFirstSystemMessage)
+            {
+                systemMessage = agentInstructions.Trim();
+
+                var secondaryBlocks = new List<string>();
+                if (!string.IsNullOrWhiteSpace(agentPrompt))
+                {
+                    secondaryBlocks.Add($"=== AGENT PROMPT ===\n{agentPrompt.Trim()}");
+                }
+                if (!string.IsNullOrWhiteSpace(templateInstructions))
+                {
+                    secondaryBlocks.Add($"=== TEMPLATE INSTRUCTIONS ===\n{templateInstructions!.Trim()}");
+                }
+                secondarySystemMessage = secondaryBlocks.Count > 0 ? string.Join("\n\n", secondaryBlocks) : string.Empty;
+            }
+            else
+            {
+                var systemBlocks = new List<string>();
+                if (!string.IsNullOrWhiteSpace(agentInstructions))
+                {
+                    systemBlocks.Add($"=== AGENT INSTRUCTIONS ===\n{agentInstructions.Trim()}");
+                }
+                if (!string.IsNullOrWhiteSpace(agentPrompt))
+                {
+                    systemBlocks.Add($"=== AGENT PROMPT ===\n{agentPrompt.Trim()}");
+                }
+                if (!string.IsNullOrWhiteSpace(templateInstructions))
+                {
+                    systemBlocks.Add($"=== TEMPLATE INSTRUCTIONS ===\n{templateInstructions!.Trim()}");
+                }
+                systemMessage = systemBlocks.Count > 0 ? string.Join("\n\n", systemBlocks) : string.Empty;
+            }
             // Note: any validation-requested system overrides are injected via `extraMessages`
             var attachInitialContext = execution.CurrentStep == 1
                 && !hasChunkPlaceholder
@@ -545,9 +612,30 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
             if (attachInitialContext)
             {
                 // Only add to system message if the template did NOT have {{PROMPT}}
-                systemMessage = string.IsNullOrEmpty(systemMessage)
-                    ? $"**CONTESTO DELLA STORIA**:\n{execution.InitialContext}"
-                    : $"{systemMessage}\n\n**CONTESTO DELLA STORIA**:\n{execution.InitialContext}";
+                // For writer story generation, keep agent instructions as the first system message and append context after.
+                if (useAgentInstructionsAsFirstSystemMessage)
+                {
+                    secondarySystemMessage = string.IsNullOrEmpty(secondarySystemMessage)
+                        ? $"=== CONTESTO DELLA STORIA ===\n{execution.InitialContext}"
+                        : $"{secondarySystemMessage}\n\n=== CONTESTO DELLA STORIA ===\n{execution.InitialContext}";
+                }
+                else
+                {
+                    systemMessage = string.IsNullOrEmpty(systemMessage)
+                        ? $"=== CONTESTO DELLA STORIA ===\n{execution.InitialContext}"
+                        : $"{systemMessage}\n\n=== CONTESTO DELLA STORIA ===\n{execution.InitialContext}";
+                }
+            }
+
+            // If we have secondary system content, inject it right after the first system message.
+            if (useAgentInstructionsAsFirstSystemMessage && !string.IsNullOrWhiteSpace(secondarySystemMessage))
+            {
+                extraMessages ??= new List<ConversationMessage>();
+                extraMessages.Insert(0, new ConversationMessage
+                {
+                    Role = "system",
+                    Content = secondarySystemMessage
+                });
             }
 
             if (!string.IsNullOrWhiteSpace(chunkIntro))
@@ -571,10 +659,14 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 if (_logger is CustomLogger cl4) await cl4.FlushAsync();
                 
                 var executorAgentModelInfo = _database.GetModelInfoById(executorAgent.ModelId ?? 0);
-                var modelOverride = GetExecutionModelOverride(execution);
-                var executorModelName = !string.IsNullOrWhiteSpace(modelOverride)
-                    ? modelOverride!
-                    : executorAgentModelInfo?.Name ?? "phi3:mini";
+                var modelOverrideId = GetExecutionModelOverrideId(execution);
+                var executorModelName = modelOverrideId.HasValue
+                    ? _database.GetModelInfoById(modelOverrideId.Value)?.Name
+                    : executorAgentModelInfo?.Name;
+                if (string.IsNullOrWhiteSpace(executorModelName))
+                {
+                    throw new InvalidOperationException($"Executor agent \"{executorAgent.Name}\" has no model configured.");
+                }
                 var (workingFolder, ttsStoryText) = GetExecutionTtsConfig(execution);
                 
                 _logger.Log("Information", "MultiStep", $"Creating orchestrator for model: {executorModelName}, skills: {executorAgent.Skills}");
@@ -605,7 +697,14 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                         ttsTool.CurrentStoryId = execution.EntityId.Value;
                     }
                 }
-                var bridge = _kernelFactory.CreateChatBridge(executorModelName, executorAgent.Temperature, executorAgent.TopP);
+                var bridge = _kernelFactory.CreateChatBridge(
+                    executorModelName,
+                    executorAgent.Temperature,
+                    executorAgent.TopP,
+                    executorAgent.RepeatPenalty,
+                    executorAgent.TopK,
+                    executorAgent.RepeatLastN,
+                    executorAgent.NumPredict);
                 var loop = new ReActLoopOrchestrator(
                     orchestrator,
                     _logger,
@@ -646,8 +745,8 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                     if (string.IsNullOrWhiteSpace(output))
                     {
                         Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - Output is empty! result object: {result != null}, FinalResponse: '{result?.FinalResponse ?? "(null)"}'");
-                        _logger.Log("Error", "MultiStep", $"Executor agent produced empty output. Success={result.Success}, Error={result.Error}, Iterations={result.IterationCount}, ExecutedTools={result.ExecutedTools?.Count ?? 0}");
-                        throw new InvalidOperationException($"Executor agent produced empty output. Model: {executorModelName}, Success: {result.Success}, Error: {result.Error ?? "none"}, Iterations: {result.IterationCount}");
+                        _logger.Log("Error", "MultiStep", $"Executor agent produced empty output. Success={(result?.Success.ToString() ?? "false")}, Error={(result?.Error ?? "(null)" )}, Iterations={(result?.IterationCount.ToString() ?? "0")}, ExecutedTools={result?.ExecutedTools?.Count ?? 0}");
+                        throw new InvalidOperationException($"Executor agent produced empty output. Model: {executorModelName}, Success: {(result?.Success.ToString() ?? "false")}, Error: {(result?.Error ?? "none")}, Iterations: {result?.IterationCount ?? 0}");
                     }
                 }
             }
@@ -673,49 +772,65 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
 
             ValidationResult baseValidation;
 
-            // Get step template for validation checks (MinCharsStory, MinCharsTrama, etc.)
-            Models.StepTemplate? stepTemplate = null;
-            if (executorAgent.MultiStepTemplateId.HasValue)
+            var isSummarizerStep = isStoryTask
+                && !string.IsNullOrWhiteSpace(executorAgent.Role)
+                && executorAgent.Role.Equals("summarizer", StringComparison.OrdinalIgnoreCase);
+
+            if (isSummarizerStep)
             {
-                stepTemplate = _database.GetStepTemplateById(executorAgent.MultiStepTemplateId.Value);
-            }
-
-            // Task-specific deterministic checks (e.g., TTS coverage) are executed here
-            if (string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
-            {
-                // Use chunkText for coverage comparison (may be empty if not applicable)
-                var ttsResult = _checkerService.ValidateTtsSchemaResponse(output, chunkText ?? string.Empty, 0.80);
-
-                var reasons = new List<string>();
-                if (ttsResult.Errors.Any()) reasons.AddRange(ttsResult.Errors);
-                if (ttsResult.Warnings.Any()) reasons.AddRange(ttsResult.Warnings);
-
                 baseValidation = new ValidationResult
                 {
-                    IsValid = ttsResult.IsValid,
-                    Reason = ttsResult.FeedbackMessage ?? (reasons.Count > 0 ? string.Join("; ", reasons) : "TTS validation result"),
-                    NeedsRetry = !ttsResult.IsValid,
+                    IsValid = true,
+                    Reason = "Summary auto-accepted",
+                    NeedsRetry = false,
                     SemanticScore = null
                 };
             }
             else
             {
-                // Generic deterministic/basic checks including MinCharsStory validation
-                baseValidation = await _checkerService.ValidateStepOutputAsync(
-                    stepInstruction,
-                    output,
-                    validationCriteria,
-                    threadId,
-                    executorAgent.Name,
-                    executorAgent.ModelName,
-                    execution.TaskType,
-                    execution.CurrentStep,
-                    stepTemplate
-                );
+                // Get step template for validation checks (MinCharsStory, MinCharsTrama, etc.)
+                if (executorAgent.MultiStepTemplateId.HasValue)
+                {
+                    stepTemplate = _database.GetStepTemplateById(executorAgent.MultiStepTemplateId.Value);
+                }
+
+                // Task-specific deterministic checks (e.g., TTS coverage) are executed here
+                if (string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Use chunkText for coverage comparison (may be empty if not applicable)
+                    var ttsResult = _checkerService.ValidateTtsSchemaResponse(output, chunkText ?? string.Empty, 0.80);
+
+                    var reasons = new List<string>();
+                    if (ttsResult.Errors.Any()) reasons.AddRange(ttsResult.Errors);
+                    if (ttsResult.Warnings.Any()) reasons.AddRange(ttsResult.Warnings);
+
+                    baseValidation = new ValidationResult
+                    {
+                        IsValid = ttsResult.IsValid,
+                        Reason = ttsResult.FeedbackMessage ?? (reasons.Count > 0 ? string.Join("; ", reasons) : "TTS validation result"),
+                        NeedsRetry = !ttsResult.IsValid,
+                        SemanticScore = null
+                    };
+                }
+                else
+                {
+                    // Generic deterministic/basic checks including MinCharsStory validation
+                    baseValidation = await _checkerService.ValidateStepOutputAsync(
+                        stepInstruction,
+                        output,
+                        validationCriteria,
+                        threadId,
+                        executorAgent.Name,
+                        executorAgent.ModelName,
+                        execution.TaskType,
+                        execution.CurrentStep,
+                        stepTemplate
+                    );
+                }
             }
 
             // Skip tool-use reminders for tts_schema (ora usa output testuale strutturato).
-            if (!string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
+            if (!isSummarizerStep && !string.Equals(execution.TaskType, "tts_schema", StringComparison.OrdinalIgnoreCase))
             {
                 try
                 {
@@ -769,7 +884,7 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                     "text_writer"
                 };
 
-                if (!string.IsNullOrWhiteSpace(executorAgent.Role) && writerRoles.Contains(executorAgent.Role))
+                if (!isSummarizerStep && !string.IsNullOrWhiteSpace(executorAgent.Role) && writerRoles.Contains(executorAgent.Role))
                 {
                     // stepTemplate already retrieved above for baseValidation
 
@@ -799,7 +914,7 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 // Step valid - check if this step requires evaluator validation
                 var evaluationSteps = GetEvaluationStepsFromTemplate(execution);
                 
-                if (evaluationSteps.Contains(execution.CurrentStep))
+                if (!isSummarizerStep && evaluationSteps.Contains(execution.CurrentStep))
                 {
                     _logger.Log("Information", "MultiStep", $"Step {execution.CurrentStep} requires evaluator validation");
                     
@@ -950,28 +1065,16 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 agent = _database.GetAgentById(execution.ExecutorAgentId.Value);
                 if (agent == null || !agent.IsActive)
                 {
-                    _logger.Log($"Executor agent {execution.ExecutorAgentId} not found or inactive, falling back to role",
-                        "MultiStep", "Warning");
-                    agent = null;
+                    var msg = $"Executor agent {execution.ExecutorAgentId} not found or inactive.";
+                    _logger.Log(msg, "MultiStep", "Error");
+                    throw new InvalidOperationException(msg);
                 }
             }
-
-            if (agent == null)
+            else
             {
-                // Fallback to first active agent with correct role
-                var taskTypeInfo = _database.GetTaskTypeByCode(execution.TaskType);
-                if (taskTypeInfo == null)
-                {
-                    throw new InvalidOperationException($"Task type {execution.TaskType} not found");
-                }
-
-                agent = _database.ListAgents()
-                    .FirstOrDefault(a => a.Role == taskTypeInfo.DefaultExecutorRole && a.IsActive);
-
-                if (agent == null)
-                {
-                    throw new InvalidOperationException($"No active agent with role '{taskTypeInfo.DefaultExecutorRole}' found");
-                }
+                var msg = "ExecutorAgentId is missing for task execution.";
+                _logger.Log(msg, "MultiStep", "Error");
+                throw new InvalidOperationException(msg);
             }
 
             return agent;
@@ -1137,9 +1240,9 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
             return MergeConfigWithTemplateInstructions(configOverrides, templateInstructions, null);
         }
 
-        private string? MergeConfigWithTemplateInstructions(string? configOverrides, string? templateInstructions, string? executorModelOverride)
+        private string? MergeConfigWithTemplateInstructions(string? configOverrides, string? templateInstructions, int? executorModelOverrideId)
         {
-            if (string.IsNullOrWhiteSpace(templateInstructions) && string.IsNullOrWhiteSpace(executorModelOverride))
+            if (string.IsNullOrWhiteSpace(templateInstructions) && !executorModelOverrideId.HasValue)
                 return configOverrides;
 
             try
@@ -1158,9 +1261,9 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 {
                     dict["templateInstructions"] = templateInstructions;
                 }
-                if (!string.IsNullOrWhiteSpace(executorModelOverride))
+                if (executorModelOverrideId.HasValue)
                 {
-                    dict["executorModelOverride"] = executorModelOverride;
+                    dict["executorModelIdOverride"] = executorModelOverrideId.Value;
                 }
                 return JsonSerializer.Serialize(dict);
             }
@@ -1170,31 +1273,15 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 return JsonSerializer.Serialize(new
                 {
                     templateInstructions,
-                    executorModelOverride,
+                    executorModelIdOverride = executorModelOverrideId,
                     rawConfig = configOverrides
                 });
             }
         }
 
-        private string? GetExecutionModelOverride(TaskExecution execution)
+        private int? GetExecutionModelOverrideId(TaskExecution execution)
         {
-            if (string.IsNullOrWhiteSpace(execution.Config))
-                return null;
-
-            try
-            {
-                using var doc = JsonDocument.Parse(execution.Config);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("executorModelOverride", out var modelProp))
-                {
-                    return modelProp.GetString();
-                }
-            }
-            catch
-            {
-            }
-
-            return null;
+            return GetConfigValue<int?>(execution.Config, "executorModelIdOverride");
         }
 
         /// <summary>
@@ -1547,17 +1634,26 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
                 return string.Empty;
             }
 
-            // Find fast summary model (qwen2.5:3b or phi3:mini)
-            var summaryModel = _database.ListModels()
-                .FirstOrDefault(m => m.Name.Contains("qwen2.5:3b") || m.Name.Contains("phi3:mini"));
+            var summarizerAgent = _database.ListAgents()
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    a.Role.Equals("summarizer", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
 
-            if (summaryModel == null)
+            if (summarizerAgent == null)
             {
-                _logger.Log("Warning", "MultiStep", "No summary model found (looking for qwen2.5:3b or phi3:mini), returning full text");
-                return text; // Fallback: full text
+                _logger.Log("Warning", "MultiStep", "No summarizer agent found, returning full text");
+                return text;
             }
 
-            _logger.Log("Information", "MultiStep", $"Summarizing {text.Length} chars using {summaryModel.Name}");
+            var summaryModelName = _database.GetModelInfoById(summarizerAgent.ModelId ?? 0)?.Name;
+            if (string.IsNullOrWhiteSpace(summaryModelName))
+            {
+                _logger.Log("Warning", "MultiStep", $"Summarizer agent {summarizerAgent.Name} has no model configured, returning full text");
+                return text;
+            }
+
+            _logger.Log("Information", "MultiStep", $"Summarizing {text.Length} chars using {summaryModelName}");
 
             try
             {
@@ -1567,9 +1663,15 @@ Correggi la tua risposta tenendo conto del feedback ricevuto.";
 
 RIASSUNTO:";
 
-                var summaryModelName = summaryModel.Name;
                 var orchestrator = _kernelFactory.CreateOrchestrator(summaryModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(summaryModelName);
+                var bridge = _kernelFactory.CreateChatBridge(
+                    summaryModelName,
+                    summarizerAgent.Temperature,
+                    summarizerAgent.TopP,
+                    summarizerAgent.RepeatPenalty,
+                    summarizerAgent.TopK,
+                    summarizerAgent.RepeatLastN,
+                    summarizerAgent.NumPredict);
                 var loop = new ReActLoopOrchestrator(orchestrator, _logger, modelBridge: bridge);
                 var response = await loop.ExecuteAsync(prompt, ct);
                 
@@ -1714,14 +1816,38 @@ RIASSUNTO:";
             return result.Length > 0 ? result.ToString().Trim() : output;
         }
 
-        private async Task<string> SummarizeContextAsync(string context, int threadId, CancellationToken ct)
+        private async Task<string> SummarizeContextAsync(
+            string context,
+            int threadId,
+            CancellationToken ct,
+            string? preferredModelName = null,
+            double? temperature = null,
+            double? topP = null,
+            double? repeatPenalty = null,
+            int? topK = null,
+            int? repeatLastN = null,
+            int? numPredict = null)
         {
             _logger.Log("Information", "MultiStep", "Summarizing context (>10k tokens)");
 
-            var summaryModel = _database.ListModels()
-                .FirstOrDefault(m => m.Name.Contains("qwen2.5:3b") || m.Name.Contains("phi3:mini"));
+            var summarizerAgent = _database.ListAgents()
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    a.Role.Equals("summarizer", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
 
-            if (summaryModel == null) return context; // Fallback
+            if (summarizerAgent == null)
+            {
+                _logger.Log("Warning", "MultiStep", "No summarizer agent found, skipping context summarization");
+                return context;
+            }
+
+            var summaryModelName = _database.GetModelInfoById(summarizerAgent.ModelId ?? 0)?.Name;
+            if (string.IsNullOrWhiteSpace(summaryModelName))
+            {
+                _logger.Log("Warning", "MultiStep", $"Summarizer agent {summarizerAgent.Name} has no model configured, skipping context summarization");
+                return context;
+            }
 
             try
             {
@@ -1731,10 +1857,21 @@ RIASSUNTO:";
 
 RIASSUNTO:";
 
-                var summaryModelName = summaryModel.Name;
                 var orchestrator = _kernelFactory.CreateOrchestrator(summaryModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(summaryModelName);
-                var loop = new ReActLoopOrchestrator(orchestrator, _logger, modelBridge: bridge);
+                var bridge = _kernelFactory.CreateChatBridge(
+                    summaryModelName,
+                    temperature ?? summarizerAgent.Temperature,
+                    topP ?? summarizerAgent.TopP,
+                    repeatPenalty ?? summarizerAgent.RepeatPenalty,
+                    topK ?? summarizerAgent.TopK,
+                    repeatLastN ?? summarizerAgent.RepeatLastN,
+                    numPredict ?? summarizerAgent.NumPredict);
+                var systemMessage = summarizerAgent.Instructions ?? string.Empty;
+                var loop = new ReActLoopOrchestrator(
+                    orchestrator,
+                    _logger,
+                    modelBridge: bridge,
+                    systemMessage: systemMessage);
                 var response = await loop.ExecuteAsync(prompt, ct);
                 return response.FinalResponse ?? context;
             }
@@ -1778,7 +1915,14 @@ RIASSUNTO:";
                 var fullPrompt = string.IsNullOrEmpty(context) ? stepInstruction : $"{context}\n\n---\n\n{stepInstruction}";
                 var fallbackModelName = fallbackModel.Name;
                 var orchestrator = _kernelFactory.CreateOrchestrator(fallbackModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(fallbackModelName, currentAgent.Temperature, currentAgent.TopP);
+                var bridge = _kernelFactory.CreateChatBridge(
+                    fallbackModelName,
+                    currentAgent.Temperature,
+                    currentAgent.TopP,
+                    currentAgent.RepeatPenalty,
+                    currentAgent.TopK,
+                    currentAgent.RepeatLastN,
+                    currentAgent.NumPredict);
                 var loop = new ReActLoopOrchestrator(orchestrator, _logger, modelBridge: bridge);
 
                 using var stepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -1939,19 +2083,8 @@ RIASSUNTO:";
                         // Se execution.EntityId non esiste ancora, crea la storia
                         if (!execution.EntityId.HasValue)
                         {
-                            var modelOverride = GetExecutionModelOverride(execution);
-                            int? modelId = null;
-
-                            if (!string.IsNullOrWhiteSpace(modelOverride))
-                            {
-                                var modelInfoByName = _database.GetModelInfo(modelOverride);
-                                modelId = modelInfoByName?.Id;
-                            }
-
-                            if (modelId == null && agent?.ModelId != null)
-                            {
-                                modelId = agent.ModelId;
-                            }
+                            var modelOverrideId = GetExecutionModelOverrideId(execution);
+                            var modelId = modelOverrideId ?? agent?.ModelId;
 
                             var prompt = execution.InitialContext ?? "[No prompt]";
                             var storyId = _database.InsertSingleStory(
@@ -2023,19 +2156,8 @@ RIASSUNTO:";
             // Create or update story entity
             if (execution.TaskType == "story")
             {
-                var modelOverride = GetExecutionModelOverride(execution);
-                int? modelId = null;
-
-                if (!string.IsNullOrWhiteSpace(modelOverride))
-                {
-                    var modelInfoByName = _database.GetModelInfo(modelOverride);
-                    modelId = modelInfoByName?.Id;
-                }
-
-                if (modelId == null && agent?.ModelId != null)
-                {
-                    modelId = agent.ModelId;
-                }
+                var modelOverrideId = GetExecutionModelOverrideId(execution);
+                var modelId = modelOverrideId ?? agent?.ModelId;
 
                 if (execution.EntityId.HasValue)
                 {
@@ -2405,7 +2527,7 @@ RIASSUNTO:";
         }
 
         /// <summary>
-        /// Evaluates a chapter/step output using all active chapter evaluators.
+        /// Evaluates a chapter/step output using a single active chapter evaluator.
         /// Returns the average score and combined feedback. If average score is below threshold, 
         /// the step should be retried with the feedback.
         /// </summary>
@@ -2418,10 +2540,7 @@ RIASSUNTO:";
             // Get all active evaluators (story_evaluator role)
             var evaluators = _database.ListAgents()
                 .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
-                    (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
-                     a.Role.Equals("evaluator", StringComparison.OrdinalIgnoreCase) ||
-                     a.Role.Equals("chapter_evaluator", StringComparison.OrdinalIgnoreCase)))
-                .OrderBy(a => a.Id)
+                    a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (evaluators.Count == 0)
@@ -2430,60 +2549,51 @@ RIASSUNTO:";
                 return (true, 10.0, string.Empty);
             }
 
-            _logger.Log("Information", "MultiStep", $"Evaluating step {stepNumber} with {evaluators.Count} evaluators");
+            var evaluator = evaluators
+                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .First();
 
-            var evaluationResults = new List<ChapterEvaluationResult>();
-            var feedbackParts = new List<string>();
+            _logger.Log("Information", "MultiStep", $"Evaluating step {stepNumber} with evaluator {evaluator.Name}");
 
-            foreach (var evaluator in evaluators)
+            ChapterEvaluationResult? result;
+            try
             {
-                try
-                {
-                    var result = await EvaluateChapterWithSingleEvaluatorAsync(
-                        chapterText, stepNumber, evaluator, threadId, ct);
-                    
-                    if (result != null)
-                    {
-                        evaluationResults.Add(result);
-                        
-                        var evalFeedback = new StringBuilder();
-                        evalFeedback.AppendLine($"### Valutatore: {evaluator.Name} (punteggio medio: {result.AverageScore:F1})");
-                        evalFeedback.AppendLine($"- Coerenza narrativa: {result.NarrativeCoherenceScore}/10 - {result.NarrativeCoherenceFeedback}");
-                        evalFeedback.AppendLine($"- Originalità: {result.OriginalityScore}/10 - {result.OriginalityFeedback}");
-                        evalFeedback.AppendLine($"- Impatto emotivo: {result.EmotionalImpactScore}/10 - {result.EmotionalImpactFeedback}");
-                        evalFeedback.AppendLine($"- Stile: {result.StyleScore}/10 - {result.StyleFeedback}");
-                        evalFeedback.AppendLine($"**Valutazione complessiva:** {result.OverallFeedback}");
-                        feedbackParts.Add(evalFeedback.ToString());
-
-                        _logger.Log("Information", "MultiStep", 
-                            $"Evaluator {evaluator.Name}: avg={result.AverageScore:F1} (coherence={result.NarrativeCoherenceScore}, originality={result.OriginalityScore}, emotion={result.EmotionalImpactScore}, style={result.StyleScore})");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.Log("Warning", "MultiStep", $"Evaluator {evaluator.Name} failed: {ex.Message}");
-                }
+                result = await EvaluateChapterWithSingleEvaluatorAsync(
+                    chapterText, stepNumber, evaluator, threadId, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.Log("Warning", "MultiStep", $"Evaluator {evaluator.Name} failed: {ex.Message}");
+                result = null;
             }
 
-            if (evaluationResults.Count == 0)
+            if (result == null)
             {
-                _logger.Log("Warning", "MultiStep", "All evaluators failed, passing step by default");
+                _logger.Log("Warning", "MultiStep", "Evaluator failed, passing step by default");
                 return (true, 10.0, string.Empty);
             }
 
-            var overallAverage = evaluationResults.Average(r => r.AverageScore);
-            var combinedFeedback = string.Join("\n\n", feedbackParts);
+            var evalFeedback = new StringBuilder();
+            evalFeedback.AppendLine($"### Valutatore: {evaluator.Name} (punteggio medio: {result.AverageScore:F1})");
+            evalFeedback.AppendLine($"- Coerenza narrativa: {result.NarrativeCoherenceScore}/10 - {result.NarrativeCoherenceFeedback}");
+            evalFeedback.AppendLine($"- Originalita: {result.OriginalityScore}/10 - {result.OriginalityFeedback}");
+            evalFeedback.AppendLine($"- Impatto emotivo: {result.EmotionalImpactScore}/10 - {result.EmotionalImpactFeedback}");
+            evalFeedback.AppendLine($"- Stile: {result.StyleScore}/10 - {result.StyleFeedback}");
+            evalFeedback.AppendLine($"**Valutazione complessiva:** {result.OverallFeedback}");
+
+            _logger.Log("Information", "MultiStep", 
+                $"Evaluator {evaluator.Name}: avg={result.AverageScore:F1} (coherence={result.NarrativeCoherenceScore}, originality={result.OriginalityScore}, emotion={result.EmotionalImpactScore}, style={result.StyleScore})");
+
+            var overallAverage = result.AverageScore;
+            var combinedFeedback = evalFeedback.ToString();
             var passed = overallAverage >= 6.0;
 
             _logger.Log("Information", "MultiStep", 
-                $"Chapter evaluation complete: avg={overallAverage:F2}, passed={passed}, evaluators={evaluationResults.Count}");
+                $"Chapter evaluation complete: avg={overallAverage:F2}, passed={passed}, evaluators=1");
 
             return (passed, overallAverage, combinedFeedback);
         }
 
-        /// <summary>
-        /// Evaluates chapter text with a single evaluator agent using the ChapterEvaluatorTool.
-        /// </summary>
         private async Task<ChapterEvaluationResult?> EvaluateChapterWithSingleEvaluatorAsync(
             string chapterText,
             int stepNumber,
@@ -2492,7 +2602,12 @@ RIASSUNTO:";
             CancellationToken ct = default)
         {
             var modelInfo = _database.GetModelInfoById(evaluator.ModelId ?? 0);
-            var modelName = modelInfo?.Name ?? "phi3:mini";
+            var modelName = modelInfo?.Name;
+            if (string.IsNullOrWhiteSpace(modelName))
+            {
+                _logger.Log("Warning", "MultiStep", $"Evaluator {evaluator.Name} has no model configured, skipping evaluation");
+                return null;
+            }
 
             // Create orchestrator with chapter_evaluator skill only
             var orchestrator = _kernelFactory.CreateOrchestrator(
@@ -2511,7 +2626,14 @@ RIASSUNTO:";
                 chapterTool.ModelName = modelName;
             }
 
-            var bridge = _kernelFactory.CreateChatBridge(modelName, evaluator.Temperature, evaluator.TopP);
+            var bridge = _kernelFactory.CreateChatBridge(
+                modelName,
+                evaluator.Temperature,
+                evaluator.TopP,
+                evaluator.RepeatPenalty,
+                evaluator.TopK,
+                evaluator.RepeatLastN,
+                evaluator.NumPredict);
 
             // Build system message for evaluation
             var systemMessage = evaluator.Instructions ?? 

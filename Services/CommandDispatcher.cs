@@ -27,6 +27,7 @@ namespace TinyGenerator.Services
         public string? AgentName { get; }
         public int Priority { get; }
         public long EnqueueSequence { get; }
+        public CancellationTokenSource Cancellation { get; }
 
         public CommandWorkItem(
             string runId,
@@ -37,6 +38,7 @@ namespace TinyGenerator.Services
             long operationNumber,
             int priority,
             long enqueueSequence,
+            CancellationTokenSource cancellation,
             string? agentName = null)
         {
             RunId = runId;
@@ -48,6 +50,7 @@ namespace TinyGenerator.Services
             Priority = priority;
             EnqueueSequence = enqueueSequence;
             AgentName = agentName;
+            Cancellation = cancellation;
             Completion = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
@@ -78,6 +81,7 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, CommandState> _active = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, CommandState> _completed = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<CommandResult>> _completionTasks = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, CancellationTokenSource> _commandCancellations = new(StringComparer.OrdinalIgnoreCase);
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
@@ -108,7 +112,8 @@ namespace TinyGenerator.Services
             var opNumber = LogScope.GenerateOperationId();
             var enqueueSeq = Interlocked.Increment(ref _enqueueCounter);
             var agentName = metadata != null && metadata.TryGetValue("agentName", out var an) ? an : null;
-            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, priority, enqueueSeq, agentName);
+            var commandCts = new CancellationTokenSource();
+            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, priority, enqueueSeq, commandCts, agentName);
 
             lock (_queueLock)
             {
@@ -131,6 +136,7 @@ namespace TinyGenerator.Services
             };
             _active[id] = state;
             _completionTasks[id] = workItem.Completion.Task;
+            _commandCancellations[id] = commandCts;
 
             _ = BroadcastCommandsAsync();
 
@@ -198,19 +204,25 @@ namespace TinyGenerator.Services
         private async Task ProcessWorkItemAsync(CommandWorkItem workItem, CancellationToken stoppingToken)
         {
             using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName);
-            var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, stoppingToken);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workItem.Cancellation.Token);
+            var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, linkedCts.Token);
             var startMessage = $"[{workItem.RunId}] START {workItem.OperationName}";
             _logger?.Log("Information", "Command", startMessage);
 
-            if (_active.TryGetValue(workItem.RunId, out var state))
-            {
-                state.Status = "running";
-                state.StartedAt = DateTimeOffset.UtcNow;
-            }
-            await BroadcastCommandsAsync().ConfigureAwait(false);
-
             try
             {
+                if (_active.TryGetValue(workItem.RunId, out var state))
+                {
+                    if (state.Status == "cancelled")
+                    {
+                        throw new OperationCanceledException("Operazione annullata");
+                    }
+                    state.Status = "running";
+                    state.StartedAt = DateTimeOffset.UtcNow;
+                }
+                await BroadcastCommandsAsync().ConfigureAwait(false);
+
+                linkedCts.Token.ThrowIfCancellationRequested();
                 var result = await workItem.Handler(ctx).ConfigureAwait(false);
                 var finalMessage = result.Message ?? (result.Success ? "OK" : "FAILED");
                 var endLevel = result.Success ? "Information" : "Error";
@@ -220,9 +232,12 @@ namespace TinyGenerator.Services
                 // Aggiorna stato completato
                 if (_active.TryGetValue(workItem.RunId, out var completedState))
                 {
-                    completedState.Status = result.Success ? "completed" : "failed";
-                    completedState.CompletedAt = DateTimeOffset.UtcNow;
-                    completedState.ErrorMessage = result.Success ? null : result.Message;
+                    if (completedState.Status != "cancelled")
+                    {
+                        completedState.Status = result.Success ? "completed" : "failed";
+                        completedState.CompletedAt = DateTimeOffset.UtcNow;
+                        completedState.ErrorMessage = result.Success ? null : result.Message;
+                    }
                 }
                 
                 RaiseCompleted(workItem.RunId, workItem.OperationName, result);
@@ -272,6 +287,10 @@ namespace TinyGenerator.Services
                     });
                 }
                 _completionTasks.TryRemove(workItem.RunId, out _);
+                if (_commandCancellations.TryRemove(workItem.RunId, out var cancelCts))
+                {
+                    cancelCts.Dispose();
+                }
                 await BroadcastCommandsAsync().ConfigureAwait(false);
             }
         }
@@ -349,6 +368,34 @@ namespace TinyGenerator.Services
                 state.RetryCount = retryCount;
                 _ = BroadcastCommandsAsync();
             }
+        }
+
+        public bool CancelCommand(string runId)
+        {
+            if (string.IsNullOrWhiteSpace(runId))
+            {
+                return false;
+            }
+
+            if (!_active.TryGetValue(runId, out var state))
+            {
+                return false;
+            }
+
+            if (_commandCancellations.TryGetValue(runId, out var cts))
+            {
+                cts.Cancel();
+            }
+
+            if (state.Status == "queued")
+            {
+                state.Status = "cancelled";
+                state.CompletedAt = DateTimeOffset.UtcNow;
+                state.ErrorMessage = "Operazione annullata";
+            }
+
+            _ = BroadcastCommandsAsync();
+            return true;
         }
 
         private Task BroadcastCommandsAsync()

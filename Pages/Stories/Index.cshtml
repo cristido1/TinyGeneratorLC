@@ -115,6 +115,7 @@
                     <th data-col="score">Score</th>
                     <th data-col="eval">Valutazione</th>
                     <th data-col="approved">Approved</th>
+                    <th data-col="details">Dettagli</th>
                     <th data-col="actions">Azioni</th>
                 </tr>
             </thead>
@@ -148,6 +149,9 @@
                         <td data-col="score">@s.Score</td>
                         <td data-col="eval">@((s.Evaluations!=null && s.Evaluations.Any()) ? (s.Evaluations.Average(e=>e.TotalScore)*100.0/40.0).ToString("F1") + "/100" : "-")</td>
                         <td data-col="approved">@(s.Approved ? "✅" : "❌")</td>
+                        <td data-col="details">
+                            <button type="button" class="btn btn-sm btn-outline-secondary toggle-evals" data-story-id="@s.Id">Valutazioni</button>
+                        </td>
                         <td data-col="actions">
                             <div class="dropdown">
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Azioni</button>
@@ -196,7 +200,8 @@
                                             };
                                             if (method == "GET")
                                             {
-                                                <li><a class="dropdown-item" href="@url" target="_blank"><i class="@iconClass me-2"></i>@title</a></li>
+                                                var targetAttr = id == "edit" ? string.Empty : " target=\"_blank\"";
+                                                <li><a class="dropdown-item" href="@url"@Html.Raw(targetAttr)><i class="@iconClass me-2"></i>@title</a></li>
                                             }
                                             else
                                             {
@@ -221,7 +226,7 @@
                                             var iconClass = "bi bi-pencil";
                                             if (method == "GET")
                                             {
-                                                <li><a class="dropdown-item" href="@url" target="_blank"><i class="@iconClass me-2"></i>@title</a></li>
+                                                <li><a class="dropdown-item" href="@url"><i class="@iconClass me-2"></i>@title</a></li>
                                             }
                                             else
                                             {
@@ -249,7 +254,7 @@
                                             var iconClass = "bi bi-trash-fill";
                                             if (method == "GET")
                                             {
-                                                <li><a class="dropdown-item text-danger" href="@url" target="_blank"><i class="@iconClass me-2 text-danger"></i>@title</a></li>
+                                                <li><a class="dropdown-item text-danger" href="@url"><i class="@iconClass me-2 text-danger"></i>@title</a></li>
                                             }
                                             else
                                             {
@@ -266,6 +271,23 @@
                             </div>
                         </td>
                     </tr>
+                    <tr class="story-evals-row d-none" data-story-id="@s.Id">
+                        <td colspan="16">
+                            <div class="p-3 bg-light border rounded">
+                                @if (s.Evaluations != null && s.Evaluations.Any())
+                                {
+                                    foreach (var e in s.Evaluations)
+                                    {
+                                        <partial name="_StoryEvaluationCard" model="e" />
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="text-muted">Nessuna valutazione</div>
+                                }
+                            </div>
+                        </td>
+                    </tr>
                 }
             </tbody>
         </table>
@@ -275,7 +297,10 @@
     </div>
 </div>
 
-<form id="bulkEvaluateForm" method="post" asp-page-handler="EvaluateAll"></form>
+<form id="bulkEvaluateForm" method="post" asp-page-handler="EvaluateAll">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="agentId" id="bulkEvaluateAgentId" />
+</form>
 <audio id="ttsPlaylistAudio" class="d-none"></audio>
 
 <!-- Modal per riprodurre final mix dalla pagina Stories -->
@@ -348,4 +373,26 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" />
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/js/shared/list-ui.js"></script>
+    <script>
+        function bulkEvaluate(agentId) {
+            const form = document.getElementById('bulkEvaluateForm');
+            const input = document.getElementById('bulkEvaluateAgentId');
+            if (!form || !input) return;
+            input.value = agentId || '';
+            form.submit();
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.toggle-evals').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const id = btn.getAttribute('data-story-id');
+                    const row = document.querySelector(`tr.story-evals-row[data-story-id="${id}"]`);
+                    if (!row) return;
+                    const isHidden = row.classList.contains('d-none');
+                    row.classList.toggle('d-none', !isHidden);
+                    btn.textContent = isHidden ? 'Nascondi' : 'Valutazioni';
+                });
+            });
+        });
+    </script>
 }

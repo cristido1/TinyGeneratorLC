@@ -368,7 +368,8 @@ namespace TinyGenerator.Services
             if (string.Equals(cat, "ModelPrompt", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(cat, "ModelCompletion", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(cat, "ModelRequest", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(cat, "ModelResponse", StringComparison.OrdinalIgnoreCase))
+                string.Equals(cat, "ModelResponse", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cat, "llama.cpp", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }

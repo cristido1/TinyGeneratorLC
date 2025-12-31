@@ -75,8 +75,10 @@ namespace TinyGenerator.Pages.Models
             existing.NoTools = Model.NoTools;
             existing.Note = Model.Note;
 
-            // Business rule: if provider == "ollama" then IsLocal = true
-            if (!string.IsNullOrWhiteSpace(existing.Provider) && existing.Provider.Equals("ollama", System.StringComparison.OrdinalIgnoreCase))
+            // Business rule: if provider is local then IsLocal = true
+            if (!string.IsNullOrWhiteSpace(existing.Provider) &&
+                (existing.Provider.Equals("ollama", System.StringComparison.OrdinalIgnoreCase) ||
+                 existing.Provider.Equals("llama.cpp", System.StringComparison.OrdinalIgnoreCase)))
             {
                 existing.IsLocal = true;
             }

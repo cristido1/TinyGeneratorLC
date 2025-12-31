@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Net.Http;
+using System.Text.Json;
 using System.Threading.Tasks;
 using TinyGenerator.Services;
 
@@ -10,11 +13,15 @@ namespace TinyGenerator.Pages
     public class OllamaMonitorModel : PageModel
     {
     private readonly IOllamaMonitorService _monitor;
+    private readonly LlamaService _llamaService;
     public List<TinyGenerator.Services.OllamaModelInfo> Models { get; set; } = new();
+    public LlamaStatusInfo LlamaStatus { get; set; } = new();
+    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
 
-        public OllamaMonitorModel(IOllamaMonitorService monitor)
+        public OllamaMonitorModel(IOllamaMonitorService monitor, LlamaService llamaService)
         {
             _monitor = monitor ?? throw new ArgumentNullException(nameof(monitor));
+            _llamaService = llamaService ?? throw new ArgumentNullException(nameof(llamaService));
         }
 
         public void OnGet()
@@ -25,6 +32,7 @@ namespace TinyGenerator.Pages
         public async Task OnGetRefreshAsync()
         {
             Models = await _monitor.GetRunningModelsAsync();
+            LlamaStatus = await GetLlamaStatusAsync();
         }
 
         // JSON endpoint for fetching models + last prompt
@@ -116,5 +124,84 @@ namespace TinyGenerator.Pages
         }
 
         public class StartContextRequest { public string Model { get; set; } = string.Empty; public int Context { get; set; } = 8192; }
+
+        public IActionResult OnPostKillLlamaAsync()
+        {
+            try
+            {
+                _llamaService.StopServer();
+            }
+            catch { }
+
+            try
+            {
+                var psi = new ProcessStartInfo("taskkill", "/IM \"llama-server.exe\" /F")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                };
+                using var p = Process.Start(psi);
+                if (p == null) return new JsonResult(new { success = false, output = "Could not start taskkill" });
+                p.WaitForExit(5000);
+                var outp = p.StandardOutput.ReadToEnd();
+                var err = p.StandardError.ReadToEnd();
+                var combined = outp + (string.IsNullOrEmpty(err) ? string.Empty : "\nERR:" + err);
+                return new JsonResult(new { success = true, output = combined });
+            }
+            catch (Exception ex)
+            {
+                return new JsonResult(new { success = false, output = ex.Message });
+            }
+        }
+
+        public sealed class LlamaStatusInfo
+        {
+            public string Endpoint { get; set; } = "http://127.0.0.1:11436";
+            public bool IsRunning { get; set; }
+            public List<string> Models { get; set; } = new();
+            public string? Error { get; set; }
+        }
+
+        private static async Task<LlamaStatusInfo> GetLlamaStatusAsync()
+        {
+            var info = new LlamaStatusInfo();
+            try
+            {
+                var healthUrl = info.Endpoint.TrimEnd('/') + "/health";
+                var modelsUrl = info.Endpoint.TrimEnd('/') + "/v1/models";
+
+                using var healthRes = await _httpClient.GetAsync(healthUrl);
+                if (healthRes.IsSuccessStatusCode)
+                {
+                    info.IsRunning = true;
+                }
+
+                using var modelsRes = await _httpClient.GetAsync(modelsUrl);
+                if (modelsRes.IsSuccessStatusCode)
+                {
+                    var json = await modelsRes.Content.ReadAsStringAsync();
+                    using var doc = JsonDocument.Parse(json);
+                    if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var item in data.EnumerateArray())
+                        {
+                            if (item.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                            {
+                                var value = id.GetString();
+                                if (!string.IsNullOrWhiteSpace(value)) info.Models.Add(value);
+                            }
+                        }
+                    }
+                    info.IsRunning = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                info.Error = ex.Message;
+            }
+
+            return info;
+        }
     }
 }

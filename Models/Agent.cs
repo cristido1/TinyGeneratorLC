@@ -66,6 +66,18 @@ namespace TinyGenerator.Models
         
         [Column("top_p")]
         public double? TopP { get; set; } // Nucleus sampling probability (0.0-1.0)
+
+        [Column("repeat_penalty")]
+        public double? RepeatPenalty { get; set; } // Penalize repetition (model-specific)
+
+        [Column("top_k")]
+        public int? TopK { get; set; } // Top-K sampling (model-specific)
+
+        [Column("repeat_last_n")]
+        public int? RepeatLastN { get; set; } // Repeat window size (model-specific)
+
+        [Column("num_predict")]
+        public int? NumPredict { get; set; } // Max tokens to predict (model-specific)
         
         // Multi-step template association
         [Column("multi_step_template_id")]

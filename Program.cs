@@ -142,13 +142,18 @@ builder.Services.AddSingleton<LangChainToolFactory>(sp => new LangChainToolFacto
     sp.GetService<IMemoryEmbeddingBackfillScheduler>()));
 
 // LangChain kernel factory (creates and caches orchestrators)
+builder.Services.AddSingleton<LlamaService>(sp => new LlamaService(
+    sp.GetRequiredService<IConfiguration>(),
+    sp.GetService<ICustomLogger>()));
 builder.Services.AddSingleton<LangChainKernelFactory>(sp => 
 {
     var factory = new LangChainKernelFactory(
         builder.Configuration,
         sp.GetRequiredService<DatabaseService>(),
         sp.GetService<ICustomLogger>(),
-        sp.GetRequiredService<LangChainToolFactory>());
+        sp.GetRequiredService<LangChainToolFactory>(),
+        sp.GetService<IOllamaMonitorService>(),
+        sp.GetService<LlamaService>());
     return factory;
 });
 

@@ -26,8 +26,16 @@ namespace TinyGenerator.Services
         private readonly string _apiKey;
         private readonly HttpClient _httpClient;
         private readonly ICustomLogger? _logger;
+        private readonly bool? _forceOllama;
+        private readonly Func<CancellationToken, Task>? _beforeCallAsync;
+        private readonly Func<CancellationToken, Task>? _afterCallAsync;
+        private readonly bool _logRequestsAsLlama;
         public double Temperature { get; set; } = 0.7;
         public double TopP { get; set; } = 1.0;
+        public double? RepeatPenalty { get; set; }
+        public int? TopK { get; set; }
+        public int? RepeatLastN { get; set; }
+        public int? NumPredict { get; set; }
         public int MaxResponseTokens { get; set; } = 8000;
 
         public LangChainChatBridge(
@@ -35,7 +43,11 @@ namespace TinyGenerator.Services
             string modelId,
             string apiKey,
             HttpClient? httpClient = null,
-            ICustomLogger? logger = null)
+            ICustomLogger? logger = null,
+            bool? forceOllama = null,
+            Func<CancellationToken, Task>? beforeCallAsync = null,
+            Func<CancellationToken, Task>? afterCallAsync = null,
+            bool logRequestsAsLlama = false)
         {
             // Normalize endpoint - don't add /v1 suffix, just use endpoint as-is
             _modelEndpoint = new Uri(modelEndpoint.TrimEnd('/'));
@@ -43,6 +55,10 @@ namespace TinyGenerator.Services
             _apiKey = apiKey;
             _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             _logger = logger;
+            _forceOllama = forceOllama;
+            _beforeCallAsync = beforeCallAsync;
+            _afterCallAsync = afterCallAsync;
+            _logRequestsAsLlama = logRequestsAsLlama;
         }
 
         /// <summary>
@@ -65,7 +81,13 @@ namespace TinyGenerator.Services
 
             try
             {
-                var isOllama = _modelEndpoint.ToString().Contains("11434", StringComparison.OrdinalIgnoreCase);
+                if (_beforeCallAsync != null)
+                {
+                    _logger?.Log("Info", "llama.cpp", $"Running pre-call hook for {_modelId}");
+                    await _beforeCallAsync(ct).ConfigureAwait(false);
+                }
+
+                var isOllama = _forceOllama ?? _modelEndpoint.ToString().Contains("11434", StringComparison.OrdinalIgnoreCase);
                 
                 // For Ollama, create request with format or tools
                 // For OpenAI, include tools with tool_choice="auto"
@@ -84,6 +106,10 @@ namespace TinyGenerator.Services
                         { "temperature", Temperature },
                         { "top_p", TopP }
                     };
+                    if (RepeatPenalty.HasValue) requestBody["repeat_penalty"] = RepeatPenalty.Value;
+                    if (TopK.HasValue) requestBody["top_k"] = TopK.Value;
+                    if (RepeatLastN.HasValue) requestBody["repeat_last_n"] = RepeatLastN.Value;
+                    if (NumPredict.HasValue) requestBody["num_predict"] = NumPredict.Value;
 
                     // If we have tools, pass them
                     if (tools.Any())
@@ -147,6 +173,10 @@ namespace TinyGenerator.Services
                         { "temperature", Temperature },
                         { "top_p", TopP }
                     };
+                    if (RepeatPenalty.HasValue) requestDict["repeat_penalty"] = RepeatPenalty.Value;
+                    if (TopK.HasValue) requestDict["top_k"] = TopK.Value;
+                    if (RepeatLastN.HasValue) requestDict["repeat_last_n"] = RepeatLastN.Value;
+                    if (NumPredict.HasValue) requestDict["num_predict"] = NumPredict.Value;
 
                     if (tools.Any())
                     {
@@ -176,6 +206,10 @@ namespace TinyGenerator.Services
 
                 _logger?.Log("Info", "LangChainBridge", $"Calling model {_modelId} at {fullUrl}");
                 _logger?.LogRequestJson(_modelId, requestJson, currentThreadId);
+                if (_logRequestsAsLlama)
+                {
+                    _logger?.Log("Info", "llama.cpp", $"Request -> {fullUrl}\n{requestJson}");
+                }
 
                 var httpRequest = new HttpRequestMessage(HttpMethod.Post, fullUrl)
                 {
@@ -194,6 +228,10 @@ namespace TinyGenerator.Services
                 
                 _logger?.Log("Info", "LangChainBridge", $"Model responded (status={response.StatusCode})");
                 _logger?.LogResponseJson(_modelId, responseContent, currentThreadId);
+                if (_logRequestsAsLlama)
+                {
+                    _logger?.Log("Info", "llama.cpp", $"Response <- {fullUrl} (status={response.StatusCode})\n{responseContent}");
+                }
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -221,6 +259,19 @@ namespace TinyGenerator.Services
             }
             finally
             {
+                if (_afterCallAsync != null)
+                {
+                    try
+                    {
+                        _logger?.Log("Info", "llama.cpp", $"Running post-call hook for {_modelId}");
+                        await _afterCallAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Log("Warning", "LangChainBridge", $"Post-call hook failed: {ex.Message}");
+                    }
+                }
+
                 if (_logger != null)
                 {
                     await _logger.ModelRequestFinishedAsync(_modelId).ConfigureAwait(false);
@@ -236,10 +287,36 @@ namespace TinyGenerator.Services
         /// </summary>
         public static (string? textContent, List<ToolCallFromModel> toolCalls) ParseChatResponse(string? jsonResponse)
         {
+            var parsed = ParseChatResponseWithFinishReason(jsonResponse);
+            return (parsed.TextContent, parsed.ToolCalls);
+        }
+
+        public sealed class ParsedChatResponse
+        {
+            public string? TextContent { get; set; }
+            public List<ToolCallFromModel> ToolCalls { get; set; } = new();
+            public string? FinishReason { get; set; }
+        }
+
+        /// <summary>
+        /// Parse chat completion response including finish reason.
+        /// finishReason is typically "stop" or "length" (OpenAI-compatible), or done_reason for Ollama.
+        /// </summary>
+        public static ParsedChatResponse ParseChatResponseWithFinishReason(string? jsonResponse)
+        {
             var toolCalls = new List<ToolCallFromModel>();
             string? textContent = null;
+            string? finishReason = null;
 
-            if (string.IsNullOrWhiteSpace(jsonResponse)) return (textContent, toolCalls);
+            if (string.IsNullOrWhiteSpace(jsonResponse))
+            {
+                return new ParsedChatResponse
+                {
+                    TextContent = textContent,
+                    ToolCalls = toolCalls,
+                    FinishReason = finishReason
+                };
+            }
 
             // Step 1: Try structured deserialization to ApiResponse
             try
@@ -249,6 +326,7 @@ namespace TinyGenerator.Services
                 if (apiResponse?.Message != null)
                 {
                     textContent = apiResponse.Message.Content;
+                    finishReason = apiResponse.DoneReason;
 
                     // Extract tool_calls from structured response
                     if (apiResponse.Message.ToolCalls != null && apiResponse.Message.ToolCalls.Count > 0)
@@ -285,7 +363,12 @@ namespace TinyGenerator.Services
                     }
 
                     // Success with ApiResponse deserialization
-                    return (textContent, toolCalls);
+                    return new ParsedChatResponse
+                    {
+                        TextContent = textContent,
+                        ToolCalls = toolCalls,
+                        FinishReason = finishReason
+                    };
                 }
             }
             catch (JsonException)
@@ -306,6 +389,13 @@ namespace TinyGenerator.Services
 
                     foreach (var choice in choices)
                     {
+                        if (string.IsNullOrWhiteSpace(finishReason)
+                            && choice.TryGetProperty("finish_reason", out var finish)
+                            && finish.ValueKind == JsonValueKind.String)
+                        {
+                            finishReason = finish.GetString();
+                        }
+
                         if (choice.TryGetProperty("message", out var message))
                         {
                             // Extract text content
@@ -336,6 +426,12 @@ namespace TinyGenerator.Services
                 // Try Ollama format (has "message" object directly)
                 else if (root.TryGetProperty("message", out var ollamaMessage))
                 {
+                    // Some servers may include done_reason at root
+                    if (root.TryGetProperty("done_reason", out var doneReason) && doneReason.ValueKind == JsonValueKind.String)
+                    {
+                        finishReason = doneReason.GetString();
+                    }
+
                     if (ollamaMessage.TryGetProperty("content", out var content) && content.ValueKind != JsonValueKind.Null)
                     {
                         textContent = content.GetString();
@@ -389,7 +485,12 @@ namespace TinyGenerator.Services
                 System.Diagnostics.Debug.WriteLine($"Failed to parse chat response: {ex.Message}");
             }
 
-            return (textContent, toolCalls);
+            return new ParsedChatResponse
+            {
+                TextContent = textContent,
+                ToolCalls = toolCalls,
+                FinishReason = finishReason
+            };
         }
 
         private static void TryParseEmbeddedToolCalls(string content, List<ToolCallFromModel> toolCalls)

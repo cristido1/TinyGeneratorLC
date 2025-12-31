@@ -8,6 +8,7 @@
         const search = pager.dataset.search || '';
         const orderBy = pager.dataset.orderBy || '';
         const modelFilter = pager.dataset.modelFilter || '';
+        const roleFilter = pager.dataset.roleFilter || '';
         const showDisabled = pager.dataset.showDisabled || '';
         const totalPages = Math.max(1, Math.ceil(total / pageSize));
         const container = document.createElement('nav');
@@ -22,6 +23,7 @@
             if (search) qs.set('search', search);
             if (orderBy) qs.set('orderBy', orderBy);
             if (modelFilter) qs.set('modelFilter', modelFilter);
+            if (roleFilter) qs.set('roleFilter', roleFilter);
             if (showDisabled) qs.set('showDisabled', showDisabled);
             a.href = '?' + qs.toString(); a.textContent = label; li.appendChild(a); return li;
         }
@@ -35,6 +37,7 @@
             a.className='page-link';
             const qs = new URLSearchParams({page:p,pageSize:pageSize, ...(search?{search}:{}), ...(orderBy?{orderBy}:{}) });
             if (modelFilter) qs.set('modelFilter', modelFilter);
+            if (roleFilter) qs.set('roleFilter', roleFilter);
             if (showDisabled) qs.set('showDisabled', showDisabled);
             a.href='?'+qs.toString();
             a.textContent=String(p);

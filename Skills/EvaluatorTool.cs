@@ -37,7 +37,7 @@ namespace TinyGenerator.Skills
         {
             return CreateFunctionSchema(
                 "evaluate_full_story",
-                "Provide the complete evaluation for a story. Call this exactly once when you finish your review. The story_id is managed internally; do not pass it.",
+                "Provide the complete evaluation for a story. Call this exactly once when you finish your review.",
                 BuildFullStoryProperties(),
                 RequiredProperties);
         }
@@ -76,7 +76,7 @@ namespace TinyGenerator.Skills
             return Task.FromResult(JsonSerializer.Serialize(new { error = $"Unknown function: {functionName}" }));
         }
 
-        private readonly int _storyChunkSize = 1000;
+        private readonly int _storyChunkSize = 2000;
 
         private Task<string> EvaluateFullStoryAsync(string jsonInput)
         {
@@ -104,9 +104,21 @@ namespace TinyGenerator.Skills
                 var emotional = input.EmotionalImpactScore!.Value;
                 var action = input.ActionScore!.Value;
 
-                var payload = new
+                var payloadForStorage = new
                 {
-                    story_id = CurrentStoryId, // kept in payload for downstream systems, not required from the model
+                    story_id = CurrentStoryId,
+                    narrative_coherence_score = narrative,
+                    narrative_coherence_defects = input.NarrativeCoherenceDefects,
+                    originality_score = originality,
+                    originality_defects = input.OriginalityDefects,
+                    emotional_impact_score = emotional,
+                    emotional_impact_defects = input.EmotionalImpactDefects,
+                    action_score = action,
+                    action_defects = input.ActionDefects
+                };
+
+                var payloadForModel = new
+                {
                     narrative_coherence_score = narrative,
                     narrative_coherence_defects = input.NarrativeCoherenceDefects,
                     originality_score = originality,
@@ -126,7 +138,7 @@ namespace TinyGenerator.Skills
                 };
                 var totalScore = (double)scores.Sum();
 
-                LastResult = JsonSerializer.Serialize(payload);
+                LastResult = JsonSerializer.Serialize(payloadForModel);
                 LastFunctionCalled = "evaluate_full_story";
                 LastFunctionResult = LastResult;
 
@@ -134,7 +146,8 @@ namespace TinyGenerator.Skills
                 {
                     try
                     {
-                        _database.AddStoryEvaluation(CurrentStoryId.Value, LastResult, totalScore, ModelId, AgentId);
+                        var storageJson = JsonSerializer.Serialize(payloadForStorage);
+                        _database.AddStoryEvaluation(CurrentStoryId.Value, storageJson, totalScore, ModelId, AgentId);
                     }
                     catch (Exception dbEx)
                     {
@@ -278,9 +291,13 @@ namespace TinyGenerator.Skills
         private static readonly List<string> RequiredProperties = new()
         {
             "narrative_coherence_score",
+            "narrative_coherence_defects",
             "originality_score",
+            "originality_defects",
             "emotional_impact_score",
-            "action_score"
+            "emotional_impact_defects",
+            "action_score",
+            "action_defects"
         };
 
         private void EnsureStoryChunks()
@@ -336,9 +353,6 @@ namespace TinyGenerator.Skills
 
         public class ReadStoryPartInput
         {
-            [JsonPropertyName("story_id")]
-            public long StoryId { get; set; }
-
             [JsonPropertyName("part_index")]
             public int PartIndex { get; set; }
         }

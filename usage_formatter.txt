@@ -1,0 +1,168 @@
+OBIETTIVO GENERALE
+Implementare un nuovo comando applicativo che trasformi una storia in testo libero
+(story_raw) in una versione strutturata con tag narrativi (story_tagged),
+utilizzabile per TTS e pipeline successive.
+
+L’operazione deve essere eseguita come UN SOLO COMANDO gestito dal Command Dispatcher,
+ma internamente suddivisa in più fasi ben separate.
+
+
+========================================
+PATTERN ARCHITETTURALE
+========================================
+
+- Utilizzare il pattern Command.
+- Il Dispatcher invoca un unico comando di alto livello.
+- Il comando orchestri internamente più funzioni/step.
+- Nessuna logica di orchestrazione deve stare nel Dispatcher.
+
+
+========================================
+NUOVO COMANDO
+========================================
+
+Nome suggerito:
+TransformStoryRawToTaggedCommand
+
+Responsabilità del comando:
+- Leggere il campo story_raw dalla tabella stories.
+- Trasformare il testo libero in testo con tag narrativi.
+- Salvare il risultato e i metadati di formattazione nel database.
+
+
+========================================
+SCHEMA DATABASE (MODIFICHE)
+========================================
+
+Rinominare:
+- story  → story_raw
+
+Aggiungere i seguenti campi alla tabella stories:
+
+- story_tagged               TEXT
+- story_tagged_version       INTEGER
+- formatter_model            TEXT
+- formatter_prompt_hash      TEXT
+
+
+========================================
+FLUSSO INTERNO DEL COMANDO
+========================================
+
+Il comando deve eseguire le seguenti fasi IN SEQUENZA.
+
+
+----------------------------------------
+FASE 1 — SPLITTER (LOGICA DI CODICE)
+----------------------------------------
+
+Implementare una funzione pura (NO AI):
+
+Input:
+- string story_raw
+
+Output:
+- List<Chunk>
+
+Regole:
+- Suddividere story_raw in chunk tra 1000 e 2000 token.
+- Ogni chunk deve avere un overlap di 100–200 token con il successivo.
+- Ogni chunk deve contenere:
+  - id_chunk
+  - index_chunk
+  - testo_chunk
+
+NOTE:
+- La tokenizzazione può essere approssimata (non serve tokenizer perfetto).
+- L’obiettivo è garantire continuità narrativa, non precisione matematica.
+
+
+----------------------------------------
+FASE 2 — FORMATTER (AGENTE AI)
+----------------------------------------
+
+Per ogni chunk generato:
+
+- Inviare il testo del chunk all’agente Formatter.
+- L’agente Formatter:
+  - riceve SOLO testo libero
+  - restituisce lo STESSO testo arricchito con i tag narrativi
+    (AMBIENTE, RUMORI, MUSICA, FX, NARRATORE, PERSONAGGIO, ecc.)
+  - NON deve inventare contenuto
+  - NON deve riassumere
+  - NON deve modificare la sequenza narrativa
+
+Output di questa fase:
+- List<ChunkTagged> (uno per chunk)
+
+Registrare:
+- nome del modello usato come formatter_model
+- hash del prompt del formatter come formatter_prompt_hash
+
+
+----------------------------------------
+FASE 3 — MERGER (LOGICA DI CODICE, NON AI)
+----------------------------------------
+
+Il merger NON deve essere un agente AI.
+
+Motivazione:
+- Il merge è deterministico.
+- Deve solo eliminare duplicazioni dovute all’overlap.
+- Un agente introdurrebbe rumore e rischio di alterazioni.
+
+Implementare quindi una funzione di codice:
+
+Input:
+- List<ChunkTagged>
+
+Output:
+- string story_tagged_finale
+
+Regole di merge:
+- Mantenere l’ordine dei chunk.
+- Rimuovere le porzioni duplicate generate dall’overlap.
+- Preservare TUTTI i tag narrativi.
+- Non riformattare, non reinterpretare, non “abbellire”.
+
+Strategia consigliata:
+- Confronto testuale tra fine del chunk N e inizio del chunk N+1.
+- Eliminare la parte comune.
+- Concatenare il resto.
+
+
+----------------------------------------
+FASE 4 — SALVATAGGIO
+----------------------------------------
+
+Il comando deve infine:
+
+- Salvare story_tagged_finale nel campo story_tagged.
+- Impostare:
+  - story_tagged_version = valore incrementale o versione corrente
+  - formatter_model = nome modello formatter
+  - formatter_prompt_hash = hash del prompt formatter
+
+Il comando termina senza restituire il testo completo
+(la storia è persistita nel database).
+
+
+========================================
+NOTE IMPORTANTI
+========================================
+
+- Il writer NON deve più produrre tag.
+- Il formatter è l’unico responsabile del tagging.
+- La valutazione qualitativa avviene SEMPRE su story_raw.
+- Il tagging è una trasformazione tecnica, non creativa.
+
+- L’intera pipeline (split → format → merge → save)
+  deve essere atomica dal punto di vista del Command Dispatcher.
+
+- In futuro il comando potrà essere rilanciato per rigenerare story_tagged
+  quando cambiano formatter_model o formatter_prompt_hash.
+
+
+========================================
+FINE FILE
+========================================

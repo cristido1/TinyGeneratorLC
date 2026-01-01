@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
+using System.Text;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
@@ -36,7 +37,9 @@ namespace TinyGenerator.Services
         public int? TopK { get; set; }
         public int? RepeatLastN { get; set; }
         public int? NumPredict { get; set; }
-        public int MaxResponseTokens { get; set; } = 8000;
+        // If null, do not send any explicit max tokens parameter to the model.
+        // This avoids forcing an unsafe default such as 8000. Set when required.
+        public int? MaxResponseTokens { get; set; } = null;
 
         public LangChainChatBridge(
             string modelEndpoint,
@@ -79,11 +82,25 @@ namespace TinyGenerator.Services
                 await _logger.ModelRequestStartedAsync(_modelId).ConfigureAwait(false);
             }
 
+            // Prepare lightweight aggregation for llama.cpp logs: we will emit a
+            // single concise SUCCESS message on success or a detailed error body
+            // (request + response + exception) only when something goes wrong.
+            StringBuilder? llamaLog = null;
+            string? requestJsonForLlama = null;
+            string? responseContentForLlama = null;
+            int? responseStatusForLlama = null;
+            bool encounteredError = false;
+            if (_logRequestsAsLlama && _logger != null)
+            {
+                llamaLog = new StringBuilder();
+            }
+
+            string? requestUrlForLlama = null;
             try
             {
                 if (_beforeCallAsync != null)
                 {
-                    _logger?.Log("Info", "llama.cpp", $"Running pre-call hook for {_modelId}");
+                    if (llamaLog != null) llamaLog.AppendLine($"Pre-call: Running pre-call hook for {_modelId}");
                     await _beforeCallAsync(ct).ConfigureAwait(false);
                 }
 
@@ -121,6 +138,7 @@ namespace TinyGenerator.Services
 
                     request = requestBody;
                     fullUrl = new Uri(_modelEndpoint, "/api/chat").ToString();
+                    requestUrlForLlama = fullUrl;
                 }
                 else
                 {
@@ -184,17 +202,21 @@ namespace TinyGenerator.Services
                     }
                     
                     // Add correct token limit parameter based on model
-                    if (usesNewTokenParam)
+                    if (MaxResponseTokens.HasValue)
                     {
-                        requestDict["max_completion_tokens"] = MaxResponseTokens;
-                    }
-                    else
-                    {
-                        requestDict["max_tokens"] = MaxResponseTokens;
+                        if (usesNewTokenParam)
+                        {
+                            requestDict["max_completion_tokens"] = MaxResponseTokens.Value;
+                        }
+                        else
+                        {
+                            requestDict["max_tokens"] = MaxResponseTokens.Value;
+                        }
                     }
                     
                     request = requestDict;
                     fullUrl = new Uri(_modelEndpoint, "/v1/chat/completions").ToString();
+                    requestUrlForLlama = fullUrl;
                 }
 
                 var requestJson = JsonSerializer.Serialize(request, new JsonSerializerOptions { WriteIndented = false });
@@ -204,12 +226,11 @@ namespace TinyGenerator.Services
                     System.Text.Encoding.UTF8,
                     "application/json");
 
-                _logger?.Log("Info", "LangChainBridge", $"Calling model {_modelId} at {fullUrl}");
-                _logger?.LogRequestJson(_modelId, requestJson, currentThreadId);
-                if (_logRequestsAsLlama)
-                {
-                    _logger?.Log("Info", "llama.cpp", $"Request -> {fullUrl}\n{requestJson}");
-                }
+                    _logger?.Log("Info", "LangChainBridge", $"Calling model {_modelId} at {fullUrl}");
+                    _logger?.LogRequestJson(_modelId, requestJson, currentThreadId);
+                    // store request for possible error diagnostics only; do not attach it to
+                    // the log unless an error occurs
+                    requestJsonForLlama = requestJson;
 
                 var httpRequest = new HttpRequestMessage(HttpMethod.Post, fullUrl)
                 {
@@ -228,9 +249,12 @@ namespace TinyGenerator.Services
                 
                 _logger?.Log("Info", "LangChainBridge", $"Model responded (status={response.StatusCode})");
                 _logger?.LogResponseJson(_modelId, responseContent, currentThreadId);
-                if (_logRequestsAsLlama)
+                // capture response for possible error diagnostics only
+                responseContentForLlama = responseContent;
+                responseStatusForLlama = (int)response.StatusCode;
+                if (!response.IsSuccessStatusCode)
                 {
-                    _logger?.Log("Info", "llama.cpp", $"Response <- {fullUrl} (status={response.StatusCode})\n{responseContent}");
+                    encounteredError = true;
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -263,14 +287,44 @@ namespace TinyGenerator.Services
                 {
                     try
                     {
-                        _logger?.Log("Info", "llama.cpp", $"Running post-call hook for {_modelId}");
                         await _afterCallAsync(ct).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
+                        // treat post-call failures as errors to surface in llama.cpp logs
+                        encounteredError = true;
+                        if (llamaLog != null)
+                        {
+                            llamaLog.AppendLine($"Post-call hook failed: {ex.Message}");
+                        }
                         _logger?.Log("Warning", "LangChainBridge", $"Post-call hook failed: {ex.Message}");
                     }
                 }
+
+                // Emit a single aggregated llama.cpp log entry: concise success or detailed error
+                try
+                {
+                    if (llamaLog != null)
+                    {
+                        if (encounteredError)
+                        {
+                            // Provide request + response for diagnostics when error occurred
+                            var sb = llamaLog;
+                            sb.AppendLine($"Model: {_modelId}");
+                            if (!string.IsNullOrEmpty(requestJsonForLlama))
+                                sb.AppendLine($"Request -> {requestUrlForLlama}\n{requestJsonForLlama}");
+                            if (!string.IsNullOrEmpty(responseContentForLlama))
+                                sb.AppendLine($"Response <- {requestUrlForLlama} (status={responseStatusForLlama})\n{responseContentForLlama}");
+                            _logger?.Log("Information", "llama.cpp", sb.ToString());
+                        }
+                        else
+                        {
+                            // Only log a short success message to reduce noise
+                            _logger?.Log("Information", "llama.cpp", $"Model call succeeded: {_modelId} (status={responseStatusForLlama})");
+                        }
+                    }
+                }
+                catch { }
 
                 if (_logger != null)
                 {
@@ -602,7 +656,14 @@ namespace TinyGenerator.Services
             _modelBridge = new LangChainChatBridge(modelEndpoint, modelId, apiKey, httpClient, logger);
             if (maxTokens.HasValue && maxTokens.Value > 0)
             {
-                _modelBridge.MaxResponseTokens = Math.Max(_modelBridge.MaxResponseTokens, maxTokens.Value);
+                if (!_modelBridge.MaxResponseTokens.HasValue)
+                {
+                    _modelBridge.MaxResponseTokens = maxTokens.Value;
+                }
+                else
+                {
+                    _modelBridge.MaxResponseTokens = Math.Max(_modelBridge.MaxResponseTokens.Value, maxTokens.Value);
+                }
             }
             _reactLoop = new ReActLoopOrchestrator(tools, logger);
         }

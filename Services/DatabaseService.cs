@@ -1852,7 +1852,7 @@ SET TotalScore = (
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
             Prompt = prompt ?? string.Empty,
-            Story = r.StoryA ?? string.Empty,
+            StoryRaw = r.StoryA ?? string.Empty,
             CharCount = charCountA,
             Eval = r.EvalA ?? string.Empty,
             Score = r.ScoreA,
@@ -1870,7 +1870,7 @@ SET TotalScore = (
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
             Prompt = prompt ?? string.Empty,
-            Story = r.StoryB ?? string.Empty,
+            StoryRaw = r.StoryB ?? string.Empty,
             CharCount = charCountB,
             Eval = r.EvalB ?? string.Empty,
             Score = r.ScoreB,
@@ -1888,7 +1888,7 @@ SET TotalScore = (
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
             Prompt = prompt ?? string.Empty,
-            Story = r.StoryC ?? string.Empty,
+            StoryRaw = r.StoryC ?? string.Empty,
             CharCount = charCountC,
             Eval = r.EvalC ?? string.Empty,
             Score = r.ScoreC,
@@ -2021,7 +2021,7 @@ SET TotalScore = (
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
             Prompt = prompt ?? string.Empty,
-            Story = story ?? string.Empty,
+            StoryRaw = story ?? string.Empty,
             Title = title ?? string.Empty,
             CharCount = charCount,
             Eval = eval ?? string.Empty,
@@ -2085,7 +2085,7 @@ SET TotalScore = (
         if (storyRecord == null) return false;
         if (story != null)
         {
-            storyRecord.Story = story;
+            storyRecord.StoryRaw = story;
             storyRecord.CharCount = story.Length;
         }
         if (modelId.HasValue) storyRecord.ModelId = modelId.Value;
@@ -2117,6 +2117,44 @@ SET TotalScore = (
         var storyRecord = context.Stories.Find(storyId);
         if (storyRecord == null) return false;
         storyRecord.Summary = summary;
+        context.SaveChanges();
+        return true;
+    }
+
+    /// <summary>
+    /// Updates tagged story fields and formatter metadata.
+    /// </summary>
+    public bool UpdateStoryTagged(long storyId, string storyTagged, int? formatterModelId, string? formatterPromptHash, int? storyTaggedVersion = null)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.StoryTagged = storyTagged ?? string.Empty;
+        if (storyTaggedVersion.HasValue)
+        {
+            storyRecord.StoryTaggedVersion = storyTaggedVersion.Value;
+        }
+        if (formatterModelId.HasValue)
+        {
+            storyRecord.FormatterModelId = formatterModelId.Value;
+        }
+        storyRecord.FormatterPromptHash = formatterPromptHash;
+        context.SaveChanges();
+        return true;
+    }
+
+    /// <summary>
+    /// Clears tagged story fields and formatter metadata.
+    /// </summary>
+    public bool ClearStoryTagged(long storyId)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.StoryTagged = string.Empty;
+        storyRecord.StoryTaggedVersion = null;
+        storyRecord.FormatterModelId = null;
+        storyRecord.FormatterPromptHash = null;
         context.SaveChanges();
         return true;
     }
@@ -3383,6 +3421,94 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
     {
         var list = entries?.ToList() ?? new List<TinyGenerator.Models.LogEntry>();
         if (list.Count == 0) return;
+
+        // Pre-process list: coalesce consecutive llama.cpp entries into a single aggregated entry
+        var processed = new List<TinyGenerator.Models.LogEntry>();
+        for (int i = 0; i < list.Count; i++)
+        {
+            var e = list[i];
+            if (string.Equals(e.Category, "llama.cpp", StringComparison.OrdinalIgnoreCase))
+            {
+                // start aggregation
+                var msgSb = new System.Text.StringBuilder();
+                var level = e.Level ?? "Information";
+                var exceptionSb = new System.Text.StringBuilder();
+                var chatTextSb = new System.Text.StringBuilder();
+                var ts = e.Ts;
+                var threadId = e.ThreadId;
+                var threadScope = e.ThreadScope;
+                var agentName = e.AgentName;
+
+                void AppendEntry(TinyGenerator.Models.LogEntry le)
+                {
+                    if (!string.IsNullOrWhiteSpace(le.Message))
+                    {
+                        if (msgSb.Length > 0) msgSb.AppendLine();
+                        msgSb.Append(le.Message);
+                    }
+                    if (!string.IsNullOrWhiteSpace(le.Exception))
+                    {
+                        if (exceptionSb.Length > 0) exceptionSb.AppendLine();
+                        exceptionSb.Append(le.Exception);
+                    }
+                    if (!string.IsNullOrWhiteSpace(le.ChatText))
+                    {
+                        if (chatTextSb.Length > 0) chatTextSb.AppendLine();
+                        chatTextSb.Append(le.ChatText);
+                    }
+                    // escalate level severity if any entry is warning/error
+                    var lvl = (le.Level ?? "Information").ToLowerInvariant();
+                    if (lvl == "error" || lvl == "fatal") level = "Error";
+                    else if (lvl == "warning" && level.ToLowerInvariant() != "error") level = "Warning";
+                }
+
+                AppendEntry(e);
+                int j = i + 1;
+                while (j < list.Count && string.Equals(list[j].Category, "llama.cpp", StringComparison.OrdinalIgnoreCase))
+                {
+                    AppendEntry(list[j]);
+                    j++;
+                }
+
+                // create aggregated entry
+                var agg = new TinyGenerator.Models.LogEntry
+                {
+                    Ts = ts,
+                    Level = level,
+                    Category = "llama.cpp",
+                    Message = msgSb.Length > 0 ? msgSb.ToString() : string.Empty,
+                    Exception = exceptionSb.Length > 0 ? exceptionSb.ToString() : null,
+                    State = null,
+                    ThreadId = threadId,
+                    ThreadScope = threadScope,
+                    AgentName = agentName,
+                    Context = null,
+                    Analized = false,
+                    ChatText = chatTextSb.Length > 0 ? chatTextSb.ToString() : string.Empty,
+                    Result = null
+                };
+
+                // Trim very large aggregated messages to avoid DB bloat
+                const int MaxLen = 8000;
+                if (!string.IsNullOrEmpty(agg.Message) && agg.Message.Length > MaxLen)
+                {
+                    agg.Message = agg.Message.Substring(0, MaxLen) + "\n... (truncated)";
+                }
+                if (!string.IsNullOrEmpty(agg.ChatText) && agg.ChatText.Length > MaxLen)
+                {
+                    agg.ChatText = agg.ChatText.Substring(0, MaxLen) + "\n... (truncated)";
+                }
+
+                processed.Add(agg);
+                i = j - 1; // advance outer loop
+            }
+            else
+            {
+                processed.Add(e);
+            }
+        }
+
+        list = processed;
 
         using var conn = CreateConnection();
         await ((SqliteConnection)conn).OpenAsync();

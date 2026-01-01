@@ -30,13 +30,18 @@ namespace TinyGenerator.Pages.Stories
 
         public StoryRecord? Story { get; set; }
         public List<StoryEvaluation> Evaluations { get; set; } = new List<StoryEvaluation>();
-        public string? StoryText { get; set; }
+        public string? StoryRawText { get; set; }
+        public string? StoryTaggedText { get; set; }
 
         public void OnGet(long id)
         {
             Id = id;
             Story = _stories.GetStoryById(id);
-            if (Story != null) StoryText = Story.Story;
+            if (Story != null)
+            {
+                StoryRawText = Story.StoryRaw;
+                StoryTaggedText = Story.StoryTagged;
+            }
             Evaluations = _stories.GetEvaluationsForStory(id);
         }
 
@@ -46,7 +51,7 @@ namespace TinyGenerator.Pages.Stories
             {
                 var story = _stories.GetStoryById(id);
                 if (story == null) return NotFound();
-                var text = story.Story;
+                var text = story.StoryRaw;
                 if (string.IsNullOrWhiteSpace(text)) return BadRequest("No story text");
 
                 var voices = _db.ListTtsVoices();
@@ -140,7 +145,7 @@ namespace TinyGenerator.Pages.Stories
             {
                 var story = _stories.GetStoryById(id);
                 if (story == null) return NotFound();
-                var text = story.Story;
+                var text = story.StoryRaw;
                 if (string.IsNullOrWhiteSpace(text)) return BadRequest("No story text");
 
                 // Check if we're on macOS

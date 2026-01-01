@@ -16,6 +16,7 @@
             <label for="Prompt" class="note-title">Inserisci il prompt della storia</label>
             <textarea class="keep-input font-monospace" id="Prompt" name="Prompt" rows="8" style="width:100%; padding:10px; font-size:0.95rem;" required>@Model.Prompt</textarea>
         </div>
+        <div id="savedStories" style="margin-bottom:10px; display:flex; gap:8px; flex-wrap:wrap"></div>
         <div id="genError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
 
         <div style="display:flex; gap:12px; align-items:center; margin-bottom:8px">
@@ -182,6 +183,8 @@
             genError.style.display = 'none';
         }
 
+        // save title/prompt to cookie-based history
+        saveStoryToCookie();
         clearMessages();
         appendMessage('🟡 Avvio...');
     // send start request (include antiforgery token automatically by using the form)
@@ -220,6 +223,8 @@
             genError.style.display = 'none';
         }
 
+        // save title/prompt to cookie-based history
+        saveStoryToCookie();
         clearMessages();
         appendMessage('🎬 Avvio pipeline completo...');
         appendMessage('📝 Verrà generata una storia con tutti i writer attivi');
@@ -247,6 +252,8 @@
 
     // on page load, if there's a lastGenId in localStorage, reattach to it (so the page is persistent)
     (async () => {
+        // render any saved stories from cookie
+        renderSavedButtons();
         try {
             const existing = localStorage.getItem('lastGenId');
             if (existing) {
@@ -309,6 +316,67 @@
         if (progressDiv) {
             progressDiv.style.display = 'none';
         }
+    }
+
+    // --- Saved stories (cookie) helpers ---
+    function getCookie(name) {
+        const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+        return v ? decodeURIComponent(v.pop()) : '';
+    }
+    function setCookie(name, value, days) {
+        const d = new Date();
+        d.setTime(d.getTime() + (days*24*60*60*1000));
+        document.cookie = name + '=' + encodeURIComponent(value) + ';path=/;expires=' + d.toUTCString();
+    }
+    function getSavedStories() {
+        const raw = getCookie('tg_history');
+        if (!raw) return [];
+        try { return JSON.parse(raw); } catch (e) { return []; }
+    }
+    function saveStoryToCookie() {
+        try {
+            const titleEl = document.getElementById('Title');
+            const promptEl = document.getElementById('Prompt');
+            if (!titleEl || !promptEl) return;
+            const title = titleEl.value ? titleEl.value.trim() : '';
+            const prompt = promptEl.value ? promptEl.value : '';
+            if (!title) return; // don't save empty titles
+            const arr = getSavedStories();
+            // if title exists, remove it (we'll re-add to front)
+            const idx = arr.findIndex(x => x.title === title);
+            if (idx >= 0) arr.splice(idx, 1);
+            arr.unshift({ title: title, prompt: prompt });
+            // keep max 10
+            const sliced = arr.slice(0, 10);
+            setCookie('tg_history', JSON.stringify(sliced), 365);
+            renderSavedButtons();
+        } catch (e) { console.error('saveStoryToCookie', e); }
+    }
+    function renderSavedButtons() {
+        const container = document.getElementById('savedStories');
+        if (!container) return;
+        container.innerHTML = '';
+        const arr = getSavedStories();
+        if (!arr || arr.length === 0) return;
+        arr.forEach(item => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'action-btn';
+            btn.style.padding = '6px 10px';
+            btn.style.background = '#f1f5f9';
+            btn.style.border = '1px solid #e2e8f0';
+            btn.style.borderRadius = '6px';
+            btn.style.cursor = 'pointer';
+            btn.textContent = item.title;
+            btn.title = 'Ripristina titolo e prompt salvati';
+            btn.addEventListener('click', () => {
+                const titleEl = document.getElementById('Title');
+                const promptEl = document.getElementById('Prompt');
+                if (titleEl) titleEl.value = item.title;
+                if (promptEl) promptEl.value = item.prompt;
+            });
+            container.appendChild(btn);
+        });
     }
 
     // hide error when user edits prompt

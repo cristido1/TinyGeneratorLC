@@ -11,8 +11,9 @@ MODEL_MAPPINGS = {
         'multi_step_template_id', 'RowVersion'
     ],
     'stories': [
-        'id', 'generation_id', 'memory_key', 'ts', 'prompt', 'title', 'story',
+        'id', 'generation_id', 'memory_key', 'ts', 'prompt', 'title', 'story_raw',
         'char_count', 'eval', 'score', 'approved', 'status_id', 'folder',
+        'story_tagged', 'story_tagged_version', 'formatter_model', 'formatter_prompt_hash',
         'generated_tts_json', 'generated_tts', 'generated_ambient', 'generated_music',
         'generated_effects', 'generated_mixed_audio', 'model_id', 'agent_id',
         'RowVersion', 'characters', 'serie_id', 'serie_episode', 'summary'

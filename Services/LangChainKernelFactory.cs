@@ -288,12 +288,23 @@ namespace TinyGenerator.Services
                     var modelName = modelInfo.Name;
                     _logger?.Log("Info", "llama.cpp",
                         $"llama.cpp selected: model={modelName}, ctx={ctxSize}, endpoint={endpoint}");
-                    beforeCall = _ => Task.Run(() =>
+                    beforeCall = async ct =>
                     {
-                        _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: starting server");
-                        _llamaService?.StartServer(modelName, ctxSize);
-                        _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: start complete");
-                    });
+                        _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: ensuring server restart");
+                        if (_llamaService != null)
+                        {
+                            try
+                            {
+                                await _llamaService.EnsureRestartAsync(modelName, ctxSize).ConfigureAwait(false);
+                                _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: start complete");
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger?.Log("Warning", "llama.cpp", $"llama.cpp beforeCall failed: {ex.Message}");
+                                throw;
+                            }
+                        }
+                    };
                     afterCall = _ => Task.Run(() =>
                     {
                         _logger?.Log("Info", "llama.cpp", "llama.cpp afterCall: stopping server");
@@ -337,7 +348,14 @@ namespace TinyGenerator.Services
                     var maxTokens = DetermineMaxTokensForModel(modelInfo);
                     if (maxTokens > 0)
                     {
-                        bridge.MaxResponseTokens = Math.Max(bridge.MaxResponseTokens, maxTokens);
+                        if (!bridge.MaxResponseTokens.HasValue)
+                        {
+                            bridge.MaxResponseTokens = maxTokens;
+                        }
+                        else
+                        {
+                            bridge.MaxResponseTokens = Math.Max(bridge.MaxResponseTokens.Value, maxTokens);
+                        }
                     }
                 }
                 return bridge;

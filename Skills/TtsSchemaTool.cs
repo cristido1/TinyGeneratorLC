@@ -326,7 +326,7 @@ namespace TinyGenerator.Skills
             if (string.IsNullOrWhiteSpace(storyText) && CurrentStoryId.HasValue && _database != null)
             {
                 var s = _database.GetStoryById(CurrentStoryId.Value);
-                storyText = s?.Story ?? string.Empty;
+                storyText = s?.StoryTagged ?? string.Empty;
             }
 
             if (string.IsNullOrEmpty(storyText))
@@ -458,7 +458,7 @@ namespace TinyGenerator.Skills
             if (CurrentStoryId.HasValue && _database != null)
             {
                 var s = _database.GetStoryById(CurrentStoryId.Value);
-                var storyText = s?.Story ?? string.Empty;
+                var storyText = s?.StoryTagged ?? string.Empty;
                 _chunksCache = StoryChunkHelper.SplitIntoChunks(storyText, _storyChunkSize);
             }
         }

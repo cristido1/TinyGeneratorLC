@@ -205,7 +205,7 @@ namespace TinyGenerator.Skills
                     return Task.FromResult(JsonSerializer.Serialize(new { error = $"Story {CurrentStoryId} not found" }));
                 }
 
-                var fullText = story.Story ?? string.Empty;
+                var fullText = story.StoryRaw ?? string.Empty;
                 var totalChunks = (int)Math.Ceiling((double)fullText.Length / _storyChunkSize);
 
                 if (input.PartIndex < 0 || input.PartIndex >= totalChunks)

@@ -994,10 +994,26 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("status_id");
 
-                    b.Property<string>("Story")
+                    b.Property<string>("StoryRaw")
                         .IsRequired()
                         .HasColumnType("TEXT")
-                        .HasColumnName("story");
+                        .HasColumnName("story_raw");
+
+                    b.Property<string>("StoryTagged")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("story_tagged");
+
+                    b.Property<int?>("StoryTaggedVersion")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("story_tagged_version");
+
+                    b.Property<int?>("FormatterModelId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("formatter_model");
+
+                    b.Property<string>("FormatterPromptHash")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("formatter_prompt_hash");
 
                     b.Property<string>("Timestamp")
                         .IsRequired()

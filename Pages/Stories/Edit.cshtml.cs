@@ -26,6 +26,9 @@ namespace TinyGenerator.Pages.Stories
         public string StoryText { get; set; } = string.Empty;
 
         [BindProperty]
+        public string? StoryTaggedText { get; set; }
+
+        [BindProperty]
         public string? Characters { get; set; }
 
         [BindProperty]
@@ -44,13 +47,16 @@ namespace TinyGenerator.Pages.Stories
         [BindProperty]
         public string? Title { get; set; }
 
+        public string FormatterAgentName { get; set; } = string.Empty;
+
         public IActionResult OnGet(long id)
         {
             Id = id;
             var s = _stories.GetStoryById(id);
             if (s == null) return NotFound();
             Prompt = s.Prompt;
-            StoryText = s.Story;
+            StoryText = s.StoryRaw;
+            StoryTaggedText = s.StoryTagged;
             Characters = s.Characters;
             StatusId = s.StatusId;
             Title = s.Title;
@@ -59,14 +65,26 @@ namespace TinyGenerator.Pages.Stories
             LoadStatuses();
             LoadAgents();
             LoadModels();
+            FormatterAgentName = ResolveFormatterAgentName(s.FormatterModelId);
             return Page();
         }
 
         public IActionResult OnPost()
         {
             if (Id <= 0) return BadRequest();
+            var story = _stories.GetStoryById(Id);
+            if (story == null) return NotFound();
             LoadStatuses();
             _stories.UpdateStoryById(Id, StoryText, ModelId, AgentId, StatusId, updateStatus: true);
+            if (StoryTaggedText != null)
+            {
+                _database.UpdateStoryTagged(
+                    Id,
+                    StoryTaggedText ?? string.Empty,
+                    story.FormatterModelId,
+                    story.FormatterPromptHash,
+                    story.StoryTaggedVersion);
+            }
             if (!string.IsNullOrEmpty(Characters))
             {
                 _stories.UpdateStoryCharacters(Id, Characters);
@@ -108,6 +126,29 @@ namespace TinyGenerator.Pages.Stories
             catch
             {
                 Models = new List<TinyGenerator.Models.ModelInfo>();
+            }
+        }
+
+        private string ResolveFormatterAgentName(int? formatterModelId)
+        {
+            try
+            {
+                var agents = _database.ListAgents()
+                    .Where(a => a.IsActive && string.Equals(a.Role, "formatter", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (agents.Count == 0) return string.Empty;
+
+                if (formatterModelId.HasValue)
+                {
+                    var match = agents.FirstOrDefault(a => a.ModelId == formatterModelId.Value);
+                    if (match != null) return match.Name ?? string.Empty;
+                }
+
+                return agents[0].Name ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
             }
         }
     }

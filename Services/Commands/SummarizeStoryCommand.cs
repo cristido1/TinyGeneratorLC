@@ -40,7 +40,7 @@ namespace TinyGenerator.Services.Commands
                     return false;
                 }
 
-                if (string.IsNullOrWhiteSpace(story.Story))
+                if (string.IsNullOrWhiteSpace(story.StoryRaw))
                 {
                     _logger.Log("Error", "SummarizeStory", $"Story {_storyId} has no content to summarize");
                     return false;
@@ -155,7 +155,7 @@ namespace TinyGenerator.Services.Commands
                 TITLE: {story.Title ?? "Untitled"}
 
                 STORY TEXT:
-                {story.Story}
+                {story.StoryRaw}
 
                 ---
                 Provide a 3-5 sentence summary that captures the main characters, central conflict, key events, and resolution. Write in the same language as the story.

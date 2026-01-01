@@ -35,7 +35,7 @@ ALTER TABLE stories RENAME COLUMN GenerationId TO generation_id;
 ALTER TABLE stories RENAME COLUMN MemoryKey TO memory_key;
 ALTER TABLE stories RENAME COLUMN Timestamp TO ts;
 ALTER TABLE stories RENAME COLUMN Prompt TO prompt;
-ALTER TABLE stories RENAME COLUMN Story TO story;
+ALTER TABLE stories RENAME COLUMN Story TO story_raw;
 ALTER TABLE stories RENAME COLUMN CharCount TO char_count;
 ALTER TABLE stories RENAME COLUMN Eval TO eval;
 ALTER TABLE stories RENAME COLUMN Score TO score;

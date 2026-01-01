@@ -21,6 +21,8 @@ namespace TinyGenerator.Services
         private readonly int _llamaGpuLayers;
         private readonly string? _llamaDevice;
         private readonly int _llamaRestartDelayMs;
+        private readonly bool _llamaVerboseLogs;
+        private readonly string _llamaRestartPolicy;
         // Can be a single path or a semicolon-separated list of paths.
         // On Windows, llama.cpp CUDA DLLs are typically in ...\CUDA\vXX.Y\bin\x64
         private readonly string? _cudaBinPath;
@@ -48,6 +50,8 @@ namespace TinyGenerator.Services
             _llamaDevice = configuration["LlamaCpp:Device"];
             _cudaBinPath = configuration["LlamaCpp:CudaBinPath"];
             _llamaRestartDelayMs = int.TryParse(configuration["LlamaCpp:RestartDelayMs"], out var delayMs) ? delayMs : 500;
+            _llamaVerboseLogs = bool.TryParse(configuration["LlamaCpp:VerboseLogs"], out var v) ? v : false;
+            _llamaRestartPolicy = configuration["LlamaCpp:RestartPolicy"] ?? "kill";
         }
 
         public void StartServer(string modelName, int contextSize)
@@ -129,17 +133,36 @@ namespace TinyGenerator.Services
 
                 _llamaServer.OutputDataReceived += (_, e) =>
                 {
-                    if (!string.IsNullOrWhiteSpace(e.Data))
+                    try
                     {
-                        _logger?.Log("Info", "llama.cpp", $"llama.cpp: {e.Data}");
+                        if (string.IsNullOrWhiteSpace(e.Data)) return;
+                        var line = e.Data.Trim();
+                        // If verbose logging is enabled, log everything. Otherwise only log warnings/errors.
+                        if (_llamaVerboseLogs)
+                        {
+                            _logger?.Log("Info", "llama.cpp", $"llama.cpp: {line}");
+                        }
+                        else
+                        {
+                            var lower = line.ToLowerInvariant();
+                            if (lower.Contains("error") || lower.Contains("failed") || lower.Contains("exception") || lower.Contains("traceback") || lower.Contains("warning"))
+                            {
+                                _logger?.Log("Warning", "llama.cpp", $"llama.cpp: {line}");
+                            }
+                            // otherwise skip noisy info lines
+                        }
                     }
+                    catch { }
                 };
                 _llamaServer.ErrorDataReceived += (_, e) =>
                 {
-                    if (!string.IsNullOrWhiteSpace(e.Data))
+                    try
                     {
-                        _logger?.Log("Warning", "llama.cpp", $"llama.cpp stderr: {e.Data}");
+                        if (string.IsNullOrWhiteSpace(e.Data)) return;
+                        var line = e.Data.Trim();
+                        _logger?.Log("Warning", "llama.cpp", $"llama.cpp stderr: {line}");
                     }
+                    catch { }
                 };
 
                 _llamaServer.Start();
@@ -171,9 +194,106 @@ namespace TinyGenerator.Services
             }
         }
 
+        /// <summary>
+        /// Check whether the llama server appears to be running (process alive or health endpoint responding).
+        /// </summary>
+        public async Task<bool> IsServerRunningAsync()
+        {
+            try
+            {
+                lock (_lock)
+                {
+                    if (_llamaServer != null && !_llamaServer.HasExited)
+                    {
+                        return true;
+                    }
+                }
+
+                var healthUrl = $"http://{_llamaHost}:{_llamaPort}/health";
+                try
+                {
+                    var res = await _httpClient.GetAsync(healthUrl, CancellationToken.None).ConfigureAwait(false);
+                    if (res.IsSuccessStatusCode) return true;
+                }
+                catch { }
+
+                var modelsUrl = $"http://{_llamaHost}:{_llamaPort}/v1/models";
+                try
+                {
+                    var res = await _httpClient.GetAsync(modelsUrl, CancellationToken.None).ConfigureAwait(false);
+                    if (res.IsSuccessStatusCode) return true;
+                }
+                catch { }
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Ensure the llama server is restarted before using it: if already running, stop and wait a short delay, then start.
+        /// </summary>
+        public async Task EnsureRestartAsync(string modelName, int contextSize)
+        {
+            // If server is running, stop it first
+            try
+            {
+                if (await IsServerRunningAsync().ConfigureAwait(false))
+                {
+                    if (!_llamaRestartPolicy.Equals("kill", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger?.Log("Info", "llama.cpp", $"RestartPolicy={_llamaRestartPolicy} - not killing external llama-server; skipping restart");
+                        return;
+                    }
+
+                    // If we own the process, StopServer will stop it. If the server is external
+                    // (we didn't start it), attempt to locate and kill external llama-server processes.
+                    if (_llamaServer != null)
+                    {
+                        StopServer();
+                    }
+                    else
+                    {
+                        try
+                        {
+                            var exeName = Path.GetFileNameWithoutExtension(_llamaServerExe ?? "llama-server.exe");
+                            var procs = Process.GetProcessesByName(exeName);
+                            foreach (var p in procs)
+                            {
+                                try
+                                {
+                                    _logger?.Log("Info", "llama.cpp", $"Terminating external llama-server process (PID={p.Id})");
+                                    p.Kill(entireProcessTree: true);
+                                    p.WaitForExit(2000);
+                                }
+                                catch { }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // Wait restart delay + extra safety margin (5s)
+                    var delay = Math.Max(0, _llamaRestartDelayMs) + 5000;
+                    Thread.Sleep(delay);
+                }
+
+                // Start server on background thread to avoid blocking callers
+                await Task.Run(() => StartServer(modelName, contextSize)).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Let exceptions bubble up to caller if desired; swallow here to avoid crashing startup
+                throw;
+            }
+        }
+
         private void WaitForReady()
         {
-            var deadline = DateTime.UtcNow.AddSeconds(15);
+            // Increased timeout by 5 seconds to allow llama.cpp more startup time
+            var deadline = DateTime.UtcNow.AddSeconds(20);
             var healthUrl = $"http://{_llamaHost}:{_llamaPort}/health";
             var modelsUrl = $"http://{_llamaHost}:{_llamaPort}/v1/models";
 

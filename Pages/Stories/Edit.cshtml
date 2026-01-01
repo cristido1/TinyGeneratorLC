@@ -8,56 +8,84 @@
     <div class="card-body">
         <h3>Modifica storia</h3>
         <form method="post">
-                        <div class="mb-3">
-                            <label class="form-label">Titolo</label>
-                            <input class="form-control" asp-for="Title" />
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Agente (opzionale)</label>
-                            <select class="form-select" asp-for="AgentId">
-                                <option value="">-- nessuno --</option>
-                                @foreach(var ag in Model.Agents)
-                                {
-                                    <option value="@ag.Id" selected="@((Model.AgentId==ag.Id)?"selected":"")">@ag.Name (@ag.Role)</option>
-                                }
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Modello (opzionale)</label>
-                            <select class="form-select" asp-for="ModelId">
-                                <option value="">-- nessuno --</option>
-                                @foreach(var m in Model.Models)
-                                {
-                                    <option value="@m.Id" selected="@((Model.ModelId==m.Id)?"selected":"")">@m.Name (@m.Provider)</option>
-                                }
-                            </select>
-                        </div>
-            <div class="mb-3">
-                <label class="form-label">Id</label>
-                <input class="form-control" asp-for="Id" disabled />
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Prompt</label>
-                <input class="form-control" asp-for="Prompt" />
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Testo</label>
-                <textarea class="form-control" rows="10" asp-for="StoryText"></textarea>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Personaggi (JSON)</label>
-                <textarea class="form-control" rows="6" asp-for="Characters" placeholder='[{"name": "Nome", "gender": "male", "age": "35"}]'></textarea>
-                <small class="text-muted">Array JSON con name, gender, age, title, role, aliases</small>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Status</label>
-                <select class="form-select" asp-for="StatusId">
-                    <option value="">-- nessuno --</option>
-                    @foreach (var status in Model.Statuses)
-                    {
-                        <option value="@status.Id">@((status.Description ?? status.Code) ?? "N/D") (@status.Code)</option>
-                    }
-                </select>
+            <ul class="nav nav-tabs" id="storyEditTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="dati-tab" data-bs-toggle="tab" data-bs-target="#dati-pane" type="button" role="tab" aria-controls="dati-pane" aria-selected="true">Dati</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="storia-tab" data-bs-toggle="tab" data-bs-target="#storia-pane" type="button" role="tab" aria-controls="storia-pane" aria-selected="false">Storia</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="tagged-tab" data-bs-toggle="tab" data-bs-target="#tagged-pane" type="button" role="tab" aria-controls="tagged-pane" aria-selected="false">Story Tagged</button>
+                </li>
+            </ul>
+
+            <div class="tab-content mt-3 story-edit-tab-content" id="storyEditTabsContent">
+                <div class="tab-pane fade show active" id="dati-pane" role="tabpanel" aria-labelledby="dati-tab">
+                    <div class="mb-3">
+                        <label class="form-label">Id</label>
+                        <input class="form-control" asp-for="Id" disabled />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Titolo</label>
+                        <input class="form-control" asp-for="Title" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Agente (opzionale)</label>
+                        <select class="form-select" asp-for="AgentId">
+                            <option value="">-- nessuno --</option>
+                            @foreach(var ag in Model.Agents)
+                            {
+                                <option value="@ag.Id" selected="@((Model.AgentId==ag.Id)?"selected":"")">@ag.Name (@ag.Role)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Modello (opzionale)</label>
+                        <select class="form-select" asp-for="ModelId">
+                            <option value="">-- nessuno --</option>
+                            @foreach(var m in Model.Models)
+                            {
+                                <option value="@m.Id" selected="@((Model.ModelId==m.Id)?"selected":"")">@m.Name (@m.Provider)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Prompt</label>
+                        <input class="form-control" asp-for="Prompt" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Status</label>
+                        <select class="form-select" asp-for="StatusId">
+                            <option value="">-- nessuno --</option>
+                            @foreach (var status in Model.Statuses)
+                            {
+                                <option value="@status.Id">@((status.Description ?? status.Code) ?? "N/D") (@status.Code)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Personaggi (JSON)</label>
+                        <textarea class="form-control" rows="6" asp-for="Characters" placeholder='[{"name": "Nome", "gender": "male", "age": "35"}]'></textarea>
+                        <small class="text-muted">Array JSON con name, gender, age, title, role, aliases</small>
+                    </div>
+                </div>
+                <div class="tab-pane fade story-tab-pane" id="storia-pane" role="tabpanel" aria-labelledby="storia-tab">
+                    <div class="d-flex flex-column h-100">
+                        <label class="form-label">Story raw</label>
+                        <textarea class="form-control flex-grow-1 story-textarea" asp-for="StoryText"></textarea>
+                    </div>
+                </div>
+                <div class="tab-pane fade story-tab-pane" id="tagged-pane" role="tabpanel" aria-labelledby="tagged-tab">
+                    <div class="mb-3">
+                        <label class="form-label">Agente formatter</label>
+                        <input class="form-control" value="@Model.FormatterAgentName" disabled />
+                    </div>
+                    <div class="d-flex flex-column h-100">
+                        <label class="form-label">Story tagged</label>
+                        <textarea class="form-control flex-grow-1 story-textarea" asp-for="StoryTaggedText"></textarea>
+                    </div>
+                </div>
             </div>
             <div class="mb-3">
                 <button type="submit" class="btn btn-primary">Salva</button>
@@ -66,3 +94,17 @@
         </form>
     </div>
 </div>
+
+<style>
+    .story-edit-tab-content {
+        min-height: 60vh;
+    }
+    .story-tab-pane {
+        height: 60vh;
+    }
+    .story-textarea {
+        min-height: 55vh;
+        height: 100%;
+        resize: vertical;
+    }
+</style>

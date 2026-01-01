@@ -19,37 +19,62 @@
                 <a class="btn btn-sm btn-outline-success" id="macTtsPlay">Ascolta (macOS)</a>
             </div>
         </div>
-        <details open>
-            <summary class="fw-bold">Valutazioni</summary>
-            <div id="evaluations" class="mt-2">
-                @if (Model.Evaluations != null && Model.Evaluations.Count > 0)
+        <ul class="nav nav-tabs" id="storyTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="story-raw-tab" data-bs-toggle="tab" data-bs-target="#story-raw-pane" type="button" role="tab" aria-controls="story-raw-pane" aria-selected="false">Storia raw</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="story-tab" data-bs-toggle="tab" data-bs-target="#story-pane" type="button" role="tab" aria-controls="story-pane" aria-selected="true">Storia</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="evaluations-tab" data-bs-toggle="tab" data-bs-target="#evaluations-pane" type="button" role="tab" aria-controls="evaluations-pane" aria-selected="false">Valutazioni</button>
+            </li>
+        </ul>
+        <div class="tab-content mt-3" id="storyTabsContent">
+            <div class="tab-pane fade" id="story-raw-pane" role="tabpanel" aria-labelledby="story-raw-tab">
+                @if (!string.IsNullOrWhiteSpace(Model.StoryRawText))
                 {
-                    foreach (var e in Model.Evaluations)
-                    {
-                        <partial name="_StoryEvaluationCard" model="e" />
-                        <div class="mt-2 text-end">
-                            <form method="post" asp-page-handler="DeleteEvaluation" class="d-inline">
-                                @Html.AntiForgeryToken()
-                                <input type="hidden" name="id" value="@e.Id" />
-                                <input type="hidden" name="storyId" value="@Model.Story?.Id" />
-                                <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Eliminare questa valutazione?');">Elimina valutazione</button>
-                            </form>
-                        </div>
-                    }
+                    <pre style="white-space: pre-wrap;">@Model.StoryRawText</pre>
                 }
                 else
                 {
-                    <div class="text-muted">Nessuna valutazione</div>
+                    <div class="text-muted">Nessun testo raw disponibile.</div>
                 }
             </div>
-        </details>
-
-        <details class="mt-2" open>
-            <summary class="fw-bold">Testo della storia</summary>
-            <div class="mt-2">
-                <pre style="white-space: pre-wrap;">@Model.StoryText</pre>
+            <div class="tab-pane fade show active" id="story-pane" role="tabpanel" aria-labelledby="story-tab">
+                @if (!string.IsNullOrWhiteSpace(Model.StoryTaggedText))
+                {
+                    <pre style="white-space: pre-wrap;">@Model.StoryTaggedText</pre>
+                }
+                else
+                {
+                    <div class="text-muted">Nessun testo taggato disponibile.</div>
+                }
             </div>
-        </details>
+            <div class="tab-pane fade" id="evaluations-pane" role="tabpanel" aria-labelledby="evaluations-tab">
+                <div id="evaluations" class="mt-2">
+                    @if (Model.Evaluations != null && Model.Evaluations.Count > 0)
+                    {
+                        foreach (var e in Model.Evaluations)
+                        {
+                            <partial name="_StoryEvaluationCard" model="e" />
+                            <div class="mt-2 text-end">
+                                <form method="post" asp-page-handler="DeleteEvaluation" class="d-inline">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="id" value="@e.Id" />
+                                    <input type="hidden" name="storyId" value="@Model.Story?.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Eliminare questa valutazione?');">Elimina valutazione</button>
+                                </form>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <div class="text-muted">Nessuna valutazione</div>
+                    }
+                </div>
+            </div>
+        </div>
 
         <audio id="ttsAudio" controls style="width:100%; display:none;" />
     </div>
@@ -79,7 +104,7 @@
                 }
 
                 // Get story text
-                var storyText = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.StoryText ?? ""));
+                var storyText = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.StoryRawText ?? ""));
                 
                 if (!storyText || storyText.trim() === '') {
                     alert('Nessun testo da leggere');

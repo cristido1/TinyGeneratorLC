@@ -1103,7 +1103,7 @@ namespace TinyGenerator.Services
             if (string.IsNullOrWhiteSpace(sourceText) && execution.EntityId.HasValue)
             {
                 var story = _database.GetStoryById(execution.EntityId.Value);
-                sourceText = story?.Story;
+                sourceText = story?.StoryRaw;
             }
 
             sourceText ??= string.Empty;

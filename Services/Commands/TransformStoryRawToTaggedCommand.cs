@@ -1,0 +1,472 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using TinyGenerator.Models;
+using TinyGenerator.Services;
+
+namespace TinyGenerator.Services.Commands
+{
+    public sealed class TransformStoryRawToTaggedCommand
+    {
+        private const int MinTokensPerChunk = 1000;
+        private const int MaxTokensPerChunk = 2000;
+        private const int TargetTokensPerChunk = 1500;
+        private const int OverlapTokens = 150;
+        private const int MaxAttemptsPerChunk = 3;
+        private const int MaxOverlapChars = 8000;
+
+        private readonly long _storyId;
+        private readonly DatabaseService _database;
+        private readonly ILangChainKernelFactory _kernelFactory;
+        private readonly StoriesService? _storiesService;
+        private readonly ICustomLogger? _logger;
+
+        public TransformStoryRawToTaggedCommand(
+            long storyId,
+            DatabaseService database,
+            ILangChainKernelFactory kernelFactory,
+            StoriesService? storiesService = null,
+            ICustomLogger? logger = null)
+        {
+            _storyId = storyId;
+            _database = database ?? throw new ArgumentNullException(nameof(database));
+            _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+            _storiesService = storiesService;
+            _logger = logger;
+        }
+
+        public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
+        {
+            var effectiveRunId = string.IsNullOrWhiteSpace(runId)
+                ? $"format_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
+                : runId;
+
+            _logger?.Start(effectiveRunId);
+            _logger?.Append(effectiveRunId, $"[story {_storyId}] Starting formatter pipeline");
+
+            try
+            {
+                var story = _database.GetStoryById(_storyId);
+                if (story == null)
+                {
+                    return Fail(effectiveRunId, $"Story {_storyId} not found");
+                }
+
+                if (string.IsNullOrWhiteSpace(story.StoryRaw))
+                {
+                    return Fail(effectiveRunId, $"Story {_storyId} has no raw text");
+                }
+
+                if (_storiesService != null)
+                {
+                    var (ok, msg) = await _storiesService.DeleteStoryTaggedAsync(story.Id);
+                    if (!ok)
+                    {
+                        return Fail(effectiveRunId, msg ?? "Failed to clear story tagged data");
+                    }
+                }
+
+                var formatterAgent = _database.ListAgents()
+                    .FirstOrDefault(a => a.IsActive && string.Equals(a.Role, "formatter", StringComparison.OrdinalIgnoreCase));
+
+                if (formatterAgent == null)
+                {
+                    return Fail(effectiveRunId, "No active formatter agent found");
+                }
+
+                if (!formatterAgent.ModelId.HasValue)
+                {
+                    return Fail(effectiveRunId, $"Formatter agent {formatterAgent.Name} has no model configured");
+                }
+
+                var modelInfo = _database.GetModelInfoById(formatterAgent.ModelId.Value);
+                if (string.IsNullOrWhiteSpace(modelInfo?.Name))
+                {
+                    return Fail(effectiveRunId, $"Model not found for formatter agent {formatterAgent.Name}");
+                }
+
+                var systemPrompt = BuildSystemPrompt(formatterAgent);
+                var promptHash = string.IsNullOrWhiteSpace(systemPrompt)
+                    ? null
+                    : ComputeSha256(systemPrompt);
+
+                var chunks = SplitStoryIntoChunks(story.StoryRaw);
+                if (chunks.Count == 0)
+                {
+                    return Fail(effectiveRunId, "No chunks produced from story_raw");
+                }
+
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {chunks.Count} chunks");
+
+                var bridge = _kernelFactory.CreateChatBridge(
+                    modelInfo.Name,
+                    formatterAgent.Temperature,
+                    formatterAgent.TopP,
+                    formatterAgent.RepeatPenalty,
+                    formatterAgent.TopK,
+                    formatterAgent.RepeatLastN,
+                    formatterAgent.NumPredict);
+
+                var taggedChunks = new List<string>();
+                for (int i = 0; i < chunks.Count; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var chunk = chunks[i];
+                    var tagged = await FormatChunkWithRetriesAsync(
+                        bridge,
+                        systemPrompt,
+                        chunk.Text,
+                        i + 1,
+                        chunks.Count,
+                        effectiveRunId,
+                        ct);
+
+                    if (string.IsNullOrWhiteSpace(tagged))
+                    {
+                        return Fail(effectiveRunId, $"Formatter returned empty text for chunk {i + 1}/{chunks.Count}");
+                    }
+
+                    taggedChunks.Add(tagged);
+                }
+
+                var mergedTagged = MergeTaggedChunks(taggedChunks);
+                if (string.IsNullOrWhiteSpace(mergedTagged))
+                {
+                    return Fail(effectiveRunId, "Merged tagged story is empty");
+                }
+
+                var nextVersion = story.StoryTaggedVersion.HasValue
+                    ? story.StoryTaggedVersion.Value + 1
+                    : 1;
+
+                var saved = _database.UpdateStoryTagged(
+                    story.Id,
+                    mergedTagged,
+                    formatterAgent.ModelId,
+                    promptHash,
+                    nextVersion);
+
+                if (!saved)
+                {
+                    return Fail(effectiveRunId, $"Failed to persist tagged story for {_storyId}");
+                }
+
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] Tagged story saved (version {nextVersion})");
+                _logger?.MarkCompleted(effectiveRunId, "ok");
+                return new CommandResult(true, "Tagged story generated");
+            }
+            catch (OperationCanceledException)
+            {
+                return Fail(effectiveRunId, "Operation cancelled");
+            }
+            catch (Exception ex)
+            {
+                return Fail(effectiveRunId, ex.Message);
+            }
+        }
+
+        private CommandResult Fail(string runId, string message)
+        {
+            _logger?.Append(runId, message, "error");
+            _logger?.MarkCompleted(runId, "failed");
+            return new CommandResult(false, message);
+        }
+
+        private async Task<string> FormatChunkWithRetriesAsync(
+            LangChainChatBridge bridge,
+            string? systemPrompt,
+            string chunkText,
+            int chunkIndex,
+            int chunkCount,
+            string runId,
+            CancellationToken ct)
+        {
+            for (int attempt = 1; attempt <= MaxAttemptsPerChunk; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Formatting attempt {attempt}/{MaxAttemptsPerChunk}");
+
+                try
+                {
+                    var messages = new List<ConversationMessage>();
+                    if (!string.IsNullOrWhiteSpace(systemPrompt))
+                    {
+                        messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
+                    }
+                    messages.Add(new ConversationMessage { Role = "user", Content = chunkText });
+
+                    var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
+                    var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
+                    var cleaned = textContent?.Trim() ?? string.Empty;
+
+                    if (!string.IsNullOrWhiteSpace(cleaned))
+                    {
+                        return cleaned;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Attempt {attempt} failed: {ex.Message}", "warn");
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string? BuildSystemPrompt(Agent agent)
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(agent.Prompt))
+            {
+                parts.Add(agent.Prompt);
+            }
+
+            if (!string.IsNullOrWhiteSpace(agent.ExecutionPlan))
+            {
+                var plan = LoadExecutionPlan(agent.ExecutionPlan);
+                if (!string.IsNullOrWhiteSpace(plan))
+                {
+                    parts.Add(plan);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(agent.Instructions))
+            {
+                parts.Add(agent.Instructions);
+            }
+
+            return parts.Count == 0 ? null : string.Join("\n\n", parts);
+        }
+
+        private static string? LoadExecutionPlan(string planName)
+        {
+            try
+            {
+                var planPath = Path.Combine(Directory.GetCurrentDirectory(), "execution_plans", planName);
+                if (File.Exists(planPath))
+                {
+                    return File.ReadAllText(planPath);
+                }
+            }
+            catch
+            {
+                // ignore loading errors
+            }
+
+            return null;
+        }
+
+        private static string ComputeSha256(string text)
+        {
+            var bytes = Encoding.UTF8.GetBytes(text);
+            var hash = SHA256.HashData(bytes);
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (var b in hash)
+            {
+                sb.Append(b.ToString("x2"));
+            }
+            return sb.ToString();
+        }
+
+        private sealed record Chunk(int Index, string Text);
+        private sealed record Segment(int Start, int End, int TokenCount);
+
+        private static List<Chunk> SplitStoryIntoChunks(string storyText)
+        {
+            var chunks = new List<Chunk>();
+            if (string.IsNullOrWhiteSpace(storyText))
+            {
+                return chunks;
+            }
+
+            var segments = SplitIntoSegments(storyText);
+            if (segments.Count == 0)
+            {
+                chunks.Add(new Chunk(0, storyText));
+                return chunks;
+            }
+
+            int segmentIndex = 0;
+            int chunkIndex = 0;
+            while (segmentIndex < segments.Count)
+            {
+                int startSeg = segmentIndex;
+                int endSeg = startSeg;
+                int tokenCount = 0;
+
+                while (endSeg < segments.Count)
+                {
+                    var segTokens = segments[endSeg].TokenCount;
+                    if (tokenCount + segTokens > MaxTokensPerChunk && tokenCount >= MinTokensPerChunk)
+                    {
+                        break;
+                    }
+
+                    tokenCount += segTokens;
+                    endSeg++;
+
+                    if (tokenCount >= TargetTokensPerChunk && tokenCount >= MinTokensPerChunk)
+                    {
+                        break;
+                    }
+                }
+
+                if (endSeg == startSeg)
+                {
+                    endSeg = Math.Min(startSeg + 1, segments.Count);
+                }
+
+                var startChar = segments[startSeg].Start;
+                var endChar = segments[endSeg - 1].End;
+                var chunkText = storyText.Substring(startChar, endChar - startChar);
+                chunks.Add(new Chunk(chunkIndex, chunkText));
+
+                if (endSeg >= segments.Count)
+                {
+                    break;
+                }
+
+                int overlapCount = 0;
+                int nextStartSeg = endSeg;
+                for (int i = endSeg - 1; i >= startSeg; i--)
+                {
+                    overlapCount += segments[i].TokenCount;
+                    if (overlapCount >= OverlapTokens)
+                    {
+                        nextStartSeg = i;
+                        break;
+                    }
+                }
+
+                if (nextStartSeg <= startSeg)
+                {
+                    nextStartSeg = endSeg;
+                }
+
+                segmentIndex = nextStartSeg;
+                chunkIndex++;
+            }
+
+            return chunks;
+        }
+
+        private static List<Segment> SplitIntoSegments(string text)
+        {
+            var segments = new List<Segment>();
+            int start = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+                bool boundary = false;
+                int end = i + 1;
+
+                if (c == '\r')
+                {
+                    if (i + 1 < text.Length && text[i + 1] == '\n')
+                    {
+                        end = i + 2;
+                        i++;
+                    }
+                    boundary = true;
+                }
+                else if (c == '\n' || c == '.' || c == '!' || c == '?')
+                {
+                    boundary = true;
+                }
+
+                if (boundary)
+                {
+                    var segmentText = text.Substring(start, end - start);
+                    segments.Add(new Segment(start, end, CountTokens(segmentText)));
+                    start = end;
+                }
+            }
+
+            if (start < text.Length)
+            {
+                var tail = text.Substring(start);
+                segments.Add(new Segment(start, text.Length, CountTokens(tail)));
+            }
+
+            return segments;
+        }
+
+        private static int CountTokens(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return 0;
+            }
+
+            int count = 0;
+            bool inToken = false;
+            foreach (var c in text)
+            {
+                if (char.IsWhiteSpace(c))
+                {
+                    if (inToken)
+                    {
+                        inToken = false;
+                    }
+                }
+                else
+                {
+                    if (!inToken)
+                    {
+                        count++;
+                        inToken = true;
+                    }
+                }
+            }
+
+            return count;
+        }
+
+        private static string MergeTaggedChunks(IReadOnlyList<string> chunks)
+        {
+            if (chunks.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder(chunks[0]);
+            var previous = chunks[0];
+
+            for (int i = 1; i < chunks.Count; i++)
+            {
+                var current = chunks[i];
+                var overlap = FindOverlapLength(previous, current);
+                builder.Append(overlap > 0 ? current.Substring(overlap) : current);
+                previous = current;
+            }
+
+            return builder.ToString();
+        }
+
+        private static int FindOverlapLength(string previous, string current)
+        {
+            if (string.IsNullOrEmpty(previous) || string.IsNullOrEmpty(current))
+            {
+                return 0;
+            }
+
+            int max = Math.Min(previous.Length, current.Length);
+            int maxSearch = Math.Min(max, MaxOverlapChars);
+
+            for (int len = maxSearch; len > 0; len--)
+            {
+                if (previous.AsSpan(previous.Length - len).SequenceEqual(current.AsSpan(0, len)))
+                {
+                    return len;
+                }
+            }
+
+            return 0;
+        }
+    }
+}

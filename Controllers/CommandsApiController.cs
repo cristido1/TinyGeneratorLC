@@ -11,17 +11,20 @@ namespace TinyGenerator.Controllers
         private readonly ICommandDispatcher _dispatcher;
         private readonly DatabaseService _database;
         private readonly ILangChainKernelFactory _kernelFactory;
+        private readonly StoriesService _storiesService;
         private readonly ICustomLogger _logger;
 
         public CommandsApiController(
             ICommandDispatcher dispatcher,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
+            StoriesService storiesService,
             ICustomLogger logger)
         {
             _dispatcher = dispatcher;
             _database = database;
             _kernelFactory = kernelFactory;
+            _storiesService = storiesService;
             _logger = logger;
         }
 
@@ -62,7 +65,7 @@ namespace TinyGenerator.Controllers
                 return NotFound(new { error = $"Storia {storyId} non trovata." });
             }
 
-            if (string.IsNullOrWhiteSpace(story.Story))
+            if (string.IsNullOrWhiteSpace(story.StoryRaw))
             {
                 return BadRequest(new { error = $"Storia {storyId} non ha contenuto da riassumere." });
             }
@@ -91,6 +94,46 @@ namespace TinyGenerator.Controllers
                 priority: 3);  // Priorità media-bassa per riassunti
 
             return Ok(new { runId, storyId, message = "Summarization enqueued" });
+        }
+
+        /// <summary>
+        /// POST /api/commands/format-story?storyId=123
+        /// Trasforma story_raw in story_tagged usando l'agente formatter.
+        /// </summary>
+        [HttpPost("format-story")]
+        public IActionResult FormatStory([FromQuery] long storyId)
+        {
+            var story = _database.GetStoryById(storyId);
+            if (story == null)
+            {
+                return NotFound(new { error = $"Storia {storyId} non trovata." });
+            }
+
+            if (string.IsNullOrWhiteSpace(story.StoryRaw))
+            {
+                return BadRequest(new { error = $"Storia {storyId} non ha testo da formattare." });
+            }
+
+            var runId = Guid.NewGuid().ToString();
+            var cmd = new TransformStoryRawToTaggedCommand(
+                storyId,
+                _database,
+                _kernelFactory,
+                _storiesService,
+                _logger);
+
+            _dispatcher.Enqueue(
+                "TransformStoryRawToTagged",
+                async ctx => await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId),
+                runId: runId,
+                metadata: new Dictionary<string, string>
+                {
+                    ["storyId"] = storyId.ToString(),
+                    ["operation"] = "format_story"
+                },
+                priority: 2);
+
+            return Ok(new { runId, storyId, message = "Formatter enqueued" });
         }
 
         /// <summary>

@@ -268,7 +268,7 @@ public class TestAutomationController : ControllerBase
                     id = story.Id,
                     generationId = story.GenerationId,
                     prompt = story.Prompt,
-                    length = story.Story?.Length ?? 0,
+                    length = story.StoryRaw?.Length ?? 0,
                     model = story.Model,
                     agent = story.Agent,
                     score = story.Score,

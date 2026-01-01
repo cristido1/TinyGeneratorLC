@@ -19,6 +19,7 @@ namespace TinyGenerator.Pages.Stories
     {
         private readonly StoriesService _stories;
         private readonly DatabaseService _database;
+        private readonly ILangChainKernelFactory _kernelFactory;
         private readonly ICustomLogger? _customLogger;
         private readonly ILogger<IndexModel>? _logger;
         private readonly ICommandDispatcher _commandDispatcher;
@@ -26,12 +27,14 @@ namespace TinyGenerator.Pages.Stories
         public IndexModel(
             StoriesService stories,
             DatabaseService database,
+            ILangChainKernelFactory kernelFactory,
             ICustomLogger? customLogger = null,
             ICommandDispatcher? commandDispatcher = null,
             ILogger<IndexModel>? logger = null)
         {
             _stories = stories;
             _database = database;
+            _kernelFactory = kernelFactory;
             _customLogger = customLogger;
             _logger = logger;
             _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
@@ -629,6 +632,117 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public IActionResult OnPostDeleteFinalMix(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "delete_final_mix",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.DeleteFinalMixAsync(id);
+                    return new CommandResult(success, message ?? (success ? "Mix finale cancellato" : "Cancellazione mix fallita"));
+                },
+                "Cancellazione mix finale avviata in background.");
+            TempData["StatusMessage"] = $"Cancellazione mix finale avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostDeleteMusic(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "delete_music",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.DeleteMusicAsync(id);
+                    return new CommandResult(success, message ?? (success ? "Musica cancellata" : "Cancellazione musica fallita"));
+                },
+                "Cancellazione musica avviata in background.");
+            TempData["StatusMessage"] = $"Cancellazione musica avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostDeleteFx(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "delete_fx",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.DeleteFxAsync(id);
+                    return new CommandResult(success, message ?? (success ? "Effetti cancellati" : "Cancellazione effetti fallita"));
+                },
+                "Cancellazione effetti sonori avviata in background.");
+            TempData["StatusMessage"] = $"Cancellazione effetti avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostDeleteAmbience(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "delete_ambience",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.DeleteAmbienceAsync(id);
+                    return new CommandResult(success, message ?? (success ? "Rumori ambientali cancellati" : "Cancellazione ambient fallita"));
+                },
+                "Cancellazione rumori ambientali avviata in background.");
+            TempData["StatusMessage"] = $"Cancellazione rumori ambientali avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostDeleteTts(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "delete_tts",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.DeleteTtsAsync(id);
+                    return new CommandResult(success, message ?? (success ? "TTS cancellato" : "Cancellazione TTS fallita"));
+                },
+                "Cancellazione TTS avviata in background.");
+            TempData["StatusMessage"] = $"Cancellazione TTS avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostDeleteStoryTagged(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "delete_story_tagged",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.DeleteStoryTaggedAsync(id);
+                    return new CommandResult(success, message ?? (success ? "Story tagged cancellato" : "Cancellazione story tagged fallita"));
+                },
+                "Cancellazione story tagged avviata in background.");
+            TempData["StatusMessage"] = $"Cancellazione story tagged avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostAddTags(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "add_tags",
+                async ctx =>
+                {
+                    var cmd = new TransformStoryRawToTaggedCommand(
+                        id,
+                        _database,
+                        _kernelFactory,
+                        _stories,
+                        _customLogger);
+                    return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
+                },
+                "Aggiunta tag avviata in background.");
+
+            TempData["StatusMessage"] = $"Aggiunta tag avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
         public StoryStatus? GetNextStatus(StoryRecord story)
         {
             return _stories.GetNextStatusForStory(story, Statuses);
@@ -895,6 +1009,30 @@ namespace TinyGenerator.Pages.Stories
                 actions.Add(new { id = "mix_final", title = "Mix Audio Finale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "MixFinalAudio", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "final_mix_play", title = "Ascolta Mix Finale", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "FinalMixAudio", id = s.Id }, Request.Scheme) });
                 actions.Add(new { id = "tts_playlist", title = "Ascolta sequenza TTS", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "TtsPlaylist", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "delete_final_mix", title = "Cancella Mix Audio", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteFinalMix", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "delete_music", title = "Cancella Musica", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteMusic", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "delete_fx", title = "Cancella Effetti", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteFx", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "delete_ambience", title = "Cancella Rumori Ambientali", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteAmbience", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "delete_tts", title = "Cancella TTS", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteTts", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "delete_story_tagged", title = "Cancella Story Tagged", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteStoryTagged", id = s.Id }, Request.Scheme) });
+            }
+
+            var addTagsAction = new { id = "add_tags", title = "Aggiungi TAG", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) };
+            var insertAt = actions.FindIndex(a =>
+            {
+                var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty;
+                var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? string.Empty;
+                return id.Contains("evaluate", StringComparison.OrdinalIgnoreCase)
+                    || title.Contains("Valuta", StringComparison.OrdinalIgnoreCase)
+                    || title.Contains("Evaluate", StringComparison.OrdinalIgnoreCase);
+            });
+            if (insertAt >= 0)
+            {
+                actions.Insert(insertAt + 1, addTagsAction);
+            }
+            else
+            {
+                actions.Add(addTagsAction);
             }
 
             // Delete

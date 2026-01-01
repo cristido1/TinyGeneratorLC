@@ -26,8 +26,20 @@ namespace TinyGenerator.Models
         [Column("title")]
         public string? Title { get; set; }
         
-        [Column("story")]
-        public string Story { get; set; } = string.Empty;
+        [Column("story_raw")]
+        public string StoryRaw { get; set; } = string.Empty;
+
+        [Column("story_tagged")]
+        public string? StoryTagged { get; set; }
+
+        [Column("story_tagged_version")]
+        public int? StoryTaggedVersion { get; set; }
+
+        [Column("formatter_model")]
+        public int? FormatterModelId { get; set; }
+
+        [Column("formatter_prompt_hash")]
+        public string? FormatterPromptHash { get; set; }
         
         [Column("char_count")]
         public int CharCount { get; set; }
@@ -148,9 +160,12 @@ namespace TinyGenerator.Models
         public List<StoryEvaluation> Evaluations { get; set; } = new List<StoryEvaluation>();
         
         // Legacy properties for backward compatibility (mapped to Story field)
-        [Obsolete("Use Story property instead")]
+        [Obsolete("Use StoryRaw property instead")]
         [NotMapped]
-        public string StoryA { get => Story; set => Story = value; }
+        public string Story { get => StoryRaw; set => StoryRaw = value; }
+        [Obsolete("Use StoryRaw property instead")]
+        [NotMapped]
+        public string StoryA { get => StoryRaw; set => StoryRaw = value; }
         [Obsolete("Use Model property instead")]
         [NotMapped]
         public string ModelA { get => Model; set => Model = value; }

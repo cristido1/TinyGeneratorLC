@@ -145,7 +145,7 @@ namespace TinyGenerator.Skills
                     memory_key = row.MemoryKey,
                     ts = row.Timestamp,
                     prompt = row.Prompt,
-                    story = row.Story,
+                    story = row.StoryRaw,
                     model = row.Model,
                     agent = row.Agent,
                     eval = row.Eval,
@@ -175,7 +175,7 @@ namespace TinyGenerator.Skills
                 if (existing == null)
                     return SerializeResult(new { error = "not found", id = request.Id });
 
-                var newStory = request.Story ?? existing.Story;
+                var newStory = request.Story ?? existing.StoryRaw;
                 int? statusId = existing.StatusId;
                 var statusCode = existing.Status;
                 var statusProvided = request.Status != null;

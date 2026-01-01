@@ -40,7 +40,7 @@ namespace TinyGenerator.Services.Commands
                     .Where(s => 
                         s.Score >= _minScore && 
                         string.IsNullOrWhiteSpace(s.Summary) &&
-                        !string.IsNullOrWhiteSpace(s.Story))
+                        !string.IsNullOrWhiteSpace(s.StoryRaw))
                     .ToList();
 
                 _logger.Log("Information", "BatchSummarize", $"Found {eligibleStories.Count} stories eligible for summarization");

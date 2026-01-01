@@ -15,6 +15,13 @@ ALTER TABLE stories ADD COLUMN serie_id INTEGER;
 ALTER TABLE stories ADD COLUMN serie_episode INTEGER;
 CREATE INDEX IX_stories_serie_id ON stories(serie_id);
 
+-- 20251231180000_RenameStoryToStoryRawAddTaggedFields
+ALTER TABLE stories RENAME COLUMN story TO story_raw;
+ALTER TABLE stories ADD COLUMN story_tagged TEXT;
+ALTER TABLE stories ADD COLUMN story_tagged_version INTEGER;
+ALTER TABLE stories ADD COLUMN formatter_model INTEGER;
+ALTER TABLE stories ADD COLUMN formatter_prompt_hash TEXT;
+
 -- Update migrations history
 INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion) 
 VALUES ('20251220195450_AddStoryTitle', '10.0.0');
@@ -27,3 +34,6 @@ VALUES ('20251223064452_AddStepTemplateFields', '10.0.0');
 
 INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion) 
 VALUES ('20251227074900_AddSerieFieldsToStories', '10.0.0');
+
+INSERT INTO __EFMigrationsHistory (MigrationId, ProductVersion) 
+VALUES ('20251231180000_RenameStoryToStoryRawAddTaggedFields', '10.0.0');

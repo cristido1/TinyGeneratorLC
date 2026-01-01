@@ -135,6 +135,7 @@
                         <td data-col="model">@s.Model</td>
                         <td data-col="folder">@s.Folder</td>
                         <td data-col="assets">
+                            @if (!string.IsNullOrWhiteSpace(s.StoryTagged)) { <span title="Story tagged" class="text-dark me-1"><i class="bi bi-tags-fill"></i></span>; }
                             @if (s.GeneratedTtsJson) { <span title="TTS JSON" class="text-primary me-1"><i class="bi bi-file-earmark-text-fill"></i></span>; }
                             @if (s.GeneratedTts) { <span title="TTS audio" class="text-success me-1"><i class="bi bi-volume-up-fill"></i></span>; }
                             @if (s.GeneratedAmbient) { <span title="Ambience" class="text-info me-1"><i class="bi bi-cloud-fill"></i></span>; }
@@ -185,6 +186,7 @@
                                             var iconClass = id switch
                                             {
                                                 "prepare_tts_schema" => "bi bi-magic",
+                                                "add_tags" => "bi bi-tags",
                                                 "gen_tts" => "bi bi-volume-up-fill",
                                                 "gen_ambience" => "bi bi-cloud-fill",
                                                 "gen_fx" => "bi bi-lightning-charge-fill",

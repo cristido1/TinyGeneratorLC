@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -242,7 +242,7 @@ public sealed class StoriesService
 
     private async Task<(bool success, string? message)> ExecuteStoryCommandAsync(StoryRecord story, IStoryCommand command, StoryStatus? targetStatus = null)
     {
-        if (command.RequireStoryText && string.IsNullOrWhiteSpace(story.Story))
+        if (command.RequireStoryText && string.IsNullOrWhiteSpace(story.StoryRaw))
             return (false, "La storia non contiene testo");
 
         string folderPath = string.Empty;
@@ -308,7 +308,7 @@ public sealed class StoriesService
             return (false, 0, "Kernel factory non disponibile");
 
         var story = GetStoryById(storyId);
-        if (story == null || string.IsNullOrWhiteSpace(story.Story))
+        if (story == null || string.IsNullOrWhiteSpace(story.StoryRaw))
             return (false, 0, "Storia non trovata o priva di contenuto");
 
         var agent = _database.GetAgentById(agentId);
@@ -430,7 +430,7 @@ public sealed class StoriesService
                 _customLogger?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
                 TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
                 
-                // Se score > 60, avvia riassunto automatico con priorità bassa
+                // Se score > 60, avvia riassunto automatico con priorit� bassa
                 if (avgScore > 60 && _commandDispatcher != null)
                 {
                     try
@@ -514,7 +514,7 @@ public sealed class StoriesService
             return (false, 0, "Kernel factory non disponibile");
 
         var story = GetStoryById(storyId);
-        if (story == null || string.IsNullOrWhiteSpace(story.Story))
+        if (story == null || string.IsNullOrWhiteSpace(story.StoryRaw))
             return (false, 0, "Storia non trovata o priva di contenuto");
 
         var agent = _database.GetAgentById(agentId);
@@ -605,10 +605,15 @@ public sealed class StoriesService
         var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", folderName);
         Directory.CreateDirectory(folderPath);
 
-        // Clean previous TTS/audio-related assets (delete old tts files, music, fx, ambience, final mix)
-        try { CleanBeforeTtsAudioGeneration(story.Id, folderPath); } catch { }
-
         var context = new StoryCommandContext(story, folderPath, null);
+
+        var deleteCmd = new DeleteTtsCommand(this);
+        var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+        if (!cleanupOk)
+        {
+            return (false, cleanupMessage ?? "Impossibile cancellare i file TTS esistenti");
+        }
+
         // Run synchronously when dispatcherRunId is provided so we can report progress
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
@@ -634,10 +639,14 @@ public sealed class StoriesService
         var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", folderName);
         Directory.CreateDirectory(folderPath);
 
-        // Clean previous ambience assets and references
-        try { CleanAmbienceForRegeneration(story.Id, folderPath); } catch { }
-
         var context = new StoryCommandContext(story, folderPath, null);
+
+        var deleteCmd = new DeleteAmbienceCommand(this);
+        var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+        if (!cleanupOk)
+        {
+            return (false, cleanupMessage ?? "Impossibile cancellare i rumori ambientali esistenti");
+        }
         
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
@@ -679,6 +688,55 @@ public sealed class StoriesService
         return ExecuteStoryCommandAsync(
             storyId,
             new NormalizeSentimentsCommand(this));
+    }
+
+    public Task<(bool success, string? message)> DeleteFinalMixAsync(long storyId)
+    {
+        return ExecuteStoryCommandAsync(
+            storyId,
+            new DeleteFinalMixCommand(this));
+    }
+
+    public Task<(bool success, string? message)> DeleteMusicAsync(long storyId)
+    {
+        return ExecuteStoryCommandAsync(
+            storyId,
+            new DeleteMusicCommand(this));
+    }
+
+    public Task<(bool success, string? message)> DeleteFxAsync(long storyId)
+    {
+        return ExecuteStoryCommandAsync(
+            storyId,
+            new DeleteFxCommand(this));
+    }
+
+    public Task<(bool success, string? message)> DeleteAmbienceAsync(long storyId)
+    {
+        return ExecuteStoryCommandAsync(
+            storyId,
+            new DeleteAmbienceCommand(this));
+    }
+
+    public Task<(bool success, string? message)> DeleteTtsSchemaAsync(long storyId)
+    {
+        return ExecuteStoryCommandAsync(
+            storyId,
+            new DeleteTtsSchemaCommand(this));
+    }
+
+    public Task<(bool success, string? message)> DeleteTtsAsync(long storyId)
+    {
+        return ExecuteStoryCommandAsync(
+            storyId,
+            new DeleteTtsCommand(this));
+    }
+
+    public Task<(bool success, string? message)> DeleteStoryTaggedAsync(long storyId)
+    {
+        return ExecuteStoryCommandAsync(
+            storyId,
+            new DeleteStoryTaggedCommand(this));
     }
 
     /// <summary>
@@ -727,6 +785,11 @@ public sealed class StoriesService
             return (false, "MultiStepOrchestrator non disponibile");
         }
 
+        if (string.IsNullOrWhiteSpace(story.StoryTagged))
+        {
+            return (false, "Il testo taggato della storia e vuoto");
+        }
+
         var ttsAgent = _database.ListAgents()
             .FirstOrDefault(a => a.IsActive && a.Role?.Equals("tts_json", StringComparison.OrdinalIgnoreCase) == true && a.MultiStepTemplateId.HasValue);
 
@@ -747,7 +810,7 @@ public sealed class StoriesService
         var configPayload = JsonSerializer.Serialize(new
         {
             workingFolder = folderPath,
-            storyText = story.Story ?? string.Empty
+            storyText = story.StoryTagged ?? string.Empty
         });
 
         var threadId = unchecked((int)(story.Id % int.MaxValue));
@@ -792,7 +855,7 @@ public sealed class StoriesService
                 executorAgentId: ttsAgent.Id,
                 checkerAgentId: null,
                 configOverrides: configPayload,
-                initialContext: story.Story ?? string.Empty,
+                initialContext: story.StoryTagged ?? string.Empty,
                 threadId: threadId,
                 templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions,
                 executorModelOverrideId: model.Id);
@@ -949,7 +1012,7 @@ public sealed class StoriesService
         // - Keep essential punctuation for pauses and intonation: . , ; : ? !
         // - Convert multiple dots (... or ..) to single dot
         // - Normalize whitespace
-        result = Regex.Replace(result, @"\.{2,}", ".");  // Multiple dots → single dot
+        result = Regex.Replace(result, @"\.{2,}", ".");  // Multiple dots ? single dot
         result = Regex.Replace(result, @"\s+", " ");  // Normalize whitespace
         return result.Trim();
     }
@@ -1342,6 +1405,133 @@ public sealed class StoriesService
         }
     }
 
+    private static readonly string[] FinalMixRootKeys = new[]
+    {
+        "finalMixFile",
+        "finalMix",
+        "finalMixMp3",
+        "finalMixWav",
+        "final_mix",
+        "final_mix_file",
+        "final_mix_mp3",
+        "final_mix_wav",
+        "audioMasterFile",
+        "audio_master_file",
+        "mixedAudioFile"
+    };
+
+    private static readonly string[] FinalMixTimelineKeys = new[]
+    {
+        "finalMixFile",
+        "finalMix",
+        "finalMixMp3",
+        "finalMixWav",
+        "mixFile",
+        "mix_file",
+        "audioMasterFile",
+        "audio_master_file"
+    };
+
+    private (bool success, string? message) DeleteTtsSchemaAssets(long storyId, string folderPath)
+    {
+        try
+        {
+            CleanAllGeneratedAssetsForTtsSchemaRegeneration(storyId, folderPath);
+            return (true, "Schema TTS cancellato");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Errore durante la cancellazione dello schema TTS per la storia {Id}", storyId);
+            return (false, ex.Message);
+        }
+    }
+
+    private bool RemoveFinalMixReferencesFromSchema(string folderPath)
+    {
+        var schemaPath = Path.Combine(folderPath, "tts_schema.json");
+        if (!File.Exists(schemaPath))
+            return false;
+
+        try
+        {
+            var json = File.ReadAllText(schemaPath);
+            var root = JsonNode.Parse(json) as JsonObject;
+            if (root == null)
+                return false;
+
+            var modified = RemovePropertiesCaseInsensitive(root, FinalMixRootKeys);
+
+            if (root.TryGetPropertyValue("timeline", out var timelineNode) || root.TryGetPropertyValue("Timeline", out timelineNode))
+            {
+                if (timelineNode is JsonArray arr)
+                {
+                    foreach (var item in arr.OfType<JsonObject>())
+                    {
+                        if (RemovePropertiesCaseInsensitive(item, FinalMixTimelineKeys))
+                        {
+                            modified = true;
+                        }
+                    }
+                }
+            }
+
+            if (modified)
+            {
+                File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+            }
+
+            return modified;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Unable to remove final mix references from schema for folder {Folder}", folderPath);
+            return false;
+        }
+    }
+
+    private static bool RemovePropertiesCaseInsensitive(JsonObject node, params string[] propertyNames)
+    {
+        if (node == null || propertyNames == null || propertyNames.Length == 0)
+            return false;
+
+        var targets = propertyNames.Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+        if (targets.Count == 0)
+            return false;
+
+        var keysToRemove = node
+            .Where(kvp => targets.Any(target => string.Equals(kvp.Key, target, StringComparison.OrdinalIgnoreCase)))
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        var removed = false;
+        foreach (var key in keysToRemove)
+        {
+            removed |= node.Remove(key);
+        }
+
+        return removed;
+    }
+
+    private (bool success, string? message) DeleteFinalMixAssets(long storyId, string folderPath)
+    {
+        try
+        {
+            RemoveFinalMixReferencesFromSchema(folderPath);
+
+            DeleteIfExists(Path.Combine(folderPath, "final_mix.mp3"));
+            DeleteIfExists(Path.Combine(folderPath, "final_mix.wav"));
+
+            try { _database.UpdateStoryGeneratedMixedAudio(storyId, false); } catch { }
+
+            return (true, "Mix finale cancellato");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Errore durante la cancellazione del mix finale per la storia {Id}", storyId);
+            return (false, ex.Message);
+        }
+    }
+
     private static string SanitizeFolderName(string name)
     {
         var invalidChars = Path.GetInvalidFileNameChars();
@@ -1513,11 +1703,11 @@ public sealed class StoriesService
             builder.AppendLine("Instead, use the read_story_part function to retrieve segments of the story (start with part_index=0 and continue requesting parts until you receive \"is_last\": true).");
             builder.AppendLine("Do not invent story content; rely only on the chunks returned by read_story_part.");
             builder.AppendLine("After you have reviewed the necessary sections, call the evaluate_full_story function exactly once. The story_id is managed internally; do not pass it.");
-            builder.AppendLine("If you finish your review but fail to call evaluate_full_story, the orchestrator will remind you and ask again up to 3 times â€” you MUST call the function before the evaluation completes.");
+            builder.AppendLine("If you finish your review but fail to call evaluate_full_story, the orchestrator will remind you and ask again up to 3 times - you MUST call the function before the evaluation completes.");
             builder.AppendLine("Populate the following scores (0-10): narrative_coherence_score, originality_score, emotional_impact_score, action_score.");
             builder.AppendLine("All score fields MUST be integers between 0 and 10 (use 0 if you cannot determine a score). Do NOT send strings like \"None\".");
             builder.AppendLine("Also include the corresponding *_defects values (empty string or \"None\" is acceptable if there are no defects).");
-            builder.AppendLine("Do not return an overall evaluation text â€“ the system will compute the aggregate score automatically.");
+            builder.AppendLine("Do not return an overall evaluation text - the system will compute the aggregate score automatically.");
             builder.AppendLine("Ensure every score and defect field is present in the final tool call, even if the defect description is empty.");
         }
         
@@ -1531,7 +1721,7 @@ public sealed class StoriesService
         builder.AppendLine("Workflow:");
         builder.AppendLine("1) Read chunk with read_story_part(part_index=N) starting from 0 and increment until is_last=true (do NOT invent chunks).");
         builder.AppendLine("2) Extract action/pacing profile with extract_action_profile(chunk_number=N, chunk_text=returned content).");
-        builder.AppendLine("3) Compute scores (0.0â€“1.0):");
+        builder.AppendLine("3) Compute scores (0.0-1.0):");
         builder.AppendLine("   - action_score: quantity/quality of action");
         builder.AppendLine("   - pacing_score: narrative rhythm of the chunk");
         builder.AppendLine("4) Record scores with calculate_action_pacing(chunk_number=N, action_score=..., pacing_score=..., notes=\"short notes\").");
@@ -1616,48 +1806,48 @@ public sealed class StoriesService
 
         public GenerateTtsSchemaCommand(StoriesService service) => _service = service;
 
-        public bool RequireStoryText => true;
+        public bool RequireStoryText => false;
         public bool EnsureFolder => true;
         public bool HandlesStatusTransition => false;
 
-        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
             var story = context.Story;
             var folderPath = context.FolderPath;
 
-            if (string.IsNullOrWhiteSpace(story.Story))
+            if (string.IsNullOrWhiteSpace(story.StoryTagged))
             {
-                return Task.FromResult<(bool, string?)>((false, "Il testo della storia Ã¨ vuoto"));
+                return (false, "Il testo taggato della storia e vuoto");
+            }
+
+            var deleteCmd = new DeleteTtsSchemaCommand(_service);
+            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+            if (!cleanupOk)
+            {
+                return (false, cleanupMessage ?? "Impossibile cancellare il precedente schema TTS");
             }
 
             try
             {
-                // Clean previous generated assets (tts audio, music, fx, ambience, final mix)
-                try { _service.CleanAllGeneratedAssetsForTtsSchemaRegeneration(story.Id, folderPath); } catch { }
-
-                // Use direct parsing instead of agent
                 var generator = new TtsSchemaGenerator(_service._customLogger, _service._database);
-                var schema = generator.GenerateFromStoryText(story.Story);
+                var schema = generator.GenerateFromStoryText(story.StoryTagged);
 
                 if (schema.Timeline.Count == 0)
                 {
-                    return Task.FromResult<(bool, string?)>((false, "Nessuna frase trovata nel testo. Assicurati che il testo contenga tag come [NARRATORE], [personaggio, emozione] o [PERSONAGGIO: Nome] [EMOZIONE: emozione]."));
+                    return (false, "Nessuna frase trovata nel testo. Assicurati che il testo contenga tag come [NARRATORE], [personaggio, emozione] o [PERSONAGGIO: Nome] [EMOZIONE: emozione].");
                 }
 
-                // Assign voices to characters
                 generator.AssignVoices(schema);
 
-                // Save the schema
                 var schemaPath = Path.Combine(folderPath, "tts_schema.json");
-                var jsonOptions = new JsonSerializerOptions 
-                { 
+                var jsonOptions = new JsonSerializerOptions
+                {
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase
                 };
                 var json = JsonSerializer.Serialize(schema, jsonOptions);
                 File.WriteAllText(schemaPath, json);
 
-                // Mark story as having generated TTS JSON (best-effort)
                 try { _service._database.UpdateStoryGeneratedTtsJson(story.Id, true); } catch { }
 
                 _service._database.UpdateStoryById(story.Id, statusId: TtsSchemaReadyStatusId, updateStatus: true);
@@ -1666,12 +1856,12 @@ public sealed class StoriesService
                     "TTS schema generato per storia {StoryId}: {Characters} personaggi, {Phrases} frasi",
                     story.Id, schema.Characters.Count, schema.Timeline.Count);
 
-                return Task.FromResult<(bool, string?)>((true, $"Schema TTS generato: {schema.Characters.Count} personaggi, {schema.Timeline.Count} frasi"));
+                return (true, $"Schema TTS generato: {schema.Characters.Count} personaggi, {schema.Timeline.Count} frasi");
             }
             catch (Exception ex)
             {
                 _service._logger?.LogError(ex, "Errore durante la generazione del TTS schema per la storia {Id}", story.Id);
-                return Task.FromResult<(bool, string?)>((false, ex.Message));
+                return (false, ex.Message);
             }
         }
     }
@@ -1708,7 +1898,7 @@ public sealed class StoriesService
             }
             if (storyCharacters.Count == 0)
             {
-                return Task.FromResult<(bool, string?)>((false, $"La lista personaggi della storia Ã¨ vuota o non valida. JSON attuale: {story.Characters.Substring(0, Math.Min(200, story.Characters.Length))}..."));
+                return Task.FromResult<(bool, string?)>((false, $"La lista personaggi della storia è vuota o non valida. JSON attuale: {story.Characters.Substring(0, Math.Min(200, story.Characters.Length))}..."));
             }
 
             // Check if tts_schema.json exists
@@ -1751,7 +1941,7 @@ public sealed class StoriesService
 
                 if (characterMapping.Count == 0)
                 {
-                    return Task.FromResult<(bool, string?)>((true, "Nessuna normalizzazione necessaria: tutti i nomi sono giÃ  canonici."));
+                    return Task.FromResult<(bool, string?)>((true, "Nessuna normalizzazione necessaria: tutti i nomi sono già canonici."));
                 }
 
                 // Update character names in the Characters list
@@ -2075,7 +2265,7 @@ public sealed class StoriesService
                 if (missingVoices.Any())
                 {
                     return Task.FromResult<(bool, string?)>((false, 
-                        $"Non Ã¨ stato possibile assegnare voci a: {string.Join(", ", missingVoices)}. " +
+                        $"Non è stato possibile assegnare voci a: {string.Join(", ", missingVoices)}. " +
                         $"Aggiungi altre voci nella tabella tts_voices."));
                 }
 
@@ -2181,7 +2371,7 @@ public sealed class StoriesService
                 "bambino" or "child" or "kid" => 8,
                 "ragazzo" or "giovane" or "young" or "teen" or "teenager" => 18,
                 "adulto" or "adult" => 35,
-                "mezza etÃ " or "middle-aged" or "middle aged" => 50,
+                "mezza età" or "middle-aged" or "middle aged" => 50,
                 "anziano" or "elderly" or "old" => 70,
                 _ => null
             };
@@ -2268,6 +2458,222 @@ public sealed class StoriesService
         {
             _logger?.LogError(ex, "Errore durante ApplyVoiceAssignmentFallbacksAsync per schema {SchemaPath}", schemaPath);
             return false;
+        }
+    }
+
+    private sealed class DeleteTtsSchemaCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public DeleteTtsSchemaCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => false;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => false;
+
+        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            return Task.FromResult<(bool success, string? message)>(_service.DeleteTtsSchemaAssets(context.Story.Id, context.FolderPath));
+        }
+    }
+
+    private sealed class DeleteFinalMixCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public DeleteFinalMixCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => false;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => false;
+
+        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            return Task.FromResult(_service.DeleteFinalMixAssets(context.Story.Id, context.FolderPath));
+        }
+    }
+
+    private sealed class DeleteMusicCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public DeleteMusicCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => false;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => false;
+
+        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            try
+            {
+                _service.CleanMusicForRegeneration(context.Story.Id, context.FolderPath);
+                var (mixSuccess, mixMessage) = _service.DeleteFinalMixAssets(context.Story.Id, context.FolderPath);
+                string? message = mixSuccess
+                    ? "Musica cancellata e mix finale rimosso"
+                    : string.IsNullOrWhiteSpace(mixMessage)
+                        ? "Musica cancellata con avvisi sul mix finale"
+                        : $"Musica cancellata. {mixMessage}";
+                return Task.FromResult<(bool success, string? message)>((mixSuccess, message));
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogError(ex, "Errore durante la cancellazione della musica per la storia {Id}", context.Story.Id);
+                return Task.FromResult<(bool success, string? message)>((false, ex.Message));
+            }
+        }
+    }
+
+    private sealed class DeleteFxCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public DeleteFxCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => false;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => false;
+
+        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            try
+            {
+                _service.CleanFxForRegeneration(context.Story.Id, context.FolderPath);
+                var (mixSuccess, mixMessage) = _service.DeleteFinalMixAssets(context.Story.Id, context.FolderPath);
+                string? message = mixSuccess
+                    ? "Effetti sonori cancellati e mix finale aggiornato"
+                    : string.IsNullOrWhiteSpace(mixMessage)
+                        ? "Effetti cancellati con avvisi sul mix finale"
+                        : $"Effetti cancellati. {mixMessage}";
+                return Task.FromResult<(bool success, string? message)>((mixSuccess, message));
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogError(ex, "Errore durante la cancellazione degli effetti per la storia {Id}", context.Story.Id);
+                return Task.FromResult<(bool success, string? message)>((false, ex.Message));
+            }
+        }
+    }
+
+    private sealed class DeleteAmbienceCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public DeleteAmbienceCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => false;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => false;
+
+        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            try
+            {
+                _service.CleanAmbienceForRegeneration(context.Story.Id, context.FolderPath);
+                var (mixSuccess, mixMessage) = _service.DeleteFinalMixAssets(context.Story.Id, context.FolderPath);
+                string? message = mixSuccess
+                    ? "Rumori ambientali cancellati e mix finale aggiornato"
+                    : string.IsNullOrWhiteSpace(mixMessage)
+                        ? "Rumori ambientali cancellati con avvisi sul mix finale"
+                        : $"Rumori ambientali cancellati. {mixMessage}";
+                return Task.FromResult<(bool success, string? message)>((mixSuccess, message));
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogError(ex, "Errore durante la cancellazione dei rumori ambientali per la storia {Id}", context.Story.Id);
+                return Task.FromResult<(bool success, string? message)>((false, ex.Message));
+            }
+        }
+    }
+
+    private sealed class DeleteTtsCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public DeleteTtsCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => false;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => false;
+
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            try
+            {
+                _service.CleanBeforeTtsAudioGeneration(context.Story.Id, context.FolderPath);
+
+                var cascadeContext = new StoryCommandContext(context.Story, context.FolderPath, null);
+                var cascadeCommands = new IStoryCommand[]
+                {
+                    new DeleteAmbienceCommand(_service),
+                    new DeleteMusicCommand(_service),
+                    new DeleteFxCommand(_service),
+                    new DeleteFinalMixCommand(_service)
+                };
+
+                var messages = new List<string> { "Tracce TTS cancellate" };
+                var allOk = true;
+
+                foreach (var cmd in cascadeCommands)
+                {
+                    var (ok, msg) = await cmd.ExecuteAsync(cascadeContext);
+                    allOk &= ok;
+                    if (!string.IsNullOrWhiteSpace(msg))
+                    {
+                        messages.Add(msg);
+                    }
+                }
+
+                return (allOk, string.Join(" | ", messages));
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogError(ex, "Errore durante la cancellazione TTS per la storia {Id}", context.Story.Id);
+                return (false, ex.Message);
+            }
+        }
+    }
+
+    private sealed class DeleteStoryTaggedCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public DeleteStoryTaggedCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => false;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => false;
+
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            try
+            {
+                var storyId = context.Story.Id;
+                var cleared = _service._database.ClearStoryTagged(storyId);
+                if (!cleared)
+                {
+                    return (false, "Impossibile cancellare story_tagged dal database");
+                }
+
+                context.Story.StoryTagged = string.Empty;
+                context.Story.StoryTaggedVersion = null;
+                context.Story.FormatterModelId = null;
+                context.Story.FormatterPromptHash = null;
+
+                var cascadeContext = new StoryCommandContext(context.Story, context.FolderPath, null);
+                var (ttsOk, ttsMessage) = await new DeleteTtsCommand(_service).ExecuteAsync(cascadeContext);
+
+                var message = string.IsNullOrWhiteSpace(ttsMessage)
+                    ? "Campo story_tagged cancellato"
+                    : $"Campo story_tagged cancellato. {ttsMessage}";
+
+                return (ttsOk, message);
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogError(ex, "Errore durante la cancellazione del campo story_tagged per la storia {Id}", context.Story.Id);
+                return (false, ex.Message);
+            }
         }
     }
 
@@ -2442,9 +2848,16 @@ public sealed class StoriesService
         public bool EnsureFolder => true;
         public bool HandlesStatusTransition => true;
 
-        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
-            return _service.StartTtsAudioGenerationAsync(context);
+            var deleteCmd = new DeleteTtsCommand(_service);
+            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+            if (!cleanupOk)
+            {
+                return (false, cleanupMessage ?? "Impossibile cancellare i file TTS esistenti");
+            }
+
+            return await _service.StartTtsAudioGenerationAsync(context);
         }
     }
 
@@ -2880,9 +3293,16 @@ public sealed class StoriesService
         public bool EnsureFolder => true;
         public bool HandlesStatusTransition => true;
 
-        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
-            return _service.StartAmbienceAudioGenerationAsync(context);
+            var deleteCmd = new DeleteAmbienceCommand(_service);
+            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+            if (!cleanupOk)
+            {
+                return (false, cleanupMessage ?? "Impossibile cancellare i rumori ambientali esistenti");
+            }
+
+            return await _service.StartAmbienceAudioGenerationAsync(context);
         }
     }
 
@@ -2982,7 +3402,7 @@ public sealed class StoriesService
         var ambienceSegments = ExtractAmbienceSegments(phraseEntries);
         if (ambienceSegments.Count == 0)
         {
-            var msg = "Nessun segmento ambient sounds trovato nella timeline (nessuna proprietà 'ambient_sounds' presente - usa il tag [RUMORI: ...])";
+            var msg = "Nessun segmento ambient sounds trovato nella timeline (nessuna propriet� 'ambient_sounds' presente - usa il tag [RUMORI: ...])";
             _customLogger?.Append(runId, $"[{story.Id}] {msg}");
             return (true, msg);
         }
@@ -3217,9 +3637,16 @@ public sealed class StoriesService
         public bool EnsureFolder => true;
         public bool HandlesStatusTransition => true;
 
-        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
-            return _service.StartFxAudioGenerationAsync(context);
+            var deleteCmd = new DeleteFxCommand(_service);
+            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+            if (!cleanupOk)
+            {
+                return (false, cleanupMessage ?? "Impossibile cancellare gli effetti sonori esistenti");
+            }
+
+            return await _service.StartFxAudioGenerationAsync(context);
         }
     }
 
@@ -3332,7 +3759,7 @@ public sealed class StoriesService
 
         if (fxEntries.Count == 0)
         {
-            var msg = "Nessun effetto sonoro da generare (nessuna proprietà 'fxDescription' presente)";
+            var msg = "Nessun effetto sonoro da generare (nessuna propriet� 'fxDescription' presente)";
             _customLogger?.Append(runId, $"[{story.Id}] {msg}");
             return (true, msg);
         }
@@ -3501,10 +3928,13 @@ public sealed class StoriesService
         var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", folderName);
         Directory.CreateDirectory(folderPath);
 
-        // Clean previous FX assets and references
-        try { CleanFxForRegeneration(story.Id, folderPath); } catch { }
-
         var context = new StoryCommandContext(story, folderPath, null);
+        var deleteCmd = new DeleteFxCommand(this);
+        var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+        if (!cleanupOk)
+        {
+            return (false, cleanupMessage ?? "Impossibile cancellare gli effetti sonori esistenti");
+        }
         
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
@@ -3526,9 +3956,16 @@ public sealed class StoriesService
         public bool EnsureFolder => true;
         public bool HandlesStatusTransition => false;
 
-        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
-            return _service.StartMusicGenerationAsync(context);
+            var deleteCmd = new DeleteMusicCommand(_service);
+            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+            if (!cleanupOk)
+            {
+                return (false, cleanupMessage ?? "Impossibile cancellare la musica esistente");
+            }
+
+            return await _service.StartMusicGenerationAsync(context);
         }
     }
 
@@ -3871,6 +4308,13 @@ public sealed class StoriesService
         Directory.CreateDirectory(folderPath);
 
         var context = new StoryCommandContext(story, folderPath, null);
+
+        var deleteCmd = new DeleteMusicCommand(this);
+        var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+        if (!cleanupOk)
+        {
+            return (false, cleanupMessage ?? "Impossibile cancellare la musica esistente");
+        }
         
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
@@ -3892,9 +4336,16 @@ public sealed class StoriesService
         public bool EnsureFolder => true;
         public bool HandlesStatusTransition => true;
 
-        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
-            return _service.StartMixFinalAudioAsync(context);
+            var deleteCmd = new DeleteFinalMixCommand(_service);
+            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+            if (!cleanupOk)
+            {
+                return (false, cleanupMessage ?? "Impossibile cancellare il mix finale esistente");
+            }
+
+            return await _service.StartMixFinalAudioAsync(context);
         }
     }
 
@@ -4128,7 +4579,7 @@ public sealed class StoriesService
             musicTrackFiles.Add((jingleFile, 0, 7000));
         }
 
-        // 2. Genera TTS del titolo (se non esiste già)
+        // 2. Genera TTS del titolo (se non esiste gi�)
         string? titleTtsFile = null;
         if (!string.IsNullOrWhiteSpace(story.Title))
         {
@@ -4297,7 +4748,7 @@ public sealed class StoriesService
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "ffmpeg",
-                    Arguments = $"-y -i \"{outputFile}\" -codec:a libmp3lame -q:a 0 -b:a 320k \"{mp3OutputFile}\"",  // q:a 0 = massima qualità VBR, -b:a 320k = bitrate massimo
+                    Arguments = $"-y -i \"{outputFile}\" -codec:a libmp3lame -q:a 0 -b:a 320k \"{mp3OutputFile}\"",  // q:a 0 = massima qualit� VBR, -b:a 320k = bitrate massimo
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -4336,7 +4787,7 @@ public sealed class StoriesService
 
         var successMsg = $"Mixaggio audio completato: final_mix.wav ({ttsTrackFiles.Count} voci, {ambienceTrackFiles.Count} ambience, {fxTrackFiles.Count} FX)";
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
-        // Aggiorna lo stato della storia a `audio_master_generated` quando il mix finale è stato creato
+        // Aggiorna lo stato della storia a `audio_master_generated` quando il mix finale e stato creato
         try
         {
             var audioMasterStatus = GetStoryStatusByCode("audio_master_generated");
@@ -4753,9 +5204,9 @@ public sealed class StoriesService
             process.StartInfo.ArgumentList.Add("-ac");
             process.StartInfo.ArgumentList.Add("2");
             process.StartInfo.ArgumentList.Add("-ar");
-            process.StartInfo.ArgumentList.Add("48000");  // Mantenere qualità audio 48kHz (stesso del TTS)
+            process.StartInfo.ArgumentList.Add("48000");  // Mantenere qualit� audio 48kHz (stesso del TTS)
             process.StartInfo.ArgumentList.Add("-b:a");
-            process.StartInfo.ArgumentList.Add("320k");   // Bitrate alto per qualità master
+            process.StartInfo.ArgumentList.Add("320k");   // Bitrate alto per qualit� master
             process.StartInfo.ArgumentList.Add(outputFile);
             
             process.Start();
@@ -4783,7 +5234,7 @@ public sealed class StoriesService
             if (!processExited)
             {
                 _customLogger?.Append(runId, $"[{storyId}] Timeout ffmpeg (30 minuti)");
-                return (false, "Timeout ffmpeg: il processo ha impiegato più di 30 minuti");
+                return (false, "Timeout ffmpeg: il processo ha impiegato pi� di 30 minuti");
             }
 
             if (process.ExitCode != 0)
@@ -4834,6 +5285,12 @@ public sealed class StoriesService
         Directory.CreateDirectory(folderPath);
 
         var context = new StoryCommandContext(story, folderPath, null);
+        var deleteCmd = new DeleteFinalMixCommand(this);
+        var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
+        if (!cleanupOk)
+        {
+            return (false, cleanupMessage ?? "Impossibile cancellare il mix finale esistente");
+        }
         
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
@@ -4946,7 +5403,7 @@ public sealed class StoriesService
     private async Task<(byte[] audioBytes, int? durationMs)> GenerateAudioBytesAsync(string voiceId, string text, string emotion)
     {
         if (string.IsNullOrWhiteSpace(text))
-            throw new InvalidOperationException("Il testo della frase è vuoto");
+            throw new InvalidOperationException("Il testo della frase e vuoto");
 
         // Normalize emotion to valid TTS value or fallback to neutral
         var normalizedEmotion = NormalizeEmotionForTts(emotion);
@@ -5169,17 +5626,21 @@ public sealed class StoriesService
 Usa SOLO queste sezioni ripetute nell'ordine del testo:
 
 [NARRATORE]
-Testo narrativo così come appare nel chunk
+Testo narrativo cos� come appare nel chunk
 
 [PERSONAGGIO: NomePersonaggio | EMOZIONE: emotion]
-Battuta di dialogo così come appare nel chunk
+Battuta di dialogo cos� come appare nel chunk
 
 Regole:
 - NON cambiare lingua, NON abbreviare, NON riassumere.
-- Se non è chiaramente un dialogo, usa NARRATORE.
+- Se non e chiaramente un dialogo, usa NARRATORE.
 - EMOZIONE: usa una tra neutral, happy, sad, angry, fearful, disgusted, surprised (default neutral se non indicata).
 - Non aggiungere spiegazioni o altro testo fuori dai blocchi.
-- Copri tutto il chunk, più blocchi uno dopo l'altro finché il chunk è esaurito.";
+- Copri tutto il chunk, pi� blocchi uno dopo l'altro finch� il chunk e esaurito.";
     }
 }
+
+
+
+
 

@@ -603,7 +603,14 @@ namespace TinyGenerator.Services
                 var writerMaxTokens = Math.Max(context.ModelInfo.ContextToUse, context.ModelInfo.MaxContext);
                 if (writerMaxTokens > 0)
                 {
-                    chatBridge.MaxResponseTokens = Math.Max(chatBridge.MaxResponseTokens, writerMaxTokens);
+                    if (!chatBridge.MaxResponseTokens.HasValue)
+                    {
+                        chatBridge.MaxResponseTokens = writerMaxTokens;
+                    }
+                    else
+                    {
+                        chatBridge.MaxResponseTokens = Math.Max(chatBridge.MaxResponseTokens.Value, writerMaxTokens);
+                    }
                 }
                 var timeout = test.TimeoutSecs > 0 ? Math.Max(1, test.TimeoutSecs) : 120;
 
@@ -799,7 +806,7 @@ namespace TinyGenerator.Services
             var ttsAgent = _database.ListAgents()
                 .FirstOrDefault(a => a.IsActive && a.Role.Equals("tts_json", StringComparison.OrdinalIgnoreCase));
             var ttsStory = _database.GetStoryById(23);
-            var ttsStoryText = ttsStory?.Story ?? prompt;
+            var ttsStoryText = ttsStory?.StoryRaw ?? prompt;
             var allowedPlugins = ParseAgentSkills(ttsAgent) ?? ParseAllowedPlugins(test);
             var agentPrompt = !string.IsNullOrWhiteSpace(ttsAgent?.Prompt)
                 ? ttsAgent.Prompt!

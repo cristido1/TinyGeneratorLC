@@ -305,7 +305,7 @@ namespace TinyGenerator.Skills
             if (_chunksCache != null) return;
             if (!CurrentStoryId.HasValue || _database == null) return;
             var s = _database.GetStoryById(CurrentStoryId.Value);
-            var storyText = s?.Story ?? string.Empty;
+            var storyText = s?.StoryRaw ?? string.Empty;
             _chunksCache = StoryChunkHelper.SplitIntoChunks(storyText, _storyChunkSize);
         }
 

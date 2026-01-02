@@ -2167,9 +2167,7 @@ RIASSUNTO:";
                         _logger.Log("Debug", "MultiStep", $"Updating existing story {execution.EntityId.Value} with final text (length {merged?.Length ?? 0})");
                         var ok = _database.UpdateStoryById(
                             execution.EntityId.Value,
-                            story: merged,
-                            agentId: agent?.Id,
-                            modelId: modelId);
+                            story: merged);
                         _logger.Log(ok ? "Information" : "Warning", "MultiStep", $"UpdateStoryById returned {ok} for story {execution.EntityId.Value}");
                     }
                     catch (Exception ex)

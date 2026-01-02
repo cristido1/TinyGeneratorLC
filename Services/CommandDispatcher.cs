@@ -73,6 +73,7 @@ namespace TinyGenerator.Services
         private readonly int _parallelism;
         private readonly ICustomLogger? _logger;
         private readonly Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? _hubContext;
+        private readonly NumeratorService? _numerator;
         private readonly List<Task> _workers = new();
         private CancellationTokenSource? _cts;
         private long _counter;
@@ -85,11 +86,12 @@ namespace TinyGenerator.Services
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
-        public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null, Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? hubContext = null)
+        public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null, Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? hubContext = null, NumeratorService? numerator = null)
         {
             _parallelism = Math.Max(1, options?.Value?.MaxParallelCommands ?? 2);
             _logger = logger;
             _hubContext = hubContext;
+            _numerator = numerator;
         }
 
         public CommandHandle Enqueue(
@@ -203,7 +205,34 @@ namespace TinyGenerator.Services
 
         private async Task ProcessWorkItemAsync(CommandWorkItem workItem, CancellationToken stoppingToken)
         {
-            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName);
+            var allocatedThreadId = _numerator?.NextThreadId() ?? Environment.CurrentManagedThreadId;
+            long? allocatedStoryId = null;
+            if (_numerator != null && string.Equals(workItem.OperationName, "create_story", StringComparison.OrdinalIgnoreCase))
+            {
+                allocatedStoryId = _numerator.NextStoryId();
+            }
+            else if (_numerator != null && workItem.Metadata != null)
+            {
+                // If command targets a specific story, propagate story_id to all logs.
+                // Many callers provide metadata["storyId"]. Some use "entityId".
+                if (workItem.Metadata.TryGetValue("storyId", out var sidRaw) || workItem.Metadata.TryGetValue("entityId", out sidRaw))
+                {
+                    if (long.TryParse(sidRaw, out var storyDbId) && storyDbId > 0)
+                    {
+                        try
+                        {
+                            allocatedStoryId = _numerator.EnsureStoryIdForStoryDbId(storyDbId);
+                        }
+                        catch
+                        {
+                            // best-effort; keep null if story cannot be resolved
+                            allocatedStoryId = null;
+                        }
+                    }
+                }
+            }
+
+            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName, threadId: allocatedThreadId, storyId: allocatedStoryId);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workItem.Cancellation.Token);
             var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, linkedCts.Token);
             var startMessage = $"[{workItem.RunId}] START {workItem.OperationName}";

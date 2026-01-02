@@ -82,6 +82,36 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public IActionResult OnPostDeleteAllEvaluations()
+        {
+            try
+            {
+                _database.DeleteAllEvaluations();
+                TempData["StatusMessage"] = "Tutte le valutazioni eliminate (inclusa coerenza).";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore eliminazione valutazioni: " + ex.Message;
+            }
+
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostRealignCreatorModelIds()
+        {
+            try
+            {
+                var changed = _database.RealignStoriesCreatorModelIds();
+                TempData["StatusMessage"] = $"Allineamento completato: aggiornate {changed} storie (model_id ← agent.model_id).";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore allineamento model_id: " + ex.Message;
+            }
+
+            return RedirectToPage();
+        }
+
         public IActionResult OnPostEvaluate(long id, int agentId)
         {
             var agent = _database.GetAgentById(agentId);

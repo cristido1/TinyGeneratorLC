@@ -40,6 +40,7 @@
             <th>Result</th>
             <th>Operazione</th>
             <th>ThreadId</th>
+            <th>StoryId</th>
             <th>AgentName</th>
             <th>Message</th>
             <th>Azioni</th>
@@ -68,6 +69,7 @@
             data-source="@log.Source"
             data-ts="@log.Ts" 
             data-threadid="@log.ThreadId" 
+            data-storyid="@(log.StoryId.HasValue ? log.StoryId.Value.ToString() : string.Empty)"
             data-threadscope="@log.ThreadScope"
             data-analized="@log.Analized"
             data-agentname="@log.AgentName" 
@@ -100,6 +102,7 @@
             </td>
             <td class="operation">@(!string.IsNullOrWhiteSpace(log.ThreadScope) ? log.ThreadScope : "-")</td>
             <td class="threadid">@(log.ThreadId > 0 ? log.ThreadId.ToString() : "-")</td>
+            <td class="storyid">@(log.StoryId.HasValue && log.StoryId.Value > 0 ? log.StoryId.Value.ToString() : "-")</td>
             <td class="agentname">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
             <td class="message"><span class="text-muted">Premi + per caricare il messaggio</span></td>
             <td class="actions" style="white-space:nowrap;">
@@ -154,6 +157,13 @@
         .log-model-request td.message, .log-model-response td.message {
             font-weight: 500;
         }
+
+        .log-content-highlight {
+            background: #ffe599;
+            border-radius: 2px;
+            padding: 0 2px;
+            font-weight: 600;
+        }
     </style>
 }
 
@@ -189,13 +199,14 @@
                     { orderable: false, targets: 0 }, // details control column not sortable
                     { responsivePriority: 1, targets: 1 }, // Timestamp always visible
                     { responsivePriority: 2, targets: 2 }, // Level always visible
-                    { responsivePriority: 3, targets: 3 }, // Result
-                    { responsivePriority: 4, targets: 4 }, // Operation
-                    { responsivePriority: 5, targets: 5 }, // ThreadId
-                    { responsivePriority: 6, targets: 6 }, // AgentName
-                    { responsivePriority: 7, targets: 7 }, // Message
-                    { responsivePriority: 8, targets: 8 }, // Source
-                    { orderable: false, targets: 9 }       // Actions
+                    { responsivePriority: 3, targets: 4 }, // Result
+                    { responsivePriority: 4, targets: 5 }, // Operation
+                    { responsivePriority: 5, targets: 6 }, // ThreadId
+                    { responsivePriority: 6, targets: 7 }, // StoryId
+                    { responsivePriority: 7, targets: 8 }, // AgentName
+                    { responsivePriority: 8, targets: 9 }, // Message
+                    { responsivePriority: 9, targets: 3 }, // Source
+                    { orderable: false, targets: 10 }      // Actions
                 ],
                 dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
                      "rt" +
@@ -280,6 +291,9 @@
             function formatLogDetailsFromMessage(message) {
                 var decoded = decodeEscapes(message || '');
                 var safe = htmlEscape(decoded);
+                safe = safe.replace(/\bcontent\b/gi, function(match) {
+                    return '<span class="log-content-highlight">' + match + '</span>';
+                });
                 var html = '<div style="padding:8px 12px;font-size:0.95rem;color:#222;background:#f8f9fa;border-radius:4px;">';
                 html += '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid #ddd;padding:8px;margin:0;border-radius:3px;max-height:420px;overflow:auto;">' + safe + '</pre>';
                 html += '</div>';

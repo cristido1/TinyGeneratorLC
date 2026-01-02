@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
@@ -95,7 +96,13 @@ namespace TinyGenerator.Services.Commands
                     ? null
                     : ComputeSha256(systemPrompt);
 
-                var chunks = SplitStoryIntoChunks(story.StoryRaw);
+                var normalizedForFormatter = PreNormalizeForFormatter(story.StoryRaw);
+                if (string.IsNullOrWhiteSpace(normalizedForFormatter))
+                {
+                    return Fail(effectiveRunId, "Story text became empty after pre-normalization for formatter");
+                }
+
+                var chunks = SplitStoryIntoChunks(normalizedForFormatter);
                 if (chunks.Count == 0)
                 {
                     return Fail(effectiveRunId, "No chunks produced from story_raw");
@@ -241,6 +248,84 @@ namespace TinyGenerator.Services.Commands
             }
 
             return parts.Count == 0 ? null : string.Join("\n\n", parts);
+        }
+
+        /// <summary>
+        /// IMPORTANT: the formatter must never see editorial structure (titles/chapters/markdown).
+        /// It should receive only continuous narration text.
+        /// </summary>
+        private static string PreNormalizeForFormatter(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+
+            var text = input.Replace("\r\n", "\n");
+            var lines = text.Split('\n');
+
+            // Build paragraphs: join non-empty lines with spaces, keep blank lines as paragraph breaks.
+            var paragraphs = new List<string>();
+            var current = new StringBuilder();
+
+            void FlushParagraph()
+            {
+                var p = current.ToString().Trim();
+                if (!string.IsNullOrWhiteSpace(p))
+                    paragraphs.Add(p);
+                current.Clear();
+            }
+
+            foreach (var rawLine in lines)
+            {
+                var line = (rawLine ?? string.Empty).Trim();
+
+                if (line.Length == 0)
+                {
+                    FlushParagraph();
+                    continue;
+                }
+
+                // Remove markdown headings entirely (editorial structure)
+                if (Regex.IsMatch(line, @"^#{1,6}\s+"))
+                    continue;
+
+                // Remove common title/chapter lines (editorial structure)
+                if (Regex.IsMatch(line, @"^(titolo|title)\b\s*[:\-–—]?\s*.*$", RegexOptions.IgnoreCase))
+                    continue;
+                if (Regex.IsMatch(line, @"^(capitolo|chapter)\b\s*(\d+|[ivxlcdm]+)?\b\s*[:\-–—]?.*$", RegexOptions.IgnoreCase))
+                    continue;
+
+                // Remove horizontal rules / separators
+                if (Regex.IsMatch(line, @"^[-*_]{3,}\s*$"))
+                    continue;
+
+                // Remove fenced code blocks markers (safety: formatter shouldn't see them)
+                if (Regex.IsMatch(line, @"^`{3,}"))
+                    continue;
+
+                // Strip markdown emphasis/bold markers but keep the text
+                var cleaned = line;
+                cleaned = cleaned.Replace("**", string.Empty).Replace("__", string.Empty);
+                cleaned = Regex.Replace(cleaned, @"\*(?<t>[^*]+)\*", "${t}");
+                cleaned = Regex.Replace(cleaned, @"_(?<t>[^_]+)_", "${t}");
+
+                // Dialogue asterisks (common pattern: *dialogo*)
+                cleaned = Regex.Replace(cleaned, @"^\*+\s*(?<t>.+?)\s*\*+$", "${t}");
+
+                // If any stray asterisks remain, remove them to avoid confusing the formatter
+                cleaned = cleaned.Replace("*", string.Empty);
+
+                cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+                if (cleaned.Length == 0)
+                    continue;
+
+                if (current.Length > 0)
+                    current.Append(' ');
+                current.Append(cleaned);
+            }
+
+            FlushParagraph();
+
+            // Re-join as continuous narration with paragraph breaks
+            return string.Join("\n\n", paragraphs).Trim();
         }
 
         private static string? LoadExecutionPlan(string planName)

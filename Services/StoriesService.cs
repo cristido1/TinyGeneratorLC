@@ -85,14 +85,15 @@ public sealed class StoriesService
         _database.DeleteStoryById(id);
     }
 
-    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null)
+    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, long? storyId = null)
     {
-        return _database.InsertSingleStory(prompt, story, modelId, agentId, score, eval, approved, statusId, memoryKey, title);
+        storyId ??= LogScope.CurrentStoryId;
+        return _database.InsertSingleStory(prompt, story, storyId, modelId, agentId, score, eval, approved, statusId, memoryKey, title);
     }
 
-    public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false)
+    public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false, bool allowCreatorMetadataUpdate = false)
     {
-        return _database.UpdateStoryById(id, story, modelId, agentId, statusId, updateStatus);
+        return _database.UpdateStoryById(id, story, modelId, agentId, statusId, updateStatus, allowCreatorMetadataUpdate);
     }
 
     public bool UpdateStoryCharacters(long storyId, string charactersJson)
@@ -324,8 +325,6 @@ public sealed class StoriesService
             return (false, 0, "Modello associato all'agente non disponibile");
 
         var allowedPlugins = ParseAgentSkills(agent)?.ToList() ?? new List<string>();
-        if (!allowedPlugins.Any())
-            return (false, 0, "L'agente valutatore non ha strumenti abilitati");
 
         var runId = $"storyeval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
         _customLogger?.Start(runId);
@@ -363,9 +362,11 @@ public sealed class StoriesService
                 agent.RepeatLastN,
                 agent.NumPredict);
 
-            var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
-                ? agent.Instructions
-                : ComposeSystemMessage(agent);
+            var isStoryEvaluatorTextProtocol = agent.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
+            var systemMessage = (isStoryEvaluatorTextProtocol
+                ? StoriesServiceDefaults.EvaluatorTextProtocolInstructions
+                : (!string.IsNullOrWhiteSpace(agent.Instructions) ? agent.Instructions : ComposeSystemMessage(agent)))
+                ?? string.Empty;
 
             // Use different prompt based on agent role
             bool isCoherenceEvaluation = agent.Role?.Equals("coherence_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
@@ -375,21 +376,43 @@ public sealed class StoriesService
                 .Select(e => e.Id)
                 .ToHashSet();
 
-            var reactLoop = new ReActLoopOrchestrator(
-                orchestrator,
-                _customLogger,
-                runId: runId,
-                modelBridge: chatBridge,
-                systemMessage: systemMessage,
-                responseChecker: _responseChecker,
-                agentRole: agent.Role);
-
-            var reactResult = await reactLoop.ExecuteAsync(prompt);
-            if (!reactResult.Success)
+            if (isStoryEvaluatorTextProtocol)
             {
-                var error = reactResult.Error ?? "Valutazione fallita";
-                _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
-                return (false, 0, error);
+                var protocolResult = await EvaluateStoryWithTextProtocolAsync(
+                    story,
+                    chatBridge,
+                    systemMessage,
+                    modelId: agent.ModelId,
+                    agentId: agent.Id).ConfigureAwait(false);
+
+                if (!protocolResult.success)
+                {
+                    var error = protocolResult.error ?? "Valutazione fallita";
+                    _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
+                    return (false, 0, error);
+                }
+            }
+            else
+            {
+                if (!allowedPlugins.Any())
+                    return (false, 0, "L'agente valutatore non ha strumenti abilitati");
+
+                var reactLoop = new ReActLoopOrchestrator(
+                    orchestrator,
+                    _customLogger,
+                    runId: runId,
+                    modelBridge: chatBridge,
+                    systemMessage: systemMessage,
+                    responseChecker: _responseChecker,
+                    agentRole: agent.Role);
+
+                var reactResult = await reactLoop.ExecuteAsync(prompt);
+                if (!reactResult.Success)
+                {
+                    var error = reactResult.Error ?? "Valutazione fallita";
+                    _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
+                    return (false, 0, error);
+                }
             }
 
             // Check results based on agent type
@@ -430,8 +453,8 @@ public sealed class StoriesService
                 _customLogger?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
                 TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
                 
-                // Se score > 60, avvia riassunto automatico con priorit� bassa
-                if (avgScore > 60 && _commandDispatcher != null)
+                // Se score > 60% (su scala 0-40), avvia riassunto automatico con priorit� bassa
+                if (avgScore > 24 && _commandDispatcher != null)
                 {
                     try
                     {
@@ -486,6 +509,230 @@ public sealed class StoriesService
             _customLogger?.MarkCompleted(runId);
         }
 
+    }
+
+    private async Task<(bool success, double score, string? error)> EvaluateStoryWithTextProtocolAsync(
+        StoryRecord story,
+        LangChainChatBridge chatBridge,
+        string systemMessage,
+        int? modelId,
+        int agentId)
+    {
+        if (story == null) return (false, 0, "Storia non trovata");
+        if (string.IsNullOrWhiteSpace(story.StoryRaw)) return (false, 0, "Storia non trovata o priva di contenuto");
+
+        var messages = new List<ConversationMessage>
+        {
+            new ConversationMessage { Role = "system", Content = systemMessage }
+        };
+        const int maxAttemptsFinalEvaluation = 3;
+
+        // Single-shot evaluation: send the full story once and expect immediate formatted evaluation.
+        // Allow a few attempts to recover if the model uses the wrong format.
+        messages.Add(new ConversationMessage
+        {
+            Role = "user",
+            Content = $"TESTO:\n\n{story.StoryRaw}\n\nVALUTA"
+        });
+
+        var parsed = new ParsedEvaluation(0, string.Empty, 0, string.Empty, 0, string.Empty, 0, string.Empty);
+        string? parseError = null;
+        string evalText = string.Empty;
+
+        var evalOk = false;
+        for (var attempt = 1; attempt <= maxAttemptsFinalEvaluation; attempt++)
+        {
+            var evalRawJson = await chatBridge.CallModelWithToolsAsync(messages, tools: new List<Dictionary<string, object>>()).ConfigureAwait(false);
+            var (evalResponseText, _) = LangChainChatBridge.ParseChatResponse(evalRawJson);
+            evalText = NormalizeEvaluatorOutput((evalResponseText ?? string.Empty));
+            messages.Add(new ConversationMessage { Role = "assistant", Content = evalText });
+
+            if (IsReadAck(evalText))
+            {
+                if (attempt < maxAttemptsFinalEvaluation)
+                {
+                    messages.Add(new ConversationMessage
+                    {
+                        Role = "user",
+                        Content =
+                            "Devi restituire SOLO la valutazione nel formato richiesto (4 sezioni, punteggi 1-5, 1-2 frasi ciascuna). " +
+                            "Non rispondere 'LEGGI' e non aggiungere altro testo."
+                    });
+                    continue;
+                }
+
+                return (false, 0, "Valutatore ha risposto LEGGI invece della valutazione.");
+            }
+
+            if (TryParseEvaluationText(evalText, out parsed, out parseError))
+            {
+                evalOk = true;
+                break;
+            }
+
+                if (attempt < maxAttemptsFinalEvaluation)
+                {
+                    messages.Add(new ConversationMessage
+                    {
+                        Role = "user",
+                        Content =
+                            "Formato non valido. Devi rispondere SOLO nel formato obbligatorio, senza markup né elenchi. " +
+                            "Ripeti la valutazione rispettando esattamente le 4 intestazioni e i punteggi 1-5." +
+                            " Le intestazioni richieste sono (in questo ordine):\nCoerenza narrativa\nOriginalità\nImpatto emotivo\nAzione"
+                    });
+                }
+        }
+
+        if (!evalOk)
+        {
+            return (false, 0, parseError ?? "Formato valutazione non valido.");
+        }
+
+        var totalScore = (double)(parsed.NarrativeScore10 + parsed.OriginalityScore10 + parsed.EmotionalScore10 + parsed.ActionScore10);
+        try
+        {
+            _database.AddStoryEvaluation(
+                story.Id,
+                parsed.NarrativeScore10, parsed.NarrativeExplanation,
+                parsed.OriginalityScore10, parsed.OriginalityExplanation,
+                parsed.EmotionalScore10, parsed.EmotionalExplanation,
+                parsed.ActionScore10, parsed.ActionExplanation,
+                totalScore,
+                rawJson: evalText,
+                modelId: modelId,
+                agentId: agentId);
+        }
+        catch (Exception ex)
+        {
+            return (false, 0, $"Errore nel salvataggio della valutazione: {ex.Message}");
+        }
+
+        return (true, totalScore, null);
+    }
+
+    private static bool IsReadAck(string? response)
+        => !string.IsNullOrWhiteSpace(response) && NormalizeEvaluatorOutput(response).Equals("LEGGI", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeEvaluatorOutput(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+
+        var t = text;
+
+        // Remove common "thinking" blocks.
+        t = Regex.Replace(t, "(?is)<think>.*?</think>", " ");
+        t = Regex.Replace(t, "(?is)\\[think\\].*?\\[/think\\]", " ");
+        t = Regex.Replace(t, "(?im)^\\s*(thinking|reasoning)\\s*:\\s*.*$", " ");
+
+        // Preserve content inside fenced code blocks (models often wrap the whole evaluation in ```...```).
+        // We only strip the fence markers.
+        t = Regex.Replace(t, "(?is)```(?:[a-z0-9_+-]+)?\\s*(.*?)\\s*```", "$1");
+
+        // Collapse whitespace (line breaks are not meaningful for parsing).
+        t = Regex.Replace(t, "\\s+", " ").Trim();
+        return t;
+    }
+
+    private sealed record ParsedEvaluation(
+        int NarrativeScore10,
+        string NarrativeExplanation,
+        int OriginalityScore10,
+        string OriginalityExplanation,
+        int EmotionalScore10,
+        string EmotionalExplanation,
+        int ActionScore10,
+        string ActionExplanation);
+
+    private static bool TryParseEvaluationText(string text, out ParsedEvaluation parsed, out string? error)
+    {
+        parsed = new ParsedEvaluation(0, string.Empty, 0, string.Empty, 0, string.Empty, 0, string.Empty);
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            error = "Risposta di valutazione vuota.";
+            return false;
+        }
+
+        var normalized = NormalizeEvaluatorOutput(text);
+
+        // Flexible headings (accept missing accents / minor variations).
+        // IMPORTANT: parse them sequentially in the required order to avoid false positives
+        // (e.g., the word "azione" mentioned inside another section's comment).
+        var hNarr = new Regex(@"\bcoerenza\s+narrativ[aà]\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var hOrig = new Regex(@"\boriginalit[aà]\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var hEmot = new Regex(@"\bimpatto\s+emotiv[oòaà]\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var hAzione = new Regex(@"\bazione\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        (int idx, int len)? FindAfter(Regex rx, int startAt)
+        {
+            if (startAt < 0) startAt = 0;
+            if (startAt >= normalized.Length) return null;
+            var m = rx.Match(normalized, startAt);
+            return m.Success ? (m.Index, m.Length) : null;
+        }
+
+        var narr = FindAfter(hNarr, 0);
+        if (narr == null)
+        {
+            error = "Formato valutazione non valido: manca la sezione 'Coerenza narrativa'.";
+            return false;
+        }
+
+        var orig = FindAfter(hOrig, narr.Value.idx + narr.Value.len);
+        if (orig == null)
+        {
+            error = "Formato valutazione non valido: manca la sezione 'Originalità'.";
+            return false;
+        }
+
+        var emot = FindAfter(hEmot, orig.Value.idx + orig.Value.len);
+        if (emot == null)
+        {
+            error = "Formato valutazione non valido: manca la sezione 'Impatto emotivo'.";
+            return false;
+        }
+
+        var azione = FindAfter(hAzione, emot.Value.idx + emot.Value.len);
+        if (azione == null)
+        {
+            error = "Formato valutazione non valido: manca la sezione 'Azione'.";
+            return false;
+        }
+
+        (int score5, string explanation) ExtractSection(int start, int end)
+        {
+            var seg = normalized.Substring(start, Math.Max(0, end - start)).Trim();
+            if (string.IsNullOrWhiteSpace(seg)) return (0, string.Empty);
+
+            var mScore = Regex.Match(seg, @"\b([1-5])\b");
+            if (!mScore.Success) return (0, string.Empty);
+            var score = int.Parse(mScore.Groups[1].Value);
+
+            // Explanation is optional.
+            var rest = seg.Substring(mScore.Index + mScore.Length).Trim();
+            rest = rest.TrimStart('-', ':', '.', ')', ']', ' ');
+            return (score, rest);
+        }
+
+        var (nScore5, nExp) = ExtractSection(narr.Value.idx + narr.Value.len, orig.Value.idx);
+        var (oScore5, oExp) = ExtractSection(orig.Value.idx + orig.Value.len, emot.Value.idx);
+        var (eScore5, eExp) = ExtractSection(emot.Value.idx + emot.Value.len, azione.Value.idx);
+        var (aScore5, aExp) = ExtractSection(azione.Value.idx + azione.Value.len, normalized.Length);
+
+        if (nScore5 < 1 || oScore5 < 1 || eScore5 < 1 || aScore5 < 1)
+        {
+            error = "Formato valutazione non valido: punteggi non trovati o fuori range (atteso 1-5 per sezione).";
+            return false;
+        }
+
+        parsed = new ParsedEvaluation(
+            nScore5 * 2, nExp,
+            oScore5 * 2, oExp,
+            eScore5 * 2, eExp,
+            aScore5 * 2, aExp);
+
+        return true;
     }
 
     private void TryLogEvaluationResult(string runId, long storyId, string? agentName, bool success, string message)
@@ -813,7 +1060,7 @@ public sealed class StoriesService
             storyText = story.StoryTagged ?? string.Empty
         });
 
-        var threadId = unchecked((int)(story.Id % int.MaxValue));
+        var threadId = LogScope.CurrentThreadId ?? Environment.CurrentManagedThreadId;
         var sw = Stopwatch.StartNew();
         const string testGroup = "tts";
         int? runId = null;
@@ -5621,6 +5868,72 @@ public sealed class StoriesService
 
     internal static class StoriesServiceDefaults
     {
+        public const string EvaluatorTextProtocolInstructions =
+    @"Sei un valutatore narrativo tecnico, rigoroso e non compiacente.
+
+    Riceverai il testo di una storia DIVISO IN CHUNK.
+    Il testo completo NON arriva in una sola volta.
+
+    ========================
+    FASE DI LETTURA (OBBLIGATORIA)
+    ========================
+
+    Per OGNI chunk di testo che ricevi:
+    - Devi LIMITARTI a leggerlo.
+    - NON devi valutare.
+    - NON devi commentare.
+    - NON devi trarre conclusioni.
+
+    La tua risposta DEVE essere SEMPRE ed ESCLUSIVAMENTE:
+
+    LEGGI
+
+    Questa regola vale anche se ritieni di aver già
+    capito l’andamento della storia.
+
+    ========================
+    FASE DI VALUTAZIONE (SOLO SU COMANDO)
+    ========================
+
+    La valutazione è CONSENTITA SOLO quando ricevi
+    esplicitamente il comando:
+
+    VALUTA
+
+    Solo in quel caso devi restituire la valutazione completa
+    nel formato seguente, senza aggiungere nulla prima o dopo.
+
+    Formato OBBLIGATORIO:
+
+    Coerenza narrativa
+    <numero da 1 a 5>
+    <breve spiegazione tecnica (1–2 frasi)>
+
+    Originalità
+    <numero da 1 a 5>
+    <breve spiegazione tecnica (1–2 frasi)>
+
+    Impatto emotivo
+    <numero da 1 a 5>
+    <breve spiegazione tecnica (1–2 frasi)>
+
+    Azione
+    <numero da 1 a 5>
+    <breve spiegazione tecnica (1–2 frasi)>
+
+    ========================
+    VINCOLI ASSOLUTI
+    ========================
+
+    - NON valutare prima del comando VALUTA
+    - NON riassumere la storia
+    - NON suggerire miglioramenti
+    - NON usare markup o elenchi
+    - NON usare linguaggio morale o emotivo
+    - NON aggiungere spiegazioni fuori formato
+
+    Durante la lettura, l’unica risposta valida è:
+    LEGGI";
         public static string GetDefaultTtsStructuredInstructions() => @"Leggi attentamente il testo del chunk e trascrivilo integralmente nel formato seguente, senza riassumere o saltare frasi, senza aggiungere note o testo extra.
 
 Usa SOLO queste sezioni ripetute nell'ordine del testo:

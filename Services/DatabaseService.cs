@@ -908,6 +908,40 @@ public sealed class DatabaseService
         using var conn = CreateDapperConnection();
         conn.Open();
 
+        // Persistent numerator state (threadid + story_id)
+        // Keeps counters stable across restarts and independent from deletions.
+        try
+        {
+            conn.Execute(@"CREATE TABLE IF NOT EXISTS numerators_state (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+);");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to ensure numerators_state table: {ex.Message}");
+        }
+
+        // Ensure story_id exists in Log table (for correlating logs to a story creation/execution)
+        var checkLogStoryId = conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name='story_id'");
+        if (checkLogStoryId == 0)
+        {
+            Console.WriteLine("[DB] Applying migration: AddStoryIdToLog");
+            conn.Execute("ALTER TABLE Log ADD COLUMN story_id INTEGER");
+            Console.WriteLine("[DB] ✓ Migration AddStoryIdToLog applied");
+        }
+
+        // Ensure story_id exists in stories table (preallocated story numbering independent from DB row id)
+        var checkStoriesStoryId = conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='story_id'");
+        if (checkStoriesStoryId == 0)
+        {
+            Console.WriteLine("[DB] Applying migration: AddStoryIdToStories");
+            conn.Execute("ALTER TABLE stories ADD COLUMN story_id INTEGER");
+            Console.WriteLine("[DB] ✓ Migration AddStoryIdToStories applied");
+        }
+
         // Check if summary column exists
         var checkSummary = conn.ExecuteScalar<int>(
             "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='summary'");
@@ -1832,6 +1866,61 @@ SET TotalScore = (
         context.SaveChanges();
     }
 
+    /// <summary>
+    /// Delete all story evaluations (and related global coherence rows) across the whole database.
+    /// Also clears aggregate fields on stories (Score/Eval) as best-effort.
+    /// </summary>
+    public void DeleteAllEvaluations()
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        conn.Execute("DELETE FROM stories_evaluations;", transaction: tx);
+
+        // best-effort: if present, wipe coherence rows too
+        try
+        {
+            var hasGlobalCoherence = conn.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='global_coherence'",
+                transaction: tx);
+            if (hasGlobalCoherence > 0)
+            {
+                conn.Execute("DELETE FROM global_coherence;", transaction: tx);
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        // best-effort: reset aggregate story columns if present
+        try
+        {
+            var hasScore = conn.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='score'",
+                transaction: tx);
+            if (hasScore > 0)
+            {
+                conn.Execute("UPDATE stories SET score = 0;", transaction: tx);
+            }
+
+            var hasEval = conn.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='eval'",
+                transaction: tx);
+            if (hasEval > 0)
+            {
+                conn.Execute("UPDATE stories SET eval = '';", transaction: tx);
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        tx.Commit();
+    }
+
     // Stories CRUD operations
     /// <summary>
     /// LEGACY: Saves stories using fixed WriterA/B/C structure.
@@ -1970,6 +2059,25 @@ SET TotalScore = (
         return s;
     }
 
+    public long? GetStoryCorrelationId(long storyDbId)
+    {
+        using var context = CreateDbContext();
+        var s = context.Stories.Find(storyDbId);
+        return s?.StoryId;
+    }
+
+    public long EnsureStoryCorrelationId(long storyDbId, long newStoryId)
+    {
+        using var context = CreateDbContext();
+        var s = context.Stories.Find(storyDbId);
+        if (s == null) throw new InvalidOperationException($"Story {storyDbId} not found");
+        if (s.StoryId.HasValue && s.StoryId.Value > 0) return s.StoryId.Value;
+
+        s.StoryId = newStoryId;
+        context.SaveChanges();
+        return newStoryId;
+    }
+
     public void DeleteStoryById(long id)
     {
         using var context = CreateDbContext();
@@ -2017,6 +2125,7 @@ SET TotalScore = (
         var charCount = (story ?? string.Empty).Length;
         var storyRecord = new StoryRecord
         {
+            StoryId = null,
             GenerationId = genId,
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
@@ -2059,6 +2168,126 @@ SET TotalScore = (
         return storyRecord.Id;
     }
 
+    public long InsertSingleStory(string prompt, string story, long? storyId, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null)
+    {
+        using var context = CreateDbContext();
+        var ts = DateTime.UtcNow.ToString("o");
+        var genId = Guid.NewGuid().ToString();
+
+        string? folder = null;
+        if (agentId.HasValue)
+        {
+            var agent = context.Agents.Find(agentId.Value);
+            var sanitizedAgentName = SanitizeFolderName(agent?.Name ?? $"agent{agentId.Value}");
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+            folder = $"{sanitizedAgentName}_{timestamp}";
+        }
+
+        var charCount = (story ?? string.Empty).Length;
+        var storyRecord = new StoryRecord
+        {
+            StoryId = storyId,
+            GenerationId = genId,
+            MemoryKey = memoryKey ?? genId,
+            Timestamp = ts,
+            Prompt = prompt ?? string.Empty,
+            StoryRaw = story ?? string.Empty,
+            Title = title ?? string.Empty,
+            CharCount = charCount,
+            Eval = eval ?? string.Empty,
+            Score = score,
+            Approved = approved != 0,
+            StatusId = statusId ?? InitialStoryStatusId,
+            Folder = null,
+            ModelId = modelId,
+            AgentId = agentId
+        };
+
+        context.Stories.Add(storyRecord);
+        context.SaveChanges();
+
+        try
+        {
+            var paddedId = storyRecord.Id.ToString("D5");
+            string finalFolder;
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                finalFolder = SanitizeFolderName($"{paddedId}_{folder}");
+            }
+            else
+            {
+                finalFolder = SanitizeFolderName($"{paddedId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}");
+            }
+            storyRecord.Folder = finalFolder;
+            context.SaveChanges();
+        }
+        catch
+        {
+        }
+
+        return storyRecord.Id;
+    }
+
+    public long GetMaxStoryId()
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            return conn.ExecuteScalar<long>("SELECT COALESCE(MAX(story_id), 0) FROM stories");
+        }
+        catch
+        {
+            return conn.ExecuteScalar<long>("SELECT COALESCE(MAX(id), 0) FROM stories");
+        }
+    }
+
+    public int GetMaxLogThreadId()
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            return conn.ExecuteScalar<int>("SELECT COALESCE(MAX(ThreadId), 0) FROM Log");
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public long? GetNumeratorState(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            return conn.ExecuteScalar<long?>("SELECT value FROM numerators_state WHERE key = @k LIMIT 1", new { k = key.Trim() });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public void SetNumeratorState(string key, long value)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            conn.Execute(@"INSERT INTO numerators_state(key, value)
+VALUES(@k, @v)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value;", new { k = key.Trim(), v = value });
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
     private int? ResolveStoryStatusId(string? statusCode)
     {
         if (string.IsNullOrWhiteSpace(statusCode)) return null;
@@ -2078,21 +2307,66 @@ SET TotalScore = (
         return name.Trim().Replace(" ", "_").ToLowerInvariant();
     }
 
-    public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false)
+    public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false, bool allowCreatorMetadataUpdate = false)
     {
         using var context = CreateDbContext();
         var storyRecord = context.Stories.Find(id);
         if (storyRecord == null) return false;
+
+        // Creator metadata (model_id/agent_id) must be stable: it can be SET only if currently NULL,
+        // unless allowCreatorMetadataUpdate=true (explicit admin/repair operation).
+        if (!allowCreatorMetadataUpdate)
+        {
+            var attemptedOverwrite = false;
+            if (modelId.HasValue && storyRecord.ModelId.HasValue && storyRecord.ModelId.Value != modelId.Value) attemptedOverwrite = true;
+            if (agentId.HasValue && storyRecord.AgentId.HasValue && storyRecord.AgentId.Value != agentId.Value) attemptedOverwrite = true;
+            if (attemptedOverwrite)
+            {
+                Console.WriteLine($"[DB][WARN] Blocked creator metadata overwrite for story {id}: attempted modelId={modelId?.ToString() ?? "<null>"}, agentId={agentId?.ToString() ?? "<null>"}; current modelId={storyRecord.ModelId?.ToString() ?? "<null>"}, agentId={storyRecord.AgentId?.ToString() ?? "<null>"}");
+            }
+        }
+
         if (story != null)
         {
             storyRecord.StoryRaw = story;
             storyRecord.CharCount = story.Length;
         }
-        if (modelId.HasValue) storyRecord.ModelId = modelId.Value;
-        if (agentId.HasValue) storyRecord.AgentId = agentId.Value;
+        if (allowCreatorMetadataUpdate)
+        {
+            if (modelId.HasValue) storyRecord.ModelId = modelId.Value;
+            if (agentId.HasValue) storyRecord.AgentId = agentId.Value;
+        }
+        else
+        {
+            // Allow initializing only when NULL
+            if (modelId.HasValue && !storyRecord.ModelId.HasValue) storyRecord.ModelId = modelId.Value;
+            if (agentId.HasValue && !storyRecord.AgentId.HasValue) storyRecord.AgentId = agentId.Value;
+        }
         if (updateStatus) storyRecord.StatusId = statusId;
         context.SaveChanges();
         return true;
+    }
+
+    /// <summary>
+    /// Bulk realign of creator model id for stories:
+    /// sets stories.model_id = agents.model_id when a story has an agent_id and the ids are mismatched.
+    /// Does not change agent_id.
+    /// </summary>
+    public int RealignStoriesCreatorModelIds()
+    {
+        using var context = CreateDbContext();
+
+        // SQLite supports correlated subqueries in UPDATE.
+        // Only touch stories that have an agent, where agent has a model, and story model differs.
+        var sql = @"
+UPDATE stories
+SET model_id = (SELECT a.model_id FROM agents a WHERE a.id = stories.agent_id)
+WHERE agent_id IS NOT NULL
+  AND (SELECT a.model_id FROM agents a WHERE a.id = stories.agent_id) IS NOT NULL
+  AND (model_id IS NULL OR model_id != (SELECT a.model_id FROM agents a WHERE a.id = stories.agent_id));
+";
+
+        return context.Database.ExecuteSqlRaw(sql);
     }
 
     /// <summary>
@@ -3436,6 +3710,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
                 var chatTextSb = new System.Text.StringBuilder();
                 var ts = e.Ts;
                 var threadId = e.ThreadId;
+                var storyId = e.StoryId;
                 var threadScope = e.ThreadScope;
                 var agentName = e.AgentName;
 
@@ -3480,6 +3755,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
                     Exception = exceptionSb.Length > 0 ? exceptionSb.ToString() : null,
                     State = null,
                     ThreadId = threadId,
+                    StoryId = storyId,
                     ThreadScope = threadScope,
                     AgentName = agentName,
                     Context = null,
@@ -3514,7 +3790,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         await ((SqliteConnection)conn).OpenAsync();
 
         // Build a single INSERT ... VALUES (...),(...),... with uniquely named parameters to avoid collisions
-        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result" };
+        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result" };
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
 
@@ -3533,6 +3809,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             parameters.Add("@Exception" + i, e.Exception);
             parameters.Add("@State" + i, e.State);
             parameters.Add("@ThreadId" + i, e.ThreadId);
+            parameters.Add("@story_id" + i, e.StoryId);
             parameters.Add("@ThreadScope" + i, e.ThreadScope);
             parameters.Add("@AgentName" + i, e.AgentName);
             parameters.Add("@Context" + i, e.Context);
@@ -3543,7 +3820,43 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
 
         sb.Append(";");
 
-        await conn.ExecuteAsync(sb.ToString(), parameters);
+        try
+        {
+            await conn.ExecuteAsync(sb.ToString(), parameters);
+        }
+        catch (SqliteException ex) when (ex.Message != null && ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase) && ex.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
+        {
+            // Backward-compat: database not migrated yet.
+            var legacyCols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result" };
+            var legacySb = new System.Text.StringBuilder();
+            legacySb.Append("INSERT INTO Log (" + string.Join(", ", legacyCols) + ") VALUES ");
+            var legacyParams = new DynamicParameters();
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                var pNames = legacyCols.Select(c => "@" + c + i).ToArray();
+                legacySb.Append("(" + string.Join(", ", pNames) + ")");
+                if (i < list.Count - 1) legacySb.Append(",");
+
+                var e = list[i];
+                legacyParams.Add("@Ts" + i, e.Ts);
+                legacyParams.Add("@Level" + i, e.Level);
+                legacyParams.Add("@Category" + i, e.Category);
+                legacyParams.Add("@Message" + i, e.Message);
+                legacyParams.Add("@Exception" + i, e.Exception);
+                legacyParams.Add("@State" + i, e.State);
+                legacyParams.Add("@ThreadId" + i, e.ThreadId);
+                legacyParams.Add("@ThreadScope" + i, e.ThreadScope);
+                legacyParams.Add("@AgentName" + i, e.AgentName);
+                legacyParams.Add("@Context" + i, e.Context);
+                legacyParams.Add("@analized" + i, e.Analized ? 1 : 0);
+                legacyParams.Add("@chat_text" + i, e.ChatText);
+                legacyParams.Add("@Result" + i, e.Result);
+            }
+
+            legacySb.Append(";");
+            await conn.ExecuteAsync(legacySb.ToString(), legacyParams);
+        }
     }
 
     private void SeedDefaultOpenAiModels()

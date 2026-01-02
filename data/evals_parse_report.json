@@ -1,0 +1,63 @@
+{
+  "meta": {
+    "stats": {
+      "checked": 2,
+      "parsed": 2,
+      "failed": 0
+    }
+  },
+  "rows": [
+    {
+      "id": 187,
+      "story_id": 121,
+      "model_id": 1168,
+      "agent_id": 5,
+      "ts": "2026-01-01T18:00:13.5606923Z",
+      "ok": true,
+      "parsed": {
+        "Coerenza narrativa": {
+          "score": 2,
+          "explanation": "La trama è frammentata, con una sequenza di eventi non sempre logicamente connessi, che rende difficile seguire il filo narrativo."
+        },
+        "Originalità": {
+          "score": 2,
+          "explanation": "Il racconto ricorre a cliché e archi narrativi già consolidati senza apportare novità o spunti distintivi."
+        },
+        "Impatto emotivo": {
+          "score": 2,
+          "explanation": "Le descrizioni sono troppo generiche e ripetitive, con poca intensità emotiva che coinvolga il lettore."
+        },
+        "Azione": {
+          "score": 2,
+          "explanation": "Le dinamiche di conflitto e le decisioni dei personaggi sono descritte in modo vago, senza evidenziare adeguatamente la tensione e l’energia del confronto."
+        }
+      }
+    },
+    {
+      "id": 186,
+      "story_id": 115,
+      "model_id": 1168,
+      "agent_id": 5,
+      "ts": "2026-01-01T14:07:23.0017181Z",
+      "ok": true,
+      "parsed": {
+        "Coerenza narrativa": {
+          "score": 3,
+          "explanation": "La trama mostra una sequenza di eventi catastrofici, ma le relazioni causa‑effetto e la continuità temporale sono frammentarie e poco chiare."
+        },
+        "Originalità": {
+          "score": 2,
+          "explanation": "I temi di arte predittiva e intelligenza artificiale ribelle sono già noti, con pochi elementi innovativi."
+        },
+        "Impatto emotivo": {
+          "score": 2,
+          "explanation": "La descrizione degli eventi è dettagliata, ma manca di una progressione emotiva riconoscibile per il lettore."
+        },
+        "Azione": {
+          "score": 4,
+          "explanation": "Numerosi eventi fisici e catastrofi sono descritti, ma la motivazione e la causa rimangono poco chiare."
+        }
+      }
+    }
+  ]
+}

@@ -13,6 +13,7 @@ namespace TinyGenerator.Pages.Logs
         private readonly DatabaseService _db;
         private readonly LogAnalysisService _analysisService;
         private readonly ICommandDispatcher _dispatcher;
+        private readonly NumeratorService _numerator;
         private readonly ILogger<LogsModel>? _logger;
 
         public List<LogEntry> LogEntries { get; private set; } = new();
@@ -24,11 +25,13 @@ namespace TinyGenerator.Pages.Logs
             DatabaseService db,
             LogAnalysisService analysisService,
             ICommandDispatcher dispatcher,
+            NumeratorService numerator,
             ILogger<LogsModel>? logger = null)
         {
             _db = db;
             _analysisService = analysisService;
             _dispatcher = dispatcher;
+            _numerator = numerator;
             _logger = logger;
         }
 
@@ -128,6 +131,7 @@ namespace TinyGenerator.Pages.Logs
             try
             {
                 _db.ClearLogs();
+                _numerator.ResetThreadIds();
                 StatusMessage = "Tutti i log e le analisi sono stati cancellati con successo.";
             }
             catch (Exception ex)
@@ -147,11 +151,12 @@ namespace TinyGenerator.Pages.Logs
                     : _db.GetRecentLogs(limit: 10000);
 
                 var csv = new System.Text.StringBuilder();
-                csv.AppendLine("Timestamp,Level,Operation,ThreadId,AgentName,Message,Source");
+                csv.AppendLine("Timestamp,Level,Operation,ThreadId,StoryId,AgentName,Message,Source");
 
                 foreach (var log in logs)
                 {
-                    csv.AppendLine($"\"{log.Timestamp:yyyy-MM-dd HH:mm:ss}\",\"{log.Level}\",\"{log.ThreadScope}\",{log.ThreadId},\"{log.AgentName}\",\"{EscapeCsv(log.Message)}\",\"{log.Source}\"");
+                    var storyIdValue = log.StoryId.HasValue ? log.StoryId.Value.ToString() : "";
+                    csv.AppendLine($"\"{log.Timestamp:yyyy-MM-dd HH:mm:ss}\",\"{log.Level}\",\"{log.ThreadScope}\",{log.ThreadId},{storyIdValue},\"{log.AgentName}\",\"{EscapeCsv(log.Message)}\",\"{log.Source}\"");
                 }
 
                 var fileName = threadId.HasValue && threadId.Value > 0

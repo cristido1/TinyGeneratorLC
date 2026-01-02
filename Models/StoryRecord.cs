@@ -10,6 +10,9 @@ namespace TinyGenerator.Models
     {
         [Column("id")]
         public long Id { get; set; }
+
+        [Column("story_id")]
+        public long? StoryId { get; set; }
         
         [Column("generation_id")]
         public string GenerationId { get; set; } = string.Empty;

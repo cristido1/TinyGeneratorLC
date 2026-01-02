@@ -200,7 +200,11 @@ evaluate_full_story({
 
             try
             {
-                var agents = db.ListAgents()?.Where(a => !string.IsNullOrWhiteSpace(a.Role) && a.Role.Contains("evaluat", StringComparison.OrdinalIgnoreCase)).ToList() ?? new List<Models.Agent>();
+                var agents = db.ListAgents()?.Where(a =>
+                    !string.IsNullOrWhiteSpace(a.Role)
+                    && a.Role.Contains("evaluat", StringComparison.OrdinalIgnoreCase)
+                    && !a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase))
+                    .ToList() ?? new List<Models.Agent>();
                 foreach (var agent in agents)
                 {
                     var instr = agent.Instructions ?? string.Empty;

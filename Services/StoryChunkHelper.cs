@@ -23,15 +23,26 @@ namespace TinyGenerator.Services
                 int maxSeek = Math.Min(len, end + boundaryWindow);
                 int minSeek = Math.Max(start, end - boundaryWindow);
 
-                int boundaryIndex = FindBoundary(storyText, minSeek, end);
-                if (boundaryIndex < 0 && end < len)
+                // Prefer newline boundaries, then sentence punctuation, then whitespace to avoid cutting words
+                int boundaryIndex = FindLastNewlineBetween(storyText, minSeek, Math.Min(maxSeek, len));
+                if (boundaryIndex < 0)
                 {
-                    // Try looking forward a bit if no boundary behind
-                    boundaryIndex = FindBoundary(storyText, end, maxSeek);
+                    boundaryIndex = FindLastPunctuationBetween(storyText, minSeek, Math.Min(maxSeek, len));
+                }
+                if (boundaryIndex < 0)
+                {
+                    boundaryIndex = FindLastWhitespaceBetween(storyText, minSeek, Math.Min(maxSeek, len));
                 }
 
+                // If we found a reasonable boundary after start, use it; otherwise fall back to the original end
                 if (boundaryIndex > start)
                     end = boundaryIndex;
+
+                // Ensure we make progress; if end == start (shouldn't happen), advance by targetSize
+                if (end <= start)
+                {
+                    end = Math.Min(start + targetSize, len);
+                }
 
                 var chunk = storyText.Substring(start, end - start);
                 chunks.Add(chunk);
@@ -41,19 +52,34 @@ namespace TinyGenerator.Services
             return chunks;
         }
 
-        // Find last boundary ('.', '!', '?', newline) between startInclusive and endExclusive
-        private static int FindBoundary(string text, int startInclusive, int endExclusive)
+        private static int FindLastNewlineBetween(string text, int startInclusive, int endExclusive)
         {
-            int boundary = -1;
-            for (int i = startInclusive; i < endExclusive && i < text.Length; i++)
+            for (int i = Math.Min(endExclusive, text.Length) - 1; i >= startInclusive; i--)
             {
                 char c = text[i];
-                if (c == '\n' || c == '\r' || c == '.' || c == '!' || c == '?')
-                {
-                    boundary = i + 1; // include the boundary char
-                }
+                if (c == '\n' || c == '\r') return i + 1; // include newline
             }
-            return boundary;
+            return -1;
+        }
+
+        private static int FindLastPunctuationBetween(string text, int startInclusive, int endExclusive)
+        {
+            for (int i = Math.Min(endExclusive, text.Length) - 1; i >= startInclusive; i--)
+            {
+                char c = text[i];
+                if (c == '.' || c == '!' || c == '?') return i + 1; // include punctuation
+            }
+            return -1;
+        }
+
+        private static int FindLastWhitespaceBetween(string text, int startInclusive, int endExclusive)
+        {
+            for (int i = Math.Min(endExclusive, text.Length) - 1; i >= startInclusive; i--)
+            {
+                char c = text[i];
+                if (char.IsWhiteSpace(c)) return i + 1; // include the whitespace
+            }
+            return -1;
         }
     }
 }

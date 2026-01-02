@@ -55,6 +55,9 @@ namespace TinyGenerator.Models
         // Optional metadata
         [Column("ThreadId")]
         public int ThreadId { get; set; }
+
+        [Column("story_id")]
+        public long? StoryId { get; set; }
         
         [Column("ThreadScope")]
         public string? ThreadScope { get; set; }

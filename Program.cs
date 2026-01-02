@@ -70,6 +70,9 @@ builder.Services.AddSingleton(sp => new TinyGenerator.Services.DatabaseService(
     sp.GetService<IOllamaMonitorService>(),
     sp));
 
+// Monotonic id allocator for logs (threadid) and story correlation (story_id)
+builder.Services.AddSingleton<NumeratorService>();
+
 // === Entity Framework Core DbContext ===
 // Register EF Core DbContext with SQLite (same database as Dapper)
 builder.Services.AddDbContext<TinyGenerator.Data.TinyGeneratorDbContext>(options =>
@@ -99,7 +102,8 @@ builder.Services.AddSingleton<CommandDispatcher>(sp =>
     new CommandDispatcher(
         sp.GetService<IOptions<CommandDispatcherOptions>>(),
         sp.GetService<ICustomLogger>(),
-        sp.GetService<IHubContext<TinyGenerator.Hubs.ProgressHub>>()
+        sp.GetService<IHubContext<TinyGenerator.Hubs.ProgressHub>>(),
+        sp.GetService<NumeratorService>()
     ));
 builder.Services.AddSingleton<ICommandDispatcher>(sp => sp.GetRequiredService<CommandDispatcher>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>());
@@ -246,6 +250,17 @@ try
 catch (Exception ex)
 {
     logger?.LogWarning(ex, "[Startup] Failed to apply manual migrations: {msg}", ex.Message);
+}
+
+// Initialize monotonic id generators once DB schema is ready.
+try
+{
+    var numerator = app.Services.GetService<NumeratorService>();
+    numerator?.InitializeFromDatabase();
+}
+catch (Exception ex)
+{
+    logger?.LogWarning(ex, "[Startup] NumeratorService initialization failed: {msg}", ex.Message);
 }
 
 // Startup model actions

@@ -85,9 +85,11 @@ namespace TinyGenerator.Services
                 }
             }
 
-            // Use explicit threadId if provided, otherwise fall back to LogScope or managed thread id
-            int effectiveThreadId = explicitThreadId 
-                ?? (int)(LogScope.CurrentOperationId ?? Environment.CurrentManagedThreadId);
+            // Use explicit threadId if provided; otherwise use the allocator-backed id from LogScope.
+            // Fallback to managed thread id only when logging outside a CommandDispatcher scope.
+            int effectiveThreadId = explicitThreadId
+                ?? LogScope.CurrentThreadId
+                ?? Environment.CurrentManagedThreadId;
 
             var entry = new LogEntry
             {
@@ -98,6 +100,7 @@ namespace TinyGenerator.Services
                 Exception = exception,
                 State = state,
                 ThreadId = effectiveThreadId,
+                StoryId = LogScope.CurrentStoryId,
                 ThreadScope = scope,
                 AgentName = LogScope.CurrentAgentName,
                 Context = null,

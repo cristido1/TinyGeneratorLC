@@ -75,7 +75,7 @@ namespace TinyGenerator.Pages.Stories
             var story = _stories.GetStoryById(Id);
             if (story == null) return NotFound();
             LoadStatuses();
-            _stories.UpdateStoryById(Id, StoryText, ModelId, AgentId, StatusId, updateStatus: true);
+            _stories.UpdateStoryById(Id, StoryText, ModelId, AgentId, StatusId, updateStatus: true, allowCreatorMetadataUpdate: true);
             if (StoryTaggedText != null)
             {
                 _database.UpdateStoryTagged(

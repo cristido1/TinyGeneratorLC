@@ -109,7 +109,9 @@
                 <tr>
                     <th data-col="id">Id</th>
                     <th data-col="timestamp">Timestamp</th>
+                    <th data-col="serie">Serie</th>
                     <th data-col="title">Titolo</th>
+                    <th data-col="episode">Episodio</th>
                     <th data-col="prompt">Prompt</th>
                     <th data-col="status">Status</th>
                     <th data-col="agent">Agente</th>
@@ -131,7 +133,9 @@
                     <tr>
                         <td data-col="id">@s.Id</td>
                         <td data-col="timestamp">@((DateTime.TryParse(s.Timestamp, out var _dt)) ? _dt.ToString("dd/MM/yyyy HH:mm") : s.Timestamp)</td>
+                        <td data-col="serie">@(!string.IsNullOrWhiteSpace(s.SerieName) ? s.SerieName : "-")</td>
                         <td data-col="title">@(!string.IsNullOrWhiteSpace(s.Title) ? s.Title : "<span class='text-muted'>-</span>")</td>
+                        <td data-col="episode">@((s.SerieEpisode.HasValue && s.SerieEpisode.Value > 0) ? s.SerieEpisode.Value.ToString() : "-")</td>
                         @{
                             var promptSafe = s.Prompt ?? string.Empty;
                         }
@@ -164,7 +168,7 @@
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Azioni</button>
                                 <ul class="dropdown-menu dropdown-menu-end">
                                     @{
-                                        // Build action lists, remove listen commands, and separate edit/delete
+                                        // Build action lists, remove listen commands, and pin detail/edit/delete first
                                         var rawActions = Model.GetActionsForStory(s)?.ToList() ?? new List<object>();
                                         // Filter out listen commands by id or title
                                         rawActions = rawActions.Where(a => {
@@ -175,13 +179,59 @@
                                             return true;
                                         }).ToList();
 
-                                        // Extract edit and delete
+                                        // Extract pinned actions
+                                        object? detailsAction = rawActions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "") == "details");
+                                        if (detailsAction != null) rawActions.Remove(detailsAction);
                                         object? editAction = rawActions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "") == "edit");
                                         if (editAction != null) rawActions.Remove(editAction);
                                         object? deleteAction = rawActions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "") == "delete");
                                         if (deleteAction != null) rawActions.Remove(deleteAction);
 
-                                        // Render remaining actions first
+                                        // Render pinned actions first: Details, Edit, Delete
+                                        foreach (var pinned in new[] { detailsAction, editAction, deleteAction })
+                                        {
+                                            if (pinned == null) continue;
+                                            var a = pinned;
+                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
+                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
+                                            var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "GET";
+                                            var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
+                                            var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
+
+                                            var iconClass = id switch
+                                            {
+                                                "details" => "bi bi-eye",
+                                                "edit" => "bi bi-pencil",
+                                                "delete" => "bi bi-trash-fill",
+                                                _ => "bi bi-gear"
+                                            };
+
+                                            var isDelete = id == "delete";
+                                            var itemClass = isDelete ? "dropdown-item text-danger" : "dropdown-item";
+                                            var iconExtraClass = isDelete ? " text-danger" : "";
+
+                                            if (method == "GET")
+                                            {
+                                                var targetAttr = id == "edit" ? string.Empty : " target=\"_blank\"";
+                                                <li><a class="@itemClass" href="@url"@Html.Raw(targetAttr)><i class="@iconClass me-2@iconExtraClass"></i>@title</a></li>
+                                            }
+                                            else
+                                            {
+                                                <li>
+                                                    <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
+                                                        @Html.AntiForgeryToken()
+                                                        <button type="submit" class="@itemClass"><i class="@iconClass me-2@iconExtraClass"></i>@title</button>
+                                                    </form>
+                                                </li>
+                                            }
+                                        }
+
+                                        if (detailsAction != null || editAction != null || deleteAction != null)
+                                        {
+                                            <li><hr class="dropdown-divider" /></li>
+                                        }
+
+                                        // Render remaining actions
                                         foreach(var a in rawActions)
                                         {
                                             var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
@@ -191,6 +241,7 @@
                                             var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
                                             var iconClass = id switch
                                             {
+                                                "revise" => "bi bi-spellcheck",
                                                 "prepare_tts_schema" => "bi bi-magic",
                                                 "add_tags" => "bi bi-tags",
                                                 "gen_tts" => "bi bi-volume-up-fill",
@@ -217,59 +268,6 @@
                                                     <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
                                                         @Html.AntiForgeryToken()
                                                         <button type="submit" class="dropdown-item"><i class="@iconClass me-2"></i>@title</button>
-                                                    </form>
-                                                </li>
-                                            }
-                                        }
-
-                                        // Render edit action next
-                                        if (editAction != null)
-                                        {
-                                            var a = editAction;
-                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
-                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
-                                            var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "GET";
-                                            var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
-                                            var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
-                                            var iconClass = "bi bi-pencil";
-                                            if (method == "GET")
-                                            {
-                                                <li><a class="dropdown-item" href="@url"><i class="@iconClass me-2"></i>@title</a></li>
-                                            }
-                                            else
-                                            {
-                                                <li>
-                                                    <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
-                                                        @Html.AntiForgeryToken()
-                                                        <button type="submit" class="dropdown-item"><i class="@iconClass me-2"></i>@title</button>
-                                                    </form>
-                                                </li>
-                                            }
-
-                                            // Separator after Edit
-                                            <li><hr class="dropdown-divider" /></li>
-                                        }
-
-                                        // Render delete action last (in red)
-                                        if (deleteAction != null)
-                                        {
-                                            var a = deleteAction;
-                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
-                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
-                                            var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "POST";
-                                            var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
-                                            var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
-                                            var iconClass = "bi bi-trash-fill";
-                                            if (method == "GET")
-                                            {
-                                                <li><a class="dropdown-item text-danger" href="@url"><i class="@iconClass me-2 text-danger"></i>@title</a></li>
-                                            }
-                                            else
-                                            {
-                                                <li>
-                                                    <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
-                                                        @Html.AntiForgeryToken()
-                                                        <button type="submit" class="dropdown-item text-danger"><i class="@iconClass me-2 text-danger"></i>@title</button>
                                                     </form>
                                                 </li>
                                             }

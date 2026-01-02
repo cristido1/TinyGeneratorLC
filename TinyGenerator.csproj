@@ -28,6 +28,9 @@
     
     <!-- Dapper for database queries -->
     <PackageReference Include="Dapper" Version="2.0.123" />
+
+    <!-- Text diff (Stories/Details revision highlight) -->
+    <PackageReference Include="DiffPlex" Version="1.7.2" />
     
     <!-- xUnit for unit testing -->
     <PackageReference Include="xunit" Version="2.9.3" />

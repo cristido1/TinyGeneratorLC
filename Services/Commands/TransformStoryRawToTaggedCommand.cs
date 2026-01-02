@@ -26,19 +26,22 @@ namespace TinyGenerator.Services.Commands
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly StoriesService? _storiesService;
         private readonly ICustomLogger? _logger;
+        private readonly ICommandDispatcher? _commandDispatcher;
 
         public TransformStoryRawToTaggedCommand(
             long storyId,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
             StoriesService? storiesService = null,
-            ICustomLogger? logger = null)
+            ICustomLogger? logger = null,
+            ICommandDispatcher? commandDispatcher = null)
         {
             _storyId = storyId;
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
             _storiesService = storiesService;
             _logger = logger;
+            _commandDispatcher = commandDispatcher;
         }
 
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
@@ -58,9 +61,13 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"Story {_storyId} not found");
                 }
 
-                if (string.IsNullOrWhiteSpace(story.StoryRaw))
+                var sourceText = !string.IsNullOrWhiteSpace(story.StoryRevised)
+                    ? story.StoryRevised
+                    : story.StoryRaw;
+
+                if (string.IsNullOrWhiteSpace(sourceText))
                 {
-                    return Fail(effectiveRunId, $"Story {_storyId} has no raw text");
+                    return Fail(effectiveRunId, $"Story {_storyId} has no text");
                 }
 
                 if (_storiesService != null)
@@ -96,7 +103,7 @@ namespace TinyGenerator.Services.Commands
                     ? null
                     : ComputeSha256(systemPrompt);
 
-                var normalizedForFormatter = PreNormalizeForFormatter(story.StoryRaw);
+                var normalizedForFormatter = PreNormalizeForFormatter(sourceText);
                 if (string.IsNullOrWhiteSpace(normalizedForFormatter))
                 {
                     return Fail(effectiveRunId, "Story text became empty after pre-normalization for formatter");
@@ -105,7 +112,7 @@ namespace TinyGenerator.Services.Commands
                 var chunks = SplitStoryIntoChunks(normalizedForFormatter);
                 if (chunks.Count == 0)
                 {
-                    return Fail(effectiveRunId, "No chunks produced from story_raw");
+                    return Fail(effectiveRunId, "No chunks produced from story text");
                 }
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {chunks.Count} chunks");
@@ -164,8 +171,12 @@ namespace TinyGenerator.Services.Commands
                 }
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Tagged story saved (version {nextVersion})");
+
+                // Requirement: if tagging succeeds, enqueue tts_schema.json generation from inside this command.
+                TryEnqueueTtsSchemaGeneration(story, effectiveRunId);
+
                 _logger?.MarkCompleted(effectiveRunId, "ok");
-                return new CommandResult(true, "Tagged story generated");
+                return new CommandResult(true, "Tagged story generated (TTS schema enqueued)");
             }
             catch (OperationCanceledException)
             {
@@ -174,6 +185,81 @@ namespace TinyGenerator.Services.Commands
             catch (Exception ex)
             {
                 return Fail(effectiveRunId, ex.Message);
+            }
+        }
+
+        private void TryEnqueueTtsSchemaGeneration(StoryRecord story, string runId)
+        {
+            try
+            {
+                if (_commandDispatcher == null)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] TTS schema enqueue skipped: dispatcher not available", "warn");
+                    return;
+                }
+
+                if (_storiesService == null)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] TTS schema enqueue skipped: StoriesService not available", "warn");
+                    return;
+                }
+
+                // If a schema generation command is already queued/running for this story, don't enqueue another.
+                try
+                {
+                    var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                        s.Metadata != null &&
+                        s.Metadata.TryGetValue("storyId", out var sid) &&
+                        string.Equals(sid, _storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                        (
+                            string.Equals(s.OperationName, "generate_tts_schema", StringComparison.OrdinalIgnoreCase) ||
+                            (s.Metadata.TryGetValue("operation", out var op) && op.Contains("tts_schema", StringComparison.OrdinalIgnoreCase)) ||
+                            s.RunId.StartsWith($"tts_schema_{_storyId}_", StringComparison.OrdinalIgnoreCase)
+                        ));
+
+                    if (alreadyQueued)
+                    {
+                        _logger?.Append(runId, $"[story {_storyId}] TTS schema not enqueued: already queued/running", "info");
+                        return;
+                    }
+                }
+                catch
+                {
+                    // If snapshots fail, we still try to enqueue.
+                }
+
+                var ttsRunId = $"tts_schema_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+
+                _commandDispatcher.Enqueue(
+                    "generate_tts_schema",
+                    async ctx =>
+                    {
+                        try
+                        {
+                            var cmd = new GenerateTtsSchemaCommand(_storiesService, _storyId);
+                            return await cmd.ExecuteAsync(ctx.CancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            return new CommandResult(false, ex.Message);
+                        }
+                    },
+                    runId: ttsRunId,
+                    threadScope: "story/tts_schema",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["storyId"] = _storyId.ToString(),
+                        ["operation"] = "generate_tts_schema",
+                        ["trigger"] = "tagged_generated",
+                        ["taggedVersion"] = (story.StoryTaggedVersion ?? 0).ToString()
+                    },
+                    priority: 2);
+
+                _logger?.Append(runId, $"[story {_storyId}] Enqueued TTS schema generation (runId={ttsRunId})", "info");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue TTS schema: {ex.Message}", "warn");
             }
         }
 

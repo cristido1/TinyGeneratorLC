@@ -1,0 +1,149 @@
+IMPLEMENTAZIONE CONTROLLO EMBEDDING
+Verifica ripetizione concettuale capitoli narrativi
+
+OBIETTIVO
+Individuare ripetizioni concettuali tra un capitolo appena generato e i capitoli precedenti,
+senza interferire con la generazione del testo e senza introdurre valutazioni stilistiche.
+
+Il controllo serve SOLO come sensore post-generazione per decidere se richiedere un retry.
+
+--------------------------------------------------
+QUANDO VIENE ESEGUITO
+--------------------------------------------------
+
+- Il controllo embedding viene eseguito DOPO che il modello ha prodotto un capitolo completo.
+- NON viene eseguito durante la generazione.
+- NON influenza token, prompt o sampling.
+
+Flusso:
+1. Writer genera capitolo
+2. Sistema esegue controllo embedding
+3. Se superato → capitolo accettato
+4. Se non superato → feedback + retry (max 3)
+
+--------------------------------------------------
+TESTI DA CONFRONTARE
+--------------------------------------------------
+
+INPUT A (corrente):
+- Testo completo del capitolo appena generato
+
+INPUT B (storico):
+- Uno dei seguenti (sceglierne UNO):
+  a) Concatenazione dei capitoli precedenti
+  b) Riassunto tecnico dei capitoli precedenti
+  c) Embedding medi dei capitoli precedenti (consigliato)
+
+NOTA:
+- Non confrontare con la TRAMA
+- Non confrontare con la STRUTTURA
+- Solo testo narrativo finale
+
+--------------------------------------------------
+PREPROCESSING TESTO
+--------------------------------------------------
+
+Prima di calcolare gli embedding:
+
+- Rimuovere:
+  - titoli di capitolo
+  - numerazioni
+- NON rimuovere dialoghi
+- NON riscrivere frasi
+- NON normalizzare semanticamente
+
+Consentito:
+- trim spazi
+- normalizzazione whitespace
+
+--------------------------------------------------
+CALCOLO EMBEDDING
+--------------------------------------------------
+
+- Usare lo STESSO modello di embedding per tutti i testi
+- Dimensione embedding coerente (es. 768 / 1024)
+
+Strategia consigliata:
+- Suddividere il capitolo corrente in blocchi semantici (300–600 parole)
+- Calcolare embedding per ogni blocco
+- Confrontare ciascun blocco con:
+  - embedding medio dello storico
+  OPPURE
+  - embedding di ciascun capitolo precedente
+
+--------------------------------------------------
+METRICA DI SIMILARITÀ
+--------------------------------------------------
+
+- Usare cosine similarity
+
+Valori di riferimento (empirici):
+- < 0.75 → nessuna ripetizione
+- 0.75 – 0.82 → attenzione (accettabile)
+- > 0.82 → probabile ripetizione concettuale
+
+NON usare una soglia unica rigida.
+Conta:
+- quante volte la soglia viene superata
+- su quanta parte del testo
+
+--------------------------------------------------
+CRITERIO DI FALLIMENTO
+--------------------------------------------------
+
+Il capitolo FALLISCE se:
+- più del 20–25% dei blocchi supera la soglia 0.82
+OPPURE
+- lo stesso concetto viene rilevato come simile in blocchi diversi
+
+Il capitolo PASSA se:
+- i blocchi simili sono pochi e isolati
+- la similarità è legata a eventi consequenziali inevitabili
+
+--------------------------------------------------
+FEEDBACK AL MODELLO (RETRY)
+--------------------------------------------------
+
+In caso di fallimento:
+
+- NON mostrare metriche
+- NON citare embedding o similarità
+- NON dire "ripetizione semantica"
+
+Messaggio consigliato:
+"Nel capitolo appena scritto sono presenti più passaggi che riprendono concetti già espressi in precedenza.
+Riduci spiegazioni e riformulazioni.
+Lascia emergere i significati solo attraverso azioni e conseguenze."
+
+--------------------------------------------------
+RETRY POLICY
+--------------------------------------------------
+
+- Massimo 3 retry
+- A ogni retry:
+  - stesso prompt
+  - stesso contesto
+  - solo il feedback aggiunto
+
+Se fallisce 3 volte:
+- capitolo accettato comunque
+- segnalazione a log per revisione manuale
+
+--------------------------------------------------
+COSA NON FARE (IMPORTANTE)
+--------------------------------------------------
+
+- NON usare embedding nel prompt del writer
+- NON bloccare la generazione in tempo reale
+- NON usare embedding per valutare stile o qualità
+- NON confrontare frasi singole
+- NON punire ripetizioni lessicali innocue
+
+--------------------------------------------------
+RISULTATO ATTESO
+--------------------------------------------------
+
+- Riduzione netta delle spiegazioni ridondanti
+- Capitoli più densi e consequenziali
+- Nessun aumento di verbosità difensiva del modello
+- Sistema stabile e prevedibile

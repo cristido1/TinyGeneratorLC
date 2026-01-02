@@ -32,6 +32,8 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<TtsVoice> TtsVoices => Set<TtsVoice>();
     public DbSet<LogEntry> Logs => Set<LogEntry>();
     public DbSet<Series> Series => Set<Series>();
+    public DbSet<SeriesEpisode> SeriesEpisodes => Set<SeriesEpisode>();
+    public DbSet<SeriesCharacter> SeriesCharacters => Set<SeriesCharacter>();
     public DbSet<Chapter> Chapters => Set<Chapter>();
     public DbSet<UsageState> UsageStates => Set<UsageState>();
     public DbSet<ModelTestRun> ModelTestRuns => Set<ModelTestRun>();
@@ -51,5 +53,14 @@ public class TinyGeneratorDbContext : DbContext
         
         // Minimal configuration - rely on DataAnnotations on model classes
         // Foreign keys with SetNull are handled by shadow keys, not explicit FK constraints for SQLite compatibility
+        modelBuilder.Entity<SeriesCharacter>()
+            .HasOne<Series>()
+            .WithMany(s => s.Characters)
+            .HasForeignKey(sc => sc.SerieId);
+
+        modelBuilder.Entity<SeriesEpisode>()
+            .HasOne<Series>()
+            .WithMany(s => s.Episodes)
+            .HasForeignKey(se => se.SerieId);
     }
 }

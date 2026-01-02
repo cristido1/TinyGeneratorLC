@@ -412,84 +412,18 @@ namespace TinyGenerator.Services.Commands
             // STEP 5: Genera TTS audio
             // ═══════════════════════════════════════════════════════════════
             ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(5, audioPipelineTotalSteps, "🔊 Generazione audio TTS...");
-            await LogAndNotifyAsync("🔊 Generazione audio TTS...");
-            var ttsResult = await _storiesService.GenerateTtsForStoryAsync(storyId, storyFolderName, _generationId.ToString());
-            if (!ttsResult.success)
+            await BroadcastAudioPipelineStepAsync(5, audioPipelineTotalSteps, "🔊 Accodamento generazione audio TTS...");
+            await LogAndNotifyAsync("🔊 Accodamento generazione audio TTS...");
+
+            var runId = _storiesService.EnqueueGenerateTtsAudioCommand(storyId, trigger: "full_pipeline", priority: 3);
+            if (runId == null)
             {
-                await LogAndNotifyAsync($"❌ TTS fallito: {ttsResult.error}", "error");
+                await LogAndNotifyAsync("❌ Impossibile accodare la generazione audio TTS", "error");
                 return false;
             }
-            await LogAndNotifyAsync("✅ Audio TTS generato", "success");
 
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 6: Genera suoni ambientali
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(6, audioPipelineTotalSteps, "🌲 Generazione suoni ambientali...");
-            await LogAndNotifyAsync("🌲 Generazione suoni ambientali...");
-            var ambienceResult = await _storiesService.GenerateAmbienceForStoryAsync(storyId, storyFolderName, _generationId.ToString());
-            if (!ambienceResult.success)
-            {
-                await LogAndNotifyAsync($"⚠️ Ambience: {ambienceResult.error}", "warning");
-                // Continue anyway
-            }
-            else
-            {
-                await LogAndNotifyAsync("✅ Suoni ambientali generati", "success");
-            }
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 7: Genera effetti sonori (FX)
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(7, audioPipelineTotalSteps, "💥 Generazione effetti sonori (FX)...");
-            await LogAndNotifyAsync("💥 Generazione effetti sonori (FX)...");
-            var fxResult = await _storiesService.GenerateFxForStoryAsync(storyId, storyFolderName, _generationId.ToString());
-            if (!fxResult.success)
-            {
-                await LogAndNotifyAsync($"⚠️ FX: {fxResult.error}", "warning");
-                // Continue anyway
-            }
-            else
-            {
-                await LogAndNotifyAsync("✅ Effetti sonori generati", "success");
-            }
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 8: Genera musica
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(8, audioPipelineTotalSteps, "🎵 Generazione musica...");
-            await LogAndNotifyAsync("🎵 Generazione musica...");
-            var musicResult = await _storiesService.GenerateMusicForStoryAsync(storyId, storyFolderName, _generationId.ToString());
-            if (!musicResult.success)
-            {
-                await LogAndNotifyAsync($"⚠️ Musica: {musicResult.error}", "warning");
-                // Continue anyway
-            }
-            else
-            {
-                await LogAndNotifyAsync("✅ Musica generata", "success");
-            }
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 9: Mix audio finale
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(9, audioPipelineTotalSteps, "🎚️ Mixaggio audio finale...");
-            await LogAndNotifyAsync("🎚️ Mixaggio audio finale...");
-            await LogAndNotifyAsync($"[DEBUG] Chiamata a MixFinalAudioForStoryAsync(storyId={storyId}, folder={storyFolderName})...");
-            var mixResult = await _storiesService.MixFinalAudioForStoryAsync(storyId, storyFolderName, _generationId.ToString());
-            await LogAndNotifyAsync($"[DEBUG] MixFinalAudioForStoryAsync completato: success={mixResult.success}");
-            if (!mixResult.success)
-            {
-                await LogAndNotifyAsync($"❌ Mix finale fallito: {mixResult.error}", "error");
-                return false;
-            }
-            await LogAndNotifyAsync("✅ Mix audio finale completato", "success");
+            await LogAndNotifyAsync($"✅ Generazione audio TTS accodata (run {runId}). Seguiranno musica/ambience/fx in coda.", "success");
             await LogAndNotifyAsync($"[DEBUG] RunFullPipelineOnStoryAsync returning true");
-
             return true;
         }
 

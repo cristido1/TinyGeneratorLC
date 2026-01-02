@@ -21,6 +21,8 @@ namespace TinyGenerator.Services
         private readonly ICustomLogger _logger;
         private readonly IConfiguration _configuration;
         private readonly IMemoryEmbeddingGenerator _embeddingGenerator;
+        private readonly ICommandDispatcher? _commandDispatcher;
+        private readonly IServiceProvider _services;
         private readonly Dictionary<long, List<string>> _chunkCache = new();
         private readonly bool _autoRecoverStaleExecutions;
 
@@ -31,7 +33,9 @@ namespace TinyGenerator.Services
             ITokenizer tokenizerService,
             ICustomLogger logger,
             IConfiguration configuration,
-            IMemoryEmbeddingGenerator embeddingGenerator)
+            IMemoryEmbeddingGenerator embeddingGenerator,
+            IServiceProvider services,
+            ICommandDispatcher? commandDispatcher = null)
         {
             _kernelFactory = kernelFactory;
             _database = database;
@@ -40,7 +44,39 @@ namespace TinyGenerator.Services
             _logger = logger;
             _configuration = configuration;
             _embeddingGenerator = embeddingGenerator;
+            _services = services;
+            _commandDispatcher = commandDispatcher;
             _autoRecoverStaleExecutions = _configuration.GetValue<bool>("MultiStep:AutoRecoverStaleExecutions", false);
+        }
+
+        private void EnqueueAutomaticStoryRevision(long storyDbId)
+        {
+            try
+            {
+                if (storyDbId <= 0) return;
+
+                var storiesService = _services.GetService(typeof(StoriesService)) as StoriesService;
+                if (storiesService == null)
+                {
+                    _logger.Log("Warning", "MultiStep", "Auto-revision skipped: StoriesService non disponibile");
+                    return;
+                }
+
+                var runId = storiesService.EnqueueReviseStoryCommand(storyDbId, trigger: "multistep_story_saved", priority: 2);
+                if (!string.IsNullOrWhiteSpace(runId))
+                {
+                    _logger.Log("Information", "MultiStep", $"Auto-revision enqueued for story {storyDbId} ({runId})");
+                }
+                else
+                {
+                    _logger.Log("Debug", "MultiStep", $"Auto-revision not enqueued for story {storyDbId} (maybe already queued or dispatcher unavailable)");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Non-blocking best-effort: never fail story generation completion because of auto-enqueue.
+                _logger.Log("Warning", "MultiStep", $"Auto-revision enqueue failed for story {storyDbId}: {ex.Message}");
+            }
         }
 
         public async Task<long> StartTaskExecutionAsync(
@@ -1284,6 +1320,13 @@ namespace TinyGenerator.Services
             return GetConfigValue<int?>(execution.Config, "executorModelIdOverride");
         }
 
+        private (int? serieId, int? serieEpisode) GetSeriesInfoFromConfig(TaskExecution execution)
+        {
+            var serieId = GetConfigValue<int?>(execution.Config, "serie_id");
+            var serieEpisode = GetConfigValue<int?>(execution.Config, "serie_episode");
+            return (serieId, serieEpisode);
+        }
+
         /// <summary>
         /// Gets a typed value from the execution config JSON.
         /// </summary>
@@ -2080,6 +2123,8 @@ RIASSUNTO:";
                         _logger.Log("Information", "MultiStep", 
                             $"Full story step {stepTemplate.FullStoryStep} completed: saving story with title='{title}', length={storyText.Length}");
 
+                        var (serieId, serieEpisode) = GetSeriesInfoFromConfig(execution);
+
                         // Se execution.EntityId non esiste ancora, crea la storia
                         if (!execution.EntityId.HasValue)
                         {
@@ -2092,12 +2137,19 @@ RIASSUNTO:";
                                 story: storyText, 
                                 agentId: agent?.Id, 
                                 modelId: modelId, 
-                                title: title);
+                                title: title,
+                                serieId: serieId,
+                                serieEpisode: serieEpisode);
                             
                             execution.EntityId = storyId;
                             _database.UpdateTaskExecution(execution);
                             _logger.Log("Information", "MultiStep", 
                                 $"Created new story {storyId} from full_story_step with title='{title}'");
+
+                            if (string.Equals(execution.TaskType, "story", StringComparison.OrdinalIgnoreCase))
+                            {
+                                EnqueueAutomaticStoryRevision(storyId);
+                            }
                         }
                         else
                         {
@@ -2108,6 +2160,7 @@ RIASSUNTO:";
                                 _logger.Log("Information", "MultiStep", 
                                     $"Updated story {execution.EntityId.Value} title to '{title}'");
                             }
+                            _database.UpdateStorySeriesInfo(execution.EntityId.Value, serieId, serieEpisode);
                         }
                     }
                     catch (Exception ex)
@@ -2169,6 +2222,8 @@ RIASSUNTO:";
                             execution.EntityId.Value,
                             story: merged);
                         _logger.Log(ok ? "Information" : "Warning", "MultiStep", $"UpdateStoryById returned {ok} for story {execution.EntityId.Value}");
+                        var (serieId, serieEpisode) = GetSeriesInfoFromConfig(execution);
+                        _database.UpdateStorySeriesInfo(execution.EntityId.Value, serieId, serieEpisode);
                     }
                     catch (Exception ex)
                     {
@@ -2203,8 +2258,11 @@ RIASSUNTO:";
                         _logger.Log("Debug", "MultiStep", $"Inserting new story (prompt len={prompt?.Length ?? 0}, merged len={merged?.Length ?? 0}, title present={(!string.IsNullOrWhiteSpace(title))})");
                         var safePrompt = prompt ?? string.Empty;
                         var safeMerged = merged ?? string.Empty;
-                        var storyId = _database.InsertSingleStory(safePrompt, safeMerged, agentId: agent?.Id, modelId: modelId, title: title);
+                        var (serieId, serieEpisode) = GetSeriesInfoFromConfig(execution);
+                        var storyId = _database.InsertSingleStory(safePrompt, safeMerged, agentId: agent?.Id, modelId: modelId, title: title, serieId: serieId, serieEpisode: serieEpisode);
                         _logger.Log("Information", "MultiStep", $"InsertSingleStory returned id {storyId}");
+
+                        EnqueueAutomaticStoryRevision(storyId);
 
                         // Update execution with the new entity ID
                         execution.EntityId = storyId;

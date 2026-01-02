@@ -34,7 +34,8 @@ namespace TinyGenerator.Services.Commands
         public Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
         {
             var id = _stories.InsertSingleStory(_prompt, _storyText, modelId: _modelId, agentId: _agentId, statusId: _statusId, title: _title);
-            return Task.FromResult(new CommandResult(true, $"Storia creata (id={id})"));
+            _stories.EnqueueReviseStoryCommand(id, trigger: "create_story_command", priority: 2);
+            return Task.FromResult(new CommandResult(true, $"Storia creata (id={id}) - revisione accodata"));
         }
     }
 

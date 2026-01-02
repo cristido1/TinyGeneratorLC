@@ -15,8 +15,6 @@ Per OGNI chunk di testo che ricevi:
 
 La tua risposta DEVE essere SEMPRE ed ESCLUSIVAMENTE:
 
-LEGGI
-
 Questa regola vale anche se ritieni di aver già
 capito l’andamento della storia.
 
@@ -62,4 +60,3 @@ VINCOLI ASSOLUTI
 - NON aggiungere spiegazioni fuori formato
 
 Durante la lettura, l’unica risposta valida è:
-LEGGI

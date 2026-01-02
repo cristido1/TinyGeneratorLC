@@ -218,6 +218,23 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public IActionResult OnPostRevise(long id)
+        {
+            try
+            {
+                var runId = _stories.EnqueueReviseStoryCommand(id, trigger: "stories_index", priority: 2, force: true);
+                TempData["StatusMessage"] = string.IsNullOrWhiteSpace(runId)
+                    ? "Revisione non accodata (forse già in coda o dispatcher non disponibile)."
+                    : $"Revisione accodata (run {runId}).";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore accodando revisione: " + ex.Message;
+            }
+
+            return RedirectToPage();
+        }
+
         // Allow manual evaluation input (for stories created without an associated model/agent)
         public IActionResult OnPostManualEvaluate(long id, double score, string overall)
         {
@@ -354,19 +371,11 @@ namespace TinyGenerator.Pages.Stories
 
         public IActionResult OnPostGenerateTts(long id, string folderName)
         {
-            var runId = QueueStoryCommand(
-                id,
-                "generate_tts_audio",
-                async ctx =>
-                {
-                    // Pass dispatcher runId to enable progress reporting
-                    var (success, error) = await _stories.GenerateTtsForStoryAsync(id, folderName, ctx.RunId);
-                    var message = success ? "Generazione audio TTS completata." : error;
-                    return new CommandResult(success, message);
-                },
-                "Generazione audio TTS avviata in background.");
-
-            TempData["StatusMessage"] = $"Generazione audio TTS avviata (run {runId}).";
+            // Unified path: single dispatcher command, storyId only.
+            var runId = _stories.EnqueueGenerateTtsAudioCommand(id, trigger: "manual_tts_audio", priority: 3);
+            TempData["StatusMessage"] = runId != null
+                ? $"Generazione audio TTS avviata (run {runId})."
+                : "Impossibile avviare la generazione audio TTS.";
             return RedirectToPage();
         }
 
@@ -764,7 +773,8 @@ namespace TinyGenerator.Pages.Stories
                         _database,
                         _kernelFactory,
                         _stories,
-                        _customLogger);
+                        _customLogger,
+                        _commandDispatcher);
                     return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                 },
                 "Aggiunta tag avviata in background.");
@@ -834,6 +844,16 @@ namespace TinyGenerator.Pages.Stories
                             || System.IO.File.Exists(Path.Combine(folderPath, "final_mix.wav"));
                     }
                     catch { story.HasVoiceSource = false; story.HasFinalMix = false; }
+                }
+            }
+
+            var seriesMap = _database.ListAllSeries()
+                .ToDictionary(s => s.Id, s => s.Titolo);
+            foreach (var story in pageItems)
+            {
+                if (story.SerieId.HasValue && seriesMap.TryGetValue(story.SerieId.Value, out var serieTitle))
+                {
+                    story.SerieName = serieTitle;
                 }
             }
 
@@ -1026,6 +1046,9 @@ namespace TinyGenerator.Pages.Stories
             // Details / Edit (GET)
             actions.Add(new { id = "details", title = "Dettagli", method = "GET", url = Url.Page("/Stories/Details", new { id = s.Id }) });
             actions.Add(new { id = "edit", title = "Modifica", method = "GET", url = Url.Page("/Stories/Edit", new { id = s.Id }) });
+
+            // Revision (POST)
+            actions.Add(new { id = "revise", title = "Revisione", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "Revise", id = s.Id }, Request.Scheme) });
 
             if (!string.IsNullOrWhiteSpace(s.Folder))
             {

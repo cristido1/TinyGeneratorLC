@@ -26,6 +26,9 @@ namespace TinyGenerator.Pages.Stories
         public string StoryText { get; set; } = string.Empty;
 
         [BindProperty]
+        public string? StoryRevisedText { get; set; }
+
+        [BindProperty]
         public string? StoryTaggedText { get; set; }
 
         [BindProperty]
@@ -56,6 +59,7 @@ namespace TinyGenerator.Pages.Stories
             if (s == null) return NotFound();
             Prompt = s.Prompt;
             StoryText = s.StoryRaw;
+            StoryRevisedText = s.StoryRevised;
             StoryTaggedText = s.StoryTagged;
             Characters = s.Characters;
             StatusId = s.StatusId;
@@ -76,6 +80,12 @@ namespace TinyGenerator.Pages.Stories
             if (story == null) return NotFound();
             LoadStatuses();
             _stories.UpdateStoryById(Id, StoryText, ModelId, AgentId, StatusId, updateStatus: true, allowCreatorMetadataUpdate: true);
+
+            if (StoryRevisedText != null)
+            {
+                _database.UpdateStoryRevised(Id, StoryRevisedText ?? string.Empty);
+            }
+
             if (StoryTaggedText != null)
             {
                 _database.UpdateStoryTagged(

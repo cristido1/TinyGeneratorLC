@@ -126,34 +126,18 @@ public class TestAutomationController : ControllerBase
                 return Ok(new { success = false, error = "Story not found" });
             }
 
-            var metadata = new Dictionary<string, string>
+            // Unified path: single dispatcher command, storyId only.
+            // voiceId is currently ignored by the TTS pipeline (voices are assigned from tts_schema.json).
+            var runId = _storiesService.EnqueueGenerateTtsAudioCommand(request.StoryId, trigger: "test_api", priority: 3);
+            if (runId == null)
             {
-                ["storyId"] = request.StoryId.ToString(),
-                ["voiceId"] = request.VoiceId.ToString(),
-                ["agentName"] = "tts_generator",
-                ["modelName"] = "tts_engine"
-            };
-
-            var handle = _dispatcher.Enqueue(
-                "test_tts_generation",
-                async ctx =>
-                {
-                    var result = await _storiesService.GenerateTtsForStoryAsync(request.StoryId, request.VoiceId.ToString());
-                    
-                    if (!result.success)
-                    {
-                        return new CommandResult(false, result.error ?? "TTS generation failed");
-                    }
-
-                    return new CommandResult(true, "TTS generated successfully");
-                },
-                threadScope: "test_automation",
-                metadata: metadata);
+                return Ok(new { success = false, error = "Failed to enqueue TTS generation" });
+            }
 
             return Ok(new
             {
                 success = true,
-                commandId = handle.RunId,
+                commandId = runId,
                 message = "TTS generation enqueued"
             });
         }

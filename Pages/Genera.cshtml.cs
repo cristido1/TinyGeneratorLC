@@ -43,7 +43,18 @@ public class GeneraModel : PageModel
     [BindProperty]
     public int WriterAgentId { get; set; } = 0;
 
+    [BindProperty]
+    public int SeriesId { get; set; } = 0;
+
+    [BindProperty]
+    public int EpisodeId { get; set; } = 0;
+
+    [BindProperty]
+    public int SeriesWriterAgentId { get; set; } = 0;
+
     public List<Agent> Agents { get; set; } = new();
+    public List<TinyGenerator.Models.Series> SeriesList { get; set; } = new();
+    public List<SeriesEpisode> SeriesEpisodes { get; set; } = new();
 
     public object? Story { get; set; }
     public string Status => _status.ToString();
@@ -55,7 +66,7 @@ public class GeneraModel : PageModel
     {
         // Load writer agents for dropdown (only those with a multi-step template)
         Agents = _database.ListAgents()
-            .Where(a => a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase) && a.MultiStepTemplateId.HasValue)
+            .Where(a => a.IsActive && a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase) && a.MultiStepTemplateId.HasValue)
             .OrderBy(a => a.Name)
             .ToList();
 
@@ -73,6 +84,23 @@ public class GeneraModel : PageModel
         if (WriterAgentId == 0 && Agents.Count > 0)
         {
             WriterAgentId = Agents[0].Id;
+        }
+
+        SeriesList = _database.ListAllSeries();
+        SeriesEpisodes = _database.ListAllSeriesEpisodes();
+
+        if (SeriesId == 0 && SeriesList.Count > 0)
+        {
+            SeriesId = SeriesList[0].Id;
+        }
+        if (SeriesWriterAgentId == 0 && Agents.Count > 0)
+        {
+            SeriesWriterAgentId = Agents[0].Id;
+        }
+        if (EpisodeId == 0)
+        {
+            var firstEpisode = SeriesEpisodes.FirstOrDefault(e => e.SerieId == SeriesId);
+            if (firstEpisode != null) EpisodeId = firstEpisode.Id;
         }
     }
 
@@ -202,6 +230,55 @@ public class GeneraModel : PageModel
         _customLogger.Append(genId.ToString(), "🎬 Pipeline completo avviato");
 
         try { await _customLogger.NotifyGroupAsync(genId.ToString(), "Started", "Full pipeline started", "info"); } catch { }
+
+        return new JsonResult(new { id = genId.ToString() });
+    }
+
+    public async Task<IActionResult> OnPostStartSeriesEpisodeAsync()
+    {
+        if (SeriesId <= 0) return BadRequest(new { error = "Seleziona una serie valida." });
+        if (EpisodeId <= 0) return BadRequest(new { error = "Seleziona un episodio valido." });
+        if (SeriesWriterAgentId <= 0) return BadRequest(new { error = "Seleziona un writer agent." });
+        if (_orchestrator == null)
+        {
+            return BadRequest(new { error = "Orchestrator non configurato per la generazione multi-step." });
+        }
+
+        var agent = _database.GetAgentById(SeriesWriterAgentId);
+        if (agent == null) return BadRequest(new { error = "Agente writer non trovato." });
+        if (!agent.MultiStepTemplateId.HasValue) return BadRequest(new { error = "Agente writer senza template multi-step." });
+
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+
+        var cmd = new GenerateSeriesEpisodeFromDbCommand(
+            SeriesId,
+            EpisodeId,
+            SeriesWriterAgentId,
+            genId,
+            _database,
+            _orchestrator,
+            _dispatcher,
+            _customLogger
+        );
+
+        _dispatcher.Enqueue(
+            "GenerateSeriesEpisode",
+            async ctx => {
+                await cmd.ExecuteAsync(ctx.CancellationToken);
+                return new CommandResult(true, "Series episode generation started");
+            },
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["agentName"] = agent.Name ?? "unknown",
+                ["modelName"] = agent.ModelName ?? "unknown",
+                ["operation"] = "series_episode"
+            }
+        );
+
+        _customLogger.Append(genId.ToString(), "Avvio generazione episodio di serie");
+        try { await _customLogger.NotifyGroupAsync(genId.ToString(), "Started", "Series episode started", "info"); } catch { }
 
         return new JsonResult(new { id = genId.ToString() });
     }

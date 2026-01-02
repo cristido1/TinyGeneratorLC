@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
@@ -83,4 +84,7 @@ public sealed class Series
     [Column("timestamp")]
     [Timestamp]
     public byte[]? Timestamp { get; set; }
+
+    public List<SeriesCharacter> Characters { get; set; } = new();
+    public List<SeriesEpisode> Episodes { get; set; } = new();
 }

@@ -24,6 +24,12 @@
                 <button class="nav-link" id="story-raw-tab" data-bs-toggle="tab" data-bs-target="#story-raw-pane" type="button" role="tab" aria-controls="story-raw-pane" aria-selected="false">Storia raw</button>
             </li>
             <li class="nav-item" role="presentation">
+                <button class="nav-link" id="story-revised-tab" data-bs-toggle="tab" data-bs-target="#story-revised-pane" type="button" role="tab" aria-controls="story-revised-pane" aria-selected="false">Storia revised</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="story-diff-tab" data-bs-toggle="tab" data-bs-target="#story-diff-pane" type="button" role="tab" aria-controls="story-diff-pane" aria-selected="false">Confronto</button>
+            </li>
+            <li class="nav-item" role="presentation">
                 <button class="nav-link active" id="story-tab" data-bs-toggle="tab" data-bs-target="#story-pane" type="button" role="tab" aria-controls="story-pane" aria-selected="true">Storia</button>
             </li>
             <li class="nav-item" role="presentation">
@@ -39,6 +45,36 @@
                 else
                 {
                     <div class="text-muted">Nessun testo raw disponibile.</div>
+                }
+            </div>
+            <div class="tab-pane fade" id="story-revised-pane" role="tabpanel" aria-labelledby="story-revised-tab">
+                @if (!string.IsNullOrWhiteSpace(Model.StoryRevisedText))
+                {
+                    <pre style="white-space: pre-wrap;">@Model.StoryRevisedText</pre>
+                }
+                else
+                {
+                    <div class="text-muted">Nessun testo revised disponibile.</div>
+                }
+            </div>
+            <div class="tab-pane fade" id="story-diff-pane" role="tabpanel" aria-labelledby="story-diff-tab">
+                @if (Model.HasRevisionDiff && !string.IsNullOrWhiteSpace(Model.RawDiffHtml) && !string.IsNullOrWhiteSpace(Model.RevisedDiffHtml))
+                {
+                    <div class="small text-muted mb-2">Differenze (raw in arancione, revised in verde)</div>
+                    <div class="row g-3">
+                        <div class="col-12 col-lg-6">
+                            <div class="small text-muted mb-1">Raw (modificato/eliminato/sostituito)</div>
+                            <pre class="border rounded p-2" style="white-space: pre-wrap;">@Html.Raw(Model.RawDiffHtml)</pre>
+                        </div>
+                        <div class="col-12 col-lg-6">
+                            <div class="small text-muted mb-1">Revised (aggiunte/sostituzioni)</div>
+                            <pre class="border rounded p-2" style="white-space: pre-wrap;">@Html.Raw(Model.RevisedDiffHtml)</pre>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="text-muted">Nessuna differenza da mostrare.</div>
                 }
             </div>
             <div class="tab-pane fade show active" id="story-pane" role="tabpanel" aria-labelledby="story-tab">
@@ -104,7 +140,7 @@
                 }
 
                 // Get story text
-                var storyText = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.StoryRawText ?? ""));
+                var storyText = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.StoryRevisedText ?? Model.StoryRawText ?? ""));
                 
                 if (!storyText || storyText.trim() === '') {
                     alert('Nessun testo da leggere');

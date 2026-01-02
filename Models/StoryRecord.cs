@@ -32,6 +32,9 @@ namespace TinyGenerator.Models
         [Column("story_raw")]
         public string StoryRaw { get; set; } = string.Empty;
 
+        [Column("story_revised")]
+        public string? StoryRevised { get; set; }
+
         [Column("story_tagged")]
         public string? StoryTagged { get; set; }
 

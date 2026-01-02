@@ -7,6 +7,11 @@ using TinyGenerator.Models;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
+using System.Text;
+using System.Text.Encodings.Web;
+using DiffPlex;
+using DiffPlex.DiffBuilder;
+using DiffPlex.DiffBuilder.Model;
 
 namespace TinyGenerator.Pages.Stories
 {
@@ -31,7 +36,12 @@ namespace TinyGenerator.Pages.Stories
         public StoryRecord? Story { get; set; }
         public List<StoryEvaluation> Evaluations { get; set; } = new List<StoryEvaluation>();
         public string? StoryRawText { get; set; }
+        public string? StoryRevisedText { get; set; }
         public string? StoryTaggedText { get; set; }
+
+        public bool HasRevisionDiff { get; set; }
+        public string? RawDiffHtml { get; set; }
+        public string? RevisedDiffHtml { get; set; }
 
         public void OnGet(long id)
         {
@@ -40,9 +50,193 @@ namespace TinyGenerator.Pages.Stories
             if (Story != null)
             {
                 StoryRawText = Story.StoryRaw;
+                StoryRevisedText = Story.StoryRevised;
                 StoryTaggedText = Story.StoryTagged;
             }
             Evaluations = _stories.GetEvaluationsForStory(id);
+
+            BuildRevisionDiffIfAvailable();
+        }
+
+        private void BuildRevisionDiffIfAvailable()
+        {
+            var raw = StoryRawText ?? string.Empty;
+            var revised = StoryRevisedText ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(revised))
+            {
+                HasRevisionDiff = false;
+                RawDiffHtml = null;
+                RevisedDiffHtml = null;
+                return;
+            }
+
+            if (string.Equals(raw, revised, System.StringComparison.Ordinal))
+            {
+                HasRevisionDiff = false;
+                RawDiffHtml = null;
+                RevisedDiffHtml = null;
+                return;
+            }
+
+            // Ignore whitespace-only differences (spaces/newlines/tabs).
+            // If the texts are equal after normalization, do not show any diff.
+            if (string.Equals(NormalizeWhitespaceForComparison(raw), NormalizeWhitespaceForComparison(revised), System.StringComparison.Ordinal))
+            {
+                HasRevisionDiff = false;
+                RawDiffHtml = null;
+                RevisedDiffHtml = null;
+                return;
+            }
+
+            try
+            {
+                var diffBuilder = new SideBySideDiffBuilder(new Differ());
+                // For prose, line-break and whitespace changes create a lot of noise.
+                // Normalize and wrap before diffing to improve alignment of equal text.
+                var rawForDiff = PrepareTextForDiff(raw);
+                var revisedForDiff = PrepareTextForDiff(revised);
+                var model = diffBuilder.BuildDiffModel(rawForDiff, revisedForDiff, ignoreWhitespace: true);
+
+                RawDiffHtml = RenderDiffSide(model.OldText, highlight: HighlightSide.Old);
+                RevisedDiffHtml = RenderDiffSide(model.NewText, highlight: HighlightSide.New);
+                HasRevisionDiff = true;
+            }
+            catch (System.Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to compute revision diff for story {Id}", Id);
+                HasRevisionDiff = false;
+                RawDiffHtml = null;
+                RevisedDiffHtml = null;
+            }
+        }
+
+        private static string NormalizeWhitespaceForComparison(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+
+            // Replace any whitespace sequence (including newlines/tabs) with a single space.
+            // This makes the comparison ignore spacing and line breaks.
+            var normalized = Regex.Replace(text, "\\s+", " ");
+            return normalized.Trim();
+        }
+
+        private static string PrepareTextForDiff(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+
+            // Ignore whitespace differences by collapsing all whitespace (spaces/newlines/tabs)
+            // to a single space, then wrapping for stable diff alignment.
+            var normalized = NormalizeWhitespaceForComparison(text);
+            if (string.IsNullOrEmpty(normalized)) return string.Empty;
+
+            var wrapped = new StringBuilder(normalized.Length + 128);
+            foreach (var w in WrapLine(normalized, maxWidth: 120))
+            {
+                wrapped.Append(w);
+                wrapped.Append('\n');
+            }
+
+            return wrapped.ToString();
+        }
+
+        private static IEnumerable<string> WrapLine(string line, int maxWidth)
+        {
+            if (string.IsNullOrEmpty(line)) yield break;
+            if (maxWidth <= 10)
+            {
+                yield return line;
+                yield break;
+            }
+
+            // At this point the input is already normalized (single spaces), but keep it defensive.
+            line = Regex.Replace(line, "\\s+", " ").Trim();
+
+            var remaining = line;
+            while (remaining.Length > maxWidth)
+            {
+                var cut = remaining.LastIndexOf(' ', maxWidth);
+                if (cut <= 0)
+                {
+                    // No space found (very long token). Hard cut.
+                    yield return remaining.Substring(0, maxWidth);
+                    remaining = remaining.Substring(maxWidth);
+                    continue;
+                }
+
+                yield return remaining.Substring(0, cut);
+                remaining = remaining.Substring(cut + 1);
+            }
+
+            if (remaining.Length > 0)
+            {
+                yield return remaining;
+            }
+        }
+
+        private enum HighlightSide
+        {
+            Old,
+            New
+        }
+
+        private static string RenderDiffSide(DiffPaneModel pane, HighlightSide highlight)
+        {
+            var sb = new StringBuilder();
+            var encoder = HtmlEncoder.Default;
+
+            foreach (var line in pane.Lines)
+            {
+                if (line.Type == ChangeType.Imaginary)
+                {
+                    sb.Append('\n');
+                    continue;
+                }
+
+                // For modified lines, prefer sub-piece rendering (more granular).
+                if (line.Type == ChangeType.Modified && line.SubPieces != null && line.SubPieces.Count > 0)
+                {
+                    foreach (var piece in line.SubPieces)
+                    {
+                        sb.Append(RenderPiece(piece.Text ?? string.Empty, piece.Type, highlight, encoder));
+                    }
+                    sb.Append('\n');
+                    continue;
+                }
+
+                sb.Append(RenderPiece(line.Text ?? string.Empty, line.Type, highlight, encoder));
+                sb.Append('\n');
+            }
+
+            return sb.ToString();
+        }
+
+        private static string RenderPiece(string text, ChangeType type, HighlightSide highlight, HtmlEncoder encoder)
+        {
+            var safe = encoder.Encode(text);
+
+            // Orange (warning) for deletions/changes in RAW (old)
+            if (highlight == HighlightSide.Old)
+            {
+                if (type == ChangeType.Deleted || type == ChangeType.Modified)
+                {
+                    return $"<mark class=\"bg-warning-subtle\">{safe}</mark>";
+                }
+
+                // Do not emphasize inserted-only pieces in raw
+                if (type == ChangeType.Inserted) return string.Empty;
+                return safe;
+            }
+
+            // Green (success) for insertions/changes in REVISED (new)
+            if (type == ChangeType.Inserted || type == ChangeType.Modified)
+            {
+                return $"<mark class=\"bg-success-subtle\">{safe}</mark>";
+            }
+
+            // Do not show deleted-only pieces in revised
+            if (type == ChangeType.Deleted) return string.Empty;
+            return safe;
         }
 
         public async Task<IActionResult> OnPostTtsAsync(long id)
@@ -51,7 +245,7 @@ namespace TinyGenerator.Pages.Stories
             {
                 var story = _stories.GetStoryById(id);
                 if (story == null) return NotFound();
-                var text = story.StoryRaw;
+                var text = !string.IsNullOrWhiteSpace(story.StoryRevised) ? story.StoryRevised! : story.StoryRaw;
                 if (string.IsNullOrWhiteSpace(text)) return BadRequest("No story text");
 
                 var voices = _db.ListTtsVoices();
@@ -145,7 +339,7 @@ namespace TinyGenerator.Pages.Stories
             {
                 var story = _stories.GetStoryById(id);
                 if (story == null) return NotFound();
-                var text = story.StoryRaw;
+                var text = !string.IsNullOrWhiteSpace(story.StoryRevised) ? story.StoryRevised! : story.StoryRaw;
                 if (string.IsNullOrWhiteSpace(text)) return BadRequest("No story text");
 
                 // Check if we're on macOS

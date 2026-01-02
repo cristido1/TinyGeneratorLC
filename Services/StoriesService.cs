@@ -40,6 +40,9 @@ public sealed class StoriesService
         WriteIndented = true
     };
 
+    private const double AutoFormatMinAverageScore = 65.0;
+    private const int AutoFormatMinEvaluations = 2;
+
     public StoriesService(
         DatabaseService database, 
         TtsService ttsService,
@@ -309,7 +312,14 @@ public sealed class StoriesService
             return (false, 0, "Kernel factory non disponibile");
 
         var story = GetStoryById(storyId);
-        if (story == null || string.IsNullOrWhiteSpace(story.StoryRaw))
+        if (story == null)
+            return (false, 0, "Storia non trovata");
+
+        var storyText = !string.IsNullOrWhiteSpace(story.StoryRevised)
+            ? story.StoryRevised
+            : story.StoryRaw;
+
+        if (string.IsNullOrWhiteSpace(storyText))
             return (false, 0, "Storia non trovata o priva di contenuto");
 
         var agent = _database.GetAgentById(agentId);
@@ -519,7 +529,11 @@ public sealed class StoriesService
         int agentId)
     {
         if (story == null) return (false, 0, "Storia non trovata");
-        if (string.IsNullOrWhiteSpace(story.StoryRaw)) return (false, 0, "Storia non trovata o priva di contenuto");
+        var storyText = !string.IsNullOrWhiteSpace(story.StoryRevised)
+            ? story.StoryRevised
+            : story.StoryRaw;
+
+        if (string.IsNullOrWhiteSpace(storyText)) return (false, 0, "Storia non trovata o priva di contenuto");
 
         var messages = new List<ConversationMessage>
         {
@@ -532,7 +546,7 @@ public sealed class StoriesService
         messages.Add(new ConversationMessage
         {
             Role = "user",
-            Content = $"TESTO:\n\n{story.StoryRaw}\n\nVALUTA"
+            Content = $"TESTO:\n\n{storyText}\n\nVALUTA"
         });
 
         var parsed = new ParsedEvaluation(0, string.Empty, 0, string.Empty, 0, string.Empty, 0, string.Empty);
@@ -546,25 +560,7 @@ public sealed class StoriesService
             var (evalResponseText, _) = LangChainChatBridge.ParseChatResponse(evalRawJson);
             evalText = NormalizeEvaluatorOutput((evalResponseText ?? string.Empty));
             messages.Add(new ConversationMessage { Role = "assistant", Content = evalText });
-
-            if (IsReadAck(evalText))
-            {
-                if (attempt < maxAttemptsFinalEvaluation)
-                {
-                    messages.Add(new ConversationMessage
-                    {
-                        Role = "user",
-                        Content =
-                            "Devi restituire SOLO la valutazione nel formato richiesto (4 sezioni, punteggi 1-5, 1-2 frasi ciascuna). " +
-                            "Non rispondere 'LEGGI' e non aggiungere altro testo."
-                    });
-                    continue;
-                }
-
-                return (false, 0, "Valutatore ha risposto LEGGI invece della valutazione.");
-            }
-
-            if (TryParseEvaluationText(evalText, out parsed, out parseError))
+if (TryParseEvaluationText(evalText, out parsed, out parseError))
             {
                 evalOk = true;
                 break;
@@ -601,6 +597,10 @@ public sealed class StoriesService
                 rawJson: evalText,
                 modelId: modelId,
                 agentId: agentId);
+
+            // Requirement: whenever an evaluation is performed (i.e., saved), optionally enqueue
+            // the formatter command if conditions are met. Non-blocking: we enqueue and return.
+            TryEnqueueAutoFormatAfterEvaluation(story.Id);
         }
         catch (Exception ex)
         {
@@ -610,9 +610,83 @@ public sealed class StoriesService
         return (true, totalScore, null);
     }
 
-    private static bool IsReadAck(string? response)
-        => !string.IsNullOrWhiteSpace(response) && NormalizeEvaluatorOutput(response).Equals("LEGGI", StringComparison.OrdinalIgnoreCase);
+    private void TryEnqueueAutoFormatAfterEvaluation(long storyId)
+    {
+        try
+        {
+            if (storyId <= 0) return;
+            if (_commandDispatcher == null) return;
 
+            var story = _database.GetStoryById(storyId);
+            if (story == null) return;
+            if (!string.IsNullOrWhiteSpace(story.StoryTagged)) return;
+            if (string.IsNullOrWhiteSpace(story.StoryRaw)) return;
+
+            // Avoid duplicate enqueues if a format command is already queued/running.
+            try
+            {
+                var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                    s.Metadata != null &&
+                    s.Metadata.TryGetValue("storyId", out var sid) &&
+                    string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                    (
+                        string.Equals(s.OperationName, "TransformStoryRawToTagged", StringComparison.OrdinalIgnoreCase) ||
+                        (s.Metadata.TryGetValue("operation", out var op) && op.Contains("format_story", StringComparison.OrdinalIgnoreCase)) ||
+                        s.RunId.StartsWith($"format_story_{storyId}_", StringComparison.OrdinalIgnoreCase)
+                    ));
+
+                if (alreadyQueued) return;
+            }
+            catch
+            {
+                // If dispatcher snapshots fail for any reason, we still allow enqueue.
+            }
+
+            var (count, average) = _database.GetStoryEvaluationStats(storyId);
+            if (count < AutoFormatMinEvaluations) return;
+            if (average <= AutoFormatMinAverageScore) return;
+
+            if (_kernelFactory == null) return;
+
+            var formatRunId = $"format_story_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            _commandDispatcher.Enqueue(
+                "TransformStoryRawToTagged",
+                async ctx =>
+                {
+                    try
+                    {
+                        var cmd = new TransformStoryRawToTaggedCommand(
+                            storyId,
+                            _database,
+                            _kernelFactory,
+                            storiesService: this,
+                            logger: _customLogger,
+                            commandDispatcher: _commandDispatcher);
+
+                        return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
+                    }
+                    catch (Exception ex)
+                    {
+                        return new CommandResult(false, ex.Message);
+                    }
+                },
+                runId: formatRunId,
+                threadScope: "story/format",
+                metadata: new Dictionary<string, string>
+                {
+                    ["storyId"] = storyId.ToString(),
+                    ["operation"] = "format_story_auto",
+                    ["trigger"] = "evaluation_saved",
+                    ["evaluationCount"] = count.ToString(),
+                    ["evaluationAvg"] = average.ToString("F2")
+                },
+                priority: 2);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Auto-format enqueue failed for story {StoryId}", storyId);
+        }
+    }
     private static string NormalizeEvaluatorOutput(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
@@ -841,6 +915,32 @@ public sealed class StoriesService
     /// </summary>
     public async Task<(bool success, string? error)> GenerateTtsForStoryAsync(long storyId, string folderName, string? dispatcherRunId = null)
     {
+        // Back-compat overload. Prefer using the storyId-only overload.
+        if (string.IsNullOrWhiteSpace(folderName))
+            return (false, "Folder name is required");
+
+        return await GenerateTtsForStoryInternalAsync(storyId, folderName, dispatcherRunId, targetStatusId: null);
+    }
+
+    /// <summary>
+    /// Generates TTS audio for a story, resolving the folder from the story record.
+    /// If dispatcherRunId is provided, progress will be reported to the CommandDispatcher.
+    /// </summary>
+    public async Task<(bool success, string? error)> GenerateTtsForStoryByIdAsync(long storyId, string? dispatcherRunId = null)
+    {
+        var story = GetStoryById(storyId);
+        if (story == null)
+            return (false, "Story not found");
+
+        var folderName = !string.IsNullOrWhiteSpace(story.Folder)
+            ? story.Folder
+            : new DirectoryInfo(EnsureStoryFolder(story)).Name;
+
+        return await GenerateTtsForStoryInternalAsync(storyId, folderName, dispatcherRunId, targetStatusId: null);
+    }
+
+    private async Task<(bool success, string? error)> GenerateTtsForStoryInternalAsync(long storyId, string folderName, string? dispatcherRunId, int? targetStatusId)
+    {
         if (string.IsNullOrWhiteSpace(folderName))
             return (false, "Folder name is required");
 
@@ -852,7 +952,7 @@ public sealed class StoriesService
         var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", folderName);
         Directory.CreateDirectory(folderPath);
 
-        var context = new StoryCommandContext(story, folderPath, null);
+        var context = new StoryCommandContext(story, folderPath, targetStatusId.HasValue ? new StoryStatus { Id = targetStatusId.Value } : null);
 
         var deleteCmd = new DeleteTtsCommand(this);
         var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
@@ -864,10 +964,532 @@ public sealed class StoriesService
         // Run synchronously when dispatcherRunId is provided so we can report progress
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
-            return await GenerateTtsAudioWithProgressAsync(context, dispatcherRunId);
+            var result = await GenerateTtsAudioWithProgressAsync(context, dispatcherRunId);
+            if (result.success && targetStatusId.HasValue)
+            {
+                try
+                {
+                    _database.UpdateStoryById(storyId, statusId: targetStatusId.Value, updateStatus: true);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Failed to update story {Id} to status {StatusId}", storyId, targetStatusId.Value);
+                }
+            }
+            return result;
         }
+
         var (success, message) = await StartTtsAudioGenerationAsync(context);
         return (success, message);
+    }
+
+    public string? EnqueueGenerateTtsAudioCommand(long storyId, string trigger, int priority = 3)
+        => EnqueueGenerateTtsAudioCommandInternal(storyId, trigger, priority, targetStatusId: null);
+
+    private string? EnqueueGenerateTtsAudioCommandInternal(long storyId, string trigger, int priority, int? targetStatusId)
+    {
+        try
+        {
+            if (storyId <= 0) return null;
+            if (_commandDispatcher == null) return null;
+
+            var story = GetStoryById(storyId);
+            if (story == null) return null;
+
+            var folderName = !string.IsNullOrWhiteSpace(story.Folder)
+                ? story.Folder
+                : new DirectoryInfo(EnsureStoryFolder(story)).Name;
+
+            // De-dup: don't enqueue if already queued/running.
+            try
+            {
+                var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                    s.Metadata != null &&
+                    s.Metadata.TryGetValue("storyId", out var sid) &&
+                    string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                    (string.Equals(s.OperationName, "generate_tts_audio", StringComparison.OrdinalIgnoreCase) ||
+                     s.RunId.StartsWith($"generate_tts_audio_{storyId}_", StringComparison.OrdinalIgnoreCase)));
+
+                if (alreadyQueued) return null;
+            }
+            catch
+            {
+                // Best-effort: if snapshots fail, still allow enqueue.
+            }
+
+            var runId = $"generate_tts_audio_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            _commandDispatcher.Enqueue(
+                "generate_tts_audio",
+                async ctx =>
+                {
+                    var (ok, err) = await GenerateTtsForStoryInternalAsync(storyId, folderName, ctx.RunId, targetStatusId);
+                    if (ok)
+                    {
+                        // Requirement: if TTS audio generation succeeds, enqueue music/ambience/fx individually with lower priority.
+                        EnqueuePostTtsAudioFollowups(storyId, trigger: "tts_audio_generated", priority: Math.Max(priority + 1, 4));
+                    }
+
+                    return new CommandResult(ok, ok ? "Generazione audio TTS completata." : err);
+                },
+                runId: runId,
+                threadScope: "story/tts_audio",
+                metadata: new Dictionary<string, string>
+                {
+                    ["storyId"] = storyId.ToString(),
+                    ["operation"] = "generate_tts_audio",
+                    ["trigger"] = trigger,
+                    ["folder"] = folderName,
+                    ["targetStatusId"] = targetStatusId?.ToString() ?? string.Empty
+                },
+                priority: priority);
+
+            return runId;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to enqueue generate_tts_audio for story {StoryId}", storyId);
+        }
+
+        return null;
+    }
+
+    public void EnqueuePostTtsAudioFollowups(long storyId, string trigger, int priority = 4)
+    {
+        try
+        {
+            if (storyId <= 0) return;
+            if (_commandDispatcher == null) return;
+
+            var story = GetStoryById(storyId);
+            if (story == null) return;
+
+            var folderName = !string.IsNullOrWhiteSpace(story.Folder)
+                ? story.Folder
+                : new DirectoryInfo(EnsureStoryFolder(story)).Name;
+
+            void EnqueueIfNotQueued(string operationName, string runPrefix, Func<CommandContext, Task<CommandResult>> handler)
+            {
+                try
+                {
+                    var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                        s.Metadata != null &&
+                        s.Metadata.TryGetValue("storyId", out var sid) &&
+                        string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                        (string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase) ||
+                         s.RunId.StartsWith(runPrefix, StringComparison.OrdinalIgnoreCase)));
+
+                    if (alreadyQueued) return;
+                }
+                catch
+                {
+                    // If snapshots fail, still try to enqueue.
+                }
+
+                var runId = $"{runPrefix}{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                _commandDispatcher.Enqueue(
+                    operationName,
+                    handler,
+                    runId: runId,
+                    threadScope: $"story/{operationName}",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["storyId"] = storyId.ToString(),
+                        ["operation"] = operationName,
+                        ["trigger"] = trigger,
+                        ["folder"] = folderName
+                    },
+                    priority: priority);
+            }
+
+            EnqueueIfNotQueued(
+                "generate_music",
+                $"generate_music_{storyId}_",
+                async ctx =>
+                {
+                    var (ok, err) = await GenerateMusicForStoryAsync(storyId, folderName, ctx.RunId);
+                    return new CommandResult(ok, ok ? "Generazione musica completata." : err);
+                });
+
+            EnqueueIfNotQueued(
+                "generate_ambience_audio",
+                $"generate_ambience_audio_{storyId}_",
+                async ctx =>
+                {
+                    var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
+                    return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
+                });
+
+            EnqueueIfNotQueued(
+                "generate_fx_audio",
+                $"generate_fx_audio_{storyId}_",
+                async ctx =>
+                {
+                    var (ok, err) = await GenerateFxForStoryAsync(storyId, folderName, ctx.RunId);
+                    return new CommandResult(ok, ok ? "Generazione effetti sonori completata." : err);
+                });
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to enqueue post-TTS followups for story {StoryId}", storyId);
+        }
+    }
+
+    public string? EnqueueReviseStoryCommand(long storyId, string trigger, int priority = 2, bool force = false)
+    {
+        try
+        {
+            if (storyId <= 0) return null;
+            if (_commandDispatcher == null) return null;
+
+            // De-dup (optional): skip if already queued/running unless force=true.
+            if (!force)
+            {
+                try
+                {
+                    var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                        s.Metadata != null &&
+                        s.Metadata.TryGetValue("storyId", out var sid) &&
+                        string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                        (string.Equals(s.OperationName, "revise_story", StringComparison.OrdinalIgnoreCase) ||
+                         s.RunId.StartsWith($"revise_story_{storyId}_", StringComparison.OrdinalIgnoreCase)));
+                    if (alreadyQueued) return null;
+                }
+                catch
+                {
+                    // best-effort
+                }
+            }
+
+            var runId = $"revise_story_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            _commandDispatcher.Enqueue(
+                "revise_story",
+                async ctx =>
+                {
+                    try
+                    {
+                        var story = GetStoryById(storyId);
+                        if (story == null)
+                        {
+                            return new CommandResult(false, "Story not found");
+                        }
+
+                        var raw = story.StoryRaw ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(raw))
+                        {
+                            return new CommandResult(false, "Story raw is empty");
+                        }
+
+                        var revisor = _database.ListAgents()
+                            .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                                        a.Role.Equals("revisor", StringComparison.OrdinalIgnoreCase))
+                            .OrderBy(a => a.Id)
+                            .FirstOrDefault();
+
+                        // If no revisor available, fall back to raw -> revised so the pipeline can continue.
+                        if (revisor == null)
+                        {
+                            _database.UpdateStoryRevised(storyId, raw);
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped", priority: Math.Max(priority + 1, 3));
+                            return new CommandResult(true, "No revisor configured: copied raw to story_revised and enqueued evaluations.");
+                        }
+
+                        if (!revisor.ModelId.HasValue)
+                        {
+                            _database.UpdateStoryRevised(storyId, raw);
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model", priority: Math.Max(priority + 1, 3));
+                            return new CommandResult(true, "Revisor has no model: copied raw to story_revised and enqueued evaluations.");
+                        }
+
+                        var modelInfo = _database.GetModelInfoById(revisor.ModelId.Value);
+                        if (string.IsNullOrWhiteSpace(modelInfo?.Name))
+                        {
+                            _database.UpdateStoryRevised(storyId, raw);
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model_name", priority: Math.Max(priority + 1, 3));
+                            return new CommandResult(true, "Revisor model not found: copied raw to story_revised and enqueued evaluations.");
+                        }
+
+                        if (_kernelFactory == null)
+                        {
+                            return new CommandResult(false, "Kernel factory non disponibile");
+                        }
+
+                        var systemPrompt = (revisor.Prompt ?? string.Empty).Trim();
+                        if (string.IsNullOrWhiteSpace(systemPrompt))
+                        {
+                            _database.UpdateStoryRevised(storyId, raw);
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_empty_prompt", priority: Math.Max(priority + 1, 3));
+                            return new CommandResult(true, "Revisor prompt empty: copied raw to story_revised and enqueued evaluations.");
+                        }
+
+                        var bridge = _kernelFactory.CreateChatBridge(
+                            modelInfo.Name,
+                            revisor.Temperature,
+                            revisor.TopP,
+                            revisor.RepeatPenalty,
+                            revisor.TopK,
+                            revisor.RepeatLastN,
+                            revisor.NumPredict);
+
+                        // Use smaller chunks for the revisor to reduce repetition risk and improve responsiveness.
+                        // Prepare all chunks up-front and validate we are not losing/skipping text.
+                        var chunks = SplitIntoRevisionChunks(raw, approxChunkChars: 1000);
+                        if (chunks.Count == 0)
+                        {
+                            return new CommandResult(false, "Revision chunking produced zero chunks");
+                        }
+
+                        // Sanity check: total chunk sizes (core + trailing separators) should match the normalized input length.
+                        // Note: SplitIntoRevisionChunks normalizes CRLF -> LF internally, so compare to the same normalization.
+                        var normalizedRaw = raw.Replace("\r\n", "\n");
+                        var totalCore = chunks.Sum(c => c.Text.Length);
+                        var totalSep = chunks.Sum(c => c.TrailingSeparator?.Length ?? 0);
+                        var totalChunkChars = totalCore + totalSep;
+                        var diff = Math.Abs(totalChunkChars - normalizedRaw.Length);
+
+                        // Allow a small tolerance (defensive). If it's large, something is wrong and we should stop.
+                        if (diff > 64)
+                        {
+                            _customLogger?.Append(runId,
+                                $"[story {storyId}] Revision chunking size mismatch: normalizedRawLen={normalizedRaw.Length}, totalChunkChars={totalChunkChars}, diff={diff}. Aborting revision to avoid loops.",
+                                "error");
+                            return new CommandResult(false, "Revision chunking mismatch; aborting");
+                        }
+                        else if (diff > 0)
+                        {
+                            _customLogger?.Append(runId,
+                                $"[story {storyId}] Revision chunking minor size mismatch: normalizedRawLen={normalizedRaw.Length}, totalChunkChars={totalChunkChars}, diff={diff}.",
+                                "warn");
+                        }
+                        var revisedBuilder = new StringBuilder(raw.Length + 256);
+
+                        var previousStart = -1;
+
+                        for (var i = 0; i < chunks.Count; i++)
+                        {
+                            ctx.CancellationToken.ThrowIfCancellationRequested();
+                            var chunk = chunks[i];
+
+                            // Safety: never send the same chunk twice in one run.
+                            if (chunk.Start <= previousStart)
+                            {
+                                _customLogger?.Append(runId, $"[story {storyId}] Revision chunk ordering issue: idx={i} start={chunk.Start} prevStart={previousStart}. Stopping to avoid duplicate chunks.", "warn");
+                                break;
+                            }
+                            previousStart = chunk.Start;
+
+                            try
+                            {
+                                _customLogger?.Append(runId, $"[story {storyId}] Revising chunk {i + 1}/{chunks.Count} start={chunk.Start} len={chunk.Text.Length}");
+                            }
+                            catch { }
+
+                            // Publish progress to the global "Comandi in esecuzione" panel.
+                            try
+                            {
+                                _commandDispatcher?.UpdateStep(ctx.RunId, i + 1, chunks.Count, $"chunk {i + 1}/{chunks.Count}");
+                            }
+                            catch { }
+
+                            // IMPORTANT: do not send any conversation history. Only (systemPrompt + current chunk).
+                            var systemPromptWithChunk = systemPrompt + $"\n\n(chunk: {i + 1}/{chunks.Count})";
+                            var messages = new List<ConversationMessage>
+                            {
+                                new ConversationMessage { Role = "system", Content = systemPromptWithChunk },
+                                new ConversationMessage { Role = "user", Content = chunk.Text }
+                            };
+
+                            var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ctx.CancellationToken);
+                            var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
+                            var revisedChunk = (textContent ?? string.Empty).Trim();
+                            if (string.IsNullOrWhiteSpace(revisedChunk))
+                            {
+                                // If the model returned nothing, fall back to original chunk.
+                                revisedChunk = chunk.Text;
+                            }
+
+                            revisedBuilder.Append(revisedChunk);
+
+                            // Preserve original chunk boundary whitespace (newline/space/etc.) so words don't get glued.
+                            if (!string.IsNullOrEmpty(chunk.TrailingSeparator) &&
+                                !revisedChunk.EndsWith(chunk.TrailingSeparator, StringComparison.Ordinal))
+                            {
+                                revisedBuilder.Append(chunk.TrailingSeparator);
+                            }
+                        }
+
+                        var revised = revisedBuilder.ToString();
+                        _database.UpdateStoryRevised(storyId, revised);
+
+                        // After revision, enqueue evaluations.
+                        EnqueueAutomaticStoryEvaluations(storyId, trigger: "revised_saved", priority: Math.Max(priority + 1, 3));
+
+                        return new CommandResult(true, "Story revised saved and evaluations enqueued.");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return new CommandResult(false, "Revision cancelled");
+                    }
+                    catch (Exception ex)
+                    {
+                        return new CommandResult(false, ex.Message);
+                    }
+                },
+                runId: runId,
+                threadScope: "story/revision",
+                metadata: new Dictionary<string, string>
+                {
+                    ["storyId"] = storyId.ToString(),
+                    ["operation"] = "revise_story",
+                    ["trigger"] = trigger
+                },
+                priority: priority);
+
+            return runId;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to enqueue revise_story for story {StoryId}", storyId);
+            return null;
+        }
+    }
+
+    private sealed record RevisionChunk(int Start, string Text, string TrailingSeparator);
+
+    private static List<RevisionChunk> SplitIntoRevisionChunks(string text, int approxChunkChars)
+    {
+        var result = new List<RevisionChunk>();
+        if (string.IsNullOrWhiteSpace(text)) return result;
+
+        var normalized = text.Replace("\r\n", "\n");
+        var i = 0;
+        while (i < normalized.Length)
+        {
+            var remaining = normalized.Length - i;
+            var take = Math.Min(approxChunkChars, remaining);
+            var end = i + take;
+
+            if (end >= normalized.Length)
+            {
+                // Last chunk: keep as-is.
+                var last = normalized.Substring(i, normalized.Length - i);
+                result.Add(new RevisionChunk(i, last, TrailingSeparator: string.Empty));
+                break;
+            }
+
+            // Prefer cutting at a newline within the window.
+            var cutPos = normalized.LastIndexOf('\n', end - 1, take);
+
+            // If no newline, prefer cutting on whitespace to avoid splitting words.
+            if (cutPos <= i)
+            {
+                cutPos = FindCutOnWhitespace(normalized, i, end);
+            }
+
+            if (cutPos <= i)
+            {
+                // As a last resort, cut at end (may split a long token, but avoids infinite loops).
+                var fallback = normalized.Substring(i, take);
+                result.Add(new RevisionChunk(i, fallback, TrailingSeparator: string.Empty));
+                i += take;
+                continue;
+            }
+
+            // Capture trailing whitespace (newline/space/etc.) as separator and strip it from the chunk text.
+            var separatorStart = cutPos;
+            var separatorLen = 0;
+            while (separatorStart + separatorLen < normalized.Length &&
+                   char.IsWhiteSpace(normalized[separatorStart + separatorLen]))
+            {
+                separatorLen++;
+
+                // Prevent pathological huge separators.
+                if (separatorLen >= 16) break;
+            }
+
+            var chunkCore = normalized.Substring(i, cutPos - i);
+            var trailing = separatorLen > 0
+                ? normalized.Substring(separatorStart, separatorLen)
+                : string.Empty;
+
+            result.Add(new RevisionChunk(i, chunkCore, TrailingSeparator: trailing));
+            i = separatorStart + separatorLen;
+        }
+
+        return result;
+    }
+
+    private static int FindCutOnWhitespace(string text, int start, int preferredEnd)
+    {
+        // Look backward for whitespace to cut cleanly.
+        for (var j = preferredEnd - 1; j > start; j--)
+        {
+            if (char.IsWhiteSpace(text[j])) return j;
+        }
+
+        // If none, look forward a bit for whitespace (avoid cutting a word if we're in the middle).
+        var forwardLimit = Math.Min(text.Length, preferredEnd + 256);
+        for (var j = preferredEnd; j < forwardLimit; j++)
+        {
+            if (char.IsWhiteSpace(text[j])) return j;
+        }
+
+        return -1;
+    }
+
+    private void EnqueueAutomaticStoryEvaluations(long storyId, string trigger, int priority)
+    {
+        try
+        {
+            if (storyId <= 0) return;
+            if (_commandDispatcher == null) return;
+
+            var evaluators = _database.ListAgents()
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
+                     a.Role.Equals("evaluator", StringComparison.OrdinalIgnoreCase) ||
+                     a.Role.Equals("writer_evaluator", StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(a => a.Id)
+                .ToList();
+
+            if (evaluators.Count == 0) return;
+
+            foreach (var evaluator in evaluators)
+            {
+                try
+                {
+                    var runId = $"evaluate_story_{storyId}_agent_{evaluator.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    var metadata = new Dictionary<string, string>
+                    {
+                        ["storyId"] = storyId.ToString(),
+                        ["agentId"] = evaluator.Id.ToString(),
+                        ["agentName"] = evaluator.Name ?? string.Empty,
+                        ["operation"] = "evaluate_story",
+                        ["trigger"] = trigger
+                    };
+
+                    _commandDispatcher.Enqueue(
+                        "evaluate_story",
+                        async ctx =>
+                        {
+                            var (success, score, error) = await EvaluateStoryWithAgentAsync(storyId, evaluator.Id);
+                            var msg = success ? $"Valutazione completata. Score: {score:F2}" : $"Valutazione fallita: {error}";
+                            return new CommandResult(success, msg);
+                        },
+                        runId: runId,
+                        threadScope: $"story/evaluate/agent_{evaluator.Id}",
+                        metadata: metadata,
+                        priority: priority);
+                }
+                catch
+                {
+                    // best-effort per-evaluator
+                }
+            }
+        }
+        catch
+        {
+            // best-effort
+        }
     }
 
     /// <summary>
@@ -2103,6 +2725,17 @@ public sealed class StoriesService
                     "TTS schema generato per storia {StoryId}: {Characters} personaggi, {Phrases} frasi",
                     story.Id, schema.Characters.Count, schema.Timeline.Count);
 
+                // Requirement: if tts_schema.json generation succeeds, enqueue TTS audio generation with lower priority.
+                // This is best-effort and never blocks the schema command.
+                try
+                {
+                    _service.EnqueueGenerateTtsAudioCommand(story.Id, trigger: "tts_schema_generated", priority: 3);
+                }
+                catch
+                {
+                    // ignore
+                }
+
                 return (true, $"Schema TTS generato: {schema.Characters.Count} personaggi, {schema.Timeline.Count} frasi");
             }
             catch (Exception ex)
@@ -3097,14 +3730,17 @@ public sealed class StoriesService
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
-            var deleteCmd = new DeleteTtsCommand(_service);
-            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
-            if (!cleanupOk)
-            {
-                return (false, cleanupMessage ?? "Impossibile cancellare i file TTS esistenti");
-            }
+            // Unify: always enqueue the dispatcher command (storyId only) instead of executing directly.
+            // Status transition is handled by the dispatcher handler via targetStatusId metadata.
+            var runId = _service.EnqueueGenerateTtsAudioCommandInternal(
+                context.Story.Id,
+                trigger: "status_transition",
+                priority: 3,
+                targetStatusId: context.TargetStatus?.Id);
 
-            return await _service.StartTtsAudioGenerationAsync(context);
+            return (runId != null, runId != null
+                ? $"Generazione audio TTS accodata (run {runId})."
+                : "Impossibile accodare la generazione audio TTS");
         }
     }
 
@@ -5869,71 +6505,37 @@ public sealed class StoriesService
     internal static class StoriesServiceDefaults
     {
         public const string EvaluatorTextProtocolInstructions =
-    @"Sei un valutatore narrativo tecnico, rigoroso e non compiacente.
+@"Sei un valutatore narrativo tecnico, rigoroso e non compiacente.
 
-    Riceverai il testo di una storia DIVISO IN CHUNK.
-    Il testo completo NON arriva in una sola volta.
-
-    ========================
-    FASE DI LETTURA (OBBLIGATORIA)
-    ========================
-
-    Per OGNI chunk di testo che ricevi:
-    - Devi LIMITARTI a leggerlo.
-    - NON devi valutare.
-    - NON devi commentare.
-    - NON devi trarre conclusioni.
-
-    La tua risposta DEVE essere SEMPRE ed ESCLUSIVAMENTE:
-
-    LEGGI
-
-    Questa regola vale anche se ritieni di aver già
-    capito l’andamento della storia.
-
-    ========================
-    FASE DI VALUTAZIONE (SOLO SU COMANDO)
-    ========================
-
-    La valutazione è CONSENTITA SOLO quando ricevi
-    esplicitamente il comando:
-
-    VALUTA
-
-    Solo in quel caso devi restituire la valutazione completa
-    nel formato seguente, senza aggiungere nulla prima o dopo.
+    Devi restituire la valutazione completa nel formato seguente, senza aggiungere nulla prima o dopo.
 
     Formato OBBLIGATORIO:
 
     Coerenza narrativa
     <numero da 1 a 5>
-    <breve spiegazione tecnica (1–2 frasi)>
+    <breve spiegazione tecnica (1-2 frasi)>
 
-    Originalità
+    Originalita
     <numero da 1 a 5>
-    <breve spiegazione tecnica (1–2 frasi)>
+    <breve spiegazione tecnica (1-2 frasi)>
 
     Impatto emotivo
     <numero da 1 a 5>
-    <breve spiegazione tecnica (1–2 frasi)>
+    <breve spiegazione tecnica (1-2 frasi)>
 
     Azione
     <numero da 1 a 5>
-    <breve spiegazione tecnica (1–2 frasi)>
+    <breve spiegazione tecnica (1-2 frasi)>
 
     ========================
     VINCOLI ASSOLUTI
     ========================
 
-    - NON valutare prima del comando VALUTA
     - NON riassumere la storia
     - NON suggerire miglioramenti
     - NON usare markup o elenchi
     - NON usare linguaggio morale o emotivo
-    - NON aggiungere spiegazioni fuori formato
-
-    Durante la lettura, l’unica risposta valida è:
-    LEGGI";
+    - NON aggiungere spiegazioni fuori formato";
         public static string GetDefaultTtsStructuredInstructions() => @"Leggi attentamente il testo del chunk e trascrivilo integralmente nel formato seguente, senza riassumere o saltare frasi, senza aggiungere note o testo extra.
 
 Usa SOLO queste sezioni ripetute nell'ordine del testo:

@@ -54,6 +54,47 @@
     </form>
 </div>
 
+<div class="note-card" style="max-width:900px; margin-bottom:18px">
+    <form id="seriesEpisodeForm">
+        @Html.AntiForgeryToken()
+        <h5 class="note-title" style="margin-bottom:10px">Genera episodio da serie</h5>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+            <div style="min-width:260px; flex:1;">
+                <label for="SeriesId" class="note-title">Serie</label>
+                <select id="SeriesId" name="SeriesId" class="keep-input" style="width:100%; padding:8px" required>
+                    @foreach (var s in Model.SeriesList)
+                    {
+                        <option value="@s.Id" selected="@(Model.SeriesId == s.Id ? "selected" : null)">@s.Titolo</option>
+                    }
+                </select>
+            </div>
+            <div style="min-width:220px; flex:1;">
+                <label for="EpisodeId" class="note-title">Episodio</label>
+                <select id="EpisodeId" name="EpisodeId" class="keep-input" style="width:100%; padding:8px" required></select>
+            </div>
+            <div style="min-width:260px; flex:1;">
+                <label for="SeriesWriterAgentId" class="note-title">Writer agent</label>
+                <select id="SeriesWriterAgentId" name="SeriesWriterAgentId" class="keep-input" style="width:100%; padding:8px" required>
+                    @foreach (var agent in Model.Agents)
+                    {
+                        <option value="@agent.Id" selected="@(Model.SeriesWriterAgentId == agent.Id ? "selected" : null)">
+                            @agent.Name
+                            @if (!string.IsNullOrEmpty(agent.MultiStepTemplateName))
+                            {
+                                <text> [Template: @agent.MultiStepTemplateName]</text>
+                            }
+                        </option>
+                    }
+                </select>
+            </div>
+        </div>
+        <div id="seriesEpisodeError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
+        <div style="display:flex; gap:8px;">
+            <button type="button" id="startSeriesEpisodeBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia episodio serie</button>
+        </div>
+    </form>
+</div>
+
 <hr />
 <h2>Stato generazione (live):</h2>
 <div id="statusArea">
@@ -62,8 +103,13 @@
 
 <script src="~/lib/signalr/signalr.min.js"></script>
 <script>
+    const seriesEpisodes = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.SeriesEpisodes));
     const startBtn = document.getElementById('startBtn');
     const statusPre = document.getElementById('statusPre');
+    const seriesIdSelect = document.getElementById('SeriesId');
+    const episodeIdSelect = document.getElementById('EpisodeId');
+    const startSeriesEpisodeBtn = document.getElementById('startSeriesEpisodeBtn');
+    const seriesEpisodeError = document.getElementById('seriesEpisodeError');
     let pollInterval = null;
     let connection = null;
 
@@ -205,6 +251,63 @@
         await loadHistory(id);
         await connectSignalRAndJoin(id);
     });
+
+    function renderEpisodeOptions() {
+        if (!seriesIdSelect || !episodeIdSelect) return;
+        const serieId = parseInt(seriesIdSelect.value || '0', 10);
+        episodeIdSelect.innerHTML = '';
+        const items = seriesEpisodes.filter(e => e.SerieId === serieId);
+        if (items.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Nessun episodio';
+            episodeIdSelect.appendChild(opt);
+            return;
+        }
+        items.forEach(ep => {
+            const opt = document.createElement('option');
+            opt.value = ep.Id;
+            const title = ep.Title ? ` - ${ep.Title}` : '';
+            opt.textContent = `Ep ${ep.Number}${title}`;
+            if (ep.Id === @Model.EpisodeId) opt.selected = true;
+            episodeIdSelect.appendChild(opt);
+        });
+    }
+
+    if (seriesIdSelect) {
+        seriesIdSelect.addEventListener('change', renderEpisodeOptions);
+        renderEpisodeOptions();
+    }
+
+    if (startSeriesEpisodeBtn) {
+        startSeriesEpisodeBtn.addEventListener('click', async () => {
+            if (seriesEpisodeError) {
+                seriesEpisodeError.textContent = '';
+                seriesEpisodeError.style.display = 'none';
+            }
+            clearMessages();
+            appendMessage('Avvio episodio serie...');
+
+            const form = document.getElementById('seriesEpisodeForm');
+            const fd = new FormData(form);
+            const res = await fetch('?handler=StartSeriesEpisode', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const text = await res.text();
+                if (seriesEpisodeError) {
+                    seriesEpisodeError.textContent = text;
+                    seriesEpisodeError.style.display = 'block';
+                }
+                appendMessage('Errore avvio: ' + text, 'error');
+                return;
+            }
+            const data = await res.json();
+            const id = data.id;
+            try { localStorage.setItem('lastGenId', id); } catch { }
+            appendMessage('Generazione episodio avviata. id: ' + id);
+            await loadHistory(id);
+            await connectSignalRAndJoin(id);
+        });
+    }
 
     // Full Pipeline button - generates with all writers, evaluates, selects best, runs full audio pipeline
     const fullPipelineBtn = document.getElementById('fullPipelineBtn');

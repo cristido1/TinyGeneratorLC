@@ -16,6 +16,9 @@
                     <button class="nav-link" id="storia-tab" data-bs-toggle="tab" data-bs-target="#storia-pane" type="button" role="tab" aria-controls="storia-pane" aria-selected="false">Storia</button>
                 </li>
                 <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="revised-tab" data-bs-toggle="tab" data-bs-target="#revised-pane" type="button" role="tab" aria-controls="revised-pane" aria-selected="false">Story revised</button>
+                </li>
+                <li class="nav-item" role="presentation">
                     <button class="nav-link" id="tagged-tab" data-bs-toggle="tab" data-bs-target="#tagged-pane" type="button" role="tab" aria-controls="tagged-pane" aria-selected="false">Story Tagged</button>
                 </li>
             </ul>
@@ -74,6 +77,12 @@
                     <div class="d-flex flex-column h-100">
                         <label class="form-label">Story raw</label>
                         <textarea class="form-control flex-grow-1 story-textarea" asp-for="StoryText"></textarea>
+                    </div>
+                </div>
+                <div class="tab-pane fade story-tab-pane" id="revised-pane" role="tabpanel" aria-labelledby="revised-tab">
+                    <div class="d-flex flex-column h-100">
+                        <label class="form-label">Story revised</label>
+                        <textarea class="form-control flex-grow-1 story-textarea" asp-for="StoryRevisedText"></textarea>
                     </div>
                 </div>
                 <div class="tab-pane fade story-tab-pane" id="tagged-pane" role="tabpanel" aria-labelledby="tagged-tab">

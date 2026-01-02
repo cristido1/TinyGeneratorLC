@@ -859,6 +859,39 @@ public sealed class DatabaseService
             .ToList();
     }
 
+    public SeriesEpisode? GetSeriesEpisodeById(int id)
+    {
+        using var context = CreateDbContext();
+        return context.SeriesEpisodes.Find(id);
+    }
+
+    public List<SeriesEpisode> ListSeriesEpisodes(int serieId)
+    {
+        using var context = CreateDbContext();
+        return context.SeriesEpisodes
+            .Where(e => e.SerieId == serieId)
+            .OrderBy(e => e.Number)
+            .ToList();
+    }
+
+    public List<SeriesEpisode> ListAllSeriesEpisodes()
+    {
+        using var context = CreateDbContext();
+        return context.SeriesEpisodes
+            .OrderBy(e => e.SerieId)
+            .ThenBy(e => e.Number)
+            .ToList();
+    }
+
+    public List<SeriesCharacter> ListSeriesCharacters(int serieId)
+    {
+        using var context = CreateDbContext();
+        return context.SeriesCharacters
+            .Where(c => c.SerieId == serieId)
+            .OrderBy(c => c.Name)
+            .ToList();
+    }
+
     public void IncrementSeriesEpisodeCount(int serieId)
     {
         using var context = CreateDbContext();
@@ -1843,6 +1876,18 @@ SET TotalScore = (
         return list;
     }
 
+    public (int count, double averageScore) GetStoryEvaluationStats(long storyId)
+    {
+        using var context = CreateDbContext();
+        var query = context.StoryEvaluations
+            .Where(e => e.StoryId == storyId)
+            .Select(e => e.TotalScore);
+
+        var count = query.Count();
+        var average = count > 0 ? query.Average() : 0.0;
+        return (count, average);
+    }
+
     public void DeleteStoryEvaluationById(long evaluationId)
     {
         using var context = CreateDbContext();
@@ -2106,7 +2151,7 @@ SET TotalScore = (
         return (step.RunId, asset.StepId);
     }
 
-    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null)
+    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, int? serieId = null, int? serieEpisode = null)
     {
         using var context = CreateDbContext();
         var ts = DateTime.UtcNow.ToString("o");
@@ -2131,6 +2176,7 @@ SET TotalScore = (
             Timestamp = ts,
             Prompt = prompt ?? string.Empty,
             StoryRaw = story ?? string.Empty,
+            StoryRevised = story ?? string.Empty,
             Title = title ?? string.Empty,
             CharCount = charCount,
             Eval = eval ?? string.Empty,
@@ -2139,7 +2185,9 @@ SET TotalScore = (
             StatusId = statusId ?? InitialStoryStatusId,
             Folder = null,
             ModelId = modelId,
-            AgentId = agentId
+            AgentId = agentId,
+            SerieId = serieId,
+            SerieEpisode = serieEpisode
         };
         context.Stories.Add(storyRecord);
         context.SaveChanges();
@@ -2168,7 +2216,7 @@ SET TotalScore = (
         return storyRecord.Id;
     }
 
-    public long InsertSingleStory(string prompt, string story, long? storyId, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null)
+    public long InsertSingleStory(string prompt, string story, long? storyId, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, int? serieId = null, int? serieEpisode = null)
     {
         using var context = CreateDbContext();
         var ts = DateTime.UtcNow.ToString("o");
@@ -2192,6 +2240,7 @@ SET TotalScore = (
             Timestamp = ts,
             Prompt = prompt ?? string.Empty,
             StoryRaw = story ?? string.Empty,
+            StoryRevised = story ?? string.Empty,
             Title = title ?? string.Empty,
             CharCount = charCount,
             Eval = eval ?? string.Empty,
@@ -2200,7 +2249,9 @@ SET TotalScore = (
             StatusId = statusId ?? InitialStoryStatusId,
             Folder = null,
             ModelId = modelId,
-            AgentId = agentId
+            AgentId = agentId,
+            SerieId = serieId,
+            SerieEpisode = serieEpisode
         };
 
         context.Stories.Add(storyRecord);
@@ -2226,6 +2277,17 @@ SET TotalScore = (
         }
 
         return storyRecord.Id;
+    }
+
+    public void UpdateStorySeriesInfo(long storyId, int? serieId, int? serieEpisode)
+    {
+        if (!serieId.HasValue && !serieEpisode.HasValue) return;
+        using var context = CreateDbContext();
+        var story = context.Stories.Find(storyId);
+        if (story == null) return;
+        story.SerieId = serieId;
+        story.SerieEpisode = serieEpisode;
+        context.SaveChanges();
     }
 
     public long GetMaxStoryId()
@@ -2343,6 +2405,16 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;", new { k = key.Trim(), v
             if (agentId.HasValue && !storyRecord.AgentId.HasValue) storyRecord.AgentId = agentId.Value;
         }
         if (updateStatus) storyRecord.StatusId = statusId;
+        context.SaveChanges();
+        return true;
+    }
+
+    public bool UpdateStoryRevised(long storyId, string storyRevised)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.StoryRevised = storyRevised ?? string.Empty;
         context.SaveChanges();
         return true;
     }
@@ -3000,6 +3072,21 @@ WHERE agent_id IS NOT NULL
     /// </summary>
     private void RunMigrations(IDbConnection conn)
     {
+        // Migration: add story_revised column to stories if missing
+        try
+        {
+            var hasStoryRevised = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='story_revised'") > 0;
+            if (!hasStoryRevised)
+            {
+                Console.WriteLine("[DB] Migration: adding story_revised column to stories");
+                conn.Execute("ALTER TABLE stories ADD COLUMN story_revised TEXT");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add story_revised to stories: {ex.Message}");
+        }
+
         // Migration: add Result column to Log if missing
         try
         {

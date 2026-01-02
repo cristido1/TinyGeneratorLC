@@ -2,6 +2,7 @@
 @model TinyGenerator.Pages.Series.EditModel
 @{
     ViewData["Title"] = Model.IsEditMode ? "Modifica Serie" : "Crea Serie";
+    var activeTab = Model.ActiveTab ?? "series";
 }
 
 <div class="alert alert-info">
@@ -10,178 +11,495 @@
         <li><strong>Filtraggio/Catalogo:</strong> brevi, per cercare e classificare (Titolo, Genere, Periodo, Tono, Target, Lingua)</li>
         <li><strong>Generazione Episodi:</strong> testuali e strutturati, passati al writer AI (Ambientazione Base, Premessa, Arco Narrativo, Stile, Regole, Note AI)</li>
     </ul>
-    <p class="mt-2 mb-0"><em>Personaggi ed eventi specifici vanno negli Episodi, non nella Serie.</em></p>
+    <p class="mt-2 mb-0"><em>I personaggi principali possono essere gestiti nella sezione dedicata piu sotto.</em></p>
 </div>
 
-<form method="post">
-    <input type="hidden" asp-for="SeriesItem.Id" />
-    
-    <!-- SEZIONE 1: CAMPI DI FILTRAGGIO / CATALOGO -->
-    <h4 class="mt-4 mb-3 text-primary">ðŸ“‹ Campi di Filtraggio / Catalogo</h4>
-    
-    <div class="row mb-3">
-        <div class="col-md-12">
-            <label asp-for="SeriesItem.Titolo" class="form-label">
-                Titolo <span class="text-danger">*</span>
-                <small class="text-muted">(es. "Frontiera di Cenere", "Il Sale e il Ferro")</small>
-            </label>
-            <input asp-for="SeriesItem.Titolo" class="form-control" maxlength="200" required />
-            <span asp-validation-for="SeriesItem.Titolo" class="text-danger"></span>
-        </div>
+@if (TempData["ErrorMessage"] != null)
+{
+    <div class="alert alert-danger">@TempData["ErrorMessage"]</div>
+}
+@if (TempData["StatusMessage"] != null)
+{
+    <div class="alert alert-success">@TempData["StatusMessage"]</div>
+}
+
+<ul class="nav nav-tabs" id="seriesTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link @(activeTab == "series" ? "active" : "")" id="tab-series-btn" data-bs-toggle="tab" data-bs-target="#tab-series" type="button" role="tab" aria-controls="tab-series" aria-selected="@(activeTab == "series")">Serie</button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link @(activeTab == "characters" ? "active" : "")" id="tab-characters-btn" data-bs-toggle="tab" data-bs-target="#tab-characters" type="button" role="tab" aria-controls="tab-characters" aria-selected="@(activeTab == "characters")" @(Model.IsEditMode ? "" : "disabled")>Personaggi</button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link @(activeTab == "episodes" ? "active" : "")" id="tab-episodes-btn" data-bs-toggle="tab" data-bs-target="#tab-episodes" type="button" role="tab" aria-controls="tab-episodes" aria-selected="@(activeTab == "episodes")" @(Model.IsEditMode ? "" : "disabled")>Episodi</button>
+    </li>
+</ul>
+
+<div class="tab-content pt-3" id="seriesTabsContent">
+    <div class="tab-pane fade @(activeTab == "series" ? "show active" : "")" id="tab-series" role="tabpanel" aria-labelledby="tab-series-btn">
+        <form method="post">
+            <input type="hidden" asp-for="SeriesItem.Id" />
+            
+            <!-- SEZIONE 1: CAMPI DI FILTRAGGIO / CATALOGO -->
+            <h4 class="mt-4 mb-3 text-primary">ÐY"< Campi di Filtraggio / Catalogo</h4>
+            
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <label asp-for="SeriesItem.Titolo" class="form-label">
+                        Titolo <span class="text-danger">*</span>
+                        <small class="text-muted">(es. "Frontiera di Cenere", "Il Sale e il Ferro")</small>
+                    </label>
+                    <input asp-for="SeriesItem.Titolo" class="form-control" maxlength="200" required />
+                    <span asp-validation-for="SeriesItem.Titolo" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <label asp-for="SeriesItem.Genere" class="form-label">
+                        Genere
+                        <small class="text-muted">(es. Fantascienza, Storico, Fantasy)</small>
+                    </label>
+                    <input asp-for="SeriesItem.Genere" class="form-control" maxlength="100" />
+                    <span asp-validation-for="SeriesItem.Genere" class="text-danger"></span>
+                </div>
+                <div class="col-md-4">
+                    <label asp-for="SeriesItem.Sottogenere" class="form-label">
+                        Sottogenere
+                        <small class="text-muted">(es. Militare, Dramma, Space Opera)</small>
+                    </label>
+                    <input asp-for="SeriesItem.Sottogenere" class="form-control" maxlength="100" />
+                    <span asp-validation-for="SeriesItem.Sottogenere" class="text-danger"></span>
+                </div>
+                <div class="col-md-4">
+                    <label asp-for="SeriesItem.PeriodoNarrativo" class="form-label">
+                        Periodo Narrativo
+                        <small class="text-muted">(es. Futuro lontano, Medioevo, Età moderna)</small>
+                    </label>
+                    <input asp-for="SeriesItem.PeriodoNarrativo" class="form-control" maxlength="100" />
+                    <span asp-validation-for="SeriesItem.PeriodoNarrativo" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <label asp-for="SeriesItem.TonoBase" class="form-label">
+                        Tono Base
+                        <small class="text-muted">(es. Cupo, Realistico, Avventuroso)</small>
+                    </label>
+                    <input asp-for="SeriesItem.TonoBase" class="form-control" maxlength="100" />
+                    <span asp-validation-for="SeriesItem.TonoBase" class="text-danger"></span>
+                </div>
+                <div class="col-md-4">
+                    <label asp-for="SeriesItem.Target" class="form-label">
+                        Target
+                        <small class="text-muted">(es. Adulto, Young Adult)</small>
+                    </label>
+                    <input asp-for="SeriesItem.Target" class="form-control" maxlength="50" />
+                    <span asp-validation-for="SeriesItem.Target" class="text-danger"></span>
+                </div>
+                <div class="col-md-4">
+                    <label asp-for="SeriesItem.Lingua" class="form-label">
+                        Lingua
+                        <small class="text-muted">(es. Italiano, English)</small>
+                    </label>
+                    <input asp-for="SeriesItem.Lingua" class="form-control" maxlength="50" value="Italiano" />
+                    <span asp-validation-for="SeriesItem.Lingua" class="text-danger"></span>
+                </div>
+            </div>
+
+            <!-- SEZIONE 2: CAMPI PER GENERAZIONE EPISODI -->
+            <h4 class="mt-5 mb-3 text-success">ÐYÏ- Campi per Generazione Episodi (Prompt Writer)</h4>
+            <p class="text-muted mb-3">Questi campi vengono passati al writer AI per generare ogni episodio. Devono essere stabili e non cambiare tra episodi.</p>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <label asp-for="SeriesItem.AmbientazioneBase" class="form-label">
+                        Ambientazione Base
+                        <small class="text-muted d-block">Contiene SOLO elementi stabili del mondo (periodo, tecnologia, società, politica). NON inserire personaggi o eventi specifici.</small>
+                    </label>
+                    <textarea asp-for="SeriesItem.AmbientazioneBase" class="form-control font-monospace" rows="8" 
+                              placeholder="Esempio:&#10;Periodo: anno 3050&#10;Umanità:&#10;- Civiltà interstellare attiva&#10;- Motore FTL disponibile da circa 100 anni&#10;Tecnologia:&#10;- Viaggi FTL affidabili ma costosi&#10;- Armi avanzate con limiti fisici credibili"></textarea>
+                    <span asp-validation-for="SeriesItem.AmbientazioneBase" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <label asp-for="SeriesItem.PremessaSerie" class="form-label">
+                        Premessa Serie
+                        <small class="text-muted d-block">Il concetto centrale della serie, la sua "filosofia" di base.</small>
+                    </label>
+                    <textarea asp-for="SeriesItem.PremessaSerie" class="form-control" rows="3"
+                              placeholder="Esempio: L'umanità ha conquistato le stelle ma ha perso l'illusione di essere invincibile. Ogni espansione porta nuovi conflitti e dilemmi morali."></textarea>
+                    <span asp-validation-for="SeriesItem.PremessaSerie" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <label asp-for="SeriesItem.ArcoNarrativoSerie" class="form-label">
+                        Arco Narrativo Serie
+                        <small class="text-muted d-block">La direzione complessiva della storia attraverso tutti gli episodi.</small>
+                    </label>
+                    <textarea asp-for="SeriesItem.ArcoNarrativoSerie" class="form-control" rows="3"
+                              placeholder="Esempio: Dal periodo di espansione fiduciosa alla scoperta di una minaccia sistemica che mette in crisi la sopravvivenza della civiltà umana."></textarea>
+                    <span asp-validation-for="SeriesItem.ArcoNarrativoSerie" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <label asp-for="SeriesItem.StileScrittura" class="form-label">
+                        Stile Scrittura
+                        <small class="text-muted d-block">Indicazioni su tono narrativo, ritmo, dialoghi, descrizioni.</small>
+                    </label>
+                    <textarea asp-for="SeriesItem.StileScrittura" class="form-control" rows="3"
+                              placeholder="Esempio: Tecnico ma leggibile, dialoghi asciutti, attenzione alla vita di bordo, niente eroismi gratuiti."></textarea>
+                    <span asp-validation-for="SeriesItem.StileScrittura" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <label asp-for="SeriesItem.RegoleNarrative" class="form-label">
+                        Regole Narrative
+                        <small class="text-muted d-block">Vincoli e limiti per mantenere coerenza (es. "niente tecnologia magica", "ogni decisione ha conseguenze").</small>
+                    </label>
+                    <textarea asp-for="SeriesItem.RegoleNarrative" class="form-control" rows="4"
+                              placeholder="Esempio:&#10;- Niente tecnologia magica&#10;- Ogni decisione ha conseguenze&#10;- Niente distruzione gratuita di pianeti abitati"></textarea>
+                    <span asp-validation-for="SeriesItem.RegoleNarrative" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <label asp-for="SeriesItem.NoteAI" class="form-label">
+                        Note AI (Campo Jolly)
+                        <small class="text-muted d-block">Istruzioni temporanee o sperimentali per il writer AI.</small>
+                    </label>
+                    <textarea asp-for="SeriesItem.NoteAI" class="form-control" rows="2"
+                              placeholder="Esempio: Privilegiare tensione psicologica rispetto all'azione continua."></textarea>
+                    <span asp-validation-for="SeriesItem.NoteAI" class="text-danger"></span>
+                </div>
+            </div>
+
+            <!-- SEZIONE 3: METADATI -->
+            <h4 class="mt-5 mb-3 text-secondary">ÐY"S Metadati</h4>
+            
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label asp-for="SeriesItem.EpisodiGenerati" class="form-label">Episodi Generati</label>
+                    <input asp-for="SeriesItem.EpisodiGenerati" type="number" class="form-control" min="0" />
+                    <span asp-validation-for="SeriesItem.EpisodiGenerati" class="text-danger"></span>
+                </div>
+                <div class="col-md-6">
+                    <label asp-for="SeriesItem.DataInserimento" class="form-label">Data Inserimento</label>
+                    <input asp-for="SeriesItem.DataInserimento" type="datetime-local" class="form-control" />
+                    <span asp-validation-for="SeriesItem.DataInserimento" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <button type="submit" class="btn btn-primary btn-lg">ÐY'ó Salva Serie</button>
+                <a class="btn btn-secondary btn-lg" asp-page="./Index">Annulla</a>
+            </div>
+        </form>
     </div>
 
-    <div class="row mb-3">
-        <div class="col-md-4">
-            <label asp-for="SeriesItem.Genere" class="form-label">
-                Genere
-                <small class="text-muted">(es. Fantascienza, Storico, Fantasy)</small>
-            </label>
-            <input asp-for="SeriesItem.Genere" class="form-control" maxlength="100" />
-            <span asp-validation-for="SeriesItem.Genere" class="text-danger"></span>
-        </div>
-        <div class="col-md-4">
-            <label asp-for="SeriesItem.Sottogenere" class="form-label">
-                Sottogenere
-                <small class="text-muted">(es. Militare, Dramma, Space Opera)</small>
-            </label>
-            <input asp-for="SeriesItem.Sottogenere" class="form-control" maxlength="100" />
-            <span asp-validation-for="SeriesItem.Sottogenere" class="text-danger"></span>
-        </div>
-        <div class="col-md-4">
-            <label asp-for="SeriesItem.PeriodoNarrativo" class="form-label">
-                Periodo Narrativo
-                <small class="text-muted">(es. Futuro lontano, Medioevo, EtÃ  moderna)</small>
-            </label>
-            <input asp-for="SeriesItem.PeriodoNarrativo" class="form-control" maxlength="100" />
-            <span asp-validation-for="SeriesItem.PeriodoNarrativo" class="text-danger"></span>
-        </div>
+    <div class="tab-pane fade @(activeTab == "characters" ? "show active" : "")" id="tab-characters" role="tabpanel" aria-labelledby="tab-characters-btn">
+        @if (Model.IsEditMode)
+        {
+            <h4 class="mb-3 text-primary">Personaggi Serie</h4>
+            <p class="text-muted">Gestisci i personaggi ricorrenti della serie.</p>
+            <div asp-validation-summary="All" class="text-danger"></div>
+
+            <form method="post" asp-page-handler="AssignCharacterVoices" class="card p-3 mb-4">
+                <input type="hidden" name="seriesId" value="@Model.SeriesItem.Id" />
+                <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2">
+                    <div>
+                        <div class="fw-semibold">Assegnazione automatica voci</div>
+                        <div class="text-muted small">Usa solo voci non narratore, abbina per genere e evita duplicati nella serie.</div>
+                    </div>
+                    <button type="submit" class="btn btn-outline-secondary" onclick="return confirm('Assegnare automaticamente le voci ai personaggi senza voce?');">Assegna voci automaticamente</button>
+                </div>
+            </form>
+
+            <form method="post" asp-page-handler="AddCharacter" enctype="multipart/form-data" class="card p-3 mb-4">
+                <input type="hidden" name="CharacterInput.SerieId" value="@Model.SeriesItem.Id" />
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Nome</label>
+                        <input name="CharacterInput.Name" class="form-control" maxlength="200" required />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Genere</label>
+                        <select name="CharacterInput.Gender" class="form-select" required>
+                            <option value="male">male</option>
+                            <option value="female">female</option>
+                            <option value="alien">alien</option>
+                            <option value="robot">robot</option>
+                            <option value="other" selected>other</option>
+                        </select>
+                    </div>
+                    <div class="col-md-5">
+                        <label class="form-label">Voce TTS</label>
+                        <select name="CharacterInput.VoiceId" class="form-select">
+                            <option value="">-</option>
+                            @foreach (var v in Model.Voices)
+                            {
+                                var label = string.IsNullOrWhiteSpace(v.Name) ? v.VoiceId : $"{v.Name} ({v.VoiceId})";
+                                <option value="@v.Id">@label</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Descrizione</label>
+                        <textarea name="CharacterInput.Description" class="form-control" rows="2"></textarea>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Eta</label>
+                        <input name="CharacterInput.Eta" class="form-control" maxlength="50" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Formazione</label>
+                        <input name="CharacterInput.Formazione" class="form-control" maxlength="200" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Specializzazione</label>
+                        <input name="CharacterInput.Specializzazione" class="form-control" maxlength="200" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Profilo</label>
+                        <textarea name="CharacterInput.Profilo" class="form-control" rows="2"></textarea>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Conflitto Interno</label>
+                        <textarea name="CharacterInput.ConflittoInterno" class="form-control" rows="2"></textarea>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Episodio In</label>
+                        <input name="CharacterInput.EpisodeIn" type="number" class="form-control" min="0" />
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Episodio Out</label>
+                        <input name="CharacterInput.EpisodeOut" type="number" class="form-control" min="0" />
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Immagine</label>
+                        <input type="file" name="CharacterImage" class="form-control" accept=".jpg,.jpeg,.png,.gif,.webp" />
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button type="submit" class="btn btn-outline-primary">Aggiungi Personaggio</button>
+                </div>
+            </form>
+
+            @if (Model.SeriesCharacters.Any())
+            {
+                @foreach (var c in Model.SeriesCharacters)
+                {
+                    <form method="post" asp-page-handler="UpdateCharacter" enctype="multipart/form-data" class="card mb-3 p-3">
+                        <input type="hidden" name="CharacterInput.Id" value="@c.Id" />
+                        <input type="hidden" name="CharacterInput.SerieId" value="@c.SerieId" />
+                        <div class="row g-3 align-items-start">
+                            <div class="col-md-2">
+                                @if (!string.IsNullOrWhiteSpace(c.Image))
+                                {
+                                    <img src="@c.Image" alt="Immagine personaggio" class="img-thumbnail" style="max-height:120px;" />
+                                }
+                                else
+                                {
+                                    <div class="text-muted small">Nessuna immagine</div>
+                                }
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Nome</label>
+                                <input name="CharacterInput.Name" class="form-control" maxlength="200" value="@c.Name" required />
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Genere</label>
+                                <select name="CharacterInput.Gender" class="form-select" required>
+                                    <option value="male" selected="@(c.Gender == "male" ? "selected" : null)">male</option>
+                                    <option value="female" selected="@(c.Gender == "female" ? "selected" : null)">female</option>
+                                    <option value="alien" selected="@(c.Gender == "alien" ? "selected" : null)">alien</option>
+                                    <option value="robot" selected="@(c.Gender == "robot" ? "selected" : null)">robot</option>
+                                    <option value="other" selected="@(c.Gender == "other" ? "selected" : null)">other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Voce TTS</label>
+                                <select name="CharacterInput.VoiceId" class="form-select">
+                                    <option value="">-</option>
+                                    @foreach (var v in Model.Voices)
+                                    {
+                                        var label = string.IsNullOrWhiteSpace(v.Name) ? v.VoiceId : $"{v.Name} ({v.VoiceId})";
+                                        <option value="@v.Id" selected="@(c.VoiceId == v.Id ? "selected" : null)">@label</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Descrizione</label>
+                                <textarea name="CharacterInput.Description" class="form-control" rows="2">@c.Description</textarea>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Eta</label>
+                                <input name="CharacterInput.Eta" class="form-control" maxlength="50" value="@c.Eta" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Formazione</label>
+                                <input name="CharacterInput.Formazione" class="form-control" maxlength="200" value="@c.Formazione" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Specializzazione</label>
+                                <input name="CharacterInput.Specializzazione" class="form-control" maxlength="200" value="@c.Specializzazione" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Profilo</label>
+                                <textarea name="CharacterInput.Profilo" class="form-control" rows="2">@c.Profilo</textarea>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Conflitto Interno</label>
+                                <textarea name="CharacterInput.ConflittoInterno" class="form-control" rows="2">@c.ConflittoInterno</textarea>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Episodio In</label>
+                                <input name="CharacterInput.EpisodeIn" type="number" class="form-control" min="0" value="@c.EpisodeIn" />
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Episodio Out</label>
+                                <input name="CharacterInput.EpisodeOut" type="number" class="form-control" min="0" value="@c.EpisodeOut" />
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Immagine</label>
+                                <input type="file" name="CharacterImage" class="form-control" accept=".jpg,.jpeg,.png,.gif,.webp" />
+                            </div>
+                        </div>
+                        <div class="mt-3 d-flex gap-2">
+                            <button type="submit" class="btn btn-outline-primary">Aggiorna</button>
+                            <button type="submit" class="btn btn-outline-danger"
+                                    formaction="?handler=DeleteCharacter&id=@c.Id&seriesId=@c.SerieId" formmethod="post"
+                                    onclick="return confirm('Vuoi eliminare questo personaggio?');">
+                                Elimina
+                            </button>
+                        </div>
+                    </form>
+                }
+            }
+            else
+            {
+                <div class="text-muted">Nessun personaggio presente.</div>
+            }
+        }
+        else
+        {
+            <div class="alert alert-warning">Salva la serie per aggiungere personaggi.</div>
+        }
     </div>
 
-    <div class="row mb-3">
-        <div class="col-md-4">
-            <label asp-for="SeriesItem.TonoBase" class="form-label">
-                Tono Base
-                <small class="text-muted">(es. Cupo, Realistico, Avventuroso)</small>
-            </label>
-            <input asp-for="SeriesItem.TonoBase" class="form-control" maxlength="100" />
-            <span asp-validation-for="SeriesItem.TonoBase" class="text-danger"></span>
-        </div>
-        <div class="col-md-4">
-            <label asp-for="SeriesItem.Target" class="form-label">
-                Target
-                <small class="text-muted">(es. Adulto, Young Adult)</small>
-            </label>
-            <input asp-for="SeriesItem.Target" class="form-control" maxlength="50" />
-            <span asp-validation-for="SeriesItem.Target" class="text-danger"></span>
-        </div>
-        <div class="col-md-4">
-            <label asp-for="SeriesItem.Lingua" class="form-label">
-                Lingua
-                <small class="text-muted">(es. Italiano, English)</small>
-            </label>
-            <input asp-for="SeriesItem.Lingua" class="form-control" maxlength="50" value="Italiano" />
-            <span asp-validation-for="SeriesItem.Lingua" class="text-danger"></span>
-        </div>
-    </div>
+    <div class="tab-pane fade @(activeTab == "episodes" ? "show active" : "")" id="tab-episodes" role="tabpanel" aria-labelledby="tab-episodes-btn">
+        @if (Model.IsEditMode)
+        {
+            <h4 class="mb-3 text-primary">Episodi Serie</h4>
+            <p class="text-muted">Gestisci gli episodi della serie con titolo e trama.</p>
+            <div asp-validation-summary="All" class="text-danger"></div>
 
-    <!-- SEZIONE 2: CAMPI PER GENERAZIONE EPISODI -->
-    <h4 class="mt-5 mb-3 text-success">ðŸ¤– Campi per Generazione Episodi (Prompt Writer)</h4>
-    <p class="text-muted mb-3">Questi campi vengono passati al writer AI per generare ogni episodio. Devono essere stabili e non cambiare tra episodi.</p>
+            <form method="post" asp-page-handler="AddEpisode" class="card p-3 mb-4">
+                <input type="hidden" name="EpisodeInput.SerieId" value="@Model.SeriesItem.Id" />
+                <div class="row g-3">
+                    <div class="col-md-2">
+                        <label class="form-label">Numero</label>
+                        <input name="EpisodeInput.Number" type="number" class="form-control" min="1" required />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Titolo</label>
+                        <input name="EpisodeInput.Title" class="form-control" maxlength="200" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Trama</label>
+                        <textarea name="EpisodeInput.Trama" class="form-control" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button type="submit" class="btn btn-outline-primary">Aggiungi Episodio</button>
+                </div>
+            </form>
 
-    <div class="row mb-3">
-        <div class="col-md-12">
-            <label asp-for="SeriesItem.AmbientazioneBase" class="form-label">
-                Ambientazione Base
-                <small class="text-muted d-block">Contiene SOLO elementi stabili del mondo (periodo, tecnologia, societÃ , politica). NON inserire personaggi o eventi specifici.</small>
-            </label>
-            <textarea asp-for="SeriesItem.AmbientazioneBase" class="form-control font-monospace" rows="8" 
-                      placeholder="Esempio:&#10;Periodo: anno 3050&#10;UmanitÃ :&#10;- CiviltÃ  interstellare attiva&#10;- Motore FTL disponibile da circa 100 anni&#10;Tecnologia:&#10;- Viaggi FTL affidabili ma costosi&#10;- Armi avanzate con limiti fisici credibili"></textarea>
-            <span asp-validation-for="SeriesItem.AmbientazioneBase" class="text-danger"></span>
-        </div>
+            @if (Model.SeriesEpisodes.Any())
+            {
+                @foreach (var e in Model.SeriesEpisodes)
+                {
+                    <form method="post" asp-page-handler="UpdateEpisode" class="card mb-3 p-3">
+                        <input type="hidden" name="EpisodeInput.Id" value="@e.Id" />
+                        <input type="hidden" name="EpisodeInput.SerieId" value="@e.SerieId" />
+                        <div class="row g-3">
+                            <div class="col-md-2">
+                                <label class="form-label">Numero</label>
+                                <input name="EpisodeInput.Number" type="number" class="form-control" min="1" value="@e.Number" required />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Titolo</label>
+                                <input name="EpisodeInput.Title" class="form-control" maxlength="200" value="@e.Title" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Trama</label>
+                                <textarea name="EpisodeInput.Trama" class="form-control" rows="2">@e.Trama</textarea>
+                            </div>
+                        </div>
+                        <div class="mt-3 d-flex gap-2">
+                            <button type="submit" class="btn btn-outline-primary">Aggiorna</button>
+                            <button type="submit" class="btn btn-outline-danger"
+                                    formaction="?handler=DeleteEpisode&id=@e.Id&seriesId=@e.SerieId" formmethod="post"
+                                    onclick="return confirm('Vuoi eliminare questo episodio?');">
+                                Elimina
+                            </button>
+                        </div>
+                    </form>
+                }
+            }
+            else
+            {
+                <div class="text-muted">Nessun episodio presente.</div>
+            }
+        }
+        else
+        {
+            <div class="alert alert-warning">Salva la serie per aggiungere episodi.</div>
+        }
     </div>
-
-    <div class="row mb-3">
-        <div class="col-md-12">
-            <label asp-for="SeriesItem.PremessaSerie" class="form-label">
-                Premessa Serie
-                <small class="text-muted d-block">Il concetto centrale della serie, la sua "filosofia" di base.</small>
-            </label>
-            <textarea asp-for="SeriesItem.PremessaSerie" class="form-control" rows="3"
-                      placeholder="Esempio: L'umanitÃ  ha conquistato le stelle ma ha perso l'illusione di essere invincibile. Ogni espansione porta nuovi conflitti e dilemmi morali."></textarea>
-            <span asp-validation-for="SeriesItem.PremessaSerie" class="text-danger"></span>
-        </div>
-    </div>
-
-    <div class="row mb-3">
-        <div class="col-md-12">
-            <label asp-for="SeriesItem.ArcoNarrativoSerie" class="form-label">
-                Arco Narrativo Serie
-                <small class="text-muted d-block">La direzione complessiva della storia attraverso tutti gli episodi.</small>
-            </label>
-            <textarea asp-for="SeriesItem.ArcoNarrativoSerie" class="form-control" rows="3"
-                      placeholder="Esempio: Dal periodo di espansione fiduciosa alla scoperta di una minaccia sistemica che mette in crisi la sopravvivenza della civiltÃ  umana."></textarea>
-            <span asp-validation-for="SeriesItem.ArcoNarrativoSerie" class="text-danger"></span>
-        </div>
-    </div>
-
-    <div class="row mb-3">
-        <div class="col-md-12">
-            <label asp-for="SeriesItem.StileScrittura" class="form-label">
-                Stile Scrittura
-                <small class="text-muted d-block">Indicazioni su tono narrativo, ritmo, dialoghi, descrizioni.</small>
-            </label>
-            <textarea asp-for="SeriesItem.StileScrittura" class="form-control" rows="3"
-                      placeholder="Esempio: Tecnico ma leggibile, dialoghi asciutti, attenzione alla vita di bordo, niente eroismi gratuiti."></textarea>
-            <span asp-validation-for="SeriesItem.StileScrittura" class="text-danger"></span>
-        </div>
-    </div>
-
-    <div class="row mb-3">
-        <div class="col-md-12">
-            <label asp-for="SeriesItem.RegoleNarrative" class="form-label">
-                Regole Narrative
-                <small class="text-muted d-block">Vincoli e limiti per mantenere coerenza (es. "niente tecnologia magica", "ogni decisione ha conseguenze").</small>
-            </label>
-            <textarea asp-for="SeriesItem.RegoleNarrative" class="form-control" rows="4"
-                      placeholder="Esempio:&#10;- Niente tecnologia magica&#10;- Ogni decisione ha conseguenze&#10;- Niente distruzione gratuita di pianeti abitati"></textarea>
-            <span asp-validation-for="SeriesItem.RegoleNarrative" class="text-danger"></span>
-        </div>
-    </div>
-
-    <div class="row mb-3">
-        <div class="col-md-12">
-            <label asp-for="SeriesItem.NoteAI" class="form-label">
-                Note AI (Campo Jolly)
-                <small class="text-muted d-block">Istruzioni temporanee o sperimentali per il writer AI.</small>
-            </label>
-            <textarea asp-for="SeriesItem.NoteAI" class="form-control" rows="2"
-                      placeholder="Esempio: Privilegiare tensione psicologica rispetto all'azione continua."></textarea>
-            <span asp-validation-for="SeriesItem.NoteAI" class="text-danger"></span>
-        </div>
-    </div>
-
-    <!-- SEZIONE 3: METADATI -->
-    <h4 class="mt-5 mb-3 text-secondary">ðŸ“Š Metadati</h4>
-    
-    <div class="row mb-3">
-        <div class="col-md-6">
-            <label asp-for="SeriesItem.EpisodiGenerati" class="form-label">Episodi Generati</label>
-            <input asp-for="SeriesItem.EpisodiGenerati" type="number" class="form-control" min="0" />
-            <span asp-validation-for="SeriesItem.EpisodiGenerati" class="text-danger"></span>
-        </div>
-        <div class="col-md-6">
-            <label asp-for="SeriesItem.DataInserimento" class="form-label">Data Inserimento</label>
-            <input asp-for="SeriesItem.DataInserimento" type="datetime-local" class="form-control" />
-            <span asp-validation-for="SeriesItem.DataInserimento" class="text-danger"></span>
-        </div>
-    </div>
-
-    <div class="mb-3">
-        <button type="submit" class="btn btn-primary btn-lg">ðŸ’¾ Salva Serie</button>
-        <a class="btn btn-secondary btn-lg" asp-page="./Index">Annulla</a>
-    </div>
-</form>
+</div>
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+    <script>
+        (function () {
+            var tabs = document.querySelectorAll('#seriesTabs [data-bs-toggle="tab"]');
+            if (!tabs.length) return;
+
+            function activateTab(btn) {
+                var target = btn.getAttribute('data-bs-target');
+                if (!target) return;
+                tabs.forEach(function (t) {
+                    t.classList.remove('active');
+                    t.setAttribute('aria-selected', 'false');
+                });
+                var panes = document.querySelectorAll('#seriesTabsContent .tab-pane');
+                panes.forEach(function (p) {
+                    p.classList.remove('show', 'active');
+                });
+                btn.classList.add('active');
+                btn.setAttribute('aria-selected', 'true');
+                var pane = document.querySelector(target);
+                if (pane) pane.classList.add('show', 'active');
+            }
+
+            tabs.forEach(function (btn) {
+                btn.addEventListener('click', function (evt) {
+                    if (btn.hasAttribute('disabled')) return;
+                    evt.preventDefault();
+                    activateTab(btn);
+                });
+            });
+        })();
+    </script>
 }

@@ -120,7 +120,8 @@ namespace TinyGenerator.Controllers
                 _database,
                 _kernelFactory,
                 _storiesService,
-                _logger);
+                _logger,
+                _dispatcher);
 
             _dispatcher.Enqueue(
                 "TransformStoryRawToTagged",

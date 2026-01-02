@@ -745,6 +745,103 @@ namespace TinyGenerator.Data.Migrations
                     b.ToTable("series");
                 });
 
+            modelBuilder.Entity("TinyGenerator.Models.SeriesCharacter", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ConflittoInterno")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("conflitto_interno");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Eta")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("eta");
+
+                    b.Property<int?>("EpisodeIn")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("episode_in");
+
+                    b.Property<int?>("EpisodeOut")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("episode_out");
+
+                    b.Property<string>("Formazione")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("formazione");
+
+                    b.Property<string>("Gender")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("gender");
+
+                    b.Property<string>("Image")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("image");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Profilo")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("profilo");
+
+                    b.Property<int>("SerieId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("serie_id");
+
+                    b.Property<string>("Specializzazione")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("specializzazione");
+
+                    b.Property<int?>("VoiceId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("voice_id");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("series_characters");
+                });
+
+            modelBuilder.Entity("TinyGenerator.Models.SeriesEpisode", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("number");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("title");
+
+                    b.Property<string>("Trama")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("trama");
+
+                    b.Property<int>("SerieId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("serie_id");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("series_episodes");
+                });
+
             modelBuilder.Entity("TinyGenerator.Models.StepTemplate", b =>
                 {
                     b.Property<long>("Id")

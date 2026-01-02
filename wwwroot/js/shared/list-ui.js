@@ -10,7 +10,7 @@
         // prefer explicit selector, otherwise try to find a nearby table/menu used by pages
         let table = null;
         if (options.tableSelector) table = document.querySelector(options.tableSelector);
-        if (!table) table = document.querySelector('#storiesTable') || document.querySelector('.card table') || document.querySelector('table');
+        if (!table) table = document.querySelector('#storiesTable') || document.querySelector('#seriesTable') || document.querySelector('.card table') || document.querySelector('table');
 
         // detect menu id if not provided
         if (!colsMenuId) {
@@ -23,6 +23,7 @@
 
         const menu = colsMenuId ? document.getElementById(colsMenuId) : null;
         if (table && menu) buildColsMenu(table, menu, storageKey);
+        if (table) initDetailToggles(table);
 
         // If a global Pager API exists, call it. Otherwise rely on pagination.js auto-init.
         if (window.Pager && typeof window.Pager.init === 'function'){
@@ -53,7 +54,43 @@
         const th = table.querySelector(`th[data-col="${col}"]`);
         if (th) th.style.display = visible? '': 'none';
         const idx = Array.from(table.querySelectorAll('th')).indexOf(th);
-        if (idx>=0){ Array.from(table.querySelectorAll('tbody tr')).forEach(tr=>{ const td = tr.children[idx]; if(td) td.style.display = visible? '':'none'; }); }
+        if (idx>=0){
+            Array.from(table.querySelectorAll('tbody tr')).forEach(tr=>{
+                // Detail rows use a single colspan cell: don't apply per-column visibility to them.
+                if (tr.hasAttribute('data-detail-row') || tr.classList.contains('series-detail-row') || tr.classList.contains('detail-row')) return;
+                const td = tr.children[idx];
+                if(td) td.style.display = visible? '':'none';
+            });
+        }
+    }
+
+    function initDetailToggles(table){
+        // Bind once per page via document delegation so it keeps working even if the table is re-rendered.
+        if (document.documentElement.getAttribute('data-listui-detail-bound') === '1') return;
+        document.documentElement.setAttribute('data-listui-detail-bound', '1');
+
+        document.addEventListener('click', function(evt){
+            const btn = evt.target.closest('[data-detail-toggle]');
+            if (!btn) return;
+            const tr = btn.closest('tr');
+            if (!tr) return;
+            let detailRow = tr.nextElementSibling;
+            while (detailRow && !(detailRow.hasAttribute('data-detail-row') || detailRow.classList.contains('series-detail-row') || detailRow.classList.contains('detail-row'))) {
+                detailRow = detailRow.nextElementSibling;
+            }
+            if (!detailRow) return;
+            const isHidden = detailRow.classList.contains('d-none') || detailRow.style.display === 'none';
+            if (isHidden) {
+                detailRow.classList.remove('d-none');
+                detailRow.style.display = 'table-row';
+                Array.from(detailRow.children).forEach(td => td.style.display = '');
+                btn.setAttribute('aria-expanded', 'true');
+            } else {
+                detailRow.style.display = 'none';
+                detailRow.classList.add('d-none');
+                btn.setAttribute('aria-expanded', 'false');
+            }
+        });
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ()=>init()); else init();

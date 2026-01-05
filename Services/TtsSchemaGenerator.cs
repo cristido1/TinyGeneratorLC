@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Linq;
+using System.Text;
 using TinyGenerator.Models;
+using System.Text.Json.Nodes;
 
 namespace TinyGenerator.Services
 {
@@ -17,6 +19,11 @@ namespace TinyGenerator.Services
     {
         private readonly ICustomLogger? _logger;
         private readonly DatabaseService? _database;
+
+        private static readonly HashSet<char> _ttsTextDisallowedChars = new()
+        {
+            '*', '-', '_', '"', '(', ')'
+        };
 
         public TtsSchemaGenerator(ICustomLogger? logger = null, DatabaseService? database = null)
         {
@@ -81,6 +88,7 @@ namespace TinyGenerator.Services
             
             // Track pending music for the next phrase
             string? pendingMusicDescription = null;
+            int? pendingMusicDuration = null;
 
             // Track pending emotion from [EMOZIONE: xxx] tag - applies to the next character
             string? pendingEmotion = null;
@@ -173,7 +181,7 @@ namespace TinyGenerator.Services
                             FxDescription = pendingFxDescription,
                             FxDuration = pendingFxDuration,
                             MusicDescription = pendingMusicDescription,
-                            MusicDuration = pendingMusicDescription != null ? 10 : null
+                            MusicDuration = pendingMusicDuration ?? (pendingMusicDescription != null ? 10 : null)
                         };
 
                         pendingAmbience = null;
@@ -200,7 +208,7 @@ namespace TinyGenerator.Services
                     }
                     if (!string.IsNullOrWhiteSpace(desc))
                     {
-                        pendingAmbience = desc;
+                        pendingAmbience = FilterTextField(desc);
                         _logger?.Log("Debug", "TtsSchemaGenerator",
                             $"Parsed ambiente/ambientazione (for future image generation): '{pendingAmbience}'");
                     }
@@ -219,28 +227,118 @@ namespace TinyGenerator.Services
                     }
                     if (!string.IsNullOrWhiteSpace(desc))
                     {
-                        pendingAmbientSounds = desc;
+                        pendingAmbientSounds = FilterTextField(desc);
                         _logger?.Log("Debug", "TtsSchemaGenerator",
                             $"Parsed ambient sounds (for AudioCraft): '{pendingAmbientSounds}'");
                     }
                     continue;
                 }
 
-                // Handle MUSICA tags - extract description and apply to next phrase
+                // Handle MUSIC/MUSICA tags - extract info and apply to next phrase
+                // New mandatory format (formatter): [MUSIC: <duration_in_seconds> | <type>]
+                if (tagContent.StartsWith("MUSIC", StringComparison.OrdinalIgnoreCase))
+                {
+                    var colonIndex = tagContent.IndexOf(':');
+                    var afterColon = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
+
+                    // Expected: "20 | suspense" (duration | type)
+                    var parts = afterColon.Split('|', 2, StringSplitOptions.TrimEntries);
+                    if (parts.Length == 2)
+                    {
+                        var durationStr = parts[0].Trim().Replace(',', '.');
+                        var type = parts[1].Trim();
+
+                        if (double.TryParse(durationStr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var durSeconds) &&
+                            durSeconds > 0)
+                        {
+                            pendingMusicDuration = (int)Math.Ceiling(durSeconds);
+                        }
+                        else
+                        {
+                            pendingMusicDuration = null;
+                        }
+
+                        // We store the type in music_description so downstream can resolve it to a file.
+                        pendingMusicDescription = !string.IsNullOrWhiteSpace(type)
+                            ? FilterTextField(type)
+                            : null;
+
+                        // opening/ending are always applied in the final mix, not inside tts_schema.json timeline.
+                        if (string.Equals(pendingMusicDescription, "opening", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(pendingMusicDescription, "ending", StringComparison.OrdinalIgnoreCase))
+                        {
+                            pendingMusicDuration = null;
+                            pendingMusicDescription = null;
+                        }
+
+                        _logger?.Log("Debug", "TtsSchemaGenerator",
+                            $"Parsed MUSIC: duration={pendingMusicDuration?.ToString() ?? "(null)"}s, type='{pendingMusicDescription}'");
+                    }
+                    else
+                    {
+                        _logger?.Log("Warning", "TtsSchemaGenerator",
+                            $"Invalid MUSIC tag format (expected '[MUSIC: <seconds> | <type>]'): '{tagContent}'");
+                    }
+
+                    continue;
+                }
+
                 if (tagContent.StartsWith("MUSICA", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Extract music description from tag content (after colon) or from the following text
+                    // Expected format: [MUSICA: <duration_seconds>] descriptive prompt text
                     var colonIndex = tagContent.IndexOf(':');
                     var desc = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
-                    if (string.IsNullOrWhiteSpace(desc))
+
+                    if (colonIndex >= 0 && !string.IsNullOrWhiteSpace(desc))
                     {
-                        desc = text ?? string.Empty;
+                        // Try patterns where the tag contains the duration only, or duration + short desc
+                        // Pattern A: "15 secondi, descrizione"
+                        var durationAtStartMatch = Regex.Match(desc, @"^(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)\s*,\s*(.+)$", RegexOptions.IgnoreCase);
+                        if (durationAtStartMatch.Success)
+                        {
+                            var durationStr = durationAtStartMatch.Groups[1].Value.Replace(',', '.');
+                            pendingMusicDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
+                            pendingMusicDescription = FilterTextField(durationAtStartMatch.Groups[2].Value.Trim());
+                            _logger?.Log("Debug", "TtsSchemaGenerator", $"Parsed MUSICA (duration+desc): duration={pendingMusicDuration}s, desc='{pendingMusicDescription}'");
+                            continue;
+                        }
+
+                        // Pattern B: duration only in tag, description provided in following text
+                        var durationOnlyMatch = Regex.Match(desc, @"^(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)?$", RegexOptions.IgnoreCase);
+                        if (durationOnlyMatch.Success)
+                        {
+                            var durationStr = durationOnlyMatch.Groups[1].Value.Replace(',', '.');
+                            pendingMusicDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
+                            pendingMusicDescription = !string.IsNullOrWhiteSpace(text) ? FilterTextField(text.Trim()) : null;
+                            _logger?.Log("Debug", "TtsSchemaGenerator", $"Parsed MUSICA (duration only in tag): duration={pendingMusicDuration}s, desc='{pendingMusicDescription}'");
+                            continue;
+                        }
+
+                        // Pattern C: look for 'durata X s' inside the desc
+                        var durataMatch = Regex.Match(desc, @"durata\s+(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)?", RegexOptions.IgnoreCase);
+                        if (durataMatch.Success)
+                        {
+                            var durationStr = durataMatch.Groups[1].Value.Replace(',', '.');
+                            pendingMusicDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
+                            // remove durata part from desc
+                            pendingMusicDescription = FilterTextField(
+                                Regex.Replace(desc, @",?\s*durata\s+\d+(?:[.,]\d+)?\s*(?:secondi?|sec|s)?\s*,?", ", ", RegexOptions.IgnoreCase)
+                                    .Trim().Trim(',').Trim());
+                            _logger?.Log("Debug", "TtsSchemaGenerator", $"Parsed MUSICA (durata keyword): duration={pendingMusicDuration}s, desc='{pendingMusicDescription}'");
+                            continue;
+                        }
+
+                        // Fallback: treat the whole desc as description (no duration parsed)
+                        pendingMusicDescription = FilterTextField(desc);
+                        _logger?.Log("Debug", "TtsSchemaGenerator", $"Parsed MUSICA (fallback desc): '{pendingMusicDescription}'");
+                        continue;
                     }
-                    if (!string.IsNullOrWhiteSpace(desc))
+
+                    // No colon or empty tag content: use following text as description if present
+                    if (!string.IsNullOrWhiteSpace(text))
                     {
-                        pendingMusicDescription = desc;
-                        _logger?.Log("Debug", "TtsSchemaGenerator",
-                            $"Parsed music description: '{pendingMusicDescription}'");
+                        pendingMusicDescription = FilterTextField(text.Trim());
+                        _logger?.Log("Debug", "TtsSchemaGenerator", $"Parsed MUSICA (text desc): '{pendingMusicDescription}'");
                     }
                     continue;
                 }
@@ -268,7 +366,7 @@ namespace TinyGenerator.Services
                         {
                             var durationStr = durationAtStartMatch.Groups[1].Value.Replace(',', '.');
                             pendingFxDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
-                            pendingFxDescription = durationAtStartMatch.Groups[2].Value.Trim();
+                            pendingFxDescription = FilterTextField(durationAtStartMatch.Groups[2].Value.Trim());
                             _logger?.Log("Debug", "TtsSchemaGenerator", 
                                 $"Parsed FX (duration at start): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
                         }
@@ -277,7 +375,7 @@ namespace TinyGenerator.Services
                         {
                             var durationStr = Regex.Match(afterColon, @"^(\d+(?:[.,]\d+)?)").Groups[1].Value.Replace(',', '.');
                             pendingFxDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
-                            pendingFxDescription = !string.IsNullOrWhiteSpace(text) ? text.Trim() : string.Empty;
+                            pendingFxDescription = !string.IsNullOrWhiteSpace(text) ? FilterTextField(text.Trim()) : string.Empty;
                             _logger?.Log("Debug", "TtsSchemaGenerator",
                                 $"Parsed FX (duration in tag, description in text): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
                         }
@@ -290,7 +388,9 @@ namespace TinyGenerator.Services
                                 var durationStr = durataMatch.Groups[1].Value.Replace(',', '.');
                                 pendingFxDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
                                 // Remove the "durata X s" part from the description
-                                pendingFxDescription = Regex.Replace(afterColon, @",?\s*durata\s+\d+(?:[.,]\d+)?\s*(?:secondi?|sec|s)?\s*,?", ", ", RegexOptions.IgnoreCase).Trim().Trim(',').Trim();
+                                pendingFxDescription = FilterTextField(
+                                    Regex.Replace(afterColon, @",?\s*durata\s+\d+(?:[.,]\d+)?\s*(?:secondi?|sec|s)?\s*,?", ", ", RegexOptions.IgnoreCase)
+                                        .Trim().Trim(',').Trim());
                                 _logger?.Log("Debug", "TtsSchemaGenerator", 
                                     $"Parsed FX (durata keyword): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
                             }
@@ -298,14 +398,14 @@ namespace TinyGenerator.Services
                             {
                                 // No duration specified, use default
                                 pendingFxDuration = 5;
-                                pendingFxDescription = afterColon;
+                                pendingFxDescription = FilterTextField(afterColon);
                                 _logger?.Log("Debug", "TtsSchemaGenerator", 
                                     $"Parsed FX (no duration, default 5s): description='{pendingFxDescription}'");
                             }
                             else if (!string.IsNullOrWhiteSpace(text))
                             {
                                 pendingFxDuration = 5;
-                                pendingFxDescription = text.Trim();
+                                pendingFxDescription = FilterTextField(text.Trim());
                                 _logger?.Log("Debug", "TtsSchemaGenerator",
                                     $"Parsed FX (description in text, default 5s): description='{pendingFxDescription}'");
                             }
@@ -321,14 +421,14 @@ namespace TinyGenerator.Services
                             {
                                 pendingFxDuration = fxDuration;
                             }
-                            pendingFxDescription = fxParts[2].Trim();
+                            pendingFxDescription = FilterTextField(fxParts[2].Trim());
                             _logger?.Log("Debug", "TtsSchemaGenerator", 
                                 $"Parsed FX: duration={pendingFxDuration}s, description='{pendingFxDescription}'");
                         }
                         else if (fxParts.Length == 2)
                         {
                             // Format: [FX, description] with default duration
-                            pendingFxDescription = fxParts[1].Trim();
+                            pendingFxDescription = FilterTextField(fxParts[1].Trim());
                             pendingFxDuration = 5; // default 5 seconds
                             _logger?.Log("Debug", "TtsSchemaGenerator", 
                                 $"Parsed FX (default duration): description='{pendingFxDescription}'");
@@ -433,18 +533,29 @@ namespace TinyGenerator.Services
                     characters[characterKey] = ttsChar;
                 }
 
-                // Create phrase with normalized character name
-                var phrase = new TtsPhrase
+                // Create a JsonObject phrase that contains both legacy camelCase/PascalCase
+                // fields and the new snake_case normalized names so consumers can read either.
+                var phraseNode = new JsonObject
                 {
-                    Character = characterKey,
-                    Text = CleanText(text),
-                    Emotion = string.IsNullOrWhiteSpace(emotion) ? "neutral" : emotion,
-                    Ambience = pendingAmbience,
-                    AmbientSounds = pendingAmbientSounds,
-                    FxDescription = pendingFxDescription,
-                    FxDuration = pendingFxDuration,
-                    MusicDescription = pendingMusicDescription,
-                    MusicDuration = pendingMusicDescription != null ? 10 : null // Fixed 10 seconds for music
+                    ["character"] = characterKey,
+                    ["text"] = CleanText(text),
+                    ["emotion"] = string.IsNullOrWhiteSpace(emotion) ? "neutral" : emotion,
+                    ["fileName"] = null,
+                    ["durationMs"] = null,
+                    ["startMs"] = null,
+                    ["endMs"] = null,
+
+                    // Standardized snake_case fields only
+                    ["ambient_sound_description"] = pendingAmbientSounds,
+                    ["ambient_sound_file"] = null,
+
+                    ["fx_description"] = pendingFxDescription,
+                    ["fx_duration"] = pendingFxDuration,
+                    ["fx_file"] = null,
+
+                    ["music_description"] = pendingMusicDescription,
+                    ["music_duration"] = pendingMusicDuration ?? (pendingMusicDescription != null ? 10 : null),
+                    ["music_file"] = null
                 };
 
                 // Reset pending ambience, ambient sounds, FX, and music after applying to phrase (applied only once)
@@ -454,7 +565,7 @@ namespace TinyGenerator.Services
                 pendingFxDuration = null;
                 pendingMusicDescription = null;
 
-                timeline.Add(phrase);
+                timeline.Add(phraseNode);
             }
 
             schema.Characters = characters.Values.ToList();
@@ -579,16 +690,30 @@ namespace TinyGenerator.Services
         /// </summary>
         private string CleanText(string text)
         {
+            return FilterTextField(text);
+        }
+
+        /// <summary>
+        /// Filters a text field that will be persisted in tts_schema.json.
+        /// Requirements:
+        /// - Remove: * - _ " ( )
+        /// - Do not apply extra escaping here; JSON escaping is handled by the serializer.
+        /// </summary>
+        private string FilterTextField(string? text)
+        {
             if (string.IsNullOrWhiteSpace(text))
                 return string.Empty;
 
-            // Normalize whitespace
-            text = Regex.Replace(text, @"\s+", " ").Trim();
+            var sb = new StringBuilder(text.Length);
+            foreach (var ch in text)
+            {
+                if (_ttsTextDisallowedChars.Contains(ch))
+                    continue;
+                sb.Append(ch);
+            }
 
-            // Remove quotes at start/end if present (they'll be added by TTS if needed)
-            text = text.Trim('"', '«', '»', '"', '"');
-
-            return text;
+            // Normalize whitespace after stripping characters
+            return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
         }
 
         /// <summary>

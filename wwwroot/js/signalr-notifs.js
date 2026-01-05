@@ -129,6 +129,12 @@
             } catch(e) { console.warn('ProgressCompleted handler failed', e); }
         });
 
+        // The server broadcasts BusyModelsUpdated to all clients; this page may not use it.
+        // Registering a no-op handler prevents SignalR "No client method ..." warnings.
+        connection.on('BusyModelsUpdated', function(models){
+            try { /* no-op */ } catch(e) { }
+        });
+
         ensureStarted().then(function(){
             console.debug('SignalR connected: progressHub');
         }).catch(function(err){

@@ -17,9 +17,21 @@ public static class ProsodyNormalizer
         {
             {
                 "ancora", context =>
-                    context.Contains("una volta", StringComparison.OrdinalIgnoreCase)
+                    context.Contains("nave", StringComparison.OrdinalIgnoreCase)
                         ? "àncora"
                         : "ancóra"
+            },
+            {
+                "leggere", context =>
+                    context.Contains("libro", StringComparison.OrdinalIgnoreCase) ||
+                    context.Contains("rivista", StringComparison.OrdinalIgnoreCase) ||
+                    context.Contains("articolo", StringComparison.OrdinalIgnoreCase) ||
+                    context.Contains("storia", StringComparison.OrdinalIgnoreCase) ||
+                    context.Contains("poesia", StringComparison.OrdinalIgnoreCase) ||
+                    context.Contains("romanzo", StringComparison.OrdinalIgnoreCase) ||
+                    context.Contains("lettura", StringComparison.OrdinalIgnoreCase)
+                        ? "lèggere"
+                        : "leggère"
             },
             {
                 "principi", context =>
@@ -55,8 +67,8 @@ public static class ProsodyNormalizer
                     context.Contains("arredo", StringComparison.OrdinalIgnoreCase)
                         || context.Contains("casa", StringComparison.OrdinalIgnoreCase)
                         || context.Contains("divano", StringComparison.OrdinalIgnoreCase)
-                        ? "mobìle"
-                        : "móbile"
+                        ? "móbile"
+                        : "mobìle"
             },
             {
                 "salto", context =>
@@ -70,7 +82,7 @@ public static class ProsodyNormalizer
                     context.Contains("male", StringComparison.OrdinalIgnoreCase)
                         || context.Contains("male", StringComparison.OrdinalIgnoreCase)
                         ? "peccàto"
-                        : "pèccato"
+                        : "peccàto"
             },
                         {
                 "balia", context =>
@@ -202,7 +214,7 @@ public static class ProsodyNormalizer
             { "militare", "mi-li-tà-re" },
             { "ministro", "mi-nì-stro" },
             { "momento", "mo-mèn-to" },
-            { "movimento", "mo-vi-mèn-to" },
+            { "movimento", "movimènto" },
             { "musica", "mù-si-ca" },
             
             // Parole con 'p'
@@ -432,10 +444,12 @@ public static class ProsodyNormalizer
     {
         foreach (var kvp in ForcedStressWords)
         {
+            // Use the dictionary value but strip hyphen syllable separators when applying
+            var replacement = kvp.Value?.Replace("-", "") ?? string.Empty;
             text = Regex.Replace(
                 text,
                 $@"\b{kvp.Key}\b",
-                kvp.Value,
+                replacement,
                 RegexOptions.IgnoreCase);
         }
 

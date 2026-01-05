@@ -35,6 +35,7 @@ data/storage.*
 data/logs/
 data/scripts/
 data/tts_voice_templates/
+data/music_stories/
 *.db
 *.db-shm
 *.db-wal
@@ -69,3 +70,4 @@ appsettings.secrets.json
 # Ignore generated or user-uploaded samples and story exports
 wwwroot/data_voicess_samples/
 stories_folder/
+series_folder/

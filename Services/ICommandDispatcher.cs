@@ -5,7 +5,12 @@ using System.Threading.Tasks;
 namespace TinyGenerator.Services
 {
     public sealed record CommandResult(bool Success, string? Message);
-    public sealed record CommandCompletedEventArgs(string RunId, string OperationName, bool Success, string? Message);
+    public sealed record CommandCompletedEventArgs(
+        string RunId,
+        string OperationName,
+        bool Success,
+        string? Message,
+        IReadOnlyDictionary<string, string>? Metadata = null);
 
     public sealed class CommandContext
     {

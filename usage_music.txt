@@ -1,0 +1,15 @@
+la musica generata da audiocraft non va bene, e poi su una serie vanno mantenute le stesse 4 o 5 musiche per rendere distintiva la serie, quindi sto organizzando il programma per gestire delle musiche che genererò io con suno. Vorrei una tua opinione su quello che voglio fare. 1) aggiungere nel programma una cartella series_folder (ho già una cartella stories_folder) e alla tabella series un campo folder, ciascuna serie avrà un suo folder per contenere i files fisici della serie. La cartella si chiamerà [id serie 2 in formato [000n]_[titolo serie normalizzato]) fare una sottocartella music. 
+2) all'interno della cartella music metterò dei files mp3 con la musica, i nomi dei files mp3 inizieranno con:
+opening
+ending
+transition
+mystery
+suspense
+tension
+love
+combat
+activity
+victory
+defeat
+ambient. Ciascun file poi potrà avere altro testo dopo nel nome. 3) istruirò io il revisore che può richiedere musica con i tipi sopra. 
+4) in fase di generazione del file tts_schema.json dell'episodio il sistema prenderà i files musicali con il tipo corrispondente e ne sceglierà uno a caso, magari segnandosi che l'ha usato in modo che ad una scelta uguale successiva nello stesso episodio ne usi un'altra.

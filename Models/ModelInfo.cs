@@ -37,6 +37,8 @@ public class ModelInfo
     public double TotalScore { get; set; }
     // Free-form note for the model (shown in grid and edit form)
     public string? Note { get; set; }
+    // Estimated speed score (1-10). Nullable when unknown.
+    public int? Speed { get; set; }
     // JSON-serialized last test results (array of { name, ok, message })
     public string? LastTestResults { get; set; }
     // Last generated test audio files (relative paths under wwwroot)

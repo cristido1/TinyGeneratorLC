@@ -372,10 +372,10 @@ namespace TinyGenerator.Pages.Stories
         public IActionResult OnPostGenerateTts(long id, string folderName)
         {
             // Unified path: single dispatcher command, storyId only.
-            var runId = _stories.EnqueueGenerateTtsAudioCommand(id, trigger: "manual_tts_audio", priority: 3);
-            TempData["StatusMessage"] = runId != null
-                ? $"Generazione audio TTS avviata (run {runId})."
-                : "Impossibile avviare la generazione audio TTS.";
+            var result = _stories.TryEnqueueGenerateTtsAudioCommand(id, trigger: "manual_tts_audio", priority: 3);
+            TempData["StatusMessage"] = result.Enqueued
+                ? $"Generazione audio TTS avviata (run {result.RunId})."
+                : result.Message;
             return RedirectToPage();
         }
 
@@ -803,6 +803,15 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public IActionResult OnPostStartStatusChain(long id)
+        {
+            var chainId = _stories.EnqueueStatusChain(id);
+            TempData["StatusMessage"] = string.IsNullOrWhiteSpace(chainId)
+                ? "Catena stati non avviata."
+                : $"Catena stati avviata (id {chainId}).";
+            return RedirectToPage();
+        }
+
         private void LoadData()
         {
             var allStories = _stories.GetAllStories().ToList();
@@ -1038,20 +1047,26 @@ namespace TinyGenerator.Pages.Stories
 
             // Advance status (POST)
             var next = GetNextStatus(s);
-            if (next != null && !string.IsNullOrWhiteSpace(next.OperationType))
+            if (next != null
+                && !string.IsNullOrWhiteSpace(next.OperationType)
+                && !next.OperationType.Equals("none", StringComparison.OrdinalIgnoreCase))
             {
                 actions.Add(new { id = "advance", title = next.CaptionToExecute ?? "Avanza", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AdvanceStatus", id = s.Id }, Request.Scheme) });
             }
 
+            actions.Add(new { id = "start_chain", title = "Avvia catena stati", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "StartStatusChain", id = s.Id }, Request.Scheme) });
+
             // Details / Edit (GET)
             actions.Add(new { id = "details", title = "Dettagli", method = "GET", url = Url.Page("/Stories/Details", new { id = s.Id }) });
             actions.Add(new { id = "edit", title = "Modifica", method = "GET", url = Url.Page("/Stories/Edit", new { id = s.Id }) });
-
+            actions.Add(new { id = "delete", title = "Elimina", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "Delete", id = s.Id }, Request.Scheme), confirm = true });
+            
             // Revision (POST)
             actions.Add(new { id = "revise", title = "Revisione", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "Revise", id = s.Id }, Request.Scheme) });
 
             if (!string.IsNullOrWhiteSpace(s.Folder))
             {
+                actions.Add(new { id = "add_tags", title = "Aggiungi TAG", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) });
                 // Combined operation to prepare TTS schema: generate schema, normalize characters, assign voices, normalize sentiments
                 actions.Add(new { id = "prepare_tts_schema", title = "Prepara TTS schema", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "PrepareTtsSchema", id = s.Id }, Request.Scheme) });
 
@@ -1062,15 +1077,9 @@ namespace TinyGenerator.Pages.Stories
                 actions.Add(new { id = "mix_final", title = "Mix Audio Finale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "MixFinalAudio", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "final_mix_play", title = "Ascolta Mix Finale", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "FinalMixAudio", id = s.Id }, Request.Scheme) });
                 actions.Add(new { id = "tts_playlist", title = "Ascolta sequenza TTS", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "TtsPlaylist", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "delete_final_mix", title = "Cancella Mix Audio", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteFinalMix", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "delete_music", title = "Cancella Musica", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteMusic", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "delete_fx", title = "Cancella Effetti", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteFx", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "delete_ambience", title = "Cancella Rumori Ambientali", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteAmbience", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "delete_tts", title = "Cancella TTS", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteTts", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "delete_story_tagged", title = "Cancella Story Tagged", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "DeleteStoryTagged", id = s.Id }, Request.Scheme) });
             }
 
-            var addTagsAction = new { id = "add_tags", title = "Aggiungi TAG", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) };
+/*             var addTagsAction = new { id = "add_tags", title = "Aggiungi TAG", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) };
             var insertAt = actions.FindIndex(a =>
             {
                 var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty;
@@ -1086,10 +1095,88 @@ namespace TinyGenerator.Pages.Stories
             else
             {
                 actions.Add(addTagsAction);
-            }
+            } */
 
             // Delete
-            actions.Add(new { id = "delete", title = "Elimina", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "Delete", id = s.Id }, Request.Scheme), confirm = true });
+            
+
+            // Remove any delete-like actions except the main story delete, and any actions with titles
+            // that contain "Cancella"/"Cancellazione"/"Elimina" (defensive), then ensure
+            // 'revise' and 'add_tags' are the first actions after the pinned group.
+            var toRemove = new List<object>();
+            foreach (var a in actions)
+            {
+                var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty;
+                var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? string.Empty;
+                if (id == "delete") continue; // keep main story delete
+                if (id.StartsWith("delete_") || title.IndexOf("cancell", StringComparison.OrdinalIgnoreCase) >= 0 || title.IndexOf("elimin", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    toRemove.Add(a);
+                }
+            }
+
+            foreach (var r in toRemove) actions.Remove(r);
+
+            // Ensure revise -> add_tags ordering immediately after pinned actions (details/edit/delete)
+            var pinnedIds = new[] { "details", "edit", "delete" };
+            var insertAfterIndex = actions.FindIndex(a => {
+                var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty;
+                return id == "delete";
+            });
+
+            if (insertAfterIndex < 0)
+            {
+                // fallback: place after any pinned action if delete not found
+                insertAfterIndex = actions.FindLastIndex(a => {
+                    var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty;
+                    return pinnedIds.Contains(id);
+                });
+            }
+
+            var ensureOrder = new[] { "revise", "add_tags" };
+            var currentIndex = insertAfterIndex >= 0 ? insertAfterIndex + 1 : 0;
+            foreach (var desiredId in ensureOrder)
+            {
+                var existing = actions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty) == desiredId);
+                if (existing != null)
+                {
+                    actions.Remove(existing);
+                    if (currentIndex >= 0 && currentIndex <= actions.Count)
+                    {
+                        actions.Insert(currentIndex, existing);
+                        currentIndex++;
+                    }
+                    else
+                    {
+                        actions.Add(existing);
+                    }
+                }
+            }
+
+            // Ensure TTS-related actions appear immediately after `add_tags` when present
+            var addTagsIndex = actions.FindIndex(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty) == "add_tags");
+            if (addTagsIndex >= 0)
+            {
+                // prefer to place prepare_tts_schema first, then gen_tts (if present)
+                var prepare = actions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty) == "prepare_tts_schema");
+                if (prepare != null)
+                {
+                    actions.Remove(prepare);
+                    var insertPos = addTagsIndex + 1;
+                    if (insertPos >= 0 && insertPos <= actions.Count) actions.Insert(insertPos, prepare);
+                    else actions.Add(prepare);
+                    addTagsIndex = insertPos; // update position so next insertion goes after it
+                }
+
+                var genTts = actions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty) == "gen_tts");
+                if (genTts != null)
+                {
+                    actions.Remove(genTts);
+                    var insertPos = addTagsIndex + 1;
+                    if (insertPos >= 0 && insertPos <= actions.Count) actions.Insert(insertPos, genTts);
+                    else actions.Add(genTts);
+                }
+            }
 
             // Evaluators (client will render evaluator-specific actions)
             return actions;

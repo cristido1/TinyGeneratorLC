@@ -41,7 +41,7 @@
             <input type="hidden" asp-for="SeriesItem.Id" />
             
             <!-- SEZIONE 1: CAMPI DI FILTRAGGIO / CATALOGO -->
-            <h4 class="mt-4 mb-3 text-primary">ÐY"< Campi di Filtraggio / Catalogo</h4>
+            <h4 class="mt-4 mb-3 text-primary">ï¿½Y"< Campi di Filtraggio / Catalogo</h4>
             
             <div class="row mb-3">
                 <div class="col-md-12">
@@ -74,7 +74,7 @@
                 <div class="col-md-4">
                     <label asp-for="SeriesItem.PeriodoNarrativo" class="form-label">
                         Periodo Narrativo
-                        <small class="text-muted">(es. Futuro lontano, Medioevo, Età moderna)</small>
+                        <small class="text-muted">(es. Futuro lontano, Medioevo, Etï¿½ moderna)</small>
                     </label>
                     <input asp-for="SeriesItem.PeriodoNarrativo" class="form-control" maxlength="100" />
                     <span asp-validation-for="SeriesItem.PeriodoNarrativo" class="text-danger"></span>
@@ -109,17 +109,17 @@
             </div>
 
             <!-- SEZIONE 2: CAMPI PER GENERAZIONE EPISODI -->
-            <h4 class="mt-5 mb-3 text-success">ÐYÏ- Campi per Generazione Episodi (Prompt Writer)</h4>
+            <h4 class="mt-5 mb-3 text-success">ï¿½Yï¿½- Campi per Generazione Episodi (Prompt Writer)</h4>
             <p class="text-muted mb-3">Questi campi vengono passati al writer AI per generare ogni episodio. Devono essere stabili e non cambiare tra episodi.</p>
 
             <div class="row mb-3">
                 <div class="col-md-12">
                     <label asp-for="SeriesItem.AmbientazioneBase" class="form-label">
                         Ambientazione Base
-                        <small class="text-muted d-block">Contiene SOLO elementi stabili del mondo (periodo, tecnologia, società, politica). NON inserire personaggi o eventi specifici.</small>
+                        <small class="text-muted d-block">Contiene SOLO elementi stabili del mondo (periodo, tecnologia, societï¿½, politica). NON inserire personaggi o eventi specifici.</small>
                     </label>
                     <textarea asp-for="SeriesItem.AmbientazioneBase" class="form-control font-monospace" rows="8" 
-                              placeholder="Esempio:&#10;Periodo: anno 3050&#10;Umanità:&#10;- Civiltà interstellare attiva&#10;- Motore FTL disponibile da circa 100 anni&#10;Tecnologia:&#10;- Viaggi FTL affidabili ma costosi&#10;- Armi avanzate con limiti fisici credibili"></textarea>
+                              placeholder="Esempio:&#10;Periodo: anno 3050&#10;Umanitï¿½:&#10;- Civiltï¿½ interstellare attiva&#10;- Motore FTL disponibile da circa 100 anni&#10;Tecnologia:&#10;- Viaggi FTL affidabili ma costosi&#10;- Armi avanzate con limiti fisici credibili"></textarea>
                     <span asp-validation-for="SeriesItem.AmbientazioneBase" class="text-danger"></span>
                 </div>
             </div>
@@ -131,7 +131,7 @@
                         <small class="text-muted d-block">Il concetto centrale della serie, la sua "filosofia" di base.</small>
                     </label>
                     <textarea asp-for="SeriesItem.PremessaSerie" class="form-control" rows="3"
-                              placeholder="Esempio: L'umanità ha conquistato le stelle ma ha perso l'illusione di essere invincibile. Ogni espansione porta nuovi conflitti e dilemmi morali."></textarea>
+                              placeholder="Esempio: L'umanitï¿½ ha conquistato le stelle ma ha perso l'illusione di essere invincibile. Ogni espansione porta nuovi conflitti e dilemmi morali."></textarea>
                     <span asp-validation-for="SeriesItem.PremessaSerie" class="text-danger"></span>
                 </div>
             </div>
@@ -143,7 +143,7 @@
                         <small class="text-muted d-block">La direzione complessiva della storia attraverso tutti gli episodi.</small>
                     </label>
                     <textarea asp-for="SeriesItem.ArcoNarrativoSerie" class="form-control" rows="3"
-                              placeholder="Esempio: Dal periodo di espansione fiduciosa alla scoperta di una minaccia sistemica che mette in crisi la sopravvivenza della civiltà umana."></textarea>
+                              placeholder="Esempio: Dal periodo di espansione fiduciosa alla scoperta di una minaccia sistemica che mette in crisi la sopravvivenza della civiltï¿½ umana."></textarea>
                     <span asp-validation-for="SeriesItem.ArcoNarrativoSerie" class="text-danger"></span>
                 </div>
             </div>
@@ -185,7 +185,7 @@
             </div>
 
             <!-- SEZIONE 3: METADATI -->
-            <h4 class="mt-5 mb-3 text-secondary">ÐY"S Metadati</h4>
+            <h4 class="mt-5 mb-3 text-secondary">ï¿½Y"S Metadati</h4>
             
             <div class="row mb-3">
                 <div class="col-md-6">
@@ -201,7 +201,7 @@
             </div>
 
             <div class="mb-3">
-                <button type="submit" class="btn btn-primary btn-lg">ÐY'ó Salva Serie</button>
+                <button type="submit" class="btn btn-primary btn-lg">ï¿½Y'ï¿½ Salva Serie</button>
                 <a class="btn btn-secondary btn-lg" asp-page="./Index">Annulla</a>
             </div>
         </form>
@@ -210,24 +210,32 @@
     <div class="tab-pane fade @(activeTab == "characters" ? "show active" : "")" id="tab-characters" role="tabpanel" aria-labelledby="tab-characters-btn">
         @if (Model.IsEditMode)
         {
-            <h4 class="mb-3 text-primary">Personaggi Serie</h4>
-            <p class="text-muted">Gestisci i personaggi ricorrenti della serie.</p>
+            <h4 class="mb-2 text-primary">Personaggi Serie</h4>
+            <p class="text-muted mb-2">Gestisci i personaggi ricorrenti della serie.</p>
             <div asp-validation-summary="All" class="text-danger"></div>
 
-            <form method="post" asp-page-handler="AssignCharacterVoices" class="card p-3 mb-4">
-                <input type="hidden" name="seriesId" value="@Model.SeriesItem.Id" />
-                <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-2">
+            <div class="card p-2 mb-3">
+                <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-1">
                     <div>
                         <div class="fw-semibold">Assegnazione automatica voci</div>
                         <div class="text-muted small">Usa solo voci non narratore, abbina per genere e evita duplicati nella serie.</div>
                     </div>
-                    <button type="submit" class="btn btn-outline-secondary" onclick="return confirm('Assegnare automaticamente le voci ai personaggi senza voce?');">Assegna voci automaticamente</button>
+                    <div class="d-flex gap-1">
+                        <form method="post" asp-page-handler="GenerateCharacterImages">
+                            <input type="hidden" name="seriesId" value="@Model.SeriesItem.Id" />
+                            <button type="submit" class="btn btn-sm btn-outline-secondary" onclick="return confirm('Generare le immagini mancanti dei personaggi?');">Genera immagini personaggi</button>
+                        </form>
+                        <form method="post" asp-page-handler="AssignCharacterVoices">
+                            <input type="hidden" name="seriesId" value="@Model.SeriesItem.Id" />
+                            <button type="submit" class="btn btn-sm btn-outline-secondary" onclick="return confirm('Assegnare automaticamente le voci ai personaggi senza voce?');">Assegna voci automaticamente</button>
+                        </form>
+                    </div>
                 </div>
-            </form>
+            </div>
 
-            <form method="post" asp-page-handler="AddCharacter" enctype="multipart/form-data" class="card p-3 mb-4">
+            <form method="post" asp-page-handler="AddCharacter" enctype="multipart/form-data" class="card p-2 mb-3">
                 <input type="hidden" name="CharacterInput.SerieId" value="@Model.SeriesItem.Id" />
-                <div class="row g-3">
+                <div class="row g-2">
                     <div class="col-md-4">
                         <label class="form-label">Nome</label>
                         <input name="CharacterInput.Name" class="form-control" maxlength="200" required />
@@ -256,6 +264,10 @@
                     <div class="col-md-6">
                         <label class="form-label">Descrizione</label>
                         <textarea name="CharacterInput.Description" class="form-control" rows="2"></textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Aspetto (prompt immagine)</label>
+                        <textarea name="CharacterInput.Aspect" class="form-control" rows="2" placeholder="Se compilato, viene usato per generare l'immagine al posto della descrizione."></textarea>
                     </div>
                     <div class="col-md-2">
                         <label class="form-label">Eta</label>
@@ -290,8 +302,8 @@
                         <input type="file" name="CharacterImage" class="form-control" accept=".jpg,.jpeg,.png,.gif,.webp" />
                     </div>
                 </div>
-                <div class="mt-3">
-                    <button type="submit" class="btn btn-outline-primary">Aggiungi Personaggio</button>
+                <div class="mt-2">
+                    <button type="submit" class="btn btn-sm btn-outline-primary">Aggiungi Personaggio</button>
                 </div>
             </form>
 
@@ -299,85 +311,114 @@
             {
                 @foreach (var c in Model.SeriesCharacters)
                 {
-                    <form method="post" asp-page-handler="UpdateCharacter" enctype="multipart/form-data" class="card mb-3 p-3">
+                    <form method="post" asp-page-handler="UpdateCharacter" enctype="multipart/form-data" class="card mb-2 p-2">
                         <input type="hidden" name="CharacterInput.Id" value="@c.Id" />
                         <input type="hidden" name="CharacterInput.SerieId" value="@c.SerieId" />
-                        <div class="row g-3 align-items-start">
-                            <div class="col-md-2">
+                        <div class="row g-2 align-items-start">
+                            <div class="col-md-3">
                                 @if (!string.IsNullOrWhiteSpace(c.Image))
                                 {
-                                    <img src="@c.Image" alt="Immagine personaggio" class="img-thumbnail" style="max-height:120px;" />
+                                    var imgSrc = c.Image;
+                                    if (!string.IsNullOrWhiteSpace(imgSrc) && !imgSrc.StartsWith("/", StringComparison.Ordinal))
+                                    {
+                                        imgSrc = $"/series-assets/{c.SerieId}/characters/{Uri.EscapeDataString(imgSrc)}";
+                                    }
+                                    <button type="button"
+                                            class="btn p-0 border-0 bg-transparent"
+                                            data-bs-toggle="modal"
+                                            data-bs-target="#seriesImageModal"
+                                            data-fullsrc="@imgSrc"
+                                            aria-label="Apri immagine in dimensioni reali">
+                                        <img src="@imgSrc" alt="Immagine personaggio" class="img-thumbnail img-fluid w-100" style="height:auto;" />
+                                    </button>
                                 }
                                 else
                                 {
                                     <div class="text-muted small">Nessuna immagine</div>
                                 }
                             </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Nome</label>
-                                <input name="CharacterInput.Name" class="form-control" maxlength="200" value="@c.Name" required />
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label">Genere</label>
-                                <select name="CharacterInput.Gender" class="form-select" required>
-                                    <option value="male" selected="@(c.Gender == "male" ? "selected" : null)">male</option>
-                                    <option value="female" selected="@(c.Gender == "female" ? "selected" : null)">female</option>
-                                    <option value="alien" selected="@(c.Gender == "alien" ? "selected" : null)">alien</option>
-                                    <option value="robot" selected="@(c.Gender == "robot" ? "selected" : null)">robot</option>
-                                    <option value="other" selected="@(c.Gender == "other" ? "selected" : null)">other</option>
-                                </select>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Voce TTS</label>
-                                <select name="CharacterInput.VoiceId" class="form-select">
-                                    <option value="">-</option>
-                                    @foreach (var v in Model.Voices)
-                                    {
-                                        var label = string.IsNullOrWhiteSpace(v.Name) ? v.VoiceId : $"{v.Name} ({v.VoiceId})";
-                                        <option value="@v.Id" selected="@(c.VoiceId == v.Id ? "selected" : null)">@label</option>
-                                    }
-                                </select>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Descrizione</label>
-                                <textarea name="CharacterInput.Description" class="form-control" rows="2">@c.Description</textarea>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label">Eta</label>
-                                <input name="CharacterInput.Eta" class="form-control" maxlength="50" value="@c.Eta" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Formazione</label>
-                                <input name="CharacterInput.Formazione" class="form-control" maxlength="200" value="@c.Formazione" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Specializzazione</label>
-                                <input name="CharacterInput.Specializzazione" class="form-control" maxlength="200" value="@c.Specializzazione" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Profilo</label>
-                                <textarea name="CharacterInput.Profilo" class="form-control" rows="2">@c.Profilo</textarea>
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Conflitto Interno</label>
-                                <textarea name="CharacterInput.ConflittoInterno" class="form-control" rows="2">@c.ConflittoInterno</textarea>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label">Episodio In</label>
-                                <input name="CharacterInput.EpisodeIn" type="number" class="form-control" min="0" value="@c.EpisodeIn" />
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label">Episodio Out</label>
-                                <input name="CharacterInput.EpisodeOut" type="number" class="form-control" min="0" value="@c.EpisodeOut" />
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label">Immagine</label>
-                                <input type="file" name="CharacterImage" class="form-control" accept=".jpg,.jpeg,.png,.gif,.webp" />
+                            <div class="col-md-9">
+                                <div class="row g-2">
+                                    <div class="col-md-6">
+                                        <label class="form-label">Nome</label>
+                                        <input name="CharacterInput.Name" class="form-control" maxlength="200" value="@c.Name" required />
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Genere</label>
+                                        <select name="CharacterInput.Gender" class="form-select" required>
+                                            <option value="male" selected="@(c.Gender == "male" ? "selected" : null)">male</option>
+                                            <option value="female" selected="@(c.Gender == "female" ? "selected" : null)">female</option>
+                                            <option value="alien" selected="@(c.Gender == "alien" ? "selected" : null)">alien</option>
+                                            <option value="robot" selected="@(c.Gender == "robot" ? "selected" : null)">robot</option>
+                                            <option value="other" selected="@(c.Gender == "other" ? "selected" : null)">other</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Voce TTS</label>
+                                        <select name="CharacterInput.VoiceId" class="form-select">
+                                            <option value="">-</option>
+                                            @foreach (var v in Model.Voices)
+                                            {
+                                                var label = string.IsNullOrWhiteSpace(v.Name) ? v.VoiceId : $"{v.Name} ({v.VoiceId})";
+                                                <option value="@v.Id" selected="@(c.VoiceId == v.Id ? "selected" : null)">@label</option>
+                                            }
+                                        </select>
+                                    </div>
+
+                                    <div class="col-md-6">
+                                        <label class="form-label">Descrizione</label>
+                                        <textarea name="CharacterInput.Description" class="form-control" rows="2">@c.Description</textarea>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Aspetto (prompt immagine)</label>
+                                        <textarea name="CharacterInput.Aspect" class="form-control" rows="2">@c.Aspect</textarea>
+                                    </div>
+
+                                    <div class="col-md-3">
+                                        <label class="form-label">Eta</label>
+                                        <input name="CharacterInput.Eta" class="form-control" maxlength="50" value="@c.Eta" />
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">Formazione</label>
+                                        <input name="CharacterInput.Formazione" class="form-control" maxlength="200" value="@c.Formazione" />
+                                    </div>
+                                    <div class="col-md-5">
+                                        <label class="form-label">Specializzazione</label>
+                                        <input name="CharacterInput.Specializzazione" class="form-control" maxlength="200" value="@c.Specializzazione" />
+                                    </div>
+
+                                    <div class="col-md-6">
+                                        <label class="form-label">Profilo</label>
+                                        <textarea name="CharacterInput.Profilo" class="form-control" rows="2">@c.Profilo</textarea>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Conflitto Interno</label>
+                                        <textarea name="CharacterInput.ConflittoInterno" class="form-control" rows="2">@c.ConflittoInterno</textarea>
+                                    </div>
+
+                                    <div class="col-md-3">
+                                        <label class="form-label">Episodio In</label>
+                                        <input name="CharacterInput.EpisodeIn" type="number" class="form-control" min="0" value="@c.EpisodeIn" />
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Episodio Out</label>
+                                        <input name="CharacterInput.EpisodeOut" type="number" class="form-control" min="0" value="@c.EpisodeOut" />
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Immagine</label>
+                                        <input type="file" name="CharacterImage" class="form-control" accept=".jpg,.jpeg,.png,.gif,.webp" />
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <div class="mt-3 d-flex gap-2">
-                            <button type="submit" class="btn btn-outline-primary">Aggiorna</button>
-                            <button type="submit" class="btn btn-outline-danger"
+                        <div class="mt-2 d-flex gap-1">
+                            <button type="submit" class="btn btn-sm btn-outline-primary">Aggiorna</button>
+                            <button type="submit" class="btn btn-sm btn-outline-secondary"
+                                    formaction="?handler=GenerateCharacterImage&seriesId=@c.SerieId&characterId=@c.Id" formmethod="post"
+                                    onclick="return confirm('Generare/rigenerare l\'immagine di questo personaggio?');">
+                                Genera immagine
+                            </button>
+                            <button type="submit" class="btn btn-sm btn-outline-danger"
                                     formaction="?handler=DeleteCharacter&id=@c.Id&seriesId=@c.SerieId" formmethod="post"
                                     onclick="return confirm('Vuoi eliminare questo personaggio?');">
                                 Elimina
@@ -469,6 +510,20 @@
     </div>
 </div>
 
+<div class="modal fade" id="seriesImageModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Immagine</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Chiudi"></button>
+            </div>
+            <div class="modal-body overflow-auto">
+                <img id="seriesImageModalImg" src="" alt="Immagine personaggio" style="max-width:none; height:auto; display:block;" />
+            </div>
+        </div>
+    </div>
+</div>
+
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
     <script>
@@ -499,6 +554,26 @@
                     evt.preventDefault();
                     activateTab(btn);
                 });
+            });
+        })();
+    </script>
+
+    <script>
+        (function () {
+            var modalEl = document.getElementById('seriesImageModal');
+            var imgEl = document.getElementById('seriesImageModalImg');
+            if (!modalEl || !imgEl) return;
+
+            modalEl.addEventListener('show.bs.modal', function (event) {
+                var trigger = event.relatedTarget;
+                if (!trigger) return;
+                var fullSrc = trigger.getAttribute('data-fullsrc');
+                if (!fullSrc) return;
+                imgEl.src = fullSrc;
+            });
+
+            modalEl.addEventListener('hidden.bs.modal', function () {
+                imgEl.removeAttribute('src');
             });
         })();
     </script>

@@ -269,7 +269,7 @@ namespace TinyGenerator.Services
                     }
                 }
                 
-                RaiseCompleted(workItem.RunId, workItem.OperationName, result);
+                RaiseCompleted(workItem.RunId, workItem.OperationName, result, workItem.Metadata);
             }
             catch (OperationCanceledException oce)
             {
@@ -284,7 +284,7 @@ namespace TinyGenerator.Services
                     cancelledState.ErrorMessage = "Operazione annullata";
                 }
                 
-                RaiseCompleted(workItem.RunId, workItem.OperationName, result);
+                RaiseCompleted(workItem.RunId, workItem.OperationName, result, workItem.Metadata);
             }
             catch (Exception ex)
             {
@@ -299,7 +299,7 @@ namespace TinyGenerator.Services
                     errorState.ErrorMessage = ex.Message;
                 }
                 
-                RaiseCompleted(workItem.RunId, workItem.OperationName, result);
+                RaiseCompleted(workItem.RunId, workItem.OperationName, result, workItem.Metadata);
             }
             finally
             {
@@ -467,14 +467,14 @@ namespace TinyGenerator.Services
             return await task.ConfigureAwait(false);
         }
 
-        private void RaiseCompleted(string runId, string operationName, CommandResult result)
+        private void RaiseCompleted(string runId, string operationName, CommandResult result, IReadOnlyDictionary<string, string>? metadata)
         {
             var handlers = CommandCompleted;
             if (handlers == null) return;
 
             try
             {
-                handlers(new CommandCompletedEventArgs(runId, operationName, result.Success, result.Message));
+                handlers(new CommandCompletedEventArgs(runId, operationName, result.Success, result.Message, metadata));
             }
             catch
             {

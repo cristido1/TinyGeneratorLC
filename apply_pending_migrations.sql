@@ -32,7 +32,8 @@ CREATE TABLE series_characters (
     voice_id INTEGER,
     episode_in INTEGER,
     episode_out INTEGER,
-    image TEXT
+    image TEXT,
+    aspect TEXT
 );
 CREATE INDEX IX_series_characters_serie_id ON series_characters(serie_id);
 CREATE INDEX IX_series_characters_voice_id ON series_characters(voice_id);

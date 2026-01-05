@@ -415,14 +415,14 @@ namespace TinyGenerator.Services.Commands
             await BroadcastAudioPipelineStepAsync(5, audioPipelineTotalSteps, "🔊 Accodamento generazione audio TTS...");
             await LogAndNotifyAsync("🔊 Accodamento generazione audio TTS...");
 
-            var runId = _storiesService.EnqueueGenerateTtsAudioCommand(storyId, trigger: "full_pipeline", priority: 3);
-            if (runId == null)
+            var enqueue = _storiesService.TryEnqueueGenerateTtsAudioCommand(storyId, trigger: "full_pipeline", priority: 3);
+            if (!enqueue.Enqueued)
             {
-                await LogAndNotifyAsync("❌ Impossibile accodare la generazione audio TTS", "error");
+                await LogAndNotifyAsync($"❌ {enqueue.Message}", "error");
                 return false;
             }
 
-            await LogAndNotifyAsync($"✅ Generazione audio TTS accodata (run {runId}). Seguiranno musica/ambience/fx in coda.", "success");
+            await LogAndNotifyAsync($"✅ Generazione audio TTS accodata (run {enqueue.RunId}). Seguiranno musica/ambience/fx in coda.", "success");
             await LogAndNotifyAsync($"[DEBUG] RunFullPipelineOnStoryAsync returning true");
             return true;
         }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -24,7 +25,249 @@ namespace TinyGenerator.Services
         private readonly ICommandDispatcher? _commandDispatcher;
         private readonly IServiceProvider _services;
         private readonly Dictionary<long, List<string>> _chunkCache = new();
+        private readonly ConcurrentDictionary<(long executionId, int threadId), ChapterEmbeddingHistory> _chapterEmbeddingCache = new();
         private readonly bool _autoRecoverStaleExecutions;
+
+        private sealed class ChapterEmbeddingHistory
+        {
+            public object Sync { get; } = new();
+            public List<ChapterEmbeddingEntry> Entries { get; } = new();
+        }
+
+        private sealed record ChapterEmbeddingEntry(int StepNumber, string Text, float[] Embedding);
+
+        private sealed record ChapterRepetitionCheckResult(
+            bool ShouldRetry,
+            string FeedbackMessage,
+            int TotalBlocks,
+            int HighSimilarityBlocks,
+            double HighSimilarityRatio,
+            float[]? ChapterEmbedding,
+            string CleanedChapterText);
+
+        private static readonly Regex ChapterHeadingRegex = new(
+            @"^\s*(?:#{1,6}\s*)?(?:capitolo|chapter)\b.*$",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant);
+
+        private static readonly Regex StandaloneNumberLineRegex = new(
+            @"^\s*\d+\s*[\.|\)]?\s*$",
+            RegexOptions.Multiline | RegexOptions.CultureInvariant);
+
+        private static string CleanChapterTextForEmbeddings(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+
+            var normalized = text.Replace("\r\n", "\n").Replace("\r", "\n");
+
+            // Remove chapter headings/titles and standalone numbering lines.
+            normalized = ChapterHeadingRegex.Replace(normalized, string.Empty);
+            normalized = StandaloneNumberLineRegex.Replace(normalized, string.Empty);
+
+            // Whitespace normalization is allowed.
+            normalized = Regex.Replace(normalized, @"\s+", " ").Trim();
+            return normalized;
+        }
+
+        private static List<string> SplitIntoWordBlocks(string text, int minWords = 300, int maxWords = 600)
+        {
+            var blocks = new List<string>();
+            if (string.IsNullOrWhiteSpace(text)) return blocks;
+
+            var words = Regex.Split(text.Trim(), @"\s+").Where(w => !string.IsNullOrWhiteSpace(w)).ToArray();
+            if (words.Length == 0) return blocks;
+
+            int index = 0;
+            while (index < words.Length)
+            {
+                var remaining = words.Length - index;
+                int take;
+
+                if (remaining <= maxWords)
+                {
+                    take = remaining;
+                }
+                else
+                {
+                    take = maxWords;
+                    // Avoid producing a very small tail block when possible.
+                    var tail = remaining - take;
+                    if (tail > 0 && tail < minWords)
+                    {
+                        take = Math.Max(minWords, remaining - minWords);
+                        take = Math.Min(take, maxWords);
+                    }
+                }
+
+                var blockWords = words.Skip(index).Take(take);
+                blocks.Add(string.Join(" ", blockWords));
+                index += take;
+            }
+
+            return blocks;
+        }
+
+        private static float[] AverageEmbeddings(IReadOnlyList<float[]> embeddings)
+        {
+            if (embeddings == null || embeddings.Count == 0) return Array.Empty<float>();
+            var dim = embeddings[0]?.Length ?? 0;
+            if (dim == 0) return Array.Empty<float>();
+
+            var sum = new double[dim];
+            int count = 0;
+
+            foreach (var emb in embeddings)
+            {
+                if (emb == null || emb.Length != dim) continue;
+                for (int i = 0; i < dim; i++)
+                {
+                    sum[i] += emb[i];
+                }
+                count++;
+            }
+
+            if (count == 0) return Array.Empty<float>();
+
+            var avg = new float[dim];
+            for (int i = 0; i < dim; i++)
+            {
+                avg[i] = (float)(sum[i] / count);
+            }
+
+            return avg;
+        }
+
+        private ChapterEmbeddingHistory GetChapterEmbeddingHistory(long executionId, int threadId)
+        {
+            return _chapterEmbeddingCache.GetOrAdd((executionId, threadId), _ => new ChapterEmbeddingHistory());
+        }
+
+        private void AddOrReplaceChapterEmbedding(long executionId, int threadId, int stepNumber, string cleanedText, float[] embedding)
+        {
+            if (embedding == null || embedding.Length == 0) return;
+            var history = GetChapterEmbeddingHistory(executionId, threadId);
+
+            lock (history.Sync)
+            {
+                history.Entries.RemoveAll(e => e.StepNumber == stepNumber);
+                history.Entries.Add(new ChapterEmbeddingEntry(stepNumber, cleanedText, embedding));
+                history.Entries.Sort((a, b) => a.StepNumber.CompareTo(b.StepNumber));
+            }
+        }
+
+        private async Task<ChapterRepetitionCheckResult?> CheckChapterRepetitionByEmbeddingsAsync(
+            long executionId,
+            int threadId,
+            int stepNumber,
+            string chapterText,
+            CancellationToken ct = default)
+        {
+            // Thresholds from spec (empirical): high similarity if > 0.82.
+            const double similarityThreshold = 0.82;
+            const double ratioFailThreshold = 0.25;
+            const double ratioMultipleHitThreshold = 0.20;
+
+            var cleaned = CleanChapterTextForEmbeddings(chapterText ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(cleaned))
+            {
+                return new ChapterRepetitionCheckResult(
+                    ShouldRetry: false,
+                    FeedbackMessage: string.Empty,
+                    TotalBlocks: 0,
+                    HighSimilarityBlocks: 0,
+                    HighSimilarityRatio: 0,
+                    ChapterEmbedding: null,
+                    CleanedChapterText: cleaned);
+            }
+
+            var history = GetChapterEmbeddingHistory(executionId, threadId);
+            List<float[]> previousChapterEmbeddings;
+            lock (history.Sync)
+            {
+                previousChapterEmbeddings = history.Entries
+                    .Where(e => e.StepNumber < stepNumber && e.Embedding != null && e.Embedding.Length > 0)
+                    .OrderBy(e => e.StepNumber)
+                    .Select(e => e.Embedding)
+                    .ToList();
+            }
+
+            // No historical chapters -> nothing to compare. Still compute a usable embedding to cache.
+            var blocks = SplitIntoWordBlocks(cleaned, minWords: 300, maxWords: 600);
+            if (blocks.Count == 0)
+            {
+                blocks = new List<string> { cleaned };
+            }
+
+            var blockEmbeddings = new List<float[]>(blocks.Count);
+            foreach (var block in blocks)
+            {
+                try
+                {
+                    var emb = await _embeddingGenerator.GenerateAsync(block, ct);
+                    if (emb != null && emb.Length > 0)
+                    {
+                        blockEmbeddings.Add(emb);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log("Warning", "MultiStep", $"Embedding generation failed for step {stepNumber} block: {ex.Message}");
+                    // If embeddings fail, abort sensor (non-blocking)
+                    return null;
+                }
+            }
+
+            var chapterEmbedding = AverageEmbeddings(blockEmbeddings);
+
+            if (previousChapterEmbeddings.Count == 0)
+            {
+                return new ChapterRepetitionCheckResult(
+                    ShouldRetry: false,
+                    FeedbackMessage: string.Empty,
+                    TotalBlocks: blocks.Count,
+                    HighSimilarityBlocks: 0,
+                    HighSimilarityRatio: 0,
+                    ChapterEmbedding: chapterEmbedding.Length > 0 ? chapterEmbedding : null,
+                    CleanedChapterText: cleaned);
+            }
+
+            var avgHistorical = AverageEmbeddings(previousChapterEmbeddings);
+            if (avgHistorical.Length == 0)
+            {
+                return null;
+            }
+
+            int high = 0;
+            for (int i = 0; i < blockEmbeddings.Count; i++)
+            {
+                var emb = blockEmbeddings[i];
+                if (emb == null || emb.Length == 0) continue;
+                var sim = CosineSimilarity(emb, avgHistorical);
+                if (sim >= similarityThreshold)
+                {
+                    high++;
+                }
+            }
+
+            var total = Math.Max(1, blockEmbeddings.Count);
+            var ratio = (double)high / total;
+
+            // Spec intent: fail when similarity crosses threshold on a meaningful portion of the chapter,
+            // and avoid punishing a single isolated block.
+            var shouldRetry = high >= 2 && (ratio > ratioFailThreshold || ratio >= ratioMultipleHitThreshold);
+
+            var feedback = shouldRetry
+                ? "Nel capitolo appena scritto sono presenti più passaggi che riprendono concetti già espressi in precedenza.\nRiduci spiegazioni e riformulazioni.\nLascia emergere i significati solo attraverso azioni e conseguenze."
+                : string.Empty;
+
+            return new ChapterRepetitionCheckResult(
+                ShouldRetry: shouldRetry,
+                FeedbackMessage: feedback,
+                TotalBlocks: total,
+                HighSimilarityBlocks: high,
+                HighSimilarityRatio: ratio,
+                ChapterEmbedding: chapterEmbedding.Length > 0 ? chapterEmbedding : null,
+                CleanedChapterText: cleaned);
+        }
 
         public MultiStepOrchestrationService(
             ILangChainKernelFactory kernelFactory,
@@ -945,6 +1188,56 @@ namespace TinyGenerator.Services
                 }
             }
 
+            // Post-generation repetition sensor for STORY chapters only (capitoli): run AFTER generation and core validations.
+            // Never affects sampling/prompt; only decides retry with narrative feedback.
+            ChapterRepetitionCheckResult? repetitionCheck = null;
+            var isChapterStep = isStoryTask && execution.CurrentStep >= 4; // Steps 1-3 are plot/characters/structure
+            var isWriterRole = !string.IsNullOrWhiteSpace(executorAgent.Role)
+                && (executorAgent.Role.Equals("writer", StringComparison.OrdinalIgnoreCase)
+                    || executorAgent.Role.Equals("story_writer", StringComparison.OrdinalIgnoreCase)
+                    || executorAgent.Role.Equals("text_writer", StringComparison.OrdinalIgnoreCase));
+
+            if (validationResult.IsValid && !isSummarizerStep && isChapterStep && isWriterRole)
+            {
+                try
+                {
+                    repetitionCheck = await CheckChapterRepetitionByEmbeddingsAsync(
+                        executionId,
+                        threadId,
+                        execution.CurrentStep,
+                        output,
+                        ct);
+
+                    if (repetitionCheck != null && repetitionCheck.ShouldRetry)
+                    {
+                        _logger.Log("Warning", "MultiStep",
+                            $"Embedding repetition sensor flagged step {execution.CurrentStep}: highBlocks={repetitionCheck.HighSimilarityBlocks}/{repetitionCheck.TotalBlocks} ratio={repetitionCheck.HighSimilarityRatio:F2}");
+
+                        if (execution.RetryCount < 2)
+                        {
+                            validationResult = new ValidationResult
+                            {
+                                IsValid = false,
+                                Reason = repetitionCheck.FeedbackMessage,
+                                NeedsRetry = true,
+                                SemanticScore = null
+                            };
+                        }
+                        else
+                        {
+                            // Max retries exceeded: accept anyway but log warning (per spec)
+                            _logger.Log("Warning", "MultiStep",
+                                $"Step {execution.CurrentStep} still flagged as repetitive after 3 attempts, proceeding anyway");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Non-blocking: never fail the step due to sensor issues.
+                    _logger.Log("Warning", "MultiStep", $"Embedding repetition sensor failed for step {execution.CurrentStep}: {ex.Message}");
+                }
+            }
+
             if (validationResult.IsValid)
             {
                 // Step valid - check if this step requires evaluator validation
@@ -1027,6 +1320,12 @@ namespace TinyGenerator.Services
 
                 _database.CreateTaskExecutionStep(step);
                 _logger.Log("Information", "MultiStep", $"Step {execution.CurrentStep} completed successfully");
+
+                // If this was a story chapter step and we have an embedding, cache it for future chapter checks.
+                if (isChapterStep && isWriterRole && repetitionCheck?.ChapterEmbedding != null && repetitionCheck.ChapterEmbedding.Length > 0)
+                {
+                    AddOrReplaceChapterEmbedding(executionId, threadId, execution.CurrentStep, repetitionCheck.CleanedChapterText, repetitionCheck.ChapterEmbedding);
+                }
 
                 // Advance to next step
                 execution.CurrentStep++;
@@ -2394,8 +2693,12 @@ RIASSUNTO:";
                     {
                         Directory.CreateDirectory(workingFolder);
                         var filePath = Path.Combine(workingFolder, "tts_schema.json");
-                        var json = JsonSerializer.Serialize(schema, new JsonSerializerOptions { WriteIndented = true });
-                        File.WriteAllText(filePath, json);
+                        var json = JsonSerializer.Serialize(schema, new JsonSerializerOptions
+                        {
+                            WriteIndented = true,
+                            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                        });
+                        File.WriteAllText(filePath, json, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
                         _logger.Log("Information", "MultiStep", $"Saved final TTS schema to {filePath}");
                     }
                     catch (Exception ex)
@@ -2417,6 +2720,20 @@ RIASSUNTO:";
             if (_chunkCache.ContainsKey(executionId))
             {
                 _chunkCache.Remove(executionId);
+            }
+
+            // Best-effort cleanup of chapter embedding cache for this execution
+            try
+            {
+                var keysToRemove = _chapterEmbeddingCache.Keys.Where(k => k.executionId == executionId).ToList();
+                foreach (var key in keysToRemove)
+                {
+                    _chapterEmbeddingCache.TryRemove(key, out _);
+                }
+            }
+            catch
+            {
+                // ignore cleanup errors
             }
 
             _logger.Log("Information", "MultiStep", $"Execution {executionId} completed successfully");

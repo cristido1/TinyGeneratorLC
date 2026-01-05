@@ -892,6 +892,16 @@ public sealed class DatabaseService
             .ToList();
     }
 
+    public void UpdateSeriesCharacterImage(int characterId, string? image)
+    {
+        using var context = CreateDbContext();
+        var character = context.SeriesCharacters.Find(characterId);
+        if (character == null) return;
+
+        character.Image = image;
+        context.SaveChanges();
+    }
+
     public void IncrementSeriesEpisodeCount(int serieId)
     {
         using var context = CreateDbContext();
@@ -930,6 +940,40 @@ public sealed class DatabaseService
             context.Series.Remove(serie);
             context.SaveChanges();
         }
+    }
+
+    public int EnsureSeriesFoldersOnDisk(string contentRootPath)
+    {
+        if (string.IsNullOrWhiteSpace(contentRootPath)) return 0;
+
+        using var context = CreateDbContext();
+        var list = context.Series.ToList();
+        if (list.Count == 0) return 0;
+
+        var updated = 0;
+        var seriesRoot = Path.Combine(contentRootPath, "series_folder");
+        Directory.CreateDirectory(seriesRoot);
+
+        foreach (var s in list)
+        {
+            var folder = (s.Folder ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(folder))
+            {
+                folder = $"serie_{s.Id:D4}";
+                s.Folder = folder;
+                updated++;
+            }
+
+            var full = Path.Combine(seriesRoot, folder);
+            Directory.CreateDirectory(full);
+        }
+
+        if (updated > 0)
+        {
+            context.SaveChanges();
+        }
+
+        return updated;
     }
 
     /// <summary>

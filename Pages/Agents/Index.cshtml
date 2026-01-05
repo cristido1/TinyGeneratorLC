@@ -15,7 +15,7 @@
                 {
                     if (!string.IsNullOrWhiteSpace(m.Name))
                     {
-                        <option value="@m.Name" selected="@(Model.ModelFilter == m.Name ? "selected" : null)">@m.Name</option>
+                        <option value="@m.Name" selected="@(Model.ModelFilter == m.Name ? "selected" : null)">@m.Name @(m.Speed.HasValue ? "(sp:" + m.Speed.ToString() + ")" : "(sp:-)")</option>
                     }
                 }
             </select>
@@ -73,6 +73,7 @@
                     <th data-col="multistep">MultiStep Template</th>
                     <th data-col="json">JSON Format</th>
                     <th data-col="active">Active</th>
+                    <th data-col="detail">Dettaglio</th>
                     <th data-col="actions">Azioni</th>
                 </tr>
             </thead>
@@ -94,6 +95,9 @@
                         <td data-col="multistep">@(!string.IsNullOrWhiteSpace(agent.MultiStepTemplateName) ? agent.MultiStepTemplateName : "-")</td>
                         <td data-col="json">@agent.JsonResponseFormat</td>
                         <td data-col="active">@(agent.IsActive ? "Yes" : "No")</td>
+                        <td data-col="detail">
+                            <button type="button" class="btn btn-sm btn-outline-secondary detail-toggle" data-detail-toggle aria-expanded="false">Dettaglio</button>
+                        </td>
                         <td data-col="actions">
                             <div class="dropdown">
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
@@ -125,6 +129,65 @@
                                         }
                                     }
                                 </ul>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr class="agent-detail-row d-none" data-detail-row="agent">
+                        <td colspan="15">
+                            <div class="p-3 bg-light border rounded">
+                                <div class="row g-3">
+                                    @if (!string.IsNullOrWhiteSpace(agent.Prompt))
+                                    {
+                                        <div class="col-12">
+                                            <div class="small text-muted">Prompt</div>
+                                            <div style="white-space:pre-wrap;">@agent.Prompt</div>
+                                        </div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(agent.Instructions))
+                                    {
+                                        <div class="col-12">
+                                            <div class="small text-muted">Instructions</div>
+                                            <div style="white-space:pre-wrap;">@agent.Instructions</div>
+                                        </div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(agent.Config))
+                                    {
+                                        <div class="col-12">
+                                            <div class="small text-muted">Config</div>
+                                            <pre class="border rounded p-2" style="white-space:pre-wrap;">@agent.Config</pre>
+                                        </div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(agent.ExecutionPlan))
+                                    {
+                                        <div class="col-12">
+                                            <div class="small text-muted">Execution Plan</div>
+                                            <div style="white-space:pre-wrap;">@agent.ExecutionPlan</div>
+                                        </div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(agent.Notes))
+                                    {
+                                        <div class="col-12">
+                                            <div class="small text-muted">Notes</div>
+                                            <div style="white-space:pre-wrap;">@agent.Notes</div>
+                                        </div>
+                                    }
+                                    <div class="col-12 col-md-6">
+                                        <div class="small text-muted">Model</div>
+                                        <div>@(string.IsNullOrWhiteSpace(agent.ModelName) ? (agent.ModelId?.ToString() ?? "-") : agent.ModelName)</div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="small text-muted">Voice</div>
+                                        <div>@(string.IsNullOrWhiteSpace(agent.VoiceName) ? (agent.VoiceId?.ToString() ?? "-") : agent.VoiceName)</div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="small text-muted">Created At</div>
+                                        <div>@agent.CreatedAt</div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <div class="small text-muted">Updated At</div>
+                                        <div>@(string.IsNullOrWhiteSpace(agent.UpdatedAt) ? "-" : agent.UpdatedAt)</div>
+                                    </div>
+                                </div>
                             </div>
                         </td>
                     </tr>
@@ -220,6 +283,32 @@
                 roleFilterSelect.addEventListener('change', () => {
                     localStorage.setItem(roleStorageKey, roleFilterSelect.value || '');
                 });
+            }
+        });
+    </script>
+    <script>
+        // Fallback detail toggle: mirrors Series page behavior
+        document.addEventListener('click', function (evt) {
+            const btn = evt.target.closest('[data-detail-toggle]');
+            if (!btn) return;
+            const tr = btn.closest('tr');
+            if (!tr) return;
+
+            let detailRow = tr.nextElementSibling;
+            while (detailRow && !(detailRow.matches('[data-detail-row]') || detailRow.classList.contains('agent-detail-row'))) {
+                detailRow = detailRow.nextElementSibling;
+            }
+            if (!detailRow) return;
+
+            const isHidden = detailRow.classList.contains('d-none') || detailRow.style.display === 'none';
+            if (isHidden) {
+                detailRow.classList.remove('d-none');
+                detailRow.style.display = 'table-row';
+                btn.setAttribute('aria-expanded', 'true');
+            } else {
+                detailRow.style.display = 'none';
+                detailRow.classList.add('d-none');
+                btn.setAttribute('aria-expanded', 'false');
             }
         });
     </script>

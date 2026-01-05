@@ -1,0 +1,174 @@
+# Istruzioni per l'utilizzo delle API di Scene Renderer
+
+## Descrizione
+Le API di Scene Renderer consentono di generare immagini di personaggi, ambientazioni e scene composite utilizzando richieste HTTP. Le immagini generate vengono restituite direttamente nella risposta e rimosse dal sistema locale dopo l'invio.
+
+## Endpoints
+
+### 1. Generazione immagini personaggi
+- **Endpoint**: `POST /generate_characters`
+- **Descrizione**: Genera immagini di personaggi basandosi sui dati forniti e restituisce le immagini direttamente nella risposta in formato base64.
+- **Richiesta**:
+  ```json
+  {
+    "story_id": "123",
+    "characters": [
+      {
+        "name": "John",
+        "emotion": "happy",
+        "description": "A brave knight with shining armor.",
+        "style": "realistic",
+        "seed": 42,
+        "output_size": [512, 512],
+        "background": "transparent",
+        "clothing": "medieval armor",
+        "accessories": "sword"
+      },
+      {
+        "name": "Jane",
+        "emotion": "sad",
+        "description": "A young woman in a flowing dress.",
+        "style": "cartoon",
+        "seed": 84,
+        "output_size": [512, 512],
+        "background": "solid",
+        "clothing": "casual dress",
+        "accessories": "hat"
+      }
+    ]
+  }
+  ```
+- **Risposta**:
+  ```json
+  {
+    "status": "success",
+    "characters": [
+      {
+        "name": "John",
+        "data": "<base64_encoded_data>"
+      },
+      {
+        "name": "Jane",
+        "data": "<base64_encoded_data>"
+      }
+    ]
+  }
+  ```
+
+### 2. Generazione immagini ambientazioni
+- **Endpoint**: `POST /generate_backgrounds`
+- **Descrizione**: Genera immagini di sfondi basandosi sui dati forniti e restituisce le immagini direttamente nella risposta in formato base64.
+- **Richiesta**:
+  ```json
+  {
+    "story_id": "123",
+    "environments": [
+      {
+        "id": "beach",
+        "description": "A sunny beach with palm trees.",
+        "prompt": "A tropical beach during sunset"
+      },
+      {
+        "id": "mountain",
+        "description": "A snowy mountain peak.",
+        "prompt": "A majestic snowy mountain under a clear blue sky"
+      }
+    ],
+    "output_dir": "output/backgrounds"
+  }
+  ```
+- **Risposta**:
+  ```json
+  {
+    "status": "success",
+    "backgrounds": [
+      {
+        "id": "beach",
+        "data": "<base64_encoded_data>"
+      },
+      {
+        "id": "mountain",
+        "data": "<base64_encoded_data>"
+      }
+    ]
+  }
+  ```
+
+### 3. Generazione scene composite
+- **Endpoint**: `POST /generate_scenes`
+- **Descrizione**: Combina un'immagine di sfondo e immagini di personaggi in un'unica scena e restituisce l'immagine finale in formato base64.
+- **Richiesta**:
+  ```json
+  {
+    "story_id": "123",
+    "scenes": [
+      {
+        "id": "scene1",
+        "background": "<base64_encoded_background_image>",
+        "characters": [
+          {
+            "image": "<base64_encoded_character_image>",
+            "position": [100, 200]
+          },
+          {
+            "image": "<base64_encoded_character_image>",
+            "position": [300, 200]
+          }
+        ]
+      }
+    ]
+  }
+  ```
+- **Risposta**:
+  ```json
+  {
+    "status": "success",
+    "scenes": [
+      {
+        "id": "scene1",
+        "data": "<base64_encoded_final_scene_image>"
+      }
+    ]
+  }
+  ```
+
+### 4. Stato del servizio
+- **Endpoint**: `GET /status`
+- **Descrizione**: Verifica lo stato del servizio.
+- **Risposta**:
+  ```json
+  {
+    "status": "running"
+  }
+  ```
+
+## Note
+- Le immagini vengono restituite in formato base64 nella risposta.
+- Dopo l'invio, i file locali vengono eliminati automaticamente.
+- Assicurarsi che i file di input (es. JSON) siano correttamente formattati.
+
+## Avvio del servizio
+1. Avviare il servizio API:
+   ```bash
+   uvicorn scene_renderer:app --host 0.0.0.0 --port 8010
+   ```
+2. Accedere agli endpoint tramite un client HTTP (es. Postman, cURL).
+
+## Esempio di utilizzo con cURL
+### Generazione immagini personaggi
+```bash
+curl -X POST "http://localhost:8010/generate_characters" \
+-H "Content-Type: application/json" \
+-d '{
+  "story_id": "123",
+  "characters": [
+    {"name": "John", "emotion": "happy", "description": "A brave knight with shining armor."},
+    {"name": "Jane", "emotion": "sad", "description": "A young woman in a flowing dress."}
+  ]
+}'
+```
+
+### Stato del servizio
+```bash
+curl -X GET "http://localhost:8010/status"
+```

@@ -35,7 +35,7 @@
                 <option value="">-- none --</option>
                 @foreach (var m in Model.Models)
                 {
-                    <option value="@m.Name" selected="@((Model.SelectedModelName == m.Name) ? "selected" : null)">@m.Name @((!string.IsNullOrWhiteSpace(m.Provider)) ? "(" + m.Provider + ")" : "")</option>
+                    <option value="@m.Name" selected="@((Model.SelectedModelName == m.Name) ? "selected" : null)">@m.Name @((!string.IsNullOrWhiteSpace(m.Provider)) ? "(" + m.Provider + ")" : "") @(m.Speed.HasValue ? "(sp:" + m.Speed.ToString() + ")" : "(sp:-)")</option>
                 }
             </select>
         </div>

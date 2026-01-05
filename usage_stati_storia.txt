@@ -1,0 +1,18 @@
+Stati storia:
+1) inserted : la storia è appena stata inserita ed ha solo il campo story_raw compilato, non ci sono operazioni precedenti. 
+2) revised: la storia è stata sottoposta a revisione quindi a partire dal testo di story_raw è stato generato il testo story_revised, per passare a questo stato dallo stato inserted è necessario lanciare il comando di generazione storia revised
+3) evaluated : la storia scritta in story_revised è stata valutata da almeno due valutatori e quindi ha un punteggio di valutazione tra 1 e 100, per passare a questo stato vanno completate le valutazioni di almeno due agenti valutatori.
+-------------------------------------------------
+proseguono solo le storie con punteggio >= 65
+-----------------------------------------------
+4) tagged : a partire dal testo in story_revised è stato generato il testo in story_tagged, per passare in questo stato va lanciato il comando di generazione della storia tagged. 
+5) tts_schema_generated: a partire dal testo in story_revised viene generato nella cartella della storia il file tts_schema.json, poi viene normalizzato l'elenco dei personaggi e dei sentimenti, per passare in questi stato va lanciato il comando di generaizone tts_schema e di normalizzazione personaggi e sentimenti.
+6) tts_generated : sono stati generati i files .wav del tts e nel file tts_schema.json ci sono i nomi ed i tempi dei files .wav generati, per passare a questa fase va lanciato il comando di generazione tts.
+7) ambient_generated : sono stati generati i files .wav dei rumori ambientali e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato bisogna lanciare il comando di generazione dei rumori ambientali.
+8) fx_generated : sono stati generati i files .wav degli effetti sonori e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato 
+bisogna lanciare il comando di generazione effetti speciali.
+9) music_generated : sono stati generati i files .wav della musica e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato 
+bisogna lanciare il comando di generazione della musica.
+10) audio_master_generated : a partire dai tempi in tts_schema.json ed i nomi ed i tempi dei file tts, rumori ambientali, effetti speciali e musica genero il file audio principale .wav e anche la versione mp3, per passare in questo stato bisogna lanciare il comando di mix audio finale.
+
+

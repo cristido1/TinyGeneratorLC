@@ -49,7 +49,7 @@
                             <option value="">-- nessuno --</option>
                             @foreach(var m in Model.Models)
                             {
-                                <option value="@m.Id" selected="@((Model.ModelId==m.Id)?"selected":"")">@m.Name (@m.Provider)</option>
+                                <option value="@m.Id" selected="@((Model.ModelId==m.Id)?"selected":"")">@m.Name (@m.Provider) @(m.Speed.HasValue ? "(sp:" + m.Speed.ToString() + ")" : "(sp:-)")</option>
                             }
                         </select>
                     </div>

@@ -53,4 +53,7 @@ public sealed class SeriesCharacter
 
     [Column("image")]
     public string? Image { get; set; }
+
+    [Column("aspect")]
+    public string? Aspect { get; set; }
 }

@@ -858,6 +858,14 @@ namespace TinyGenerator.Services
                     if (index >= 0)
                     {
                         remainingText = remainingText.Remove(index, normalizedExtracted.Length);
+                        continue;
+                    }
+
+                    // Fallback: allow a "gappy" in-order match (dialogue with inserted attributions in the original).
+                    // If we can match all words in order, remove the whole span (including the gaps) from remaining.
+                    if (TryRemoveInOrderSpanMatch(ref remainingText, normalizedExtracted))
+                    {
+                        continue;
                     }
                 }
 
@@ -966,11 +974,95 @@ namespace TinyGenerator.Services
         {
             if (string.IsNullOrWhiteSpace(text)) return string.Empty;
 
-            // Remove common punctuation
-            var normalized = System.Text.RegularExpressions.Regex.Replace(text, @"[.,!?;:\""\'\-\(\)\[\]]", "");
+            // Some stored chunks contain literal escape sequences (e.g. "\\n") rather than real newlines.
+            // Treat them as whitespace to keep coverage matching stable.
+            text = text.Replace("\\r", " ", StringComparison.Ordinal)
+                       .Replace("\\n", " ", StringComparison.Ordinal)
+                       .Replace("\\t", " ", StringComparison.Ordinal);
+
+            // Keep only letters/digits/whitespace to be robust against Unicode punctuation
+            // (curly quotes, guillemets, em-dash, smart apostrophes, etc.).
+            var sb = new System.Text.StringBuilder(text.Length);
+            foreach (var ch in text)
+            {
+                if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch))
+                {
+                    sb.Append(ch);
+                }
+                else
+                {
+                    sb.Append(' ');
+                }
+            }
+
+            var normalized = sb.ToString();
             // Collapse multiple spaces
             normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ");
             return normalized.Trim().ToLowerInvariant();
+        }
+
+        private static bool TryRemoveInOrderSpanMatch(ref string remainingText, string normalizedExtracted)
+        {
+            if (string.IsNullOrWhiteSpace(remainingText)) return false;
+            if (string.IsNullOrWhiteSpace(normalizedExtracted)) return false;
+
+            var remainingTokens = remainingText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var extractedTokens = normalizedExtracted.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            if (remainingTokens.Length < 2 || extractedTokens.Length < 2) return false;
+
+            const int maxGapWords = 10;
+
+            for (int start = 0; start < remainingTokens.Length; start++)
+            {
+                if (!string.Equals(remainingTokens[start], extractedTokens[0], StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                int currentIndex = start;
+                bool ok = true;
+
+                for (int i = 1; i < extractedTokens.Length; i++)
+                {
+                    var target = extractedTokens[i];
+                    int searchFrom = currentIndex + 1;
+                    int searchToExclusive = Math.Min(remainingTokens.Length, searchFrom + maxGapWords + 1);
+
+                    int found = -1;
+                    for (int j = searchFrom; j < searchToExclusive; j++)
+                    {
+                        if (string.Equals(remainingTokens[j], target, StringComparison.OrdinalIgnoreCase))
+                        {
+                            found = j;
+                            break;
+                        }
+                    }
+
+                    if (found < 0)
+                    {
+                        ok = false;
+                        break;
+                    }
+
+                    currentIndex = found;
+                }
+
+                if (!ok) continue;
+
+                // Remove the entire span (including any gap words) between the first and last matched tokens.
+                var newTokens = new List<string>(remainingTokens.Length);
+                for (int i = 0; i < remainingTokens.Length; i++)
+                {
+                    if (i < start || i > currentIndex)
+                    {
+                        newTokens.Add(remainingTokens[i]);
+                    }
+                }
+
+                remainingText = string.Join(' ', newTokens);
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>

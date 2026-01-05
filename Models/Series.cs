@@ -48,6 +48,17 @@ public sealed class Series
     [Column("lingua")]
     [MaxLength(50)]
     public string? Lingua { get; set; } = "Italiano";
+
+    // ==========================================
+    // ASSET / FILESYSTEM
+    // ==========================================
+
+    /// <summary>
+    /// Optional folder name under series_folder/ (e.g. 0001_mia_serie). Used to store series-consistent assets (music, etc.).
+    /// </summary>
+    [Column("folder")]
+    [MaxLength(255)]
+    public string? Folder { get; set; }
     
     // ==========================================
     // CAMPI PER GENERAZIONE EPISODI (PROMPT WRITER)

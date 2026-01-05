@@ -128,17 +128,17 @@ public class TestAutomationController : ControllerBase
 
             // Unified path: single dispatcher command, storyId only.
             // voiceId is currently ignored by the TTS pipeline (voices are assigned from tts_schema.json).
-            var runId = _storiesService.EnqueueGenerateTtsAudioCommand(request.StoryId, trigger: "test_api", priority: 3);
-            if (runId == null)
-            {
-                return Ok(new { success = false, error = "Failed to enqueue TTS generation" });
+                var enqueue = _storiesService.TryEnqueueGenerateTtsAudioCommand(request.StoryId, trigger: "test_api", priority: 3);
+                if (!enqueue.Enqueued)
+                {
+                    return BadRequest(enqueue.Message);
             }
 
-            return Ok(new
-            {
-                success = true,
-                commandId = runId,
-                message = "TTS generation enqueued"
+                return Ok(new
+                {
+                    success = true,
+                    commandId = enqueue.RunId,
+                    message = "TTS generation enqueued"
             });
         }
         catch (Exception ex)

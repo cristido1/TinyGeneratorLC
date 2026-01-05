@@ -18,7 +18,7 @@ namespace TinyGenerator.Skills
     public class TtsApiTool : BaseLangChainTool, ITinyTool
     {
         private readonly HttpClient _http;
-        private readonly string _baseUrl = "http://localhost:8004";
+        private readonly string _baseUrl = "http://0.0.0.0:8004";
         public string? LastSynthFormat { get; set; }
 
         public int? ModelId { get; set; }

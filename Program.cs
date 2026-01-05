@@ -54,6 +54,12 @@ builder.Services.AddSignalR();
 // Register a named HttpClient "default" and rely on IHttpClientFactory elsewhere.
 builder.Services.AddHttpClient("default");
 
+// Scene renderer API client (image generation can take a while)
+builder.Services.AddHttpClient<ImageService>(c =>
+{
+    c.Timeout = TimeSpan.FromMinutes(3);
+});
+
 // Tokenizer (try to use local tokenizer library if installed; fallback inside service)
 builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_base"));
 
@@ -250,6 +256,20 @@ try
 catch (Exception ex)
 {
     logger?.LogWarning(ex, "[Startup] Failed to apply manual migrations: {msg}", ex.Message);
+}
+
+// Ensure series_folder structure exists and backfill series.folder values (best-effort)
+try
+{
+    var updated = dbInit?.EnsureSeriesFoldersOnDisk(builder.Environment.ContentRootPath) ?? 0;
+    if (updated > 0)
+    {
+        logger?.LogInformation("[Startup] Series folders ensured; updated {count} series folder values", updated);
+    }
+}
+catch (Exception ex)
+{
+    logger?.LogWarning(ex, "[Startup] Failed to ensure series folders: {msg}", ex.Message);
 }
 
 // Initialize monotonic id generators once DB schema is ready.

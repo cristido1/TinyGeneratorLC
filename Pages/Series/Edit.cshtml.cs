@@ -3,26 +3,45 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using TinyGenerator.Data;
 using TinyGenerator.Models;
+using TinyGenerator.Services;
+using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Pages.Series
 {
     public class EditModel : PageModel
     {
         private readonly TinyGeneratorDbContext _context;
+        private readonly ICommandDispatcher? _dispatcher;
+        private readonly DatabaseService? _database;
+        private readonly ImageService? _images;
+        private readonly ICustomLogger? _logger;
+        private readonly IWebHostEnvironment? _env;
         private const string CharacterImageFolder = "series_characters";
         private static readonly HashSet<string> AllowedImageExtensions = new(StringComparer.OrdinalIgnoreCase)
         {
             ".jpg", ".jpeg", ".png", ".gif", ".webp"
         };
 
-        public EditModel(TinyGeneratorDbContext context)
+        public EditModel(
+            TinyGeneratorDbContext context,
+            ICommandDispatcher? dispatcher = null,
+            DatabaseService? database = null,
+            ImageService? images = null,
+            ICustomLogger? logger = null,
+            IWebHostEnvironment? env = null)
         {
             _context = context;
+            _dispatcher = dispatcher;
+            _database = database;
+            _images = images;
+            _logger = logger;
+            _env = env;
         }
 
         [BindProperty]
@@ -158,6 +177,7 @@ namespace TinyGenerator.Pages.Series
                 Name = CharacterInput.Name?.Trim() ?? string.Empty,
                 Gender = normalizedGender,
                 Description = CharacterInput.Description?.Trim(),
+                Aspect = CharacterInput.Aspect?.Trim(),
                 Eta = CharacterInput.Eta?.Trim(),
                 Formazione = CharacterInput.Formazione?.Trim(),
                 Specializzazione = CharacterInput.Specializzazione?.Trim(),
@@ -226,6 +246,7 @@ namespace TinyGenerator.Pages.Series
             existing.Name = CharacterInput.Name?.Trim() ?? string.Empty;
             existing.Gender = normalizedGender;
             existing.Description = CharacterInput.Description?.Trim();
+            existing.Aspect = CharacterInput.Aspect?.Trim();
             existing.Eta = CharacterInput.Eta?.Trim();
             existing.Formazione = CharacterInput.Formazione?.Trim();
             existing.Specializzazione = CharacterInput.Specializzazione?.Trim();
@@ -350,6 +371,145 @@ namespace TinyGenerator.Pages.Series
             catch (Exception ex)
             {
                 TempData["ErrorMessage"] = "Errore assegnazione voci: " + ex.Message;
+            }
+
+            return RedirectToPage(new { id = seriesId, tab = "characters" });
+        }
+
+        public IActionResult OnPostGenerateCharacterImages(int seriesId)
+        {
+            if (seriesId <= 0) return BadRequest();
+            SetActiveTab("characters");
+
+            if (_dispatcher == null || _database == null || _images == null || _logger == null)
+            {
+                TempData["ErrorMessage"] = "Dispatcher/servizi immagini non disponibili.";
+                return RedirectToPage(new { id = seriesId, tab = "characters" });
+            }
+
+            var contentRoot = _env?.ContentRootPath;
+            if (string.IsNullOrWhiteSpace(contentRoot))
+            {
+                TempData["ErrorMessage"] = "ContentRootPath non disponibile (ambiente hosting).";
+                return RedirectToPage(new { id = seriesId, tab = "characters" });
+            }
+
+            try
+            {
+                var metadata = new Dictionary<string, string>
+                {
+                    // The command panel shows storyId badge; use seriesId as requested.
+                    ["storyId"] = seriesId.ToString(),
+                    ["seriesId"] = seriesId.ToString()
+                };
+
+                var handle = _dispatcher.Enqueue(
+                    operationName: "generate_character_images",
+                    handler: async ctx =>
+                    {
+                        try
+                        {
+                            var cmd = new GenerateSeriesCharacterImagesCommand(seriesId, contentRoot, _database, _images, _dispatcher, _logger);
+                            var summary = await cmd.ExecuteAsync(ctx.RunId, ctx.CancellationToken);
+                            return new CommandResult(true, $"Immagini personaggi generate per serie {seriesId} (generate: {summary.ImagesGenerated})");
+                        }
+                        catch (Exception ex)
+                        {
+                            // Returning failure ensures the command panel shows FAILED with the error.
+                            return new CommandResult(false, ex.Message);
+                        }
+                    },
+                    threadScope: "series",
+                    metadata: metadata,
+                    priority: 2);
+
+                TempData["StatusMessage"] = $"Generazione immagini avviata (runId: {handle.RunId}).";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore avvio generazione immagini: " + ex.Message;
+            }
+
+            return RedirectToPage(new { id = seriesId, tab = "characters" });
+        }
+
+        public IActionResult OnPostGenerateCharacterImage(int seriesId, int characterId)
+        {
+            if (seriesId <= 0 || characterId <= 0) return BadRequest();
+            SetActiveTab("characters");
+
+            if (_dispatcher == null || _database == null || _images == null || _logger == null)
+            {
+                TempData["ErrorMessage"] = "Dispatcher/servizi immagini non disponibili.";
+                return RedirectToPage(new { id = seriesId, tab = "characters" });
+            }
+
+            var contentRoot = _env?.ContentRootPath;
+            if (string.IsNullOrWhiteSpace(contentRoot))
+            {
+                TempData["ErrorMessage"] = "ContentRootPath non disponibile (ambiente hosting).";
+                return RedirectToPage(new { id = seriesId, tab = "characters" });
+            }
+
+            // Do not generate for narrator
+            try
+            {
+                var ch = _context.SeriesCharacters.FirstOrDefault(c => c.Id == characterId && c.SerieId == seriesId);
+                if (ch == null)
+                {
+                    TempData["ErrorMessage"] = "Personaggio non trovato.";
+                    return RedirectToPage(new { id = seriesId, tab = "characters" });
+                }
+
+                var name = (ch.Name ?? string.Empty).Trim();
+                if (string.Equals(name, "narratore", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "narrator", StringComparison.OrdinalIgnoreCase))
+                {
+                    TempData["StatusMessage"] = "Personaggio narratore: immagine non generata.";
+                    return RedirectToPage(new { id = seriesId, tab = "characters" });
+                }
+            }
+            catch
+            {
+                // best-effort
+            }
+
+            try
+            {
+                var metadata = new Dictionary<string, string>
+                {
+                    ["storyId"] = seriesId.ToString(),
+                    ["seriesId"] = seriesId.ToString(),
+                    ["characterId"] = characterId.ToString()
+                };
+
+                var handle = _dispatcher.Enqueue(
+                    operationName: "generate_character_image",
+                    handler: async ctx =>
+                    {
+                        try
+                        {
+                            var cmd = new GenerateSeriesCharacterImagesCommand(seriesId, contentRoot, _database, _images, _dispatcher, _logger, characterId);
+                            var summary = await cmd.ExecuteAsync(ctx.RunId, ctx.CancellationToken);
+                            var kb = summary.TotalBytes / 1024.0;
+                            var prompt = summary.LastPrompt ?? string.Empty;
+                            var folder = summary.SaveFolder ?? string.Empty;
+                            var file = summary.LastFileName ?? string.Empty;
+                            return new CommandResult(true, $"Immagine personaggio generata (serie {seriesId}, character {characterId}), folder=\"{folder}\", file=\"{file}\", size={kb:F1} KB, prompt=\"{prompt}\"");
+                        }
+                        catch (Exception ex)
+                        {
+                            return new CommandResult(false, ex.Message);
+                        }
+                    },
+                    threadScope: "series",
+                    metadata: metadata,
+                    priority: 2);
+
+                TempData["StatusMessage"] = $"Generazione immagine avviata (runId: {handle.RunId}).";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore avvio generazione immagine: " + ex.Message;
             }
 
             return RedirectToPage(new { id = seriesId, tab = "characters" });
@@ -588,6 +748,7 @@ namespace TinyGenerator.Pages.Series
             public string Name { get; set; } = string.Empty;
             public string Gender { get; set; } = "other";
             public string? Description { get; set; }
+            public string? Aspect { get; set; }
             public string? Eta { get; set; }
             public string? Formazione { get; set; }
             public string? Specializzazione { get; set; }

@@ -8,6 +8,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Text.Encodings.Web;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using TinyGenerator.Models;
@@ -34,17 +36,20 @@ public sealed class StoriesService
     private readonly MultiStepOrchestrationService? _multiStepOrchestrator;
     private readonly SentimentMappingService? _sentimentMappingService;
     private readonly ResponseCheckerService? _responseChecker;
+    private readonly ConcurrentDictionary<long, StatusChainState> _statusChains = new();
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
-        WriteIndented = true
+        WriteIndented = true,
+        // IMPORTANT: write real UTF-8 characters (no \uXXXX escaping) so TTS reads accents correctly.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     private const double AutoFormatMinAverageScore = 65.0;
     private const int AutoFormatMinEvaluations = 2;
 
     public StoriesService(
-        DatabaseService database, 
+        DatabaseService database,
         TtsService ttsService,
         ILangChainKernelFactory? kernelFactory = null,
         ICustomLogger? customLogger = null,
@@ -132,6 +137,138 @@ public sealed class StoriesService
         }
 
         return ordered.FirstOrDefault(s => s.Step > current.Step);
+    }
+
+    private sealed class StatusChainState
+    {
+        public string ChainId { get; }
+        public int? LastEnqueuedStatusId { get; set; }
+
+        public StatusChainState(string chainId)
+        {
+            ChainId = chainId;
+        }
+    }
+
+    public bool IsStatusChainActive(long storyId, out string chainId)
+    {
+        chainId = string.Empty;
+        if (storyId <= 0) return false;
+
+        if (_statusChains.TryGetValue(storyId, out var state) && state != null && !string.IsNullOrWhiteSpace(state.ChainId))
+        {
+            chainId = state.ChainId;
+            return true;
+        }
+
+        return false;
+    }
+
+    public void StopStatusChain(long storyId)
+    {
+        if (storyId <= 0) return;
+        _statusChains.TryRemove(storyId, out _);
+    }
+
+    public string? EnqueueStatusChain(long storyId)
+    {
+        if (storyId <= 0) return null;
+        if (_commandDispatcher == null) return null;
+
+        if (IsStatusChainActive(storyId, out var existing))
+        {
+            return existing;
+        }
+
+        var story = GetStoryById(storyId);
+        if (story == null) return null;
+
+        var chainId = $"chain_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+        var state = new StatusChainState(chainId);
+        if (!_statusChains.TryAdd(storyId, state))
+        {
+            return IsStatusChainActive(storyId, out var current) ? current : null;
+        }
+
+        // Enqueue the first step immediately.
+        var started = TryAdvanceStatusChain(storyId, chainId);
+        if (!started)
+        {
+            StopStatusChain(storyId);
+            return null;
+        }
+
+        return chainId;
+    }
+
+    public bool TryAdvanceStatusChain(long storyId, string chainId)
+    {
+        if (storyId <= 0) return false;
+        if (string.IsNullOrWhiteSpace(chainId)) return false;
+        if (_commandDispatcher == null) return false;
+
+        if (!_statusChains.TryGetValue(storyId, out var state) || state == null)
+            return false;
+        if (!string.Equals(state.ChainId, chainId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var story = GetStoryById(storyId);
+        if (story == null)
+        {
+            StopStatusChain(storyId);
+            return false;
+        }
+
+        var statuses = _database.ListAllStoryStatuses();
+        var next = GetNextStatusForStory(story, statuses);
+        if (next == null)
+        {
+            StopStatusChain(storyId);
+            return false;
+        }
+
+        if (state.LastEnqueuedStatusId.HasValue && state.LastEnqueuedStatusId.Value == next.Id)
+        {
+            // Best-effort de-dup if we get multiple completion signals.
+            return false;
+        }
+
+        var cmd = CreateCommandForStatus(next);
+        if (cmd == null)
+        {
+            StopStatusChain(storyId);
+            return false;
+        }
+
+        var runId = $"status_{next.Code ?? next.Id.ToString()}_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+        var metadata = new Dictionary<string, string>
+        {
+            ["storyId"] = story.Id.ToString(),
+            ["operation"] = next.FunctionName ?? next.Code ?? "status",
+            ["chainId"] = state.ChainId,
+            ["chainMode"] = "1",
+            ["statusId"] = next.Id.ToString(),
+            ["statusCode"] = next.Code ?? string.Empty
+        };
+
+        _commandDispatcher.Enqueue(
+            next.FunctionName ?? next.Code ?? "status",
+            async ctx =>
+            {
+                var latestStory = GetStoryById(story.Id);
+                if (latestStory == null)
+                    return new CommandResult(false, "Storia non trovata");
+
+                var (success, message) = await ExecuteStoryCommandAsync(latestStory, cmd, next);
+                return new CommandResult(success, message);
+            },
+            runId: runId,
+            threadScope: $"story/status_chain/{story.Id}",
+            metadata: metadata,
+            priority: 2);
+
+        state.LastEnqueuedStatusId = next.Id;
+        return true;
     }
 
     public StoryStatus? GetStoryStatusById(int id)
@@ -368,7 +505,6 @@ public sealed class StoriesService
                 agent.Temperature,
                 agent.TopP,
                 agent.RepeatPenalty,
-                agent.TopK,
                 agent.RepeatLastN,
                 agent.NumPredict);
 
@@ -983,18 +1119,29 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         return (success, message);
     }
 
-    public string? EnqueueGenerateTtsAudioCommand(long storyId, string trigger, int priority = 3)
-        => EnqueueGenerateTtsAudioCommandInternal(storyId, trigger, priority, targetStatusId: null);
+    public sealed record EnqueueResult(bool Enqueued, string Message, string? RunId = null);
 
-    private string? EnqueueGenerateTtsAudioCommandInternal(long storyId, string trigger, int priority, int? targetStatusId)
+    public string? EnqueueGenerateTtsAudioCommand(long storyId, string trigger, int priority = 3)
+    {
+        var result = TryEnqueueGenerateTtsAudioCommandInternal(storyId, trigger, priority, targetStatusId: null);
+        return result.Enqueued ? result.RunId : null;
+    }
+
+    public EnqueueResult TryEnqueueGenerateTtsAudioCommand(long storyId, string trigger, int priority = 3)
+        => TryEnqueueGenerateTtsAudioCommandInternal(storyId, trigger, priority, targetStatusId: null);
+
+    private EnqueueResult TryEnqueueGenerateTtsAudioCommandInternal(long storyId, string trigger, int priority, int? targetStatusId)
     {
         try
         {
-            if (storyId <= 0) return null;
-            if (_commandDispatcher == null) return null;
+            if (storyId <= 0)
+                return new EnqueueResult(false, "StoryId non valido.");
+            if (_commandDispatcher == null)
+                return new EnqueueResult(false, "CommandDispatcher non disponibile (app non inizializzata o servizio non registrato).");
 
             var story = GetStoryById(storyId);
-            if (story == null) return null;
+            if (story == null)
+                return new EnqueueResult(false, $"Storia {storyId} non trovata.");
 
             var folderName = !string.IsNullOrWhiteSpace(story.Folder)
                 ? story.Folder
@@ -1003,14 +1150,18 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             // De-dup: don't enqueue if already queued/running.
             try
             {
-                var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                var existing = _commandDispatcher.GetActiveCommands().FirstOrDefault(s =>
                     s.Metadata != null &&
                     s.Metadata.TryGetValue("storyId", out var sid) &&
                     string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
                     (string.Equals(s.OperationName, "generate_tts_audio", StringComparison.OrdinalIgnoreCase) ||
                      s.RunId.StartsWith($"generate_tts_audio_{storyId}_", StringComparison.OrdinalIgnoreCase)));
 
-                if (alreadyQueued) return null;
+                if (existing != null && !string.IsNullOrWhiteSpace(existing.RunId))
+                {
+                    var status = string.IsNullOrWhiteSpace(existing.Status) ? "" : $" (stato: {existing.Status})";
+                    return new EnqueueResult(false, $"Generazione audio TTS già accodata/in esecuzione{status} (run {existing.RunId}).", existing.RunId);
+                }
             }
             catch
             {
@@ -1043,14 +1194,14 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 },
                 priority: priority);
 
-            return runId;
+            return new EnqueueResult(true, $"Generazione audio TTS accodata (run {runId}).", runId);
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to enqueue generate_tts_audio for story {StoryId}", storyId);
         }
 
-        return null;
+        return new EnqueueResult(false, "Errore inatteso durante l'accodamento della generazione audio TTS (vedi log applicazione).");
     }
 
     public void EnqueuePostTtsAudioFollowups(long storyId, string trigger, int priority = 4)
@@ -1886,6 +2037,130 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         return result.Trim();
     }
 
+    private static readonly HashSet<char> TtsSchemaDisallowedTextChars = new()
+    {
+        '*', '-', '_', '"', '(', ')',
+        // Quote-like punctuation that often degrades TTS reading
+        '«', '»', '“', '”', '„', '‟'
+    };
+
+    private static string FilterTtsSchemaTextField(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var sb = new StringBuilder(text.Length);
+        foreach (var ch in text)
+        {
+            // Normalize typographic apostrophes to ASCII apostrophe.
+            if (ch is '’' or '‘')
+            {
+                sb.Append('\'');
+                continue;
+            }
+            if (TtsSchemaDisallowedTextChars.Contains(ch))
+                continue;
+            sb.Append(ch);
+        }
+
+        return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
+    }
+
+    private static void SanitizeTtsSchemaTextFields(JsonObject root)
+    {
+        if (root == null) return;
+
+        if (!root.TryGetPropertyValue("timeline", out var timelineNode))
+            root.TryGetPropertyValue("Timeline", out timelineNode);
+
+        if (timelineNode is not JsonArray timelineArray)
+            return;
+
+        foreach (var item in timelineArray.OfType<JsonObject>())
+        {
+            try
+            {
+                if (!IsPhraseEntry(item))
+                    continue;
+
+                SanitizeStringProperties(item,
+                    "text", "Text",
+                    "ambience", "Ambience", "ambience_description", "ambienceDescription",
+                    "ambient_sound_description", "AmbientSoundDescription", "ambientSoundDescription",
+                    "ambientSounds", "AmbientSounds", "ambient_sounds",
+                    "fx_description", "FxDescription", "fxDescription",
+                    "music_description", "MusicDescription", "musicDescription");
+            }
+            catch
+            {
+                // best-effort: never fail the save path
+            }
+        }
+    }
+
+    private static void SanitizeStringProperties(JsonObject obj, params string[] keys)
+    {
+        if (obj == null || keys == null || keys.Length == 0) return;
+
+        var target = new HashSet<string>(keys.Where(k => !string.IsNullOrWhiteSpace(k)), StringComparer.OrdinalIgnoreCase);
+        if (target.Count == 0) return;
+
+        foreach (var kvp in obj.ToList())
+        {
+            if (!target.Contains(kvp.Key))
+                continue;
+
+            if (kvp.Value is JsonValue v && v.TryGetValue<string>(out var s))
+            {
+                obj[kvp.Key] = FilterTtsSchemaTextField(s);
+            }
+        }
+    }
+
+    private void SaveSanitizedTtsSchemaJson(string schemaPath, string json)
+    {
+        if (string.IsNullOrWhiteSpace(schemaPath)) return;
+
+        try
+        {
+            var root = JsonNode.Parse(json) as JsonObject;
+            if (root != null)
+            {
+                SanitizeTtsSchemaTextFields(root);
+                File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                return;
+            }
+        }
+        catch
+        {
+            // fall back to raw write
+        }
+
+        File.WriteAllText(schemaPath, json);
+    }
+
+    private async Task SaveSanitizedTtsSchemaJsonAsync(string schemaPath, string json)
+    {
+        if (string.IsNullOrWhiteSpace(schemaPath)) return;
+
+        try
+        {
+            var root = JsonNode.Parse(json) as JsonObject;
+            if (root != null)
+            {
+                SanitizeTtsSchemaTextFields(root);
+                await File.WriteAllTextAsync(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                return;
+            }
+        }
+        catch
+        {
+            // fall back to raw write
+        }
+
+        await File.WriteAllTextAsync(schemaPath, json);
+    }
+
     /// <summary>
     /// Remove timeline phrase entries whose cleaned TTS text is empty (e.g. text is only "..." or brackets/metadata).
     /// This prevents empty/dialog placeholders from being persisted in tts_schema.json and avoids producing entries without audio/timing.
@@ -2057,19 +2332,14 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         item.Remove("durationMs");
                         item.Remove("DurationMs");
 
-                        // also remove ambience/fx/music references and their timing
-                        item.Remove("ambienceFile");
-                        item.Remove("AmbienceFile");
-                        item.Remove("ambience_file");
+                        // also remove standardized snake_case ambience/fx/music references and their timing
                         item.Remove("ambient_sound_file");
-                        item.Remove("ambientSoundFile");
-                        item.Remove("AmbientSoundFile");
+                        item.Remove("ambient_sound_description");
                         item.Remove("fx_file");
-                        item.Remove("fxFile");
-                        item.Remove("musicFile");
-                        item.Remove("musicStartMs");
-                        item.Remove("musicDuration");
-                        item.Remove("musicDurationMs");
+                        item.Remove("fx_description");
+                        item.Remove("fx_duration");
+                        item.Remove("music_file");
+                        item.Remove("music_duration");
                     }
                 }
             }
@@ -2077,6 +2347,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             // Save modified schema
             try
             {
+                SanitizeTtsSchemaTextFields(root);
                 var updated = root.ToJsonString(SchemaJsonOptions);
                 File.WriteAllText(schemaPath, updated);
             }
@@ -2140,6 +2411,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
                     if (root != null)
                     {
+                        SanitizeTtsSchemaTextFields(root);
                         File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
                     }
                 }
@@ -2184,13 +2456,13 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                                 if (!string.IsNullOrWhiteSpace(fx)) DeleteIfExists(Path.Combine(folderPath, fx));
 
                                 item.Remove("fx_file");
-                                item.Remove("fxFile");
                             }
                         }
                     }
 
                     if (root != null)
                     {
+                        SanitizeTtsSchemaTextFields(root);
                         File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
                     }
                 }
@@ -2233,10 +2505,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                                 amb = item.TryGetPropertyValue("ambience_file", out var a2) ? a2?.ToString() : null;
                                 if (!string.IsNullOrWhiteSpace(amb)) DeleteIfExists(Path.Combine(folderPath, amb));
                                 
-                                // Clean new ambient_sound_file references
+                                // Clean new ambient_sound_file references (snake_case)
                                 var asf = item.TryGetPropertyValue("ambient_sound_file", out var a3) ? a3?.ToString() : null;
-                                if (!string.IsNullOrWhiteSpace(asf)) DeleteIfExists(Path.Combine(folderPath, asf));
-                                asf = item.TryGetPropertyValue("ambientSoundFile", out var a4) ? a4?.ToString() : null;
                                 if (!string.IsNullOrWhiteSpace(asf)) DeleteIfExists(Path.Combine(folderPath, asf));
 
                                 item.Remove("ambienceFile");
@@ -2251,6 +2521,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
                     if (root != null)
                     {
+                        SanitizeTtsSchemaTextFields(root);
                         File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
                     }
                 }
@@ -2346,6 +2617,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
             if (modified)
             {
+                SanitizeTtsSchemaTextFields(root);
                 File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
             }
 
@@ -2464,7 +2736,6 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var oldPath = Path.Combine(baseFolder, currentFolder);
                 if (!Directory.Exists(oldPath))
                 {
-                    // nothing to rename on disk, but still update db to the target name
                     _database.UpdateStoryFolder(story.Id, targetFolderName);
                     updated++;
                     continue;
@@ -2640,18 +2911,22 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     "tts_json" or "tts" => new GenerateTtsSchemaCommand(this),
                     "tts_voice" or "voice" => new AssignVoicesCommand(this),
                     "evaluator" or "story_evaluator" or "writer_evaluator" => new EvaluateStoryCommand(this),
+                    "revisor" => new ReviseStoryCommand(this),
+                    "formatter" => new TagStoryCommand(this),
                     _ => new NotImplementedCommand($"agent_call:{agentType ?? "unknown"}")
                 };
             case "function_call":
                 var functionName = status.FunctionName?.ToLowerInvariant();
                 return functionName switch
                 {
+                    "evaluate_story" => new EvaluateStoryCommand(this),
                     "generate_tts_audio" or "tts_audio" or "build_tts_audio" or "generate_voice_tts" or "generate_voices" => new GenerateTtsAudioCommand(this),
                     "generate_ambience_audio" or "ambience_audio" or "generate_ambient" or "ambient_sounds" => new GenerateAmbienceAudioCommand(this),
                     "generate_fx_audio" or "fx_audio" or "generate_fx" or "sound_effects" => new GenerateFxAudioCommand(this),
                     "generate_music" or "music_audio" or "generate_music_audio" => new GenerateMusicCommand(this),
                     "generate_audio_master" or "audio_master" or "mix_audio" or "mix_final" or "final_mix" => new MixFinalAudioCommand(this),
                     "assign_voices" or "voice_assignment" => new AssignVoicesCommand(this),
+                    "prepare_tts_schema" => new PrepareTtsSchemaCommand(this),
                     _ => new FunctionCallCommand(this, status)
                 };
             default:
@@ -2712,10 +2987,29 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var jsonOptions = new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 };
                 var json = JsonSerializer.Serialize(schema, jsonOptions);
-                File.WriteAllText(schemaPath, json);
+                _service.SaveSanitizedTtsSchemaJson(schemaPath, json);
+
+                // New requirement: resolve MUSIC blocks to actual file names immediately during schema generation.
+                // This picks files from series_folder/{series.folder}/music or data/music_stories and writes music_file/musicFile.
+                try
+                {
+                    var existingJson = await File.ReadAllTextAsync(schemaPath);
+                    var rootNode = JsonNode.Parse(existingJson) as JsonObject;
+                    if (rootNode != null)
+                    {
+                        _service.AssignMusicFilesFromLibrary(rootNode, story, folderPath);
+                        SanitizeTtsSchemaTextFields(rootNode);
+                        await File.WriteAllTextAsync(schemaPath, rootNode.ToJsonString(SchemaJsonOptions));
+                    }
+                }
+                catch (Exception exMusic)
+                {
+                    _service._logger?.LogWarning(exMusic, "Unable to assign music files during tts_schema generation for story {Id}", story.Id);
+                }
 
                 try { _service._database.UpdateStoryGeneratedTtsJson(story.Id, true); } catch { }
 
@@ -2743,6 +3037,93 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 _service._logger?.LogError(ex, "Errore durante la generazione del TTS schema per la storia {Id}", story.Id);
                 return (false, ex.Message);
             }
+        }
+    }
+
+    private void AssignMusicFilesFromLibrary(JsonObject rootNode, StoryRecord story, string folderPath)
+    {
+        if (rootNode == null) return;
+        if (story == null) return;
+        if (string.IsNullOrWhiteSpace(folderPath)) return;
+
+        // Get timeline
+        if (!rootNode.TryGetPropertyValue("timeline", out var timelineNode))
+            rootNode.TryGetPropertyValue("Timeline", out timelineNode);
+        if (timelineNode is not JsonArray timelineArray)
+            return;
+
+        var phraseEntries = timelineArray.OfType<JsonObject>().Where(IsPhraseEntry).ToList();
+        if (phraseEntries.Count == 0) return;
+
+        var musicLibraryFolder = GetMusicLibraryFolderForStory(story);
+        if (string.IsNullOrWhiteSpace(musicLibraryFolder) || !Directory.Exists(musicLibraryFolder))
+            return;
+
+        var libraryFiles = Directory
+            .GetFiles(musicLibraryFolder)
+            .Where(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
+                        f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+                        f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (libraryFiles.Count == 0) return;
+
+        var index = BuildMusicLibraryIndex(libraryFiles);
+        var usedDestFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in phraseEntries)
+        {
+            var existing = ReadString(entry, "music_file") ?? ReadString(entry, "musicFile") ?? ReadString(entry, "MusicFile");
+            if (!string.IsNullOrWhiteSpace(existing)) usedDestFileNames.Add(existing);
+        }
+
+        for (var i = 0; i < phraseEntries.Count; i++)
+        {
+            var entry = phraseEntries[i];
+            var musicDesc = ReadString(entry, "music_description") ?? ReadString(entry, "musicDescription") ?? ReadString(entry, "MusicDescription");
+            if (string.IsNullOrWhiteSpace(musicDesc))
+                continue;
+
+            if (string.Equals(musicDesc.Trim(), "silence", StringComparison.OrdinalIgnoreCase))
+            {
+                entry["music_file"] = null;
+                entry["musicFile"] = null;
+                continue;
+            }
+
+            var currentMusicFile = ReadString(entry, "music_file") ?? ReadString(entry, "musicFile") ?? ReadString(entry, "MusicFile");
+            if (!string.IsNullOrWhiteSpace(currentMusicFile) && File.Exists(Path.Combine(folderPath, currentMusicFile)))
+                continue;
+
+            var requestedType = InferMusicTypeFromDescription(musicDesc, index.Keys);
+            if (string.Equals(requestedType, "silence", StringComparison.OrdinalIgnoreCase))
+            {
+                entry["music_file"] = null;
+                entry["musicFile"] = null;
+                continue;
+            }
+
+            var selected = SelectMusicFileDeterministic(index, requestedType, usedDestFileNames, seedA: story.Id, seedB: i);
+            if (string.IsNullOrWhiteSpace(selected) || !File.Exists(selected))
+                continue;
+
+            var destFileName = Path.GetFileName(selected);
+            if (string.IsNullOrWhiteSpace(destFileName))
+                continue;
+
+            var destPath = Path.Combine(folderPath, destFileName);
+            try
+            {
+                if (!File.Exists(destPath))
+                    File.Copy(selected, destPath, overwrite: false);
+            }
+            catch
+            {
+                continue;
+            }
+
+            entry["music_file"] = destFileName;
+            entry["musicFile"] = destFileName;
+            usedDestFileNames.Add(destFileName);
         }
     }
 
@@ -2913,10 +3294,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var outputOptions = new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 };
                 var updatedJson = JsonSerializer.Serialize(schema, outputOptions);
-                File.WriteAllText(schemaPath, updatedJson);
+                _service.SaveSanitizedTtsSchemaJson(schemaPath, updatedJson);
 
                 _service._logger?.LogInformation(
                     "Normalized {Count} character names in tts_schema.json for story {StoryId}",
@@ -2978,10 +3360,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var outputOptions = new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 };
                 var updatedJson = JsonSerializer.Serialize(schema, outputOptions);
-                await File.WriteAllTextAsync(schemaPath, updatedJson);
+                await _service.SaveSanitizedTtsSchemaJsonAsync(schemaPath, updatedJson);
 
                 _service._logger?.LogInformation(
                     "Normalized {Normalized}/{Total} sentiments in tts_schema.json for story {StoryId}",
@@ -3166,10 +3549,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var outputOptions = new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 };
                 var updatedJson = JsonSerializer.Serialize(schema, outputOptions);
-                File.WriteAllText(schemaPath, updatedJson);
+                _service.SaveSanitizedTtsSchemaJson(schemaPath, updatedJson);
 
                 _service._logger?.LogInformation(
                     "Assigned {Count} voices to characters in story {StoryId}", 
@@ -3329,7 +3713,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             if (updated)
             {
                 var normalized = JsonSerializer.Serialize(schema, SchemaJsonOptions);
-                await File.WriteAllTextAsync(schemaPath, normalized);
+                await SaveSanitizedTtsSchemaJsonAsync(schemaPath, normalized);
             }
 
             return updated;
@@ -3666,6 +4050,122 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         }
     }
 
+    private sealed class ReviseStoryCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public ReviseStoryCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => true;
+        public bool EnsureFolder => false;
+        public bool HandlesStatusTransition => false;
+
+        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            var runId = _service.EnqueueReviseStoryCommand(context.Story.Id, trigger: "status_flow", priority: 2, force: true);
+            return Task.FromResult<(bool success, string? message)>(string.IsNullOrWhiteSpace(runId)
+                ? (false, "Revisione non accodata")
+                : (true, $"Revisione accodata (run {runId})"));
+        }
+    }
+
+    private sealed class TagStoryCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public TagStoryCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => true;
+        public bool EnsureFolder => false;
+        public bool HandlesStatusTransition => false;
+
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            if (_service._kernelFactory == null)
+            {
+                return (false, "Kernel factory non disponibile");
+            }
+
+            var cmd = new TransformStoryRawToTaggedCommand(
+                context.Story.Id,
+                _service._database,
+                _service._kernelFactory,
+                _service,
+                _service._customLogger,
+                _service._commandDispatcher);
+
+            var result = await cmd.ExecuteAsync();
+            return (result.Success, result.Message);
+        }
+    }
+
+    private sealed class PrepareTtsSchemaCommand : IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public PrepareTtsSchemaCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => true;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => false;
+
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        {
+            var sb = new StringBuilder();
+            var overallSuccess = true;
+
+            try
+            {
+                var (ttsOk, ttsMsg) = await _service.GenerateTtsSchemaJsonAsync(context.Story.Id);
+                sb.AppendLine($"GenerateTtsSchema: {ttsMsg}");
+                if (!ttsOk) overallSuccess = false;
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("GenerateTtsSchema: exception " + ex.Message);
+                overallSuccess = false;
+            }
+
+            try
+            {
+                var (normCharOk, normCharMsg) = await _service.NormalizeCharacterNamesAsync(context.Story.Id);
+                sb.AppendLine($"NormalizeCharacterNames: {normCharMsg}");
+                if (!normCharOk) overallSuccess = false;
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("NormalizeCharacterNames: exception " + ex.Message);
+                overallSuccess = false;
+            }
+
+            try
+            {
+                var (assignOk, assignMsg) = await _service.AssignVoicesAsync(context.Story.Id);
+                sb.AppendLine($"AssignVoices: {assignMsg}");
+                if (!assignOk) overallSuccess = false;
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("AssignVoices: exception " + ex.Message);
+                overallSuccess = false;
+            }
+
+            try
+            {
+                var (normSentOk, normSentMsg) = await _service.NormalizeSentimentsAsync(context.Story.Id);
+                sb.AppendLine($"NormalizeSentiments: {normSentMsg}");
+                if (!normSentOk) overallSuccess = false;
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("NormalizeSentiments: exception " + ex.Message);
+                overallSuccess = false;
+            }
+
+            return (overallSuccess, sb.ToString());
+        }
+    }
+
     private static void ApplyVoiceToCharacter(TtsCharacter character, TinyGenerator.Models.TtsVoice voice)
     {
         character.Voice = voice.Name;
@@ -3732,15 +4232,15 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         {
             // Unify: always enqueue the dispatcher command (storyId only) instead of executing directly.
             // Status transition is handled by the dispatcher handler via targetStatusId metadata.
-            var runId = _service.EnqueueGenerateTtsAudioCommandInternal(
+            var enqueue = _service.TryEnqueueGenerateTtsAudioCommandInternal(
                 context.Story.Id,
                 trigger: "status_transition",
                 priority: 3,
                 targetStatusId: context.TargetStatus?.Id);
 
-            return (runId != null, runId != null
-                ? $"Generazione audio TTS accodata (run {runId})."
-                : "Impossibile accodare la generazione audio TTS");
+            return (enqueue.Enqueued, enqueue.Enqueued
+                ? $"Generazione audio TTS accodata (run {enqueue.RunId})."
+                : enqueue.Message);
         }
     }
 
@@ -3949,6 +4449,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
         try
         {
+            SanitizeTtsSchemaTextFields(rootNode);
             var updated = rootNode.ToJsonString(SchemaJsonOptions);
             await File.WriteAllTextAsync(schemaPath, updated);
             // Mark story as having generated TTS audio (best-effort)
@@ -4140,6 +4641,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
         try
         {
+            SanitizeTtsSchemaTextFields(rootNode);
             var updated = rootNode.ToJsonString(SchemaJsonOptions);
             await File.WriteAllTextAsync(schemaPath, updated);
             // Mark story as having generated TTS audio (best-effort)
@@ -4419,6 +4921,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         // Save updated schema
         try
         {
+            SanitizeTtsSchemaTextFields(rootNode);
             var updated = rootNode.ToJsonString(SchemaJsonOptions);
             await File.WriteAllTextAsync(schemaPath, updated);
             // Mark story as having generated ambience audio (best-effort)
@@ -4455,8 +4958,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         for (int i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            // Read from ambient_sounds (new [RUMORI: ...] tag) instead of ambience
-            var ambientSounds = ReadString(entry, "ambient_sounds") ?? ReadString(entry, "ambientSounds") ?? ReadString(entry, "AmbientSounds");
+            // Read from ambient_sound_description (standardized [RUMORI: ...] tag)
+            var ambientSounds = ReadString(entry, "ambient_sound_description");
             
             // Read startMs and endMs using TryReadNumber
             int startMs = 0;
@@ -4777,6 +5280,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         // Save updated schema
         try
         {
+            SanitizeTtsSchemaTextFields(rootNode);
             var updated = rootNode.ToJsonString(SchemaJsonOptions);
             await File.WriteAllTextAsync(schemaPath, updated);
             // Mark story as having generated FX (best-effort)
@@ -4930,232 +5434,85 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             return (false, err);
         }
 
-        // Step 2: Find entries with musicDescription and generate music
-        var musicService = new AudioCraftService();
-        int musicCounter = 0;
-        string? lastMusicDescription = null;
-
-        // Count total music tracks to generate
-        var explicitMusicCount = phraseEntries
-            .Select(e => ReadString(e, "musicDescription") ?? ReadString(e, "MusicDescription") ?? ReadString(e, "music_description"))
-            .Where(desc => !string.IsNullOrWhiteSpace(desc))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-
-        // If no writer-specified music instructions exist, generate music automatically
-        var anyMusicRequested = phraseEntries.Any(e =>
-            !string.IsNullOrWhiteSpace(ReadString(e, "musicDescription") ?? ReadString(e, "MusicDescription") ?? ReadString(e, "music_description")));
-
-        if (!anyMusicRequested)
+        // Step 2: Assign music files from curated library (series_folder or data/music_stories)
+        var musicLibraryFolder = GetMusicLibraryFolderForStory(story);
+        if (string.IsNullOrWhiteSpace(musicLibraryFolder) || !Directory.Exists(musicLibraryFolder))
         {
-            _customLogger?.Append(runId, $"[{story.Id}] Nessuna indicazione musica trovata: generazione automatica in base alle emozioni");
-
-            // Emotion keyword sets (both English and common Italian terms)
-            var angrySet = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "angry", "arrabbiato", "furioso", "rabido" };
-            var fearfulSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "fearful", "spaventato", "pauroso", "terrorizzato" };
-            var sadSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "sad", "triste", "addolorato" };
-            var happySet = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "happy", "felice", "allegro", "contento" };
-
-            // Helper to read phrase emotion and start/duration
-            int ReadStartMs(JsonObject e)
-            {
-                if (TryReadNumber(e, "startMs", out var s) || TryReadNumber(e, "StartMs", out s) || TryReadNumber(e, "start_ms", out s))
-                    return (int)s;
-                return 0;
-            }
-            int ReadDurationMs(JsonObject e)
-            {
-                if (TryReadNumber(e, "durationMs", out var d) || TryReadNumber(e, "DurationMs", out d) || TryReadNumber(e, "duration_ms", out d))
-                    return (int)d;
-                return 10000; // fallback 10s per phrase
-            }
-
-            // Find first angry/fearful, then first sad, then first happy
-            JsonObject? angryTarget = null;
-            JsonObject? sadTarget = null;
-            JsonObject? happyTarget = null;
-
-            foreach (var entry in phraseEntries)
-            {
-                if (TryReadPhrase(entry, out var ch, out var txt, out var emotion))
-                {
-                    if (angryTarget == null && (angrySet.Contains(emotion) || fearfulSet.Contains(emotion)))
-                        angryTarget = entry;
-                    if (sadTarget == null && sadSet.Contains(emotion))
-                        sadTarget = entry;
-                    if (happyTarget == null && happySet.Contains(emotion))
-                        happyTarget = entry;
-                    if (angryTarget != null && sadTarget != null && happyTarget != null)
-                        break;
-                }
-            }
-
-            var autoTargets = new List<(JsonObject Entry, string Prompt)>();
-            if (angryTarget != null)
-                autoTargets.Add((angryTarget, "musica da camera leggera e chiara di 20 secondi"));
-            if (sadTarget != null)
-                autoTargets.Add((sadTarget, "musica da camera leggera e chiara di 20 secondi"));
-            if (happyTarget != null)
-                autoTargets.Add((happyTarget, "musica da camera leggera e chiara di 20 secondi"));
-
-            // If no emotion targets found, create periodic background music every 30 seconds
-            if (autoTargets.Count == 0)
-            {
-                _customLogger?.Append(runId, $"[{story.Id}] Nessuna emozione trovata: generazione musica di sottofondo ogni 60s");
-
-                // Estimate story duration by looking at phrase start+duration; fallback to phrases*10s
-                int estimatedTotalMs = 0;
-                foreach (var entry in phraseEntries)
-                {
-                    var s = ReadStartMs(entry);
-                    var d = ReadDurationMs(entry);
-                    estimatedTotalMs = Math.Max(estimatedTotalMs, s + d);
-                }
-                if (estimatedTotalMs == 0)
-                    estimatedTotalMs = Math.Max(phraseEntries.Count * 10000, 60000); // at least 1 minute
-
-                for (int t = 0; t < estimatedTotalMs; t += 60000)
-                {
-                    // Find the phrase that starts at or before t, otherwise the first phrase
-                    var candidate = phraseEntries.LastOrDefault(pe => ReadStartMs(pe) <= t) ?? phraseEntries.First();
-                    autoTargets.Add((candidate, "musica da camera leggera e chiara di 20 secondi"));
-                }
-            }
-
-            // Generate music for autoTargets, avoiding overlaps
-            var totalAutoMusic = autoTargets.Count;
-            _customLogger?.Append(runId, $"[{story.Id}] Generazione {totalAutoMusic} brani musicali automatici");
-            
-            long lastMusicEndMs = -1;
-            foreach (var (entry, prompt) in autoTargets)
-            {
-                try
-                {
-                    musicCounter++;
-                    _customLogger?.Append(runId, $"[{story.Id}] Generazione musica automatica {musicCounter}/{totalAutoMusic}: {prompt}");
-                    var (success, fileUrl, error) = await musicService.GenerateMusicAsync(prompt, 20.0f);
-                    if (!success || string.IsNullOrWhiteSpace(fileUrl))
-                    {
-                        var msg = error ?? "Nessuna URL restituita dal servizio musicale";
-                        _customLogger?.Append(runId, $"[{story.Id}] Errore: impossibile generare musica automatica per '{prompt}': {msg}");
-                        return (false, $"Generazione musica automatica fallita: {msg}");
-                    }
-
-                    var localFileName = $"music_auto_{musicCounter:D3}.wav";
-                    var localFilePath = Path.Combine(folderPath, localFileName);
-                    var audioBytes = await musicService.DownloadFileAsync(fileUrl);
-                    if (audioBytes == null)
-                    {
-                        _customLogger?.Append(runId, $"[{story.Id}] Errore: impossibile scaricare musica da {fileUrl}");
-                        return (false, $"Download musica fallito da {fileUrl}");
-                    }
-                    await File.WriteAllBytesAsync(localFilePath, audioBytes);
-                    _customLogger?.Append(runId, $"[{story.Id}] Salvata musica automatica: {localFileName}");
-                    
-                    // Save music prompt to .txt file with same name
-                    var promptFileName = Path.ChangeExtension(localFileName, ".txt");
-                    var promptFilePath = Path.Combine(folderPath, promptFileName);
-                    await File.WriteAllTextAsync(promptFilePath, prompt);
-                    _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt musica: {promptFileName}");
-
-                    // Attach to entry
-                    entry["musicFile"] = localFileName;
-                    entry["musicDuration"] = 20; // seconds
-
-                    // Compute desired start (phrase start + 2000ms)
-                    var phraseStart = ReadStartMs(entry);
-                    long desiredStart = phraseStart + 2000;
-                    if (lastMusicEndMs >= 0 && desiredStart < lastMusicEndMs + 100)
-                    {
-                        desiredStart = lastMusicEndMs + 100; // small gap
-                    }
-                    entry["musicStartMs"] = desiredStart;
-                    lastMusicEndMs = desiredStart + 20000; // 20s
-                }
-                catch (Exception ex)
-                {
-                    _customLogger?.Append(runId, $"[{story.Id}] Errore generazione musica automatica: {ex.Message}");
-                }
-            }
+            var err = story.SerieId.HasValue
+                ? $"Cartella musica serie non trovata: {musicLibraryFolder}"
+                : $"Cartella musica di fallback non trovata: {musicLibraryFolder}";
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
+            return (false, err);
         }
 
-        // Generate music for explicit musicDescription entries (as before)
-        if (explicitMusicCount > 0)
+        var libraryFiles = Directory
+            .GetFiles(musicLibraryFolder)
+            .Where(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
+                        f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+                        f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (libraryFiles.Count == 0)
         {
-            _customLogger?.Append(runId, $"[{story.Id}] Generazione {explicitMusicCount} brani musicali espliciti");
+            var err = $"Nessun file musica trovato in {musicLibraryFolder}";
+            _customLogger?.Append(runId, $"[{story.Id}] {err}");
+            return (false, err);
         }
-        
-        int explicitCounter = 0;
-        foreach (var entry in phraseEntries)
+
+        var index = BuildMusicLibraryIndex(libraryFiles);
+
+        var usedDestFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var existing in phraseEntries)
         {
+            var mf = ReadString(existing, "music_file") ?? ReadString(existing, "musicFile") ?? ReadString(existing, "MusicFile");
+            if (!string.IsNullOrWhiteSpace(mf)) usedDestFileNames.Add(mf);
+        }
+
+        var assigned = 0;
+        for (var i = 0; i < phraseEntries.Count; i++)
+        {
+            var entry = phraseEntries[i];
+            var musicDesc = ReadString(entry, "music_description") ?? ReadString(entry, "musicDescription") ?? ReadString(entry, "MusicDescription");
+            if (string.IsNullOrWhiteSpace(musicDesc))
+                continue;
+
+            var currentMusicFile = ReadString(entry, "music_file") ?? ReadString(entry, "musicFile") ?? ReadString(entry, "MusicFile");
+            if (!string.IsNullOrWhiteSpace(currentMusicFile) && File.Exists(Path.Combine(folderPath, currentMusicFile)))
+                continue; // already assigned and present
+
+            var requestedType = InferMusicTypeFromDescription(musicDesc, index.Keys);
+            var selected = SelectMusicFileDeterministic(index, requestedType, usedDestFileNames, seedA: story.Id, seedB: i);
+            if (string.IsNullOrWhiteSpace(selected) || !File.Exists(selected))
+            {
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Nessun file musica selezionabile per type='{requestedType}' desc='{musicDesc}'");
+                continue;
+            }
+
+            var destFileName = Path.GetFileName(selected);
+            var destPath = Path.Combine(folderPath, destFileName);
             try
             {
-                var musicDesc = ReadString(entry, "musicDescription") ?? ReadString(entry, "MusicDescription") ?? ReadString(entry, "music_description");
-                
-                if (string.IsNullOrWhiteSpace(musicDesc))
-                    continue;
-
-                // Check if this is the same as the previous music request (skip duplicates)
-                if (musicDesc.Equals(lastMusicDescription, StringComparison.OrdinalIgnoreCase))
+                if (!File.Exists(destPath))
                 {
-                    _customLogger?.Append(runId, $"[{story.Id}] Skipping duplicate music request: {musicDesc}");
-                    continue;
-                }
-
-                lastMusicDescription = musicDesc;
-                musicCounter++;
-                explicitCounter++;
-
-                _customLogger?.Append(runId, $"[{story.Id}] Generazione musica esplicita {explicitCounter}/{explicitMusicCount}: {musicDesc}");
-
-                // Generate music using MusicGen (20 seconds fixed duration)
-                var (success, fileUrl, error) = await musicService.GenerateMusicAsync(musicDesc, 20.0f);
-                
-                if (!success || string.IsNullOrWhiteSpace(fileUrl))
-                {
-                    var msg = error ?? "Nessuna URL restituita dal servizio musicale";
-                    _customLogger?.Append(runId, $"[{story.Id}] Errore: impossibile generare musica per '{musicDesc}': {msg}");
-                    return (false, $"Generazione musica fallita per '{musicDesc}': {msg}");
-                }
-
-                // Download the generated music file
-                var localFileName = $"music_{musicCounter:D3}.wav";
-                var localFilePath = Path.Combine(folderPath, localFileName);
-
-                var audioBytes = await musicService.DownloadFileAsync(fileUrl);
-                if (audioBytes == null)
-                {
-                    _customLogger?.Append(runId, $"[{story.Id}] Errore: impossibile scaricare musica da {fileUrl}");
-                    return (false, $"Download musica fallito da {fileUrl}");
-                }
-
-                await File.WriteAllBytesAsync(localFilePath, audioBytes);
-                _customLogger?.Append(runId, $"[{story.Id}] Salvata musica: {localFileName}");
-                
-                // Save music prompt to .txt file with same name
-                var promptFileName = Path.ChangeExtension(localFileName, ".txt");
-                var promptFilePath = Path.Combine(folderPath, promptFileName);
-                await File.WriteAllTextAsync(promptFilePath, musicDesc);
-                _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt musica: {promptFileName}");
-
-                // Update tts_schema.json: add musicFile property if not already set by auto generation
-                if (!entry.ContainsKey("musicFile"))
-                    entry["musicFile"] = localFileName;
-                if (!entry.ContainsKey("musicDuration"))
-                {
-                    entry["musicDuration"] = 20;
+                    File.Copy(selected, destPath, overwrite: false);
                 }
             }
             catch (Exception ex)
             {
-                _customLogger?.Append(runId, $"[{story.Id}] Errore generazione musica {musicCounter}: {ex.Message}");
-                // Continue with next music request
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Copia musica fallita ({destFileName}): {ex.Message}");
+                continue;
             }
+
+            entry["music_file"] = destFileName;
+            entry["musicFile"] = destFileName;
+            usedDestFileNames.Add(destFileName);
+            assigned++;
         }
 
         // Step 3: Save updated schema
         try
         {
+            SanitizeTtsSchemaTextFields(rootNode);
             var updated = rootNode.ToJsonString(SchemaJsonOptions);
             await File.WriteAllTextAsync(schemaPath, updated);
             // Mark story as having generated music (best-effort)
@@ -5169,9 +5526,158 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             return (false, err);
         }
 
-        var successMsg = $"Generazione musica completata ({musicCounter} tracce)";
+        var successMsg = assigned > 0
+            ? $"Musica assegnata da libreria ({assigned} voci in timeline)"
+            : "Nessuna musica assegnata (nessuna richiesta o nessun file selezionabile)";
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
+    }
+
+    private string GetMusicLibraryFolderForStory(StoryRecord story)
+    {
+        if (story.SerieId.HasValue)
+        {
+            try
+            {
+                var serie = _database.GetSeriesById(story.SerieId.Value);
+                var folder = (serie?.Folder ?? string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(folder))
+                {
+                    return Path.Combine(Directory.GetCurrentDirectory(), "series_folder", folder, "music");
+                }
+            }
+            catch
+            {
+                // best-effort
+            }
+
+            // If story is in a series but folder is missing, still fall back to global folder.
+        }
+
+        return Path.Combine(Directory.GetCurrentDirectory(), "data", "music_stories");
+    }
+
+    private static Dictionary<string, List<string>> BuildMusicLibraryIndex(List<string> files)
+    {
+        var map = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        map["any"] = new List<string>();
+
+        foreach (var file in files)
+        {
+            if (string.IsNullOrWhiteSpace(file)) continue;
+            map["any"].Add(file);
+
+            var name = Path.GetFileNameWithoutExtension(file) ?? string.Empty;
+            name = name.Trim();
+            if (string.IsNullOrWhiteSpace(name)) continue;
+
+            var sep = name.IndexOfAny(new[] { '_', '-' });
+            var prefix = sep > 0 ? name.Substring(0, sep) : name;
+            prefix = prefix.Trim();
+            if (string.IsNullOrWhiteSpace(prefix)) continue;
+
+            // Only index known music types that correspond to actual audio files; everything else goes into "any" only.
+            if (!KnownMusicFileTypes.Contains(prefix))
+                continue;
+
+            if (!map.TryGetValue(prefix, out var list))
+            {
+                list = new List<string>();
+                map[prefix] = list;
+            }
+            list.Add(file);
+        }
+
+        return map;
+    }
+
+    private static readonly HashSet<string> KnownMusicTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "opening",
+        "ending",
+        "transition",
+        "mystery",
+        "suspense",
+        "tension",
+        "love",
+        "combat",
+        "activity",
+        "exploration",
+        "victory",
+        "defeat",
+        "aftermath",
+        "ambient",
+        "silence"
+    };
+
+    private static readonly HashSet<string> KnownMusicFileTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "opening",
+        "ending",
+        "transition",
+        "mystery",
+        "suspense",
+        "tension",
+        "love",
+        "combat",
+        "activity",
+        "exploration",
+        "victory",
+        "defeat",
+        "aftermath",
+        "ambient"
+    };
+
+    private static string InferMusicTypeFromDescription(string description, IEnumerable<string> knownTypes)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return "any";
+
+        // If the description explicitly includes a known type, use it even if the library currently has no files for that type.
+        foreach (var t in KnownMusicTypes)
+        {
+            if (Regex.IsMatch(description, $@"\b{Regex.Escape(t)}\b", RegexOptions.IgnoreCase))
+                return t;
+        }
+
+        foreach (var t in knownTypes)
+        {
+            if (string.Equals(t, "any", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.IsNullOrWhiteSpace(t)) continue;
+            if (Regex.IsMatch(description, $@"\b{Regex.Escape(t)}\b", RegexOptions.IgnoreCase))
+                return t;
+        }
+
+        return "any";
+    }
+
+    private static string? SelectMusicFileDeterministic(
+        Dictionary<string, List<string>> index,
+        string requestedType,
+        HashSet<string> usedDestFileNames,
+        long seedA,
+        int seedB)
+    {
+        if (index == null || index.Count == 0) return null;
+
+        List<string> candidates;
+        if (!string.IsNullOrWhiteSpace(requestedType) && index.TryGetValue(requestedType, out var typed) && typed.Count > 0)
+            candidates = typed;
+        else if (index.TryGetValue("any", out var any) && any.Count > 0)
+            candidates = any;
+        else
+            candidates = index.Values.FirstOrDefault(v => v.Count > 0) ?? new List<string>();
+
+        if (candidates.Count == 0) return null;
+
+        // Prefer unused within the episode/run.
+        var unused = candidates
+            .Where(f => !usedDestFileNames.Contains(Path.GetFileName(f) ?? string.Empty))
+            .ToList();
+        var pool = unused.Count > 0 ? unused : candidates;
+
+        var seed = unchecked((int)(seedA ^ (seedA >> 32) ^ seedB));
+        var rnd = new Random(seed);
+        return pool[rnd.Next(pool.Count)];
     }
 
     /// <summary>
@@ -5368,16 +5874,15 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
         // Step 3: Check for missing ambient sound files (from [RUMORI: ...] tag)
         var ambientSoundsNeeded = phraseEntries.Any(e => 
-            !string.IsNullOrWhiteSpace(ReadString(e, "ambient_sounds") ?? ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds")));
+            !string.IsNullOrWhiteSpace(ReadString(e, "ambient_sound_description")));
         
         if (ambientSoundsNeeded)
         {
             var missingAmbientSounds = phraseEntries.Where(e =>
             {
-                var ambientSounds = ReadString(e, "ambient_sounds") ?? ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds");
+                var ambientSounds = ReadString(e, "ambient_sound_description");
                 if (string.IsNullOrWhiteSpace(ambientSounds)) return false;
-                var ambientSoundFile = ReadString(e, "ambient_sound_file") ?? ReadString(e, "ambientSoundFile") ?? ReadString(e, "AmbientSoundFile")
-                    ?? ReadString(e, "ambience_file") ?? ReadString(e, "ambienceFile") ?? ReadString(e, "AmbienceFile");
+                var ambientSoundFile = ReadString(e, "ambient_sound_file");
                 if (string.IsNullOrWhiteSpace(ambientSoundFile)) return true;
                 return !File.Exists(Path.Combine(folderPath, ambientSoundFile));
             }).ToList();
@@ -5393,15 +5898,15 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
         // Step 4: Check for missing FX audio files
         var fxNeeded = phraseEntries.Any(e => 
-            !string.IsNullOrWhiteSpace(ReadString(e, "fxDescription") ?? ReadString(e, "FxDescription") ?? ReadString(e, "fx_description")));
+            !string.IsNullOrWhiteSpace(ReadString(e, "fx_description")));
         
         if (fxNeeded)
         {
             var missingFx = phraseEntries.Where(e =>
             {
-                var fxDesc = ReadString(e, "fxDescription") ?? ReadString(e, "FxDescription") ?? ReadString(e, "fx_description");
+                var fxDesc = ReadString(e, "fx_description");
                 if (string.IsNullOrWhiteSpace(fxDesc)) return false;
-                var fxFile = ReadString(e, "fx_file") ?? ReadString(e, "fxFile") ?? ReadString(e, "FxFile");
+                var fxFile = ReadString(e, "fx_file");
                 if (string.IsNullOrWhiteSpace(fxFile)) return true;
                 return !File.Exists(Path.Combine(folderPath, fxFile));
             }).ToList();
@@ -5415,14 +5920,14 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         }
 
         // Step 4.5: Check for missing music files and generate if needed (music can be regenerated)
-        var musicNeeded = phraseEntries.Any(e => !string.IsNullOrWhiteSpace(ReadString(e, "musicDescription") ?? ReadString(e, "MusicDescription") ?? ReadString(e, "music_description")));
+        var musicNeeded = phraseEntries.Any(e => !string.IsNullOrWhiteSpace(ReadString(e, "music_description")));
         if (musicNeeded)
         {
             var missingMusic = phraseEntries.Where(e =>
             {
-                var mdesc = ReadString(e, "musicDescription") ?? ReadString(e, "MusicDescription") ?? ReadString(e, "music_description");
+                var mdesc = ReadString(e, "music_description");
                 if (string.IsNullOrWhiteSpace(mdesc)) return false;
-                var musicFile = ReadString(e, "musicFile") ?? ReadString(e, "music_file") ?? ReadString(e, "MusicFile");
+                var musicFile = ReadString(e, "music_file");
                 if (string.IsNullOrWhiteSpace(musicFile)) return true;
                 return !File.Exists(Path.Combine(folderPath, musicFile));
             }).ToList();
@@ -5438,87 +5943,98 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         _customLogger?.Append(runId, $"[{story.Id}] Tutti i file audio presenti. Avvio mixaggio...");
 
 
-        // === JINGLE + TITOLO INTRO LOGIC ===
         var ttsTrackFiles = new List<(string FilePath, int StartMs)>();
         var ambienceTrackFiles = new List<(string FilePath, int StartMs, int DurationMs)>();
         var fxTrackFiles = new List<(string FilePath, int StartMs)>();
         var musicTrackFiles = new List<(string FilePath, int StartMs, int DurationMs)>();
 
-        // 1. Cerca jingle casuale in music_jingles (7s)
-        string? jingleFile = null;
-        var jinglesDir = Path.Combine(Directory.GetCurrentDirectory(), "music_jingles");
-        if (Directory.Exists(jinglesDir))
+        // === OPENING INTRO (handled ONLY in mix, not in tts_schema.json) ===
+        // 15s opening music + narrator announcement at +5s. Then shift the rest of the story by +15s.
+        var introShiftMs = 0;
+        try
         {
-            var jingleFiles = Directory.GetFiles(jinglesDir, "*.wav");
-            if (jingleFiles.Length > 0)
+            var musicLibraryFolder = GetMusicLibraryFolderForStory(story);
+            if (!string.IsNullOrWhiteSpace(musicLibraryFolder) && Directory.Exists(musicLibraryFolder))
             {
-                var rnd = new Random();
-                jingleFile = jingleFiles[rnd.Next(jingleFiles.Length)];
+                var libraryFiles = Directory
+                    .GetFiles(musicLibraryFolder)
+                    .Where(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
+                                f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+                                f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                var index = BuildMusicLibraryIndex(libraryFiles);
+                var selectedOpening = SelectMusicFileDeterministic(
+                    index,
+                    requestedType: "opening",
+                    usedDestFileNames: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                    seedA: story.Id,
+                    seedB: -100);
+
+                if (!string.IsNullOrWhiteSpace(selectedOpening) && File.Exists(selectedOpening))
+                {
+                    musicTrackFiles.Add((selectedOpening, 0, 15000));
+                    introShiftMs = 15000;
+
+                    // Narrator announcement
+                    var narratorVoice = (ReadString(rootNode, "narrator_voice_id")
+                        ?? ReadString(rootNode, "narratorVoiceId")
+                        ?? ReadString(rootNode, "narrator_voice")
+                        ?? ReadString(rootNode, "narratorVoice")
+                        ?? string.Empty).Trim();
+                    if (string.IsNullOrWhiteSpace(narratorVoice)) narratorVoice = NarratorFallbackVoiceName;
+
+                    var storyTitle = (story.Title ?? string.Empty).Trim();
+                    if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null)
+                    {
+                        string? seriesTitle = null;
+                        if (story.SerieId.HasValue)
+                        {
+                            try
+                            {
+                                seriesTitle = _database.GetSeriesById(story.SerieId.Value)?.Titolo;
+                            }
+                            catch
+                            {
+                                seriesTitle = null;
+                            }
+                        }
+
+                        var episodeNumber = story.SerieEpisode;
+
+                        var announcement = !string.IsNullOrWhiteSpace(seriesTitle) && episodeNumber.HasValue
+                            ? $"{seriesTitle}. Episodio {episodeNumber.Value}. {storyTitle}."
+                            : !string.IsNullOrWhiteSpace(seriesTitle)
+                                ? $"{seriesTitle}. {storyTitle}."
+                                : $"{storyTitle}.";
+
+                        var openingTtsFile = Path.Combine(folderPath, "tts_opening.wav");
+                        if (!File.Exists(openingTtsFile))
+                        {
+                            var ttsSafe = ProsodyNormalizer.NormalizeForTTS(announcement);
+                            var ttsResult = await _ttsService.SynthesizeAsync(narratorVoice, ttsSafe);
+                            if (ttsResult != null && !string.IsNullOrWhiteSpace(ttsResult.AudioBase64))
+                            {
+                                var audioBytes = Convert.FromBase64String(ttsResult.AudioBase64);
+                                await File.WriteAllBytesAsync(openingTtsFile, audioBytes);
+                            }
+                        }
+
+                        if (File.Exists(openingTtsFile))
+                        {
+                            ttsTrackFiles.Add((openingTtsFile, 5000));
+                        }
+                    }
+                }
             }
         }
-        if (!string.IsNullOrWhiteSpace(jingleFile) && File.Exists(jingleFile))
+        catch (Exception ex)
         {
-            // Inserisci jingle come primo input, parte a 0ms
-            musicTrackFiles.Add((jingleFile, 0, 7000));
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Opening intro fallito: {ex.Message}");
         }
 
-        // 2. Genera TTS del titolo (se non esiste gi�)
-        string? titleTtsFile = null;
-        if (!string.IsNullOrWhiteSpace(story.Title))
-        {
-            titleTtsFile = Path.Combine(folderPath, "tts_title.wav");
-            if (!File.Exists(titleTtsFile))
-            {
-                // Leggi la voce del narratore da tts_schema.json nella cartella della storia
-                var narratorVoice = "";
-                var ttsSchemaPath = Path.Combine(folderPath, "tts_schema.json");
-                if (File.Exists(ttsSchemaPath))
-                {
-                    try
-                    {
-                        var ttsSchemaJson = await File.ReadAllTextAsync(ttsSchemaPath);
-                        var ttsSchema = System.Text.Json.JsonDocument.Parse(ttsSchemaJson);
-                        if (ttsSchema.RootElement.TryGetProperty("narrator_voice_id", out var narratorVoiceIdProp))
-                        {
-                            narratorVoice = narratorVoiceIdProp.GetString() ?? "";
-                        }
-                        else if (ttsSchema.RootElement.TryGetProperty("narratorVoiceId", out var narratorVoiceIdProp2))
-                        {
-                            narratorVoice = narratorVoiceIdProp2.GetString() ?? "";
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _customLogger?.Append(runId, $"[{story.Id}] Errore lettura tts_schema.json: {ex.Message}");
-                    }
-                }
-                if (string.IsNullOrWhiteSpace(narratorVoice)) narratorVoice = NarratorFallbackVoiceName;
-                try
-                {
-                    // Normalize title for TTS
-                    var ttsSafeTitle = ProsodyNormalizer.NormalizeForTTS(story.Title ?? string.Empty);
-                    var ttsResult = await _ttsService.SynthesizeAsync(narratorVoice, ttsSafeTitle);
-                    if (ttsResult != null && !string.IsNullOrWhiteSpace(ttsResult.AudioBase64))
-                    {
-                        var audioBytes = Convert.FromBase64String(ttsResult.AudioBase64);
-                        await File.WriteAllBytesAsync(titleTtsFile, audioBytes);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _customLogger?.Append(runId, $"[{story.Id}] Errore generazione TTS titolo: {ex.Message}");
-                    titleTtsFile = null;
-                }
-            }
-        }
-        if (!string.IsNullOrWhiteSpace(titleTtsFile) && File.Exists(titleTtsFile))
-        {
-            // Inserisci la voce del titolo a +3s (3000ms)
-            ttsTrackFiles.Add((titleTtsFile, 3000));
-        }
-
-        // 3. Accoda il resto della storia come al solito (shift startMs di +7000ms)
-        int currentTimeMs = 7000;
+        // Accoda il resto della storia come al solito (shift startMs di +introShiftMs)
+        int currentTimeMs = introShiftMs;
         foreach (var entry in phraseEntries)
         {
             // TTS file
@@ -5530,7 +6046,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 {
                     int startMs = currentTimeMs;
                     if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
-                        startMs = (int)s + 7000;
+                        startMs = (int)s + introShiftMs;
                     ttsTrackFiles.Add((ttsFilePath, startMs));
 
                     // Update current time based on duration
@@ -5549,9 +6065,9 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var ambientSoundFilePath = Path.Combine(folderPath, ambientSoundFile);
                 if (File.Exists(ambientSoundFilePath))
                 {
-                    int startMs = 7000;
+                    int startMs = introShiftMs;
                     if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
-                        startMs = (int)s + 7000;
+                        startMs = (int)s + introShiftMs;
                     int durationMs = 30000; // default 30s for ambient sounds
                     ambienceTrackFiles.Add((ambientSoundFilePath, startMs, durationMs));
                     _customLogger?.Append(runId, $"[{story.Id}] Ambient sound aggiunto: {ambientSoundFile} @ {startMs}ms");
@@ -5569,10 +6085,10 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var fxFilePath = Path.Combine(folderPath, fxFile);
                 if (File.Exists(fxFilePath))
                 {
-                    int startMs = 7000;
+                    int startMs = introShiftMs;
                     int phraseDurationMs = 0;
                     if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
-                        startMs = (int)s + 7000;
+                        startMs = (int)s + introShiftMs;
                     if (TryReadNumber(entry, "durationMs", out var d) || TryReadNumber(entry, "DurationMs", out d) || TryReadNumber(entry, "duration_ms", out d))
                         phraseDurationMs = (int)d;
                     int fxStartMs = startMs + (phraseDurationMs / 2);
@@ -5587,20 +6103,48 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var musicFilePath = Path.Combine(folderPath, musicFile);
                 if (File.Exists(musicFilePath))
                 {
-                    int startMs = 7000;
+                    int startMs = introShiftMs;
                     if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
-                        startMs = (int)s + 7000;
+                        startMs = (int)s + introShiftMs;
                     int durationMs = 20000; // default 20s for music
                     if (TryReadNumber(entry, "musicDuration", out var md) || TryReadNumber(entry, "MusicDuration", out md) || TryReadNumber(entry, "music_duration", out md))
                         durationMs = (int)md * 1000;
                     int musicStartMs = startMs + 2000;
                     if (TryReadNumber(entry, "musicStartMs", out var msOverride))
                     {
-                        musicStartMs = (int)msOverride + 7000;
+                        musicStartMs = (int)msOverride + introShiftMs;
                     }
                     musicTrackFiles.Add((musicFilePath, musicStartMs, durationMs));
                 }
             }
+        }
+
+        // === ENDING OUTRO (handled ONLY in mix, not in tts_schema.json) ===
+        // Append 20s ending music at the end of the story.
+        try
+        {
+            var musicLibraryFolder = GetMusicLibraryFolderForStory(story);
+            if (!string.IsNullOrWhiteSpace(musicLibraryFolder) && Directory.Exists(musicLibraryFolder))
+            {
+                var libraryFiles = Directory
+                    .GetFiles(musicLibraryFolder)
+                    .Where(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
+                                f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+                                f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                var index = BuildMusicLibraryIndex(libraryFiles);
+                var selectedEnding = SelectMusicFileDeterministic(index, requestedType: "ending", usedDestFileNames: new HashSet<string>(StringComparer.OrdinalIgnoreCase), seedA: story.Id, seedB: -200);
+                if (!string.IsNullOrWhiteSpace(selectedEnding) && File.Exists(selectedEnding))
+                {
+                    musicTrackFiles.Add((selectedEnding, currentTimeMs, 20000));
+                    currentTimeMs += 20000;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Ending outro fallito: {ex.Message}");
         }
 
         _customLogger?.Append(runId, $"[{story.Id}] [DEBUG] Riepilogo file raccolti: {ttsTrackFiles.Count} TTS, {ambienceTrackFiles.Count} ambience, {fxTrackFiles.Count} FX, {musicTrackFiles.Count} music");
@@ -5971,7 +6515,14 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             inputArgs.Append($" -i \"{filePath}\"");
             var label = $"m{i}";
             var endSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            filterArgs.Append($"[{i}]atrim=start=0:end={endSeconds},adelay={startMs}|{startMs},volume=0.70[{label}];");
+
+            var durationSeconds = durationMs / 1000.0;
+            var fadeDurSeconds = Math.Min(2.0, Math.Max(0.0, durationSeconds));
+            var fadeStartSeconds = Math.Max(0.0, durationSeconds - fadeDurSeconds);
+            var fadeStart = fadeStartSeconds.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+            var fadeDur = fadeDurSeconds.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+
+            filterArgs.Append($"[{i}]atrim=start=0:end={endSeconds},afade=t=out:st={fadeStart}:d={fadeDur},adelay={startMs}|{startMs},volume=0.70[{label}];");
             labels.Add($"[{label}]");
         }
         

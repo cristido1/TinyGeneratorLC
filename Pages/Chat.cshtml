@@ -115,11 +115,11 @@
                         {
                             if (m.Name == Model.SelectedModel)
                             {
-                                <option value="@m.Name" selected>@m.Name</option>
+                                <option value="@m.Name" selected>@m.Name @(m.Speed.HasValue ? "(sp:" + m.Speed.ToString() + ")" : "(sp:-)")</option>
                             }
                             else
                             {
-                                <option value="@m.Name">@m.Name</option>
+                                <option value="@m.Name">@m.Name @(m.Speed.HasValue ? "(sp:" + m.Speed.ToString() + ")" : "(sp:-)")</option>
                             }
                         }
                     }

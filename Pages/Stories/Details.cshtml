@@ -35,6 +35,9 @@
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="evaluations-tab" data-bs-toggle="tab" data-bs-target="#evaluations-pane" type="button" role="tab" aria-controls="evaluations-pane" aria-selected="false">Valutazioni</button>
             </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="summary-tab" data-bs-toggle="tab" data-bs-target="#summary-pane" type="button" role="tab" aria-controls="summary-pane" aria-selected="false">Sommario</button>
+            </li>
         </ul>
         <div class="tab-content mt-3" id="storyTabsContent">
             <div class="tab-pane fade" id="story-raw-pane" role="tabpanel" aria-labelledby="story-raw-tab">
@@ -109,6 +112,21 @@
                         <div class="text-muted">Nessuna valutazione</div>
                     }
                 </div>
+            </div>
+            <div class="tab-pane fade" id="summary-pane" role="tabpanel" aria-labelledby="summary-tab">
+                @if (!string.IsNullOrWhiteSpace(Model.Story?.Summary))
+                {
+                    <div class="card">
+                        <div class="card-body">
+                            <h5 class="card-title">Sommario</h5>
+                            <p class="card-text" style="white-space: pre-wrap;">@Model.Story?.Summary</p>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="text-muted">Nessun sommario disponibile per questa storia.</div>
+                }
             </div>
         </div>
 

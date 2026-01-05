@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Skills
@@ -71,13 +72,16 @@ namespace TinyGenerator.Skills
         // Expose read-only info for external loop orchestrator
         public IReadOnlyCollection<int> RequestedParts => _requestedParts;
 
-        public TtsSchemaTool(string workingFolder, string? storyText = null, ICustomLogger? logger = null, DatabaseService? database = null) 
+        private readonly string _defaultVoiceId;
+
+        public TtsSchemaTool(string workingFolder, string? storyText = null, ICustomLogger? logger = null, DatabaseService? database = null, IConfiguration? configuration = null) 
             : base("ttsschema", "TTS schema operations", logger)
         {
             _workingFolder = workingFolder;
             _database = database;
             _schema = new TtsSchema();
             _storyText = ExtractStorySegment(storyText);
+            _defaultVoiceId = configuration?["NarratorVoice:DefaultVoiceId"] ?? "default";
             LoadExistingSchema();
 
             if (!string.IsNullOrWhiteSpace(_storyText))
@@ -305,6 +309,26 @@ namespace TinyGenerator.Skills
                 Voice = "default",
                 EmotionDefault = string.Empty
             });
+        }
+
+        private void AssignDefaultVoiceIfNotSet()
+        {
+            foreach (var character in _schema.Characters)
+            {
+                if (string.IsNullOrWhiteSpace(character.VoiceId))
+                {
+                    character.VoiceId = _defaultVoiceId;
+                }
+            }
+        }
+
+        private void AssignDefaultVoiceToNarrator()
+        {
+            var narrator = _schema.Characters.FirstOrDefault(c => c.Name.Equals("Narrator", StringComparison.OrdinalIgnoreCase));
+            if (narrator != null && string.IsNullOrWhiteSpace(narrator.VoiceId))
+            {
+                narrator.VoiceId = _defaultVoiceId;
+            }
         }
 
 

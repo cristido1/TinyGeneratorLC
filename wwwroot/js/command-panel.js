@@ -363,6 +363,12 @@
                     .configureLogging(signalR.LogLevel.Warning)
                     .build();
 
+                // The server broadcasts these events to all clients.
+                // This panel doesn't use them, but registering no-op handlers
+                // avoids noisy "No client method with the name ..." warnings.
+                connection.on('ProgressAppended', () => { });
+                connection.on('BusyModelsUpdated', () => { });
+
                 connection.on('CommandListUpdated', cmds => {
                     console.log('[CommandPanel] CommandListUpdated received');
                     renderCommands(cmds);

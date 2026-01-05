@@ -131,6 +131,15 @@ namespace TinyGenerator.Services.Commands
                 {
                     ct.ThrowIfCancellationRequested();
                     var chunk = chunks[i];
+                    // Update dispatcher step so UI shows progress (current chunk / total)
+                    try
+                    {
+                        _commandDispatcher?.UpdateStep(effectiveRunId, i + 1, chunks.Count, $"Formatting chunk {i + 1}/{chunks.Count}");
+                    }
+                    catch
+                    {
+                        // best-effort: do not fail the command if update fails
+                    }
                     var tagged = await FormatChunkWithRetriesAsync(
                         bridge,
                         systemPrompt,

@@ -213,14 +213,14 @@
                                             if (method == "GET")
                                             {
                                                 var targetAttr = id == "edit" ? string.Empty : " target=\"_blank\"";
-                                                <li><a class="@itemClass" href="@url"@Html.Raw(targetAttr)><i class="@iconClass me-2@iconExtraClass"></i>@title</a></li>
+                                                <li><a class="@itemClass" href="@url"@Html.Raw(targetAttr)><i class="@iconClass me-3@iconExtraClass"></i>&nbsp;@title</a></li>
                                             }
                                             else
                                             {
                                                 <li>
                                                     <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
                                                         @Html.AntiForgeryToken()
-                                                        <button type="submit" class="@itemClass"><i class="@iconClass me-2@iconExtraClass"></i>@title</button>
+                                                        <button type="submit" class="@itemClass"><i class="@iconClass me-3@iconExtraClass"></i>&nbsp;@title</button>
                                                     </form>
                                                 </li>
                                             }

@@ -121,11 +121,46 @@ namespace TinyGenerator.Pages.Series
                 existing.StileScrittura = SeriesItem.StileScrittura;
                 existing.RegoleNarrative = SeriesItem.RegoleNarrative;
                 existing.NoteAI = SeriesItem.NoteAI;
+                existing.ImagesStyle = SeriesItem.ImagesStyle;
                 existing.EpisodiGenerati = SeriesItem.EpisodiGenerati;
                 existing.DataInserimento = SeriesItem.DataInserimento;
-                existing.DataInserimento = SeriesItem.DataInserimento;
 
-                _context.SaveChanges();
+                // Force overwrite: bypass optimistic concurrency and update the row directly.
+                try
+                {
+                    var affected = _context.Database.ExecuteSqlInterpolated($@"
+UPDATE series SET
+    titolo = {existing.Titolo},
+    genere = {existing.Genere},
+    sottogenere = {existing.Sottogenere},
+    periodo_narrativo = {existing.PeriodoNarrativo},
+    tono_base = {existing.TonoBase},
+    target = {existing.Target},
+    lingua = {existing.Lingua},
+    ambientazione_base = {existing.AmbientazioneBase},
+    premessa_serie = {existing.PremessaSerie},
+    arco_narrativo_serie = {existing.ArcoNarrativoSerie},
+    stile_scrittura = {existing.StileScrittura},
+    regole_narrative = {existing.RegoleNarrative},
+    note_ai = {existing.NoteAI},
+    images_style = {existing.ImagesStyle},
+    episodi_generati = {existing.EpisodiGenerati},
+    data_inserimento = {existing.DataInserimento}
+WHERE id = {existing.Id};");
+
+                    if (affected <= 0)
+                    {
+                        TempData["ErrorMessage"] = "Salvataggio non riuscito: serie non trovata.";
+                        LoadPageData(SeriesItem.Id);
+                        return Page();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    TempData["ErrorMessage"] = "Errore durante il salvataggio: " + ex.Message;
+                    LoadPageData(SeriesItem.Id);
+                    return Page();
+                }
             }
             else
             {
@@ -513,6 +548,181 @@ namespace TinyGenerator.Pages.Series
             }
 
             return RedirectToPage(new { id = seriesId, tab = "characters" });
+        }
+
+        public IActionResult OnGetCharacterJson(int id)
+        {
+            if (id <= 0) return BadRequest();
+
+            var ch = _context.SeriesCharacters.FirstOrDefault(c => c.Id == id);
+            if (ch == null) return NotFound();
+
+            // Return a simple JSON payload used by client-side refresh
+            return new JsonResult(new
+            {
+                success = true,
+                character = new
+                {
+                    id = ch.Id,
+                    serieId = ch.SerieId,
+                    name = ch.Name,
+                    gender = ch.Gender,
+                    description = ch.Description,
+                    aspect = ch.Aspect,
+                    eta = ch.Eta,
+                    formazione = ch.Formazione,
+                    specializzazione = ch.Specializzazione,
+                    profilo = ch.Profilo,
+                    conflittoInterno = ch.ConflittoInterno,
+                    voiceId = ch.VoiceId,
+                    episodeIn = ch.EpisodeIn,
+                    episodeOut = ch.EpisodeOut,
+                    image = ch.Image
+                }
+            });
+        }
+
+        public IActionResult OnPostUpdateCharacterAjax()
+        {
+            // Use existing bound properties: CharacterInput and CharacterImage
+            ModelState.Clear();
+            var seriesId = CharacterInput.SerieId;
+            if (seriesId <= 0) return BadRequest(new { success = false, message = "Serie non valida" });
+
+            if (string.IsNullOrWhiteSpace(CharacterInput.Name))
+            {
+                return BadRequest(new { success = false, message = "Nome obbligatorio" });
+            }
+
+            var gender = NormalizeGender(CharacterInput.Gender);
+            if (gender == null)
+            {
+                return BadRequest(new { success = false, message = "Gender non valido" });
+            }
+
+            if (CharacterImage != null && !IsAllowedImage(CharacterImage.FileName))
+            {
+                return BadRequest(new { success = false, message = "Formato immagine non supportato" });
+            }
+
+            var existing = _context.SeriesCharacters.FirstOrDefault(c => c.Id == CharacterInput.Id && c.SerieId == seriesId);
+            if (existing == null) return NotFound(new { success = false, message = "Personaggio non trovato" });
+
+            var normalizedGender = gender ?? "other";
+            existing.Name = CharacterInput.Name?.Trim() ?? string.Empty;
+            existing.Gender = normalizedGender;
+            existing.Description = CharacterInput.Description?.Trim();
+            existing.Aspect = CharacterInput.Aspect?.Trim();
+            existing.Eta = CharacterInput.Eta?.Trim();
+            existing.Formazione = CharacterInput.Formazione?.Trim();
+            existing.Specializzazione = CharacterInput.Specializzazione?.Trim();
+            existing.Profilo = CharacterInput.Profilo?.Trim();
+            existing.ConflittoInterno = CharacterInput.ConflittoInterno?.Trim();
+            existing.VoiceId = CharacterInput.VoiceId;
+            existing.EpisodeIn = CharacterInput.EpisodeIn;
+            existing.EpisodeOut = CharacterInput.EpisodeOut;
+
+            string? oldImage = existing.Image;
+            if (CharacterImage != null)
+            {
+                existing.Image = SaveCharacterImage(CharacterImage, seriesId);
+            }
+
+            try
+            {
+                _context.SaveChanges();
+
+                if (CharacterImage != null && !string.IsNullOrWhiteSpace(oldImage))
+                {
+                    TryDeleteCharacterImage(oldImage);
+                }
+
+                var imageUrl = existing.Image ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(imageUrl) && !imageUrl.StartsWith('/'))
+                {
+                    imageUrl = $"/series-assets/{existing.SerieId}/characters/{Uri.EscapeDataString(imageUrl)}";
+                }
+
+                return new JsonResult(new
+                {
+                    success = true,
+                    character = new
+                    {
+                        id = existing.Id,
+                        serieId = existing.SerieId,
+                        name = existing.Name,
+                        description = existing.Description,
+                        aspect = existing.Aspect,
+                        voiceId = existing.VoiceId,
+                        image = imageUrl
+                    },
+                    message = "Personaggio aggiornato"
+                });
+            }
+            catch (Exception ex)
+            {
+                return new JsonResult(new { success = false, message = "Errore aggiornamento: " + ex.Message });
+            }
+        }
+
+        public IActionResult OnPostGenerateCharacterImageAjax(int seriesId, int characterId)
+        {
+            if (seriesId <= 0 || characterId <= 0) return BadRequest(new { success = false, message = "Parametri non validi" });
+
+            if (_dispatcher == null || _database == null || _images == null || _logger == null)
+            {
+                return BadRequest(new { success = false, message = "Dispatcher/servizi non disponibili" });
+            }
+
+            var contentRoot = _env?.ContentRootPath;
+            if (string.IsNullOrWhiteSpace(contentRoot))
+            {
+                return BadRequest(new { success = false, message = "ContentRootPath non disponibile" });
+            }
+
+            try
+            {
+                var ch = _context.SeriesCharacters.FirstOrDefault(c => c.Id == characterId && c.SerieId == seriesId);
+                if (ch == null) return NotFound(new { success = false, message = "Personaggio non trovato" });
+
+                var name = (ch.Name ?? string.Empty).Trim();
+                if (string.Equals(name, "narratore", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "narrator", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new JsonResult(new { success = false, message = "Personaggio narratore: immagine non generata." });
+                }
+
+                var metadata = new Dictionary<string, string>
+                {
+                    ["storyId"] = seriesId.ToString(),
+                    ["seriesId"] = seriesId.ToString(),
+                    ["characterId"] = characterId.ToString()
+                };
+
+                var handle = _dispatcher.Enqueue(
+                    operationName: "generate_character_image",
+                    handler: async ctx =>
+                    {
+                        try
+                        {
+                            var cmd = new GenerateSeriesCharacterImagesCommand(seriesId, contentRoot, _database, _images, _dispatcher, _logger, characterId);
+                            var summary = await cmd.ExecuteAsync(ctx.RunId, ctx.CancellationToken);
+                            return new CommandResult(true, $"Immagine generata: {summary.LastFileName}");
+                        }
+                        catch (Exception ex)
+                        {
+                            return new CommandResult(false, ex.Message);
+                        }
+                    },
+                    threadScope: "series",
+                    metadata: metadata,
+                    priority: 2);
+
+                return new JsonResult(new { success = true, runId = handle.RunId, message = "Generazione avviata" });
+            }
+            catch (Exception ex)
+            {
+                return new JsonResult(new { success = false, message = ex.Message });
+            }
         }
 
         public IActionResult OnPostAddEpisode()

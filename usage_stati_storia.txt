@@ -15,4 +15,12 @@ bisogna lanciare il comando di generazione effetti speciali.
 bisogna lanciare il comando di generazione della musica.
 10) audio_master_generated : a partire dai tempi in tts_schema.json ed i nomi ed i tempi dei file tts, rumori ambientali, effetti speciali e musica genero il file audio principale .wav e anche la versione mp3, per passare in questo stato bisogna lanciare il comando di mix audio finale.
 
-
+Funzionamento:
+- C'è un comando che viene accodato al dispatcher per passare da uno stato ad un'altro
+- Alla fine di ciascun comando, ma dentro il comando viene accodato il comando per far passare allo stato successivo
+- Dopo la fase 3 c'è un blocco e si continua solo se la valutazione >= 65
+- gli stati devono essere eseguiti in ordine, prima uno e poi l'altro perchè generalmente lo stato successivo conta su quello precedente.
+- per generare il master audio tutti i comandi devono essere conclusi
+- se uno dei comandi fallisce allora la catena si ferma
+- ho visto che c'è un comando di avanzamento stato, ma questo deve solo accodare i comandi reali e terminare. 
+- il cambio di stato alla fine del comando principale

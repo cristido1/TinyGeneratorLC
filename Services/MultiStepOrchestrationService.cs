@@ -301,24 +301,26 @@ namespace TinyGenerator.Services
                 var storiesService = _services.GetService(typeof(StoriesService)) as StoriesService;
                 if (storiesService == null)
                 {
-                    _logger.Log("Warning", "MultiStep", "Auto-revision skipped: StoriesService non disponibile");
+                    _logger.Log("Warning", "MultiStep", "Auto-advancement skipped: StoriesService non disponibile");
                     return;
                 }
 
-                var runId = storiesService.EnqueueReviseStoryCommand(storyDbId, trigger: "multistep_story_saved", priority: 2);
-                if (!string.IsNullOrWhiteSpace(runId))
+                // Instead of enqueueing just revision, start the full status chain
+                // This will automatically advance through all states: revised → evaluated → tagged → tts_schema → etc.
+                var chainId = storiesService.EnqueueStatusChain(storyDbId);
+                if (!string.IsNullOrWhiteSpace(chainId))
                 {
-                    _logger.Log("Information", "MultiStep", $"Auto-revision enqueued for story {storyDbId} ({runId})");
+                    _logger.Log("Information", "MultiStep", $"✓ Auto-advancement chain started for story {storyDbId} (chainId: {chainId})");
                 }
                 else
                 {
-                    _logger.Log("Debug", "MultiStep", $"Auto-revision not enqueued for story {storyDbId} (maybe already queued or dispatcher unavailable)");
+                    _logger.Log("Debug", "MultiStep", $"Auto-advancement chain not started for story {storyDbId} (maybe already active or dispatcher unavailable)");
                 }
             }
             catch (Exception ex)
             {
                 // Non-blocking best-effort: never fail story generation completion because of auto-enqueue.
-                _logger.Log("Warning", "MultiStep", $"Auto-revision enqueue failed for story {storyDbId}: {ex.Message}");
+                _logger.Log("Warning", "MultiStep", $"Auto-advancement chain failed for story {storyDbId}: {ex.Message}");
             }
         }
 
@@ -1051,9 +1053,12 @@ namespace TinyGenerator.Services
 
             ValidationResult baseValidation;
 
+            // Detect summarizer step: either agent has role="summarizer" OR the prompt explicitly asks to summarize
             var isSummarizerStep = isStoryTask
-                && !string.IsNullOrWhiteSpace(executorAgent.Role)
-                && executorAgent.Role.Equals("summarizer", StringComparison.OrdinalIgnoreCase);
+                && (!string.IsNullOrWhiteSpace(executorAgent.Role)
+                    && executorAgent.Role.Equals("summarizer", StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(stepInstruction)
+                    && stepInstruction.Contains("Riassumi", StringComparison.OrdinalIgnoreCase));
 
             if (isSummarizerStep)
             {

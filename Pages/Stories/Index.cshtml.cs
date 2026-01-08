@@ -795,7 +795,7 @@ namespace TinyGenerator.Pages.Stories
                 "advance_status",
                 async ctx =>
                 {
-                    var (success, message) = await _stories.ExecuteNextStatusOperationAsync(id);
+                    var (success, message) = await _stories.ExecuteNextStatusOperationAsync(id, ctx.RunId);
                     return new CommandResult(success, message ?? (success ? "Operazione completata" : "Operazione fallita"));
                 },
                 "Operazione di avanzamento avviata in background.");

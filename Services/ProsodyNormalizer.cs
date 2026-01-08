@@ -112,7 +112,7 @@ public static class ProsodyNormalizer
         new(StringComparer.OrdinalIgnoreCase)
         {
             // Core originale - Parole frequentissime che il TTS sbaglia sempre
-            { "telefono", "te-le-fò-no" },
+            { "telefono", "te-lè-fo-no" },
             { "automatico", "au-tò-ma-ti-co" },
             { "carattere", "ca-ràt-te-re" },
             { "difficile", "dif-fì-ci-le" },

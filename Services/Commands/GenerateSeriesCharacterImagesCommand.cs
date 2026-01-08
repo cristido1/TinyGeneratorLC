@@ -186,19 +186,19 @@ namespace TinyGenerator.Services.Commands
 
         private static string BuildPromptDescription(Series serie, SeriesCharacter character)
         {
-            var serieGenere = (serie.Genere ?? string.Empty).Trim();
-            var serieSottogenere = (serie.Sottogenere ?? string.Empty).Trim();
-            var ambientazione = (serie.AmbientazioneBase ?? string.Empty).Trim();
+            var imagesStyle = (serie.ImagesStyle ?? string.Empty).Trim();
             var descr = (!string.IsNullOrWhiteSpace(character.Aspect)
                 ? character.Aspect
                 : character.Description) ?? string.Empty;
             descr = descr.Trim();
 
-            return
-                $"Genere: {serieGenere}; " +
-                $"Sottogenere: {serieSottogenere}; " +
-                $"Ambientazione: {ambientazione}; " +
-                $"Descrizione personaggio: {descr}";
+            if (!string.IsNullOrWhiteSpace(imagesStyle))
+            {
+                return imagesStyle + ": " + $"Descrizione personaggio: {descr}";
+            }
+
+            // Fallback to only character description if no images style provided
+            return $"Descrizione personaggio: {descr}";
         }
 
         private static bool IsNarratorCharacter(string? name)

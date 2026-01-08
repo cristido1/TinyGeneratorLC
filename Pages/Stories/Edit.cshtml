@@ -68,6 +68,21 @@
                         </select>
                     </div>
                     <div class="mb-3">
+                        <label class="form-label">Serie</label>
+                        <select class="form-select" asp-for="SerieId">
+                            <option value="">-- nessuna --</option>
+                            @foreach(var serie in Model.Series)
+                            {
+                                <option value="@serie.Id" selected="@((Model.SerieId==serie.Id)?"selected":"")">@serie.Titolo</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Episodio</label>
+                        <input type="number" class="form-control" asp-for="SerieEpisode" placeholder="Numero episodio (1, 2, 3...)" min="1" />
+                        <small class="text-muted">Inserire solo se la storia fa parte di una serie</small>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label">Personaggi (JSON)</label>
                         <textarea class="form-control" rows="6" asp-for="Characters" placeholder='[{"name": "Nome", "gender": "male", "age": "35"}]'></textarea>
                         <small class="text-muted">Array JSON con name, gender, age, title, role, aliases</small>

@@ -38,6 +38,7 @@
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end" id="ttsVoicesColsMenu" style="min-width: 220px;"></ul>
             </div>
+            <button id="fixDuplicateNamesBtn" class="btn btn-sm btn-warning" type="button">Fix Duplicate Names</button>
             <form id="ttsRefreshForm2" method="post" asp-page-handler="Refresh" class="d-inline">
                 @Html.AntiForgeryToken()
                 <button id="refreshVoicesBtn" class="btn btn-sm btn-outline-secondary" type="submit">Sync Voices</button>
@@ -51,17 +52,17 @@
             <thead>
                 <tr>
                     <th data-col="actions">Azioni</th>
-                    <th data-col="name"><a href="?orderBy=name">Nome</a></th>
-                    <th data-col="voiceId">VoiceId</th>
+                    <th data-col="name"><a href="?orderBy=name&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">Nome</a></th>
+                    <th data-col="voiceId"><a href="?orderBy=voiceId&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">VoiceId</a></th>
                     <th data-col="model">Model</th>
                     <th data-col="language">Language</th>
-                    <th data-col="gender" data-sort="gender" class="sortable">Gender <span class="sort-indicator ms-1"></span></th>
-                    <th data-col="age">Age</th>
+                    <th data-col="gender"><a href="?orderBy=gender&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">Gender</a></th>
+                    <th data-col="age"><a href="?orderBy=age&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">Age</a></th>
                     <th data-col="confidence">Confidence</th>
-                    <th data-col="score" data-sort="score" class="sortable">Score <span class="sort-indicator ms-1"></span></th>
+                    <th data-col="score"><a href="?orderBy=score&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">Score</a></th>
                     <th data-col="tags">Tags</th>
                     <th data-col="template">Template</th>
-                    <th data-col="archetype" data-sort="archetype" class="sortable">Archetype <span class="sort-indicator ms-1"></span></th>
+                    <th data-col="archetype"><a href="?orderBy=archetype&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">Archetype</a></th>
                     <th data-col="notes">Notes</th>
                     <th data-col="disabled">Disabled</th>
                     <th data-col="created">Created</th>
@@ -128,20 +129,17 @@
             </tbody>
         </table>
 
-        <div id="pager" class="mt-2" data-page="@Model.PageIndex" data-page-size="@Model.PageSize" data-total="@Model.TotalCount" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount"></div>
+        <div id="pager" class="mt-3" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" data-show-disabled="@(Model.ShowDisabled ? "1" : "")"></div>
     </div>
 </div>
 
+<script src="/js/shared/pagination.js"></script>
 <script src="/js/shared/list-ui.js"></script>
-<script src="/js/shared/table-sort.js"></script>
 <script>
     // Ensure list-ui initializes after DOM ready and show toast when TempData present
     document.addEventListener('DOMContentLoaded', () => {
         if (window.ListUI && typeof window.ListUI.init === 'function') {
             window.ListUI.init({ storageKey: 'ttsvoices_cols_v1', pagerId: 'pager', colsMenuId: 'ttsVoicesColsMenu' });
-        }
-        if (window.TableSort && typeof window.TableSort.init === 'function') {
-            window.TableSort.init({});
         }
 
         // Show TempData toast if present
@@ -298,6 +296,124 @@
             if (!btn) return;
             const voiceId = btn.getAttribute('data-voiceid');
             playVoice(voiceId, btn);
+        });
+    })();
+</script>
+<script>
+    // Fix Duplicate Names button handler
+    (function() {
+        const fixBtn = document.getElementById('fixDuplicateNamesBtn');
+        const tokenEl = document.querySelector('#ttsRefreshForm input[name="__RequestVerificationToken"]');
+        const token = tokenEl ? tokenEl.value : null;
+
+        if (!fixBtn) return;
+
+        fixBtn.addEventListener('click', async function() {
+            if (!confirm('Fix duplicate names by copying voice_id to name field?')) return;
+            
+            fixBtn.disabled = true;
+            const originalText = fixBtn.textContent;
+            fixBtn.textContent = 'Fixing...';
+
+            try {
+                const response = await fetch(window.location.pathname + '?handler=FixDuplicateNames', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'RequestVerificationToken': token || ''
+                    },
+                    credentials: 'same-origin'
+                });
+
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('Fixed ' + (result.fixed || 0) + ' records');
+                    window.location.reload();
+                } else {
+                    throw new Error(result.error || 'Unknown error');
+                }
+            } catch (err) {
+                console.error('Fix error', err);
+                alert('Error: ' + (err.message || String(err)));
+                fixBtn.disabled = false;
+                fixBtn.textContent = originalText;
+            }
+        });
+    })();
+</script>
+<script>
+    // Sync Voices button handler
+    (function() {
+        const refreshForm = document.getElementById('ttsRefreshForm2');
+        const refreshBtn = document.getElementById('refreshVoicesBtn');
+        const toastEl = document.getElementById('ttsToast');
+        const toastBody = document.getElementById('ttsToastBody');
+        const toastTime = document.getElementById('ttsToastTime');
+        
+        if (!refreshForm || !refreshBtn) return;
+        
+        refreshForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            console.log('Form submit intercepted');
+            
+            // Disable button during request
+            refreshBtn.disabled = true;
+            const originalText = refreshBtn.textContent;
+            refreshBtn.textContent = 'Sincronizzazione...';
+            
+            try {
+                const formData = new FormData(refreshForm);
+                const url = window.location.pathname + '?handler=Refresh';
+                
+                console.log('Calling:', url);
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                });
+                
+                console.log('Status:', response.status);
+                
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                
+                const result = await response.json();
+                console.log('Result:', result);
+                
+                // Show success toast
+                if (toastBody && toastTime && toastEl) {
+                    const now = new Date();
+                    toastTime.textContent = now.toLocaleTimeString();
+                    
+                    let message = 'Sincronizzazione completata:\n';
+                    message += 'Aggiunte: ' + (result.added || 0) + ' voci\n';
+                    message += 'Aggiornate: ' + (result.updated || 0) + ' voci';
+                    
+                    if (result.errors && result.errors.length > 0) {
+                        message += '\nErrori: ' + result.errors.length;
+                    }
+                    
+                    toastBody.textContent = message;
+                    
+                    const toast = new bootstrap.Toast(toastEl);
+                    toast.show();
+                }
+                
+                // Reload page to show updated data
+                setTimeout(function() {
+                    window.location.reload();
+                }, 2000);
+                
+            } catch (err) {
+                console.error('Sync error', err);
+                alert('Errore durante la sincronizzazione: ' + (err && err.message ? err.message : String(err)));
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = originalText;
+            }
         });
     })();
 </script>

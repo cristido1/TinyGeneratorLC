@@ -91,6 +91,43 @@
 </style>
 
 <div class="container-fluid px-4">
+    @if (TempData["Message"] != null)
+    {
+        <div class="alert alert-success alert-dismissible fade show" role="alert">
+            @TempData["Message"]
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+    }
+    @if (TempData["Error"] != null)
+    {
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            @TempData["Error"]
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+    }
+    
+    <!-- Auto-Advancement Switch -->
+    <div class="card mb-4" style="background:#f8f9fa;border:2px solid #343a40;border-radius:12px;">
+        <div class="card-body py-3">
+            <form method="post" asp-page-handler="ToggleAutoAdvancement" id="autoAdvForm">
+                <div class="form-check form-switch d-flex align-items-center">
+                    <input class="form-check-input me-3" type="checkbox" role="switch" 
+                           id="enableAutoAdv" name="enabled" value="true" 
+                           @(Model.EnableAutoAdvancement ? "checked" : "")
+                           onchange="this.form.submit();" 
+                           style="width:3em;height:1.5em;cursor:pointer;">
+                    <label class="form-check-label mb-0" for="enableAutoAdv" style="cursor:pointer;">
+                        <strong>Avanzamento Automatico Storie</strong>
+                        <div class="text-muted small mt-1">
+                            Dopo 10 minuti di inattività del sistema (escludendo attività di embedding e summary), 
+                            viene automaticamente processata e fatta avanzare la storia con punteggio di valutazione più alto.
+                        </div>
+                    </label>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- KPI Cards Row -->
     <div class="row g-3 mb-4">
         <div class="col-md-3">

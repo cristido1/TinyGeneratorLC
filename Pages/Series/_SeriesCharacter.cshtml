@@ -1,0 +1,112 @@
+@model TinyGenerator.Models.SeriesCharacter
+@{
+    var voices = (List<TinyGenerator.Models.TtsVoice>?)ViewData["Voices"] ?? new List<TinyGenerator.Models.TtsVoice>();
+}
+<div class="card mb-2 p-2" id="character-card-@Model.Id" data-character-id="@Model.Id">
+    <form class="character-ajax-form row g-2" method="post" action="?handler=UpdateCharacterAjax" enctype="multipart/form-data">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="CharacterInput.Id" value="@Model.Id" />
+        <input type="hidden" name="CharacterInput.SerieId" value="@Model.SerieId" />
+
+        <div class="col-md-3">
+            @if (!string.IsNullOrWhiteSpace(Model.Image))
+            {
+                var imgSrc = Model.Image;
+                if (!imgSrc.StartsWith("/")) imgSrc = $"/series-assets/{Model.SerieId}/characters/{Uri.EscapeDataString(imgSrc)}";
+                <button type="button" class="btn p-0 border-0 bg-transparent" data-bs-toggle="modal" data-bs-target="#seriesImageModal" data-fullsrc="@imgSrc" aria-label="Apri immagine in dimensioni reali">
+                    <img src="@imgSrc" alt="Immagine personaggio" class="img-thumbnail img-fluid w-100" style="height:auto;" />
+                </button>
+            }
+            else
+            {
+                <div class="text-muted small">Nessuna immagine</div>
+            }
+        </div>
+
+        <div class="col-md-9">
+            <div class="row g-2">
+                <div class="col-md-6">
+                    <label class="form-label">Nome</label>
+                    <input name="CharacterInput.Name" class="form-control" maxlength="200" value="@Model.Name" required />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Genere</label>
+                    <select name="CharacterInput.Gender" class="form-select" required>
+                        <option value="male" selected="@(Model.Gender == "male" ? "selected" : null)">male</option>
+                        <option value="female" selected="@(Model.Gender == "female" ? "selected" : null)">female</option>
+                        <option value="alien" selected="@(Model.Gender == "alien" ? "selected" : null)">alien</option>
+                        <option value="robot" selected="@(Model.Gender == "robot" ? "selected" : null)">robot</option>
+                        <option value="other" selected="@(Model.Gender == "other" ? "selected" : null)">other</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Voce TTS</label>
+                    <div class="input-group">
+                        <select name="CharacterInput.VoiceId" class="form-select voice-select-edit" data-voices='@System.Text.Json.JsonSerializer.Serialize(voices.Select(v => new { v.Id, v.TemplateWav }))'>
+                            <option value="">-</option>
+                            @foreach (var v in voices)
+                            {
+                                <option value="@v.Id" selected="@(Model.VoiceId == v.Id ? "selected" : null)">@(!string.IsNullOrWhiteSpace(v.Name) ? v.Name : v.VoiceId)</option>
+                            }
+                        </select>
+                        <button type="button" class="btn btn-outline-secondary play-voice-btn-edit" title="Ascolta esempio voce">
+                            <i class="bi bi-play-fill"></i>
+                        </button>
+                    </div>
+                    <audio class="voice-preview-audio-edit d-none"></audio>
+                </div>
+
+                <div class="col-md-6">
+                    <label class="form-label">Descrizione</label>
+                    <textarea name="CharacterInput.Description" class="form-control" rows="2">@Model.Description</textarea>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Aspetto (prompt immagine)</label>
+                    <textarea name="CharacterInput.Aspect" class="form-control" rows="2">@Model.Aspect</textarea>
+                </div>
+
+                <div class="col-md-3">
+                    <label class="form-label">Eta</label>
+                    <input name="CharacterInput.Eta" class="form-control" maxlength="50" value="@Model.Eta" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Formazione</label>
+                    <input name="CharacterInput.Formazione" class="form-control" maxlength="200" value="@Model.Formazione" />
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label">Specializzazione</label>
+                    <input name="CharacterInput.Specializzazione" class="form-control" maxlength="200" value="@Model.Specializzazione" />
+                </div>
+
+                <div class="col-md-6">
+                    <label class="form-label">Profilo</label>
+                    <textarea name="CharacterInput.Profilo" class="form-control" rows="2">@Model.Profilo</textarea>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Conflitto Interno</label>
+                    <textarea name="CharacterInput.ConflittoInterno" class="form-control" rows="2">@Model.ConflittoInterno</textarea>
+                </div>
+
+                <div class="col-md-3">
+                    <label class="form-label">Episodio In</label>
+                    <input name="CharacterInput.EpisodeIn" type="number" class="form-control" min="0" value="@Model.EpisodeIn" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Episodio Out</label>
+                    <input name="CharacterInput.EpisodeOut" type="number" class="form-control" min="0" value="@Model.EpisodeOut" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">Immagine (upload)</label>
+                    <input type="file" name="CharacterImage" class="form-control" accept=".jpg,.jpeg,.png,.gif,.webp" />
+                </div>
+
+                <div class="col-12 mt-2 d-flex gap-1">
+                    <button type="submit" class="btn btn-sm btn-outline-primary">Aggiorna</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary character-refresh" data-character-id="@Model.Id">Refresh</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary generate-image-ajax" data-series-id="@Model.SerieId" data-character-id="@Model.Id">Genera immagine</button>
+                    <button type="submit" formaction="?handler=DeleteCharacter&id=@Model.Id&seriesId=@Model.SerieId" formmethod="post" class="btn btn-sm btn-outline-danger" onclick="return confirm('Vuoi eliminare questo personaggio?');">Elimina</button>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>

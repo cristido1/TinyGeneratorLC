@@ -49,6 +49,163 @@ namespace TinyGenerator
             }
         }
 
+        public static async Task<bool> TryRestartAudioCraftAsync(ILogger? logger = null)
+        {
+            try
+            {
+                logger?.LogInformation("[Startup] Tentativo di riavvio del servizio AudioCraft...");
+                
+                // Check if service is already running
+                var isHealthy = await CheckAudioCraftHealthAsync(logger);
+                if (isHealthy)
+                {
+                    logger?.LogInformation("[Startup] AudioCraft service is already running");
+                    return true;
+                }
+                
+                // Try PowerShell script first (Windows)
+                var psScript = Path.Combine(Directory.GetCurrentDirectory(), "start_audiocraft.ps1");
+                if (!File.Exists(psScript))
+                {
+                    psScript = Path.Combine(AppContext.BaseDirectory, "start_audiocraft.ps1");
+                }
+                
+                if (File.Exists(psScript) && Environment.OSVersion.Platform == PlatformID.Win32NT)
+                {
+                    logger?.LogInformation("[Startup] Using PowerShell script: {script}", psScript);
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "powershell.exe",
+                        Arguments = $"-ExecutionPolicy Bypass -File \"{psScript}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WorkingDirectory = Path.GetDirectoryName(psScript)
+                    };
+                    
+                    var p = Process.Start(psi);
+                    if (p != null)
+                    {
+                        await p.WaitForExitAsync();
+                        var stdout = await p.StandardOutput.ReadToEndAsync();
+                        var stderr = await p.StandardError.ReadToEndAsync();
+                        
+                        if (!string.IsNullOrWhiteSpace(stdout))
+                            logger?.LogInformation("[Startup] PowerShell stdout: {out}", stdout);
+                        if (!string.IsNullOrWhiteSpace(stderr))
+                            logger?.LogWarning("[Startup] PowerShell stderr: {err}", stderr);
+                        
+                        return p.ExitCode == 0;
+                    }
+                }
+                
+                // Try Python script directly (Linux/Mac or fallback)
+                var pythonScript = Path.Combine(Directory.GetCurrentDirectory(), "audiocraft_server.py");
+                if (!File.Exists(pythonScript))
+                {
+                    pythonScript = Path.Combine(AppContext.BaseDirectory, "audiocraft_server.py");
+                }
+                
+                ProcessStartInfo psiPython;
+                if (File.Exists(pythonScript))
+                {
+                    logger?.LogInformation("[Startup] Using Python script: {script}", pythonScript);
+                    
+                    // Kill existing process if any
+                    try
+                    {
+                        var existingProcs = Process.GetProcessesByName("python");
+                        foreach (var proc in existingProcs)
+                        {
+                            try
+                            {
+                                var cmdLine = proc.MainModule?.FileName ?? string.Empty;
+                                if (cmdLine.Contains("audiocraft", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    logger?.LogInformation("[Startup] Terminating existing AudioCraft process PID={pid}", proc.Id);
+                                    proc.Kill();
+                                    proc.WaitForExit(5000);
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogWarning("[Startup] Error killing existing AudioCraft process: {msg}", ex.Message);
+                    }
+
+                    // Start new process in background
+                    psiPython = new ProcessStartInfo
+                    {
+                        FileName = "python",
+                        Arguments = $"\"{pythonScript}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WorkingDirectory = Path.GetDirectoryName(pythonScript)
+                    };
+                    
+                    var p = Process.Start(psiPython);
+                    if (p != null)
+                    {
+                        logger?.LogInformation("[Startup] AudioCraft process started with PID={pid}", p.Id);
+                        
+                        // Wait for service to be ready (check health endpoint)
+                        using var httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                        for (int i = 0; i < 30; i++) // Wait up to 30 seconds
+                        {
+                            await Task.Delay(1000);
+                            try
+                            {
+                                var response = await httpClient.GetAsync("http://localhost:8003/health");
+                                if (response.IsSuccessStatusCode)
+                                {
+                                    logger?.LogInformation("[Startup] AudioCraft service is ready after {sec} seconds", i + 1);
+                                    return true;
+                                }
+                            }
+                            catch
+                            {
+                                // Keep waiting
+                            }
+                        }
+                        
+                        logger?.LogWarning("[Startup] AudioCraft process started but health check failed after 30s");
+                        return false;
+                    }
+                }
+                else
+                {
+                    logger?.LogWarning("[Startup] audiocraft_server.py not found, cannot restart service");
+                }
+                
+                return false;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "[Startup] TryRestartAudioCraft failure: {msg}", ex.Message);
+                return false;
+            }
+        }
+
+        public static async Task<bool> CheckAudioCraftHealthAsync(ILogger? logger = null)
+        {
+            try
+            {
+                using var httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+                var response = await httpClient.GetAsync("http://localhost:8003/health");
+                return response.IsSuccessStatusCode;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug("[Startup] AudioCraft health check failed: {msg}", ex.Message);
+                return false;
+            }
+        }
+
         public static void InitializeDatabaseIfNeeded(DatabaseService? db, ILogger? logger = null)
         {
             try

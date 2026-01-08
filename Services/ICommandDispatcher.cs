@@ -48,6 +48,7 @@ namespace TinyGenerator.Services
         IReadOnlyList<CommandSnapshot> GetActiveCommands();
         void UpdateStep(string runId, int current, int max, string? stepDescription = null);
         void UpdateRetry(string runId, int retryCount);
+        void UpdateOperationName(string runId, string newOperationName);
         bool CancelCommand(string runId);
 
         /// <summary>

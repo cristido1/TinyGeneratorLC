@@ -93,10 +93,10 @@ public sealed class StoriesService
         _database.DeleteStoryById(id);
     }
 
-    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, long? storyId = null)
+    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, long? storyId = null, int? serieId = null, int? serieEpisode = null)
     {
         storyId ??= LogScope.CurrentStoryId;
-        return _database.InsertSingleStory(prompt, story, storyId, modelId, agentId, score, eval, approved, statusId, memoryKey, title);
+        return _database.InsertSingleStory(prompt, story, storyId, modelId, agentId, score, eval, approved, statusId, memoryKey, title, serieId, serieEpisode);
     }
 
     public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false, bool allowCreatorMetadataUpdate = false)
@@ -260,6 +260,15 @@ public sealed class StoriesService
                     return new CommandResult(false, "Storia non trovata");
 
                 var (success, message) = await ExecuteStoryCommandAsync(latestStory, cmd, next);
+                
+                // After successful command execution, automatically advance to next status in chain
+                if (success)
+                {
+                    // Use a small delay to ensure status update is persisted before checking next step
+                    await Task.Delay(100);
+                    TryAdvanceStatusChain(story.Id, chainId);
+                }
+                
                 return new CommandResult(success, message);
             },
             runId: runId,
@@ -420,7 +429,7 @@ public sealed class StoriesService
         return _database.GetStoryEvaluations(storyId);
     }
 
-    public async Task<(bool success, string? message)> ExecuteNextStatusOperationAsync(long storyId)
+    public async Task<(bool success, string? message)> ExecuteNextStatusOperationAsync(long storyId, string? currentRunId = null)
     {
         var story = GetStoryById(storyId);
         if (story == null)
@@ -434,6 +443,16 @@ public sealed class StoriesService
         var command = CreateCommandForStatus(nextStatus);
         if (command == null)
             return (false, $"Operazione non supportata per lo stato {nextStatus.Code ?? nextStatus.Id.ToString()}");
+
+        // Update operation name in the command dispatcher to show the actual command being executed
+        if (!string.IsNullOrWhiteSpace(currentRunId) && _commandDispatcher != null)
+        {
+            var operationName = GetOperationNameForStatus(nextStatus);
+            if (!string.IsNullOrWhiteSpace(operationName))
+            {
+                _commandDispatcher.UpdateOperationName(currentRunId, operationName);
+            }
+        }
 
         return await ExecuteStoryCommandAsync(story, command, nextStatus);
     }
@@ -1285,6 +1304,55 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         }
     }
 
+    /// <summary>
+    /// Removes markdown formatting characters from text.
+    /// Strips: **bold**, *italic*, __bold__, _italic_, ~~strikethrough~~, `code`, [links](url), # headers, etc.
+    /// </summary>
+    private static string StripMarkdown(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+
+        var result = text;
+
+        // Remove links [text](url) -> text
+        result = Regex.Replace(result, @"\[([^\]]+)\]\([^\)]+\)", "$1");
+
+        // Remove images ![alt](url) -> empty
+        result = Regex.Replace(result, @"!\[([^\]]*)\]\([^\)]+\)", "");
+
+        // Remove inline code `code` -> code
+        result = Regex.Replace(result, @"`([^`]+)`", "$1");
+
+        // Remove code blocks ```code``` -> code
+        result = Regex.Replace(result, @"```[^\n]*\n(.*?)\n```", "$1", RegexOptions.Singleline);
+
+        // Remove bold **text** or __text__ -> text
+        result = Regex.Replace(result, @"\*\*([^\*]+)\*\*", "$1");
+        result = Regex.Replace(result, @"__([^_]+)__", "$1");
+
+        // Remove italic *text* or _text_ -> text
+        result = Regex.Replace(result, @"\*([^\*]+)\*", "$1");
+        result = Regex.Replace(result, @"_([^_]+)_", "$1");
+
+        // Remove strikethrough ~~text~~ -> text
+        result = Regex.Replace(result, @"~~([^~]+)~~", "$1");
+
+        // Remove headers # text -> text
+        result = Regex.Replace(result, @"^#{1,6}\s+", "", RegexOptions.Multiline);
+
+        // Remove horizontal rules --- or *** or ___
+        result = Regex.Replace(result, @"^(\*{3,}|-{3,}|_{3,})$", "", RegexOptions.Multiline);
+
+        // Remove blockquotes > text -> text
+        result = Regex.Replace(result, @"^>\s+", "", RegexOptions.Multiline);
+
+        // Remove list markers - or * or + or numbers
+        result = Regex.Replace(result, @"^[\*\-\+]\s+", "", RegexOptions.Multiline);
+        result = Regex.Replace(result, @"^\d+\.\s+", "", RegexOptions.Multiline);
+
+        return result;
+    }
+
     public string? EnqueueReviseStoryCommand(long storyId, string trigger, int priority = 2, bool force = false)
     {
         try
@@ -1339,14 +1407,14 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         // If no revisor available, fall back to raw -> revised so the pipeline can continue.
                         if (revisor == null)
                         {
-                            _database.UpdateStoryRevised(storyId, raw);
+                            _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped", priority: Math.Max(priority + 1, 3));
                             return new CommandResult(true, "No revisor configured: copied raw to story_revised and enqueued evaluations.");
                         }
 
                         if (!revisor.ModelId.HasValue)
                         {
-                            _database.UpdateStoryRevised(storyId, raw);
+                            _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model", priority: Math.Max(priority + 1, 3));
                             return new CommandResult(true, "Revisor has no model: copied raw to story_revised and enqueued evaluations.");
                         }
@@ -1354,7 +1422,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         var modelInfo = _database.GetModelInfoById(revisor.ModelId.Value);
                         if (string.IsNullOrWhiteSpace(modelInfo?.Name))
                         {
-                            _database.UpdateStoryRevised(storyId, raw);
+                            _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model_name", priority: Math.Max(priority + 1, 3));
                             return new CommandResult(true, "Revisor model not found: copied raw to story_revised and enqueued evaluations.");
                         }
@@ -1367,7 +1435,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         var systemPrompt = (revisor.Prompt ?? string.Empty).Trim();
                         if (string.IsNullOrWhiteSpace(systemPrompt))
                         {
-                            _database.UpdateStoryRevised(storyId, raw);
+                            _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_empty_prompt", priority: Math.Max(priority + 1, 3));
                             return new CommandResult(true, "Revisor prompt empty: copied raw to story_revised and enqueued evaluations.");
                         }
@@ -1468,7 +1536,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                             }
                         }
 
-                        var revised = revisedBuilder.ToString();
+                        var revised = StripMarkdown(revisedBuilder.ToString());
                         _database.UpdateStoryRevised(storyId, revised);
 
                         // After revision, enqueue evaluations.
@@ -2265,7 +2333,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                                     var amb = item.TryGetPropertyValue("ambienceFile", out var a1) ? a1?.ToString() : null;
                                     if (!string.IsNullOrWhiteSpace(amb)) DeleteIfExists(Path.Combine(folderPath, amb));
 
-                                    var fx = item.TryGetPropertyValue("fx_file", out var x1) ? x1?.ToString() : null;
+                                    var fx = item.TryGetPropertyValue("fxFile", out var x1) ? x1?.ToString() : null;
+                                    if (string.IsNullOrWhiteSpace(fx)) fx = item.TryGetPropertyValue("fx_file", out var x2) ? x2?.ToString() : fx;
                                     if (!string.IsNullOrWhiteSpace(fx)) DeleteIfExists(Path.Combine(folderPath, fx));
 
                                     var music = item.TryGetPropertyValue("musicFile", out var m1) ? m1?.ToString() : null;
@@ -2335,6 +2404,9 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         // also remove standardized snake_case ambience/fx/music references and their timing
                         item.Remove("ambient_sound_file");
                         item.Remove("ambient_sound_description");
+                        item.Remove("fxFile");
+                        item.Remove("fxDescription");
+                        item.Remove("fxDuration");
                         item.Remove("fx_file");
                         item.Remove("fx_description");
                         item.Remove("fx_duration");
@@ -2452,9 +2524,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         {
                             foreach (var item in arr.OfType<JsonObject>())
                             {
-                                var fx = item.TryGetPropertyValue("fx_file", out var f1) ? f1?.ToString() : null;
+                                var fx = item.TryGetPropertyValue("fxFile", out var f1) ? f1?.ToString() : null;
+                                if (string.IsNullOrWhiteSpace(fx)) fx = item.TryGetPropertyValue("fx_file", out var f2) ? f2?.ToString() : fx;
                                 if (!string.IsNullOrWhiteSpace(fx)) DeleteIfExists(Path.Combine(folderPath, fx));
 
+                                item.Remove("fxFile");
                                 item.Remove("fx_file");
                             }
                         }
@@ -2934,6 +3008,32 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         }
     }
 
+    private string? GetOperationNameForStatus(StoryStatus status)
+    {
+        if (status == null || string.IsNullOrWhiteSpace(status.OperationType))
+            return null;
+
+        var opType = status.OperationType.ToLowerInvariant();
+        switch (opType)
+        {
+            case "agent_call":
+                var agentType = status.AgentType?.ToLowerInvariant();
+                return agentType switch
+                {
+                    "tts_json" or "tts" => "generate_tts_schema",
+                    "tts_voice" or "voice" => "assign_voices",
+                    "evaluator" or "story_evaluator" or "writer_evaluator" => "evaluate_story",
+                    "revisor" => "revise_story",
+                    "formatter" => "tag_story",
+                    _ => $"agent_call:{agentType ?? "unknown"}"
+                };
+            case "function_call":
+                return status.FunctionName ?? "function_call";
+            default:
+                return status.OperationType;
+        }
+    }
+
     private interface IStoryCommand
     {
         bool RequireStoryText { get; }
@@ -2974,7 +3074,45 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             try
             {
                 var generator = new TtsSchemaGenerator(_service._customLogger, _service._database);
-                var schema = generator.GenerateFromStoryText(story.StoryTagged);
+                
+                // If story belongs to a series, load characters from series_characters table
+                List<StoryCharacter>? characters = null;
+                Dictionary<string, string>? voiceAssignments = null;
+                
+                if (story.SerieId.HasValue)
+                {
+                    var seriesChars = _service._database.ListSeriesCharacters(story.SerieId.Value);
+                    if (seriesChars.Any())
+                    {
+                        characters = seriesChars.Select(sc => new StoryCharacter
+                        {
+                            Name = sc.Name,
+                            Gender = sc.Gender,
+                            Age = sc.Eta,
+                            Role = sc.Profilo,
+                            // Add aliases if name contains spaces or special characters for better matching
+                            Aliases = sc.Name.Contains(' ') 
+                                ? new List<string> { sc.Name.Split(' ').Last() } 
+                                : null
+                        }).ToList();
+                        
+                        // Build voice assignments dictionary from series characters with voice_id set
+                        var voicesDb = _service._database.ListTtsVoices(onlyEnabled: false);
+                        voiceAssignments = seriesChars
+                            .Where(sc => sc.VoiceId.HasValue)
+                            .Select(sc => new { sc.Name, sc.VoiceId })
+                            .ToDictionary(
+                                x => x.Name,
+                                x => voicesDb.FirstOrDefault(v => v.Id == x.VoiceId!.Value)?.VoiceId ?? string.Empty,
+                                StringComparer.OrdinalIgnoreCase);
+                        
+                        _service._logger?.LogInformation(
+                            "Loaded {CharCount} characters from series_characters for story {StoryId} (serieId={SerieId}), {VoiceCount} with voice assignments", 
+                            characters.Count, story.Id, story.SerieId.Value, voiceAssignments.Count);
+                    }
+                }
+                
+                var schema = generator.GenerateFromStoryText(story.StoryTagged, characters, voiceAssignments);
 
                 if (schema.Timeline.Count == 0)
                 {
@@ -3145,21 +3283,51 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             var story = context.Story;
             var folderPath = context.FolderPath;
 
-            // Check if story has character data
-            if (string.IsNullOrWhiteSpace(story.Characters))
+            // Load character list - from series_characters if story belongs to a series, otherwise from story.Characters
+            List<StoryCharacter> storyCharacters;
+            
+            if (story.SerieId.HasValue)
             {
-                return Task.FromResult<(bool, string?)>((false, "La storia non ha una lista di personaggi definita nel campo Characters. Inseriscila dalla pagina Modifica storia."));
+                var seriesChars = _service._database.ListSeriesCharacters(story.SerieId.Value);
+                if (!seriesChars.Any())
+                {
+                    return Task.FromResult<(bool, string?)>((false, $"La serie {story.SerieId.Value} non ha personaggi definiti nella tabella series_characters."));
+                }
+                
+                storyCharacters = seriesChars.Select(sc => new StoryCharacter
+                {
+                    Name = sc.Name,
+                    Gender = sc.Gender,
+                    Age = sc.Eta,
+                    Role = sc.Profilo,
+                    Aliases = sc.Name.Contains(' ') 
+                        ? new List<string> { sc.Name.Split(' ').Last() } 
+                        : null
+                }).ToList();
+                
+                _service._logger?.LogInformation(
+                    "Loaded {CharCount} characters from series_characters for story {StoryId} (serieId={SerieId})", 
+                    storyCharacters.Count, story.Id, story.SerieId.Value);
             }
+            else
+            {
+                // Check if story has character data
+                if (string.IsNullOrWhiteSpace(story.Characters))
+                {
+                    return Task.FromResult<(bool, string?)>((false, "La storia non ha una lista di personaggi definita nel campo Characters. Inseriscila dalla pagina Modifica storia."));
+                }
 
-            // Load character list from story with detailed error
-            var (storyCharacters, parseError) = StoryCharacterParser.TryFromJson(story.Characters);
-            if (parseError != null)
-            {
-                return Task.FromResult<(bool, string?)>((false, $"Errore nel parsing della lista personaggi: {parseError}"));
-            }
-            if (storyCharacters.Count == 0)
-            {
-                return Task.FromResult<(bool, string?)>((false, $"La lista personaggi della storia è vuota o non valida. JSON attuale: {story.Characters.Substring(0, Math.Min(200, story.Characters.Length))}..."));
+                // Load character list from story with detailed error
+                var (chars, parseError) = StoryCharacterParser.TryFromJson(story.Characters);
+                if (parseError != null)
+                {
+                    return Task.FromResult<(bool, string?)>((false, $"Errore nel parsing della lista personaggi: {parseError}"));
+                }
+                if (chars.Count == 0)
+                {
+                    return Task.FromResult<(bool, string?)>((false, $"La lista personaggi della storia è vuota o non valida. JSON attuale: {story.Characters.Substring(0, Math.Min(200, story.Characters.Length))}..."));
+                }
+                storyCharacters = chars;
             }
 
             // Check if tts_schema.json exists
@@ -4787,7 +4955,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         var ambienceSegments = ExtractAmbienceSegments(phraseEntries);
         if (ambienceSegments.Count == 0)
         {
-            var msg = "Nessun segmento ambient sounds trovato nella timeline (nessuna propriet� 'ambient_sounds' presente - usa il tag [RUMORI: ...])";
+            var msg = "Nessun segmento ambient sounds trovato nella timeline (nessuna propriet� 'ambientSounds' presente)";
             _customLogger?.Append(runId, $"[{story.Id}] {msg}");
             return (true, msg);
         }
@@ -4827,7 +4995,40 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     model = "facebook/audiogen-medium"
                 };
                 var requestJson = JsonSerializer.Serialize(audioRequest);
-                var resultJson = await audioCraft.ExecuteAsync(requestJson);
+                string? resultJson = null;
+                
+                // Try to execute with retry logic if service is down
+                try
+                {
+                    resultJson = await audioCraft.ExecuteAsync(requestJson);
+                }
+                catch (Exception executeEx) when (executeEx.Message.Contains("Connection") || executeEx.Message.Contains("No connection") || executeEx is HttpRequestException)
+                {
+                    _customLogger?.Append(runId, $"[{story.Id}] Errore connessione AudioCraft: {executeEx.Message}. Tentativo di riavvio del servizio...");
+                    
+                    // Try to restart AudioCraft service
+                    var restarted = await StartupTasks.TryRestartAudioCraftAsync(_logger);
+                    if (restarted)
+                    {
+                        _customLogger?.Append(runId, $"[{story.Id}] Servizio AudioCraft riavviato. Retry generazione segmento {segmentCounter}...");
+                        
+                        // Retry the request
+                        try
+                        {
+                            resultJson = await audioCraft.ExecuteAsync(requestJson);
+                        }
+                        catch (Exception retryEx)
+                        {
+                            _customLogger?.Append(runId, $"[{story.Id}] Errore anche dopo riavvio servizio: {retryEx.Message}");
+                            throw;
+                        }
+                    }
+                    else
+                    {
+                        _customLogger?.Append(runId, $"[{story.Id}] Impossibile riavviare il servizio AudioCraft. Generazione fallita.");
+                        return (false, "Servizio AudioCraft non disponibile e impossibile riavviare");
+                    }
+                }
 
                 // Parse result to get filename
                 var resultNode = JsonNode.Parse(resultJson) as JsonObject;
@@ -4902,12 +5103,12 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     continue;
                 }
 
-                // Update tts_schema.json: add ambient_sound_file to each phrase in this segment
+                // Update tts_schema.json: add ambientSoundsFile to each phrase in this segment
                 foreach (var entryIndex in segment.EntryIndices)
                 {
                     if (entryIndex >= 0 && entryIndex < phraseEntries.Count)
                     {
-                        phraseEntries[entryIndex]["ambient_sound_file"] = localFileName;
+                        phraseEntries[entryIndex]["ambientSoundsFile"] = localFileName;
                     }
                 }
             }
@@ -4958,8 +5159,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         for (int i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            // Read from ambient_sound_description (standardized [RUMORI: ...] tag)
-            var ambientSounds = ReadString(entry, "ambient_sound_description");
+            // Read from ambientSounds property
+            var ambientSounds = ReadString(entry, "ambientSounds") ?? ReadString(entry, "AmbientSounds") ?? ReadString(entry, "ambient_sounds");
             
             // Read startMs and endMs using TryReadNumber
             int startMs = 0;
@@ -5133,11 +5334,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         for (int i = 0; i < phraseEntries.Count; i++)
         {
             var entry = phraseEntries[i];
-            var fxDesc = ReadString(entry, "fxDescription") ?? ReadString(entry, "FxDescription") ?? ReadString(entry, "fx_description");
+            var fxDesc = ReadString(entry, "fxDescription") ?? ReadString(entry, "FxDescription");
             if (!string.IsNullOrWhiteSpace(fxDesc))
             {
                 int fxDuration = 5; // default
-                if (TryReadNumber(entry, "fxDuration", out var dur) || TryReadNumber(entry, "FxDuration", out dur) || TryReadNumber(entry, "fx_duration", out dur))
+                if (TryReadNumber(entry, "fxDuration", out var dur) || TryReadNumber(entry, "FxDuration", out dur))
                     fxDuration = (int)dur;
                 fxEntries.Add((i, entry, fxDesc, fxDuration));
             }
@@ -5267,8 +5468,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     continue;
                 }
 
-                // Update tts_schema.json: add fx_file property
-                entry["fx_file"] = localFileName;
+                // Update tts_schema.json: add fxFile property
+                entry["fxFile"] = localFileName;
             }
             catch (Exception ex)
             {
@@ -5872,24 +6073,24 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             return (false, err);
         }
 
-        // Step 3: Check for missing ambient sound files (from [RUMORI: ...] tag)
+        // Step 3: Check for missing ambient sound files (from ambientSounds property)
         var ambientSoundsNeeded = phraseEntries.Any(e => 
-            !string.IsNullOrWhiteSpace(ReadString(e, "ambient_sound_description")));
+            !string.IsNullOrWhiteSpace(ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds") ?? ReadString(e, "ambient_sounds")));
         
         if (ambientSoundsNeeded)
         {
             var missingAmbientSounds = phraseEntries.Where(e =>
             {
-                var ambientSounds = ReadString(e, "ambient_sound_description");
+                var ambientSounds = ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds") ?? ReadString(e, "ambient_sounds");
                 if (string.IsNullOrWhiteSpace(ambientSounds)) return false;
-                var ambientSoundFile = ReadString(e, "ambient_sound_file");
+                var ambientSoundFile = ReadString(e, "ambientSoundsFile") ?? ReadString(e, "AmbientSoundsFile") ?? ReadString(e, "ambient_sounds_file");
                 if (string.IsNullOrWhiteSpace(ambientSoundFile)) return true;
                 return !File.Exists(Path.Combine(folderPath, ambientSoundFile));
             }).ToList();
 
             if (missingAmbientSounds.Count > 0)
             {
-                var missingList = missingAmbientSounds.Select(e => ReadString(e, "ambient_sounds") ?? ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds")).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+                var missingList = missingAmbientSounds.Select(e => ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds") ?? ReadString(e, "ambient_sounds")).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
                 var err = $"File ambient sound mancanti per alcune frasi; genere necessario prima del mix. Missing count: {missingAmbientSounds.Count}";
                 _customLogger?.Append(runId, $"[{story.Id}] {err}");
                 return (false, err);
@@ -5898,15 +6099,15 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
         // Step 4: Check for missing FX audio files
         var fxNeeded = phraseEntries.Any(e => 
-            !string.IsNullOrWhiteSpace(ReadString(e, "fx_description")));
+            !string.IsNullOrWhiteSpace(ReadString(e, "fxDescription") ?? ReadString(e, "FxDescription")));
         
         if (fxNeeded)
         {
             var missingFx = phraseEntries.Where(e =>
             {
-                var fxDesc = ReadString(e, "fx_description");
+                var fxDesc = ReadString(e, "fxDescription") ?? ReadString(e, "FxDescription");
                 if (string.IsNullOrWhiteSpace(fxDesc)) return false;
-                var fxFile = ReadString(e, "fx_file");
+                var fxFile = ReadString(e, "fxFile") ?? ReadString(e, "FxFile");
                 if (string.IsNullOrWhiteSpace(fxFile)) return true;
                 return !File.Exists(Path.Combine(folderPath, fxFile));
             }).ToList();
@@ -6057,9 +6258,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 }
             }
 
-            // Ambient sound file (from [RUMORI: ...] tag, stored in ambient_sound_file or ambience_file)
-            var ambientSoundFile = ReadString(entry, "ambient_sound_file") ?? ReadString(entry, "ambientSoundFile") ?? ReadString(entry, "AmbientSoundFile")
-                ?? ReadString(entry, "ambience_file") ?? ReadString(entry, "ambienceFile") ?? ReadString(entry, "AmbienceFile");
+            // Ambient sound file (from ambientSounds property, stored in ambientSoundsFile)
+            var ambientSoundFile = ReadString(entry, "ambientSoundsFile") ?? ReadString(entry, "AmbientSoundsFile") ?? ReadString(entry, "ambient_sounds_file");
             if (!string.IsNullOrWhiteSpace(ambientSoundFile))
             {
                 var ambientSoundFilePath = Path.Combine(folderPath, ambientSoundFile);
@@ -6079,7 +6279,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             }
 
             // FX file - starts at middle of phrase duration
-            var fxFile = ReadString(entry, "fx_file") ?? ReadString(entry, "fxFile") ?? ReadString(entry, "FxFile");
+            var fxFile = ReadString(entry, "fxFile") ?? ReadString(entry, "FxFile");
             if (!string.IsNullOrWhiteSpace(fxFile))
             {
                 var fxFilePath = Path.Combine(folderPath, fxFile);
@@ -7051,6 +7251,19 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
         public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
             => Task.FromResult<(bool success, string? message)>((false, _message));
+    }
+
+    // TODO: Implement auto-advancement feature with idle detection
+    public bool IsAutoAdvancementEnabled()
+    {
+        // Placeholder: return false until persistence mechanism is implemented
+        return false;
+    }
+    
+    public void SetAutoAdvancementEnabled(bool enabled)
+    {
+        // Placeholder: store in database or config file
+        // TODO: Implement persistence for auto-advancement switch state
     }
 
     internal static class StoriesServiceDefaults

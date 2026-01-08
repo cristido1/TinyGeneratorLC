@@ -181,11 +181,11 @@ namespace TinyGenerator.Services.Commands
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Tagged story saved (version {nextVersion})");
 
-                // Requirement: if tagging succeeds, enqueue tts_schema.json generation from inside this command.
-                TryEnqueueTtsSchemaGeneration(story, effectiveRunId);
+                // Requirement: if tagging succeeds, enqueue ambient_expert to add ambient tags
+                TryEnqueueAmbientExpert(story, effectiveRunId);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
-                return new CommandResult(true, "Tagged story generated (TTS schema enqueued)");
+                return new CommandResult(true, "Tagged story generated (ambient_expert enqueued)");
             }
             catch (OperationCanceledException)
             {
@@ -197,78 +197,54 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        private void TryEnqueueTtsSchemaGeneration(StoryRecord story, string runId)
+        private void TryEnqueueAmbientExpert(StoryRecord story, string runId)
         {
             try
             {
                 if (_commandDispatcher == null)
                 {
-                    _logger?.Append(runId, $"[story {_storyId}] TTS schema enqueue skipped: dispatcher not available", "warn");
+                    _logger?.Append(runId, $"[story {_storyId}] ambient_expert enqueue skipped: dispatcher not available", "warn");
                     return;
                 }
 
-                if (_storiesService == null)
+                if (_storiesService == null || _kernelFactory == null)
                 {
-                    _logger?.Append(runId, $"[story {_storyId}] TTS schema enqueue skipped: StoriesService not available", "warn");
+                    _logger?.Append(runId, $"[story {_storyId}] ambient_expert enqueue skipped: missing dependencies", "warn");
                     return;
                 }
 
-                // If a schema generation command is already queued/running for this story, don't enqueue another.
-                try
-                {
-                    var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
-                        s.Metadata != null &&
-                        s.Metadata.TryGetValue("storyId", out var sid) &&
-                        string.Equals(sid, _storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
-                        (
-                            string.Equals(s.OperationName, "generate_tts_schema", StringComparison.OrdinalIgnoreCase) ||
-                            (s.Metadata.TryGetValue("operation", out var op) && op.Contains("tts_schema", StringComparison.OrdinalIgnoreCase)) ||
-                            s.RunId.StartsWith($"tts_schema_{_storyId}_", StringComparison.OrdinalIgnoreCase)
-                        ));
-
-                    if (alreadyQueued)
-                    {
-                        _logger?.Append(runId, $"[story {_storyId}] TTS schema not enqueued: already queued/running", "info");
-                        return;
-                    }
-                }
-                catch
-                {
-                    // If snapshots fail, we still try to enqueue.
-                }
-
-                var ttsRunId = $"tts_schema_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                var ambientRunId = $"ambient_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
 
                 _commandDispatcher.Enqueue(
-                    "generate_tts_schema",
+                    "ambient_expert",
                     async ctx =>
                     {
                         try
                         {
-                            var cmd = new GenerateTtsSchemaCommand(_storiesService, _storyId);
-                            return await cmd.ExecuteAsync(ctx.CancellationToken);
+                            var cmd = new AmbientExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher);
+                            return await cmd.ExecuteAsync(ctx.CancellationToken, ambientRunId);
                         }
                         catch (Exception ex)
                         {
                             return new CommandResult(false, ex.Message);
                         }
                     },
-                    runId: ttsRunId,
-                    threadScope: "story/tts_schema",
+                    runId: ambientRunId,
+                    threadScope: "story/ambient_expert",
                     metadata: new Dictionary<string, string>
                     {
                         ["storyId"] = _storyId.ToString(),
-                        ["operation"] = "generate_tts_schema",
-                        ["trigger"] = "tagged_generated",
+                        ["operation"] = "ambient_expert",
+                        ["trigger"] = "formatter_completed",
                         ["taggedVersion"] = (story.StoryTaggedVersion ?? 0).ToString()
                     },
                     priority: 2);
 
-                _logger?.Append(runId, $"[story {_storyId}] Enqueued TTS schema generation (runId={ttsRunId})", "info");
+                _logger?.Append(runId, $"[story {_storyId}] Enqueued ambient_expert (runId={ambientRunId})", "info");
             }
             catch (Exception ex)
             {
-                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue TTS schema: {ex.Message}", "warn");
+                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue ambient_expert: {ex.Message}", "warn");
             }
         }
 

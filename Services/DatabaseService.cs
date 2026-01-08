@@ -49,8 +49,8 @@ public sealed class DatabaseService
         {
             Console.WriteLine($"[DB] Error creating data directory: {ex.Message}");
         }
-        // Enable foreign key enforcement for SQLite connections
-        _connectionString = $"Data Source={dbPath};Foreign Keys=True";
+        // Enable foreign key enforcement, WAL mode for better concurrency, and reduced busy timeout
+        _connectionString = $"Data Source={dbPath};Foreign Keys=True;Mode=ReadWriteCreate;Cache=Shared;Pooling=True";
         // Defer heavy initialization to the explicit Initialize() method so the
         // service can be registered without blocking `builder.Build()`.
         _ollamaMonitor = ollamaMonitor;
@@ -59,7 +59,34 @@ public sealed class DatabaseService
         Console.WriteLine($"[DB] DatabaseService ctor completed in {ctorSw.ElapsedMilliseconds}ms");
     }
 
-    // Helper method to create a scoped DbContext
+    // Wrapper that disposes both the DbContext and the scope
+    private sealed class DbContextWrapper : IDisposable
+    {
+        private readonly IServiceScope _scope;
+        public TinyGeneratorDbContext Context { get; }
+
+        public DbContextWrapper(IServiceScope scope, TinyGeneratorDbContext context)
+        {
+            _scope = scope;
+            Context = context;
+        }
+
+        public void Dispose()
+        {
+            Context?.Dispose();
+            _scope?.Dispose();
+        }
+    }
+
+    // Helper method to create a scoped DbContext with proper disposal
+    private DbContextWrapper CreateDbContextWrapper()
+    {
+        var scope = _serviceProvider.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<TinyGeneratorDbContext>();
+        return new DbContextWrapper(scope, context);
+    }
+
+    // Helper method to create a scoped DbContext (legacy - prefer CreateDbContextWrapper)
     private TinyGeneratorDbContext CreateDbContext()
     {
         var scope = _serviceProvider.CreateScope();
@@ -94,6 +121,18 @@ public sealed class DatabaseService
         // but should be controlled by the caller (trusted/internal).
         var sql = $"UPDATE \"{tableName}\" SET \"{embeddingColumn}\" = @emb WHERE \"{idColumn}\" = @id";
         conn.Execute(sql, new { emb = embJson, id });
+    }
+
+    /// <summary>
+    /// Execute a raw SQL command and return the number of rows affected.
+    /// Use with caution - prefer EF Core methods when possible.
+    /// </summary>
+    public int ExecuteRaw(string sql, object? parameters = null)
+    {
+        if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentNullException(nameof(sql));
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        return conn.Execute(sql, parameters);
     }
 
     /// <summary>
@@ -164,8 +203,23 @@ public sealed class DatabaseService
         {
             Console.WriteLine("[DB] Initialize() called");
             
+            // Enable WAL mode for better concurrency
+            try
+            {
+                using var conn = new SqliteConnection(_connectionString);
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;";
+                cmd.ExecuteNonQuery();
+                Console.WriteLine("[DB] Enabled WAL mode and busy timeout");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to enable WAL mode: {ex.Message}");
+            }
+            
             // Check if database file exists; if not, recreate from schema file
-            var dbPath = _connectionString.Replace("Data Source=", "").Replace(";", "").Trim();
+            var dbPath = _connectionString.Replace("Data Source=", "").Split(';')[0].Trim();
             if (!File.Exists(dbPath))
             {
                 Console.WriteLine($"[DB] Database file not found at {dbPath}, recreating from schema...");
@@ -2234,7 +2288,17 @@ SET TotalScore = (
             SerieEpisode = serieEpisode
         };
         context.Stories.Add(storyRecord);
-        context.SaveChanges();
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to insert new story: {fullMessage}");
+            throw new InvalidOperationException($"Failed to insert new story: {fullMessage}", ex);
+        }
 
         // After saving we have the story Id; construct a folder name prefixed with a 5-digit zero-padded id
         try
@@ -2299,7 +2363,17 @@ SET TotalScore = (
         };
 
         context.Stories.Add(storyRecord);
-        context.SaveChanges();
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to insert new story with specified ID {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to insert new story: {fullMessage}", ex);
+        }
 
         try
         {
@@ -2323,15 +2397,45 @@ SET TotalScore = (
         return storyRecord.Id;
     }
 
-    public void UpdateStorySeriesInfo(long storyId, int? serieId, int? serieEpisode)
+    public void UpdateStorySeriesInfo(long storyId, int? serieId, int? serieEpisode, bool allowSeriesUpdate = false)
     {
         if (!serieId.HasValue && !serieEpisode.HasValue) return;
         using var context = CreateDbContext();
         var story = context.Stories.Find(storyId);
         if (story == null) return;
-        story.SerieId = serieId;
-        story.SerieEpisode = serieEpisode;
-        context.SaveChanges();
+        
+        // Series metadata (serie_id/serie_episode) should be stable: only allow updates if allowSeriesUpdate=true (explicit Edit page operation)
+        if (!allowSeriesUpdate)
+        {
+            var attemptedOverwrite = false;
+            if (serieId.HasValue && story.SerieId.HasValue && story.SerieId.Value != serieId.Value) attemptedOverwrite = true;
+            if (serieEpisode.HasValue && story.SerieEpisode.HasValue && story.SerieEpisode.Value != serieEpisode.Value) attemptedOverwrite = true;
+            if (attemptedOverwrite)
+            {
+                Console.WriteLine($"[DB][WARN] Blocked series metadata overwrite for story {storyId}: attempted serieId={serieId?.ToString() ?? "<null>"}, serieEpisode={serieEpisode?.ToString() ?? "<null>"}; current serieId={story.SerieId?.ToString() ?? "<null>"}, serieEpisode={story.SerieEpisode?.ToString() ?? "<null>"}");
+                return;
+            }
+            // Allow initializing only when NULL
+            if (serieId.HasValue && !story.SerieId.HasValue) story.SerieId = serieId;
+            if (serieEpisode.HasValue && !story.SerieEpisode.HasValue) story.SerieEpisode = serieEpisode;
+        }
+        else
+        {
+            // Explicit update allowed (from Edit page)
+            story.SerieId = serieId;
+            story.SerieEpisode = serieEpisode;
+        }
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save series info for story {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update series info for story {storyId}: {fullMessage}", ex);
+        }
     }
 
     public long GetMaxStoryId()
@@ -2449,7 +2553,18 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;", new { k = key.Trim(), v
             if (agentId.HasValue && !storyRecord.AgentId.HasValue) storyRecord.AgentId = agentId.Value;
         }
         if (updateStatus) storyRecord.StatusId = statusId;
-        context.SaveChanges();
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save changes for story {id}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update story {id}: {fullMessage}", ex);
+        }
+        
         return true;
     }
 
@@ -2459,7 +2574,18 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;", new { k = key.Trim(), v
         var storyRecord = context.Stories.Find(storyId);
         if (storyRecord == null) return false;
         storyRecord.StoryRevised = storyRevised ?? string.Empty;
-        context.SaveChanges();
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save revised story for {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update revised story {storyId}: {fullMessage}", ex);
+        }
+        
         return true;
     }
 
@@ -2494,7 +2620,18 @@ WHERE agent_id IS NOT NULL
         var storyRecord = context.Stories.Find(storyId);
         if (storyRecord == null) return false;
         storyRecord.Characters = charactersJson;
-        context.SaveChanges();
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save characters for story {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update characters for story {storyId}: {fullMessage}", ex);
+        }
+        
         return true;
     }
 
@@ -2507,8 +2644,45 @@ WHERE agent_id IS NOT NULL
         var storyRecord = context.Stories.Find(storyId);
         if (storyRecord == null) return false;
         storyRecord.Summary = summary;
-        context.SaveChanges();
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save summary for story {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update summary for story {storyId}: {fullMessage}", ex);
+        }
+        
         return true;
+    }
+
+    /// <summary>
+    /// Removes markdown artifacts and special characters from tagged story text.
+    /// </summary>
+    private string SanitizeStoryTagged(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        
+        // Remove markdown bold markers (double asterisks)
+        text = text.Replace("**", "");
+        
+        // Remove markdown italic markers (single asterisks) - careful to not break normal asterisks
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\*([^\*]+)\*", "$1");
+        
+        // Remove all quote characters
+        text = text.Replace("\u00AB", ""); // guillemet left
+        text = text.Replace("\u00BB", ""); // guillemet right
+        text = text.Replace("\u201C", ""); // left double quote
+        text = text.Replace("\u201D", ""); // right double quote
+        text = text.Replace("\u2018", ""); // left single quote
+        text = text.Replace("\u2019", ""); // right single quote
+        text = text.Replace("\"", "");     // standard double quote
+        text = text.Replace("'", "");      // standard single quote
+        
+        return text;
     }
 
     /// <summary>
@@ -2519,7 +2693,7 @@ WHERE agent_id IS NOT NULL
         using var context = CreateDbContext();
         var storyRecord = context.Stories.Find(storyId);
         if (storyRecord == null) return false;
-        storyRecord.StoryTagged = storyTagged ?? string.Empty;
+        storyRecord.StoryTagged = SanitizeStoryTagged(storyTagged ?? string.Empty);
         if (storyTaggedVersion.HasValue)
         {
             storyRecord.StoryTaggedVersion = storyTaggedVersion.Value;
@@ -2529,7 +2703,18 @@ WHERE agent_id IS NOT NULL
             storyRecord.FormatterModelId = formatterModelId.Value;
         }
         storyRecord.FormatterPromptHash = formatterPromptHash;
-        context.SaveChanges();
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save tagged story for {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update tagged story {storyId}: {fullMessage}", ex);
+        }
+        
         return true;
     }
 
@@ -2545,7 +2730,18 @@ WHERE agent_id IS NOT NULL
         storyRecord.StoryTaggedVersion = null;
         storyRecord.FormatterModelId = null;
         storyRecord.FormatterPromptHash = null;
-        context.SaveChanges();
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to clear tagged story for {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to clear tagged story {storyId}: {fullMessage}", ex);
+        }
+        
         return true;
     }
 
@@ -2841,16 +3037,31 @@ WHERE agent_id IS NOT NULL
 
                     if (existing != null)
                     {
+                        // Update only technical fields from API, preserve user-customizable fields
+                        // Update: Name, Model, Language, Gender, Age, Confidence, Tags, TemplateWav
+                        // Preserve: Score (user can adjust), Archetype (user can override), Notes (user can override), Disabled (user preference)
                         existing.Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name;
+                        existing.Model = v.Model;
                         existing.Language = v.Language;
                         existing.Gender = v.Gender;
-                        existing.Age = v.Age;
+                        existing.Age = !string.IsNullOrWhiteSpace(v.Age) ? v.Age : v.AgeRange;
                         existing.Confidence = v.Confidence;
-                        existing.Score = GetScoreFromTags(v.Tags, v.Confidence);
+                        // Only update Score if not manually set (check if it matches confidence or is null)
+                        if (existing.Score == null || existing.Score == existing.Confidence)
+                        {
+                            existing.Score = GetScoreFromTags(v.Tags, v.Confidence);
+                        }
                         existing.Tags = tagsJson;
                         existing.TemplateWav = v.Tags != null && v.Tags.ContainsKey("template_wav") ? v.Tags["template_wav"] : null;
-                        existing.Archetype = archetype;
-                        existing.Notes = notes;
+                        // Only update Archetype/Notes if currently empty (preserve user edits)
+                        if (string.IsNullOrWhiteSpace(existing.Archetype))
+                        {
+                            existing.Archetype = archetype;
+                        }
+                        if (string.IsNullOrWhiteSpace(existing.Notes))
+                        {
+                            existing.Notes = notes;
+                        }
                         existing.UpdatedAt = now;
                         result.UpdatedIds.Add(v.Id);
                     }
@@ -2860,9 +3071,10 @@ WHERE agent_id IS NOT NULL
                         {
                             VoiceId = v.Id,
                             Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name,
+                            Model = v.Model,
                             Language = v.Language,
                             Gender = v.Gender,
-                            Age = v.Age,
+                            Age = !string.IsNullOrWhiteSpace(v.Age) ? v.Age : v.AgeRange,
                             Confidence = v.Confidence,
                             Score = GetScoreFromTags(v.Tags, v.Confidence),
                             Tags = tagsJson,

@@ -44,6 +44,11 @@ namespace TinyGenerator.Controllers
                 contentType = "application/octet-stream";
             }
 
+            // Disable caching for character images so clients always fetch latest
+            Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0";
+            Response.Headers["Pragma"] = "no-cache";
+            Response.Headers["Expires"] = "0";
+
             return PhysicalFile(fullPath, contentType);
         }
     }

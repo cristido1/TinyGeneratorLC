@@ -40,15 +40,23 @@ namespace TinyGenerator.Pages.Stories
         [BindProperty]
         public int? AgentId { get; set; }
 
+        [BindProperty]
+        public int? SerieId { get; set; }
+
+        [BindProperty]
+        public int? SerieEpisode { get; set; }
+
         public List<StoryStatus> Statuses { get; set; } = new();
         public List<Agent> Agents { get; set; } = new();
         public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
+        public List<TinyGenerator.Models.Series> Series { get; set; } = new();
 
         public IActionResult OnGet()
         {
             LoadStatuses();
             LoadAgents();
             LoadModels();
+            LoadSeries();
             return Page();
         }
 
@@ -57,29 +65,18 @@ namespace TinyGenerator.Pages.Stories
             LoadStatuses();
             LoadAgents();
 
-            // Enqueue creation as command
-            var runId = $"create_story_{DateTime.UtcNow:yyyyMMddHHmmss}";
-            var agent = AgentId.HasValue ? _database.GetAgentById(AgentId.Value) : null;
-            _dispatcher.Enqueue(
-                "create_story",
-                async ctx =>
-                {
-                    var cmd = new CreateStoryCommand(_stories, Prompt, StoryText, AgentId, StatusId, Title, ModelId);
-                    return await cmd.ExecuteAsync(ctx.CancellationToken);
-                },
-                runId: runId,
-                threadScope: "story/create",
-                metadata: new Dictionary<string, string>
-                {
-                    ["operation"] = "create_story",
-                    ["prompt"] = (Prompt != null && Prompt.Length > 80) ? (Prompt.Substring(0, 80) + "...") : (Prompt ?? string.Empty),
-                    ["agentId"] = AgentId?.ToString() ?? string.Empty,
-                    ["agentName"] = agent?.Name ?? "unknown",
-                    ["modelName"] = agent?.ModelName ?? "unknown"
-                });
-
-            TempData["StatusMessage"] = $"Creazione storia accodata (run {runId}).";
-            return RedirectToPage("/Stories/Index");
+            // Save story immediately
+            var storyId = _stories.InsertSingleStory(Prompt, StoryText, modelId: ModelId, agentId: AgentId, statusId: StatusId, title: Title, serieId: SerieId, serieEpisode: SerieEpisode);
+            
+            // Enqueue status chain as background task
+            var chainId = _stories.EnqueueStatusChain(storyId);
+            
+            var message = string.IsNullOrWhiteSpace(chainId)
+                ? $"Storia creata (id={storyId})"
+                : $"Storia creata (id={storyId}) - catena stati avviata ({chainId})";
+            
+            TempData["StatusMessage"] = message;
+            return RedirectToPage("/Stories/Details", new { id = storyId });
         }
 
         private void LoadStatuses()
@@ -115,6 +112,18 @@ namespace TinyGenerator.Pages.Stories
             catch
             {
                 Models = new List<TinyGenerator.Models.ModelInfo>();
+            }
+        }
+
+        private void LoadSeries()
+        {
+            try
+            {
+                Series = _database.ListAllSeries();
+            }
+            catch
+            {
+                Series = new List<TinyGenerator.Models.Series>();
             }
         }
     }

@@ -18,6 +18,9 @@ public class IndexModel : PageModel
     public int AudioMasterGeneratedCount { get; set; }
     public List<WriterRanking> TopWriters { get; set; } = new();
     public List<TopStory> TopStories { get; set; } = new();
+    
+    // Auto-advancement property
+    public bool EnableAutoAdvancement { get; set; }
 
     public class WriterRanking
     {
@@ -48,6 +51,9 @@ public class IndexModel : PageModel
     {
         try
         {
+            // Load auto-advancement setting from config/state
+            EnableAutoAdvancement = _stories.IsAutoAdvancementEnabled();
+            
             // Total stories
             var allStories = _stories.GetAllStories();
             TotalStories = allStories.Count;
@@ -93,5 +99,22 @@ public class IndexModel : PageModel
         {
             _logger.LogError(ex, "Error loading KPI data");
         }
+    }
+    
+    public IActionResult OnPostToggleAutoAdvancement(bool enabled)
+    {
+        try
+        {
+            _stories.SetAutoAdvancementEnabled(enabled);
+            TempData["Message"] = enabled 
+                ? "✓ Avanzamento automatico abilitato. Dopo 10 minuti di inattività verrà processata la storia con punteggio più alto."
+                : "Avanzamento automatico disabilitato.";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error toggling auto advancement");
+            TempData["Error"] = "Errore durante il cambio impostazione.";
+        }
+        return RedirectToPage();
     }
 }

@@ -287,8 +287,12 @@
         });
     </script>
     <script>
-        // Fallback detail toggle: mirrors Series page behavior
+        // Page-local fallback: ensures the "Dettaglio" button toggles the next detail row
+        // even if shared scripts fail or are cached.
         document.addEventListener('click', function (evt) {
+            // If ListUI has already bound the detail handler, don't run the fallback
+            // (otherwise the row gets toggled twice and ends up hidden).
+            if (document.documentElement.getAttribute('data-listui-detail-bound') === '1') return;
             const btn = evt.target.closest('[data-detail-toggle]');
             if (!btn) return;
             const tr = btn.closest('tr');

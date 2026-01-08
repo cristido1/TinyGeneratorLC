@@ -29,6 +29,48 @@ namespace TinyGenerator.Pages.TtsVoices
             _tts = tts;
         }
 
+        private IActionResult RedirectToPagePreserveState()
+        {
+            // Read current state from query string
+            var routeValues = new Dictionary<string, object?>();
+            
+            if (Request.Query.ContainsKey("page") && int.TryParse(Request.Query["page"], out var p) && p > 1)
+                routeValues["page"] = p;
+            
+            if (Request.Query.ContainsKey("pageSize") && int.TryParse(Request.Query["pageSize"], out var ps) && ps != 25)
+                routeValues["pageSize"] = ps;
+            
+            if (Request.Query.ContainsKey("search"))
+            {
+                var search = Request.Query["search"].ToString();
+                if (!string.IsNullOrWhiteSpace(search))
+                    routeValues["search"] = search;
+            }
+            
+            if (Request.Query.ContainsKey("orderBy"))
+            {
+                var orderBy = Request.Query["orderBy"].ToString();
+                if (!string.IsNullOrWhiteSpace(orderBy))
+                    routeValues["orderBy"] = orderBy;
+            }
+            
+            if (Request.Query.ContainsKey("orderDir"))
+            {
+                var orderDir = Request.Query["orderDir"].ToString();
+                if (!string.IsNullOrWhiteSpace(orderDir))
+                    routeValues["orderDir"] = orderDir;
+            }
+            
+            if (Request.Query.ContainsKey("showDisabled"))
+            {
+                var showDisabled = Request.Query["showDisabled"].ToString();
+                if (showDisabled == "1" || showDisabled.Equals("true", StringComparison.OrdinalIgnoreCase))
+                    routeValues["showDisabled"] = "1";
+            }
+            
+            return RedirectToPage(routeValues.Count > 0 ? routeValues : null);
+        }
+
         public void OnGet()
         {
             try
@@ -68,8 +110,9 @@ namespace TinyGenerator.Pages.TtsVoices
                     {
                         "name" => asc ? filtered.OrderBy(v => v.Name) : filtered.OrderByDescending(v => v.Name),
                         "voiceId" => asc ? filtered.OrderBy(v => v.VoiceId) : filtered.OrderByDescending(v => v.VoiceId),
-                        "score" => asc ? filtered.OrderBy(v => v.Score) : filtered.OrderByDescending(v => v.Score),
                         "gender" => asc ? filtered.OrderBy(v => v.Gender) : filtered.OrderByDescending(v => v.Gender),
+                        "age" => asc ? filtered.OrderBy(v => v.Age) : filtered.OrderByDescending(v => v.Age),
+                        "score" => asc ? filtered.OrderBy(v => v.Score) : filtered.OrderByDescending(v => v.Score),
                         "archetype" => asc ? filtered.OrderBy(v => v.Archetype) : filtered.OrderByDescending(v => v.Archetype),
                         _ => asc ? filtered.OrderBy(v => v.Name) : filtered.OrderByDescending(v => v.Name)
                     };
@@ -334,7 +377,7 @@ namespace TinyGenerator.Pages.TtsVoices
                 else
                 {
                     TempData["TtsVoiceMessage"] = "Voce eliminata";
-                    return RedirectToPage();
+                    return RedirectToPagePreserveState();
                 }
             }
             catch (Exception ex)
@@ -421,7 +464,7 @@ namespace TinyGenerator.Pages.TtsVoices
                 else
                 {
                     TempData["TtsVoiceMessage"] = "Sample rigenerato";
-                    return RedirectToPage();
+                    return RedirectToPagePreserveState();
                 }
             }
             catch (Exception ex)

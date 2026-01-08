@@ -74,6 +74,7 @@ namespace TinyGenerator.Services
     {
         private readonly HttpClient _http;
         private readonly TtsOptions _options;
+        private readonly ICustomLogger? _logger;
         private static readonly JsonSerializerOptions VoiceJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
         /// <summary>
@@ -82,10 +83,11 @@ namespace TinyGenerator.Services
         /// </summary>
         private const int MaxCharsPerRequest = 220;
 
-        public TtsService(HttpClient http, TtsOptions? options = null)
+        public TtsService(HttpClient http, TtsOptions? options = null, ICustomLogger? logger = null)
         {
             _http = http ?? throw new ArgumentNullException(nameof(http));
             _options = options ?? new TtsOptions();
+            _logger = logger;
         }
 
         // GET /voices  => returns list of voices and evaluation fields
@@ -202,11 +204,21 @@ namespace TinyGenerator.Services
         /// </summary>
         private async Task<SynthesisResult?> SynthesizeSingleChunkAsync(string voiceId, string text, string? language, string? sentiment)
         {
+            // Parse voiceId: if it contains ":", split into model:speaker
+            string model = "tts_models/multilingual/multi-dataset/xtts_v2";
+            string speaker = voiceId;
+            
+            if (voiceId.Contains(":"))
+            {
+                var parts = voiceId.Split(':', 2);
+                model = parts[0];
+                speaker = parts[1];
+            }
+            
             var payload = new Dictionary<string, object?>
             {
-                // Use the default XTTS model and pass voiceId as speaker name
-                ["model"] = "tts_models/multilingual/multi-dataset/xtts_v2",
-                ["speaker"] = voiceId,
+                ["model"] = model,
+                ["speaker"] = speaker,
                 ["text"] = text
             };
             // Ensure we always send a language; default to Italian if not specified
@@ -225,8 +237,13 @@ namespace TinyGenerator.Services
             {
                 try
                 {
-                    var payloadJson = JsonSerializer.Serialize(payload);
-                    Console.WriteLine($"[TtsService] Attempt POST {path} -> payload: {payloadJson}");
+                    var payloadJson = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+                    var fullUrl = $"{_options.BaseUrl}{path}";
+                    
+                    // Log request JSON completo
+                    _logger?.LogRequestJson("TTS", $"POST {fullUrl}\n{payloadJson}");
+                    Console.WriteLine($"[TtsService] POST {fullUrl}");
+                    Console.WriteLine($"[TtsService] Request payload: {payloadJson}");
 
                     var resp = await _http.PostAsJsonAsync(path, payload);
 
@@ -237,10 +254,21 @@ namespace TinyGenerator.Services
                     }
                     catch { /* ignore read errors */ }
 
-                    Console.WriteLine($"[TtsService] Response {path} -> Status: {(int)resp.StatusCode} {resp.StatusCode}; BodyLen={respText?.Length ?? 0}");
-                    if (!string.IsNullOrWhiteSpace(respText) && respText.Length < 2000)
+                    // Log risultato response
+                    if (resp.IsSuccessStatusCode)
                     {
-                        Console.WriteLine($"[TtsService] Response body: {respText}");
+                        _logger?.Log("INFO", "TTS", $"Request succeeded: {fullUrl} -> Status {(int)resp.StatusCode}, BodyLen={respText?.Length ?? 0}");
+                        Console.WriteLine($"[TtsService] Response OK: Status {(int)resp.StatusCode}, BodyLen={respText?.Length ?? 0}");
+                    }
+                    else
+                    {
+                        var errorMsg = $"Request failed: {fullUrl} -> Status {(int)resp.StatusCode} {resp.StatusCode}";
+                        if (!string.IsNullOrWhiteSpace(respText) && respText.Length < 1000)
+                        {
+                            errorMsg += $"\nError body: {respText}";
+                        }
+                        _logger?.Log("ERROR", "TTS", errorMsg);
+                        Console.WriteLine($"[TtsService] Response ERROR: {errorMsg}");
                     }
 
                     if (resp.IsSuccessStatusCode)
@@ -274,7 +302,9 @@ namespace TinyGenerator.Services
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[TtsService] Exception posting to {path}: {ex.Message}");
+                    var fullUrl = $"{_options.BaseUrl}{path}";
+                    _logger?.Log("ERROR", "TTS", $"Exception calling {fullUrl}: {ex.Message}", ex.ToString());
+                    Console.WriteLine($"[TtsService] Exception posting to {fullUrl}: {ex.Message}");
                     if (ex is InvalidOperationException)
                     {
                         throw;

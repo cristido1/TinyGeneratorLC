@@ -43,14 +43,21 @@ namespace TinyGenerator.Pages.Stories
         [BindProperty]
         public int? ModelId { get; set; }
 
-        public List<StoryStatus> Statuses { get; set; } = new();
-        public List<Agent> Agents { get; set; } = new();
-        public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
+    [BindProperty]
+    public int? SerieId { get; set; }
 
-        [BindProperty]
-        public string? Title { get; set; }
+    [BindProperty]
+    public int? SerieEpisode { get; set; }
 
-        public string FormatterAgentName { get; set; } = string.Empty;
+    public List<StoryStatus> Statuses { get; set; } = new();
+    public List<Agent> Agents { get; set; } = new();
+    public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
+    public List<TinyGenerator.Models.Series> Series { get; set; } = new();
+
+    [BindProperty]
+    public string? Title { get; set; }
+
+    public string FormatterAgentName { get; set; } = string.Empty;
 
         public IActionResult OnGet(long id)
         {
@@ -66,9 +73,12 @@ namespace TinyGenerator.Pages.Stories
             Title = s.Title;
             AgentId = s.AgentId;
             ModelId = s.ModelId;
+            SerieId = s.SerieId;
+            SerieEpisode = s.SerieEpisode;
             LoadStatuses();
             LoadAgents();
             LoadModels();
+            LoadSeries();
             FormatterAgentName = ResolveFormatterAgentName(s.FormatterModelId);
             return Page();
         }
@@ -100,6 +110,7 @@ namespace TinyGenerator.Pages.Stories
                 _stories.UpdateStoryCharacters(Id, Characters);
             }
             _stories.UpdateStoryTitle(Id, Title ?? string.Empty);
+            _database.UpdateStorySeriesInfo(Id, SerieId, SerieEpisode, allowSeriesUpdate: true);
             return RedirectToPage("/Stories/Details", new { id = Id });
         }
 
@@ -136,6 +147,17 @@ namespace TinyGenerator.Pages.Stories
             catch
             {
                 Models = new List<TinyGenerator.Models.ModelInfo>();
+            }
+        }
+        private void LoadSeries()
+        {
+            try
+            {
+                Series = _database.ListAllSeries();
+            }
+            catch
+            {
+                Series = new List<TinyGenerator.Models.Series>();
             }
         }
 

@@ -399,6 +399,15 @@ namespace TinyGenerator.Services
             }
         }
 
+        public void UpdateOperationName(string runId, string newOperationName)
+        {
+            if (_active.TryGetValue(runId, out var state) && !string.IsNullOrWhiteSpace(newOperationName))
+            {
+                state.OperationName = newOperationName.Trim();
+                _ = BroadcastCommandsAsync();
+            }
+        }
+
         public bool CancelCommand(string runId)
         {
             if (string.IsNullOrWhiteSpace(runId))

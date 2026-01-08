@@ -207,6 +207,10 @@ builder.Services.AddHttpClient<TtsService>(client =>
 {
     client.BaseAddress = new Uri(ttsOptions.BaseUrl);
     client.Timeout = TimeSpan.FromSeconds(ttsOptions.TimeoutSeconds);
+}).AddTypedClient<TtsService>((httpClient, sp) =>
+{
+    var customLogger = sp.GetService<ICustomLogger>();
+    return new TtsService(httpClient, ttsOptions, customLogger);
 });
 
 // CostController removed - call tracking/cost controller disabled

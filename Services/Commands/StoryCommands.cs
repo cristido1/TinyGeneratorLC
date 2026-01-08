@@ -19,8 +19,10 @@ namespace TinyGenerator.Services.Commands
         private readonly int? _agentId;
         private readonly int? _statusId;
         private readonly int? _modelId;
+        private readonly int? _serieId;
+        private readonly int? _serieEpisode;
 
-        public CreateStoryCommand(StoriesService stories, string prompt, string storyText, int? agentId = null, int? statusId = null, string? title = null, int? modelId = null)
+        public CreateStoryCommand(StoriesService stories, string prompt, string storyText, int? agentId = null, int? statusId = null, string? title = null, int? modelId = null, int? serieId = null, int? serieEpisode = null)
         {
             _stories = stories ?? throw new ArgumentNullException(nameof(stories));
             _prompt = prompt ?? string.Empty;
@@ -29,11 +31,13 @@ namespace TinyGenerator.Services.Commands
             _statusId = statusId;
             _title = title;
             _modelId = modelId;
+            _serieId = serieId;
+            _serieEpisode = serieEpisode;
         }
 
         public Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
         {
-            var id = _stories.InsertSingleStory(_prompt, _storyText, modelId: _modelId, agentId: _agentId, statusId: _statusId, title: _title);
+            var id = _stories.InsertSingleStory(_prompt, _storyText, modelId: _modelId, agentId: _agentId, statusId: _statusId, title: _title, serieId: _serieId, serieEpisode: _serieEpisode);
             var chainId = _stories.EnqueueStatusChain(id);
             var message = string.IsNullOrWhiteSpace(chainId)
                 ? $"Storia creata (id={id})"

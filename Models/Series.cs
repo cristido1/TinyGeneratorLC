@@ -76,6 +76,9 @@ public sealed class Series
     [Column("stile_scrittura")]
     public string? StileScrittura { get; set; }
     
+    [Column("images_style")]
+    public string? ImagesStyle { get; set; }
+    
     [Column("regole_narrative")]
     public string? RegoleNarrative { get; set; }
     

@@ -39,9 +39,10 @@
     <div class="tab-pane fade @(activeTab == "series" ? "show active" : "")" id="tab-series" role="tabpanel" aria-labelledby="tab-series-btn">
         <form method="post">
             <input type="hidden" asp-for="SeriesItem.Id" />
+            <div asp-validation-summary="All" class="text-danger"></div>
             
             <!-- SEZIONE 1: CAMPI DI FILTRAGGIO / CATALOGO -->
-            <h4 class="mt-4 mb-3 text-primary">�Y"< Campi di Filtraggio / Catalogo</h4>
+            <h4 class="mt-4 mb-3 text-primary">Campi di Filtraggio / Catalogo</h4>
             
             <div class="row mb-3">
                 <div class="col-md-12">
@@ -109,7 +110,7 @@
             </div>
 
             <!-- SEZIONE 2: CAMPI PER GENERAZIONE EPISODI -->
-            <h4 class="mt-5 mb-3 text-success">�Y�- Campi per Generazione Episodi (Prompt Writer)</h4>
+            <h4 class="mt-5 mb-3 text-success">Campi per Generazione Episodi (Prompt Writer)</h4>
             <p class="text-muted mb-3">Questi campi vengono passati al writer AI per generare ogni episodio. Devono essere stabili e non cambiare tra episodi.</p>
 
             <div class="row mb-3">
@@ -121,6 +122,17 @@
                     <textarea asp-for="SeriesItem.AmbientazioneBase" class="form-control font-monospace" rows="8" 
                               placeholder="Esempio:&#10;Periodo: anno 3050&#10;Umanit�:&#10;- Civilt� interstellare attiva&#10;- Motore FTL disponibile da circa 100 anni&#10;Tecnologia:&#10;- Viaggi FTL affidabili ma costosi&#10;- Armi avanzate con limiti fisici credibili"></textarea>
                     <span asp-validation-for="SeriesItem.AmbientazioneBase" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
+                    <label asp-for="SeriesItem.ImagesStyle" class="form-label">
+                        Images Style
+                        <small class="text-muted d-block">Stringa opzionale che verrà passata al generatore di immagini come prefisso del prompt (es. "fotografico, luce cinematografica, realistico").</small>
+                    </label>
+                    <input asp-for="SeriesItem.ImagesStyle" class="form-control" />
+                    <span asp-validation-for="SeriesItem.ImagesStyle" class="text-danger"></span>
                 </div>
             </div>
 
@@ -185,7 +197,7 @@
             </div>
 
             <!-- SEZIONE 3: METADATI -->
-            <h4 class="mt-5 mb-3 text-secondary">�Y"S Metadati</h4>
+            <h4 class="mt-5 mb-3 text-secondary">Metadati</h4>
             
             <div class="row mb-3">
                 <div class="col-md-6">
@@ -201,7 +213,7 @@
             </div>
 
             <div class="mb-3">
-                <button type="submit" class="btn btn-primary btn-lg">�Y'� Salva Serie</button>
+                <button type="submit" class="btn btn-primary btn-lg">Salva Serie</button>
                 <a class="btn btn-secondary btn-lg" asp-page="./Index">Annulla</a>
             </div>
         </form>
@@ -252,14 +264,20 @@
                     </div>
                     <div class="col-md-5">
                         <label class="form-label">Voce TTS</label>
-                        <select name="CharacterInput.VoiceId" class="form-select">
-                            <option value="">-</option>
-                            @foreach (var v in Model.Voices)
-                            {
-                                var label = string.IsNullOrWhiteSpace(v.Name) ? v.VoiceId : $"{v.Name} ({v.VoiceId})";
-                                <option value="@v.Id">@label</option>
-                            }
-                        </select>
+                        <div class="input-group">
+                            <select name="CharacterInput.VoiceId" class="form-select voice-select-add" data-voices='@System.Text.Json.JsonSerializer.Serialize(Model.Voices.Select(v => new { v.Id, v.TemplateWav }))'>
+                                <option value="">-</option>
+                                @foreach (var v in Model.Voices)
+                                {
+                                    var label = string.IsNullOrWhiteSpace(v.Name) ? v.VoiceId : $"{v.Name} ({v.VoiceId})";
+                                    <option value="@v.Id">@label</option>
+                                }
+                            </select>
+                            <button type="button" class="btn btn-outline-secondary play-voice-btn-add" title="Ascolta esempio voce" disabled>
+                                <i class="bi bi-play-fill"></i>
+                            </button>
+                        </div>
+                        <audio class="voice-preview-audio-add d-none"></audio>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label">Descrizione</label>
@@ -311,120 +329,9 @@
             {
                 @foreach (var c in Model.SeriesCharacters)
                 {
-                    <form method="post" asp-page-handler="UpdateCharacter" enctype="multipart/form-data" class="card mb-2 p-2">
-                        <input type="hidden" name="CharacterInput.Id" value="@c.Id" />
-                        <input type="hidden" name="CharacterInput.SerieId" value="@c.SerieId" />
-                        <div class="row g-2 align-items-start">
-                            <div class="col-md-3">
-                                @if (!string.IsNullOrWhiteSpace(c.Image))
-                                {
-                                    var imgSrc = c.Image;
-                                    if (!string.IsNullOrWhiteSpace(imgSrc) && !imgSrc.StartsWith("/", StringComparison.Ordinal))
-                                    {
-                                        imgSrc = $"/series-assets/{c.SerieId}/characters/{Uri.EscapeDataString(imgSrc)}";
-                                    }
-                                    <button type="button"
-                                            class="btn p-0 border-0 bg-transparent"
-                                            data-bs-toggle="modal"
-                                            data-bs-target="#seriesImageModal"
-                                            data-fullsrc="@imgSrc"
-                                            aria-label="Apri immagine in dimensioni reali">
-                                        <img src="@imgSrc" alt="Immagine personaggio" class="img-thumbnail img-fluid w-100" style="height:auto;" />
-                                    </button>
-                                }
-                                else
-                                {
-                                    <div class="text-muted small">Nessuna immagine</div>
-                                }
-                            </div>
-                            <div class="col-md-9">
-                                <div class="row g-2">
-                                    <div class="col-md-6">
-                                        <label class="form-label">Nome</label>
-                                        <input name="CharacterInput.Name" class="form-control" maxlength="200" value="@c.Name" required />
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label">Genere</label>
-                                        <select name="CharacterInput.Gender" class="form-select" required>
-                                            <option value="male" selected="@(c.Gender == "male" ? "selected" : null)">male</option>
-                                            <option value="female" selected="@(c.Gender == "female" ? "selected" : null)">female</option>
-                                            <option value="alien" selected="@(c.Gender == "alien" ? "selected" : null)">alien</option>
-                                            <option value="robot" selected="@(c.Gender == "robot" ? "selected" : null)">robot</option>
-                                            <option value="other" selected="@(c.Gender == "other" ? "selected" : null)">other</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label">Voce TTS</label>
-                                        <select name="CharacterInput.VoiceId" class="form-select">
-                                            <option value="">-</option>
-                                            @foreach (var v in Model.Voices)
-                                            {
-                                                var label = string.IsNullOrWhiteSpace(v.Name) ? v.VoiceId : $"{v.Name} ({v.VoiceId})";
-                                                <option value="@v.Id" selected="@(c.VoiceId == v.Id ? "selected" : null)">@label</option>
-                                            }
-                                        </select>
-                                    </div>
-
-                                    <div class="col-md-6">
-                                        <label class="form-label">Descrizione</label>
-                                        <textarea name="CharacterInput.Description" class="form-control" rows="2">@c.Description</textarea>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Aspetto (prompt immagine)</label>
-                                        <textarea name="CharacterInput.Aspect" class="form-control" rows="2">@c.Aspect</textarea>
-                                    </div>
-
-                                    <div class="col-md-3">
-                                        <label class="form-label">Eta</label>
-                                        <input name="CharacterInput.Eta" class="form-control" maxlength="50" value="@c.Eta" />
-                                    </div>
-                                    <div class="col-md-4">
-                                        <label class="form-label">Formazione</label>
-                                        <input name="CharacterInput.Formazione" class="form-control" maxlength="200" value="@c.Formazione" />
-                                    </div>
-                                    <div class="col-md-5">
-                                        <label class="form-label">Specializzazione</label>
-                                        <input name="CharacterInput.Specializzazione" class="form-control" maxlength="200" value="@c.Specializzazione" />
-                                    </div>
-
-                                    <div class="col-md-6">
-                                        <label class="form-label">Profilo</label>
-                                        <textarea name="CharacterInput.Profilo" class="form-control" rows="2">@c.Profilo</textarea>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Conflitto Interno</label>
-                                        <textarea name="CharacterInput.ConflittoInterno" class="form-control" rows="2">@c.ConflittoInterno</textarea>
-                                    </div>
-
-                                    <div class="col-md-3">
-                                        <label class="form-label">Episodio In</label>
-                                        <input name="CharacterInput.EpisodeIn" type="number" class="form-control" min="0" value="@c.EpisodeIn" />
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label">Episodio Out</label>
-                                        <input name="CharacterInput.EpisodeOut" type="number" class="form-control" min="0" value="@c.EpisodeOut" />
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Immagine</label>
-                                        <input type="file" name="CharacterImage" class="form-control" accept=".jpg,.jpeg,.png,.gif,.webp" />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="mt-2 d-flex gap-1">
-                            <button type="submit" class="btn btn-sm btn-outline-primary">Aggiorna</button>
-                            <button type="submit" class="btn btn-sm btn-outline-secondary"
-                                    formaction="?handler=GenerateCharacterImage&seriesId=@c.SerieId&characterId=@c.Id" formmethod="post"
-                                    onclick="return confirm('Generare/rigenerare l\'immagine di questo personaggio?');">
-                                Genera immagine
-                            </button>
-                            <button type="submit" class="btn btn-sm btn-outline-danger"
-                                    formaction="?handler=DeleteCharacter&id=@c.Id&seriesId=@c.SerieId" formmethod="post"
-                                    onclick="return confirm('Vuoi eliminare questo personaggio?');">
-                                Elimina
-                            </button>
-                        </div>
-                    </form>
+                    var vd = new Microsoft.AspNetCore.Mvc.ViewFeatures.ViewDataDictionary(ViewData);
+                    vd["Voices"] = Model.Voices;
+                    @await Html.PartialAsync("_SeriesCharacter", c, vd)
                 }
             }
             else
@@ -558,8 +465,77 @@
         })();
     </script>
 
-    <script>
+    <script>        // Voice preview play buttons
         (function () {
+            // Handler for add character form
+            var addSelect = document.querySelector('.voice-select-add');
+            var addPlayBtn = document.querySelector('.play-voice-btn-add');
+            var addAudio = document.querySelector('.voice-preview-audio-add');
+            
+            if (addSelect && addPlayBtn && addAudio) {
+                var voicesData = {};
+                try {
+                    var dataStr = addSelect.getAttribute('data-voices');
+                    if (dataStr) {
+                        var arr = JSON.parse(dataStr);
+                        arr.forEach(function(v) { voicesData[v.Id] = v.TemplateWav; });
+                    }
+                } catch (e) { console.error('Failed to parse voices data', e); }
+                
+                addSelect.addEventListener('change', function() {
+                    var voiceId = addSelect.value;
+                    var hasTemplate = voiceId && voicesData[voiceId];
+                    addPlayBtn.disabled = !hasTemplate;
+                });
+                
+                addPlayBtn.addEventListener('click', function() {
+                    var voiceId = addSelect.value;
+                    if (!voiceId || !voicesData[voiceId]) return;
+                    var filename = voicesData[voiceId];
+                    var url = '/data_voices_samples/' + encodeURIComponent(filename);
+                    addAudio.src = url;
+                    addAudio.play().catch(function(e) { alert('Errore riproduzione: ' + e.message); });
+                });
+            }
+            
+            // Handler for edit character forms
+            document.addEventListener('click', function(e) {
+                var btn = e.target.closest('.play-voice-btn-edit');
+                if (!btn) return;
+                
+                var container = btn.closest('.col-md-3');
+                if (!container) return;
+                
+                var select = container.querySelector('.voice-select-edit');
+                var audio = container.querySelector('.voice-preview-audio-edit');
+                if (!select || !audio) return;
+                
+                var voiceId = select.value;
+                if (!voiceId) return;
+                
+                var voicesData = {};
+                try {
+                    var dataStr = select.getAttribute('data-voices');
+                    if (dataStr) {
+                        var arr = JSON.parse(dataStr);
+                        arr.forEach(function(v) { voicesData[v.Id] = v.TemplateWav; });
+                    }
+                } catch (err) { console.error('Failed to parse voices data', err); return; }
+                
+                if (!voicesData[voiceId]) {
+                    alert('Nessun campione audio disponibile per questa voce');
+                    return;
+                }
+                
+                var filename = voicesData[voiceId];
+                var url = '/data_voices_samples/' + encodeURIComponent(filename);
+                audio.src = url;
+                audio.play().catch(function(err) { alert('Errore riproduzione: ' + err.message); });
+            });
+        })();
+    </script>
+
+    <script>        (function () {
             var modalEl = document.getElementById('seriesImageModal');
             var imgEl = document.getElementById('seriesImageModalImg');
             if (!modalEl || !imgEl) return;
@@ -574,6 +550,123 @@
 
             modalEl.addEventListener('hidden.bs.modal', function () {
                 imgEl.removeAttribute('src');
+            });
+        })();
+    </script>
+
+    <script>
+        (function () {
+            // Intercept form submits for character AJAX save
+            document.addEventListener('submit', function (e) {
+                var form = e.target;
+                if (!form || !form.classList || !form.classList.contains('character-ajax-form')) return;
+                e.preventDefault();
+                var submitBtn = form.querySelector('button[type="submit"]');
+                if (submitBtn) submitBtn.disabled = true;
+
+                var fd = new FormData(form);
+                var url = form.getAttribute('action') || '?handler=UpdateCharacterAjax';
+
+                fetch(url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: fd
+                }).then(function (r) { if (submitBtn) submitBtn.disabled = false; return r.json(); })
+                .then(function (data) {
+                    if (!data) return;
+                    if (!data.success) {
+                        alert(data.message || 'Errore salvataggio');
+                        return;
+                    }
+                    var ch = data.character;
+                    var card = document.querySelector('#character-card-' + ch.id);
+                    if (!card) return;
+                    // update some visible fields
+                    var nameInput = card.querySelector('input[name="CharacterInput.Name"]'); if (nameInput) nameInput.value = ch.name || '';
+                    var desc = card.querySelector('textarea[name="CharacterInput.Description"]'); if (desc) desc.value = ch.description || '';
+                    var aspect = card.querySelector('textarea[name="CharacterInput.Aspect"]'); if (aspect) aspect.value = ch.aspect || '';
+                    // update image if changed
+                    if (ch.image) {
+                        var imgBtn = card.querySelector('button[data-fullsrc]');
+                        if (imgBtn) {
+                            imgBtn.setAttribute('data-fullsrc', ch.image);
+                            var img = imgBtn.querySelector('img'); if (img) img.src = ch.image;
+                        }
+                    }
+                })
+                .catch(function (err) { if (submitBtn) submitBtn.disabled = false; alert('Errore: ' + (err && err.message ? err.message : err)); });
+            });
+
+            // Generate image via AJAX
+            document.addEventListener('click', function (e) {
+                var btn = e.target.closest && e.target.closest('.generate-image-ajax');
+                if (!btn) return;
+                var seriesId = btn.getAttribute('data-series-id');
+                var charId = btn.getAttribute('data-character-id');
+                if (!seriesId || !charId) return;
+                if (!confirm('Generare/rigenerare l\'immagine di questo personaggio?')) return;
+                btn.disabled = true;
+
+                var tokenEl = document.querySelector('input[name="__RequestVerificationToken"]');
+                var token = tokenEl ? tokenEl.value : '';
+                var fd = new FormData();
+                fd.append('seriesId', seriesId);
+                fd.append('characterId', charId);
+                if (token) fd.append('__RequestVerificationToken', token);
+
+                fetch('?handler=GenerateCharacterImageAjax', { method: 'POST', credentials: 'same-origin', body: fd })
+                    .then(function (r) { btn.disabled = false; return r.json(); })
+                    .then(function (data) {
+                        if (!data) return;
+                        if (!data.success) {
+                            alert(data.message || 'Errore avvio generazione');
+                            return;
+                        }
+                        alert('Generazione avviata (runId: ' + (data.runId || '') + ')');
+                    })
+                    .catch(function (err) { btn.disabled = false; alert('Errore: ' + (err && err.message ? err.message : err)); });
+            });
+        })();
+    </script>
+
+    <script>
+        (function () {
+            document.addEventListener('click', function (e) {
+                var btn = e.target.closest && e.target.closest('.character-refresh');
+                if (!btn) return;
+                var charId = btn.getAttribute('data-character-id');
+                if (!charId) return;
+                btn.disabled = true;
+                fetch('?handler=CharacterJson&id=' + encodeURIComponent(charId), { credentials: 'same-origin' })
+                    .then(function (r) { btn.disabled = false; if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                    .then(function (data) {
+                        if (!data || !data.success) throw new Error('Invalid response');
+                        var ch = data.character;
+                        var card = document.querySelector('#character-card-' + ch.id);
+                        if (!card) return;
+                        var setIf = function (sel, val) { var el = card.querySelector(sel); if (el) el.value = val || ''; };
+                        setIf('input[name="CharacterInput.Name"]', ch.name);
+                        setIf('textarea[name="CharacterInput.Description"]', ch.description);
+                        setIf('textarea[name="CharacterInput.Aspect"]', ch.aspect);
+                        setIf('input[name="CharacterInput.Eta"]', ch.eta);
+                        setIf('input[name="CharacterInput.Formazione"]', ch.formazione);
+                        setIf('input[name="CharacterInput.Specializzazione"]', ch.specializzazione);
+                        setIf('textarea[name="CharacterInput.Profilo"]', ch.profilo);
+                        setIf('textarea[name="CharacterInput.ConflittoInterno"]', ch.conflittoInterno);
+
+                        var imgBtn = card.querySelector('button[data-fullsrc]');
+                        if (imgBtn) {
+                            var imgSrc = ch.image || '';
+                            if (imgSrc && !imgSrc.startsWith('/')) imgSrc = '/series-assets/' + ch.serieId + '/characters/' + encodeURIComponent(imgSrc);
+                            imgBtn.setAttribute('data-fullsrc', imgSrc);
+                            var img = imgBtn.querySelector('img');
+                            if (img) img.src = imgSrc;
+                        }
+                    })
+                    .catch(function (err) {
+                        btn.disabled = false;
+                        alert('Refresh fallita: ' + (err && err.message ? err.message : err));
+                    });
             });
         })();
     </script>

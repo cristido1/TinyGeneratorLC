@@ -12,6 +12,37 @@ Endpoint principali
 2) GET /voices
   - Scopo: elenca tutte le voci disponibili con i relativi metadati, prese direttamente dal file `voice_metadata.json`.
   - Note: include voci standard e template personalizzati, arricchiti con percorsi ai file di riferimento e campioni.
+  
+  - Response JSON:
+    {
+      "voices": [
+        {
+          "model": "tts_models/multilingual/multi-dataset/xtts_v2",
+          "speaker": "Claribel Dervla",
+          "gender": "female",
+          "age_range": "45",
+          "archetype": "personaggio",
+          "rating": 7,
+          "notes": "Voce corposa",
+          "language": "it"
+        },
+        {
+          "model": "voice_templates",
+          "speaker": "antonio_farina",
+          "gender": "male",
+          "age_range": "40",
+          "archetype": "narratore",
+          "rating": 9,
+          "notes": "Italian pro talent for audiobook and narration",
+          "language": "it",
+          "template_wav": "voice_templates/antonio_farina.wav",
+          "sample": "voices/samples/antonio_farina_neutral.wav"
+        }
+      ]
+    }
+  
+  - Esempio cURL:
+    curl http://localhost:8004/voices | jq '.voices[] | select(.model=="voice_templates") | .speaker'
 
 3) POST /patch_transformers
   - Scopo: tentativo best-effort per applicare una patch runtime a `transformers` (risolve import incompatibilities per alcune versioni di TTS).
@@ -41,8 +72,22 @@ Endpoint principali
       "emotion": "neutral"
     }
 
-  - Risposta (file): il server restituisce un FileResponse con `audio/wav` oppure, se `format: "base64"`, un JSON {"audio_base64": "...", "format": "wav"}.
-  - Errori comuni: 400 per richieste malformate; 500 per errori del motore TTS.
+  - Response (formato WAV, default):
+    - Content-Type: audio/wav
+    - Body: file WAV binario (può essere salvato direttamente su disco)
+    - Headers: Content-Disposition: attachment; filename="synthesized.wav"
+  
+  - Response (formato base64):
+    - Content-Type: application/json
+    - Body JSON:
+      {
+        "audio_base64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEA...",
+        "format": "wav"
+      }
+  
+  - Errori comuni: 
+    - 400 Bad Request: richieste malformate, parametri mancanti
+    - 500 Internal Server Error: errori del motore TTS, modello non trovato
 
 Usare voci template (voice_templates)
 

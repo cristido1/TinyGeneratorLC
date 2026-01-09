@@ -264,6 +264,9 @@ namespace TinyGenerator.Services.Commands
             string runId,
             CancellationToken ct)
         {
+            var inputLength = chunkText.Length;
+            string? lastError = null;
+
             for (int attempt = 1; attempt <= MaxAttemptsPerChunk; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -276,23 +279,59 @@ namespace TinyGenerator.Services.Commands
                     {
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
+                    
+                    // Add error feedback for retry attempts
+                    if (attempt > 1 && !string.IsNullOrWhiteSpace(lastError))
+                    {
+                        messages.Add(new ConversationMessage 
+                        { 
+                            Role = "system", 
+                            Content = $"{lastError} Questo è il tentativo {attempt} di {MaxAttemptsPerChunk}." 
+                        });
+                    }
+                    
                     messages.Add(new ConversationMessage { Role = "user", Content = chunkText });
 
                     var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
                     var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
                     var cleaned = textContent?.Trim() ?? string.Empty;
 
-                    if (!string.IsNullOrWhiteSpace(cleaned))
+                    if (string.IsNullOrWhiteSpace(cleaned))
                     {
-                        return cleaned;
+                        lastError = "Il testo ritornato è vuoto.";
+                        continue;
                     }
+
+                    // Validation 1: Check if text is shorter than input
+                    if (cleaned.Length < inputLength)
+                    {
+                        var ratio = (double)cleaned.Length / inputLength;
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Output too short: {cleaned.Length} chars vs {inputLength} input ({ratio:P0})", "warn");
+                        lastError = "Il testo ritornato è più corto dell'originale. NON devi tagliare o rimuovere testo, devi solo aggiungere i tag richiesti mantenendo tutto il contenuto originale.";
+                        continue;
+                    }
+
+                    // Validation 2: Check for minimum tag count (at least 3 tags)
+                    var tagCount = System.Text.RegularExpressions.Regex.Matches(cleaned, @"\[(?:PERSONAGGIO|EMOZIONE|VOCE|RITMO|PAUSA|VOLUME|MUSICA|FX|AMBIENTE|NOISE):", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+                    if (tagCount < 3)
+                    {
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough tags: {tagCount} found, minimum 3 required", "warn");
+                        lastError = $"Hai inserito solo {tagCount} tag. Devi inserire ALMENO 3 tag nel testo per arricchirlo adeguatamente.";
+                        continue;
+                    }
+
+                    // All validations passed
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated: {cleaned.Length} chars, {tagCount} tags");
+                    return cleaned;
                 }
                 catch (Exception ex)
                 {
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Attempt {attempt} failed: {ex.Message}", "warn");
+                    lastError = $"Errore durante l'elaborazione: {ex.Message}";
                 }
             }
 
+            _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Failed after {MaxAttemptsPerChunk} attempts. Last error: {lastError}", "error");
             return string.Empty;
         }
 

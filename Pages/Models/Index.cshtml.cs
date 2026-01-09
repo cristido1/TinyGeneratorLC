@@ -114,6 +114,37 @@ namespace TinyGenerator.Pages.Models
             return Task.FromResult<IActionResult>(new JsonResult(new { runId = handle.RunId }));
         }
 
+        public IActionResult OnPostDeleteModel()
+        {
+            if (string.IsNullOrWhiteSpace(Model))
+            {
+                TempData["ErrorMessage"] = "Nome modello mancante.";
+                return RedirectToPage();
+            }
+
+            try
+            {
+                // Check if model is used by any agent
+                var agentsUsingModel = _database.GetAgentsUsingModel(Model);
+                if (agentsUsingModel.Count > 0)
+                {
+                    var agentsList = string.Join(", ", agentsUsingModel);
+                    TempData["ErrorMessage"] = $"Impossibile eliminare il modello '{Model}'. È utilizzato dagli agenti: {agentsList}";
+                    return RedirectToPage();
+                }
+
+                // Model is not used, proceed with deletion
+                _database.DeleteModel(Model);
+                TempData["TestResultMessage"] = $"Modello '{Model}' eliminato con successo.";
+                return RedirectToPage();
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = $"Errore durante l'eliminazione del modello: {ex.Message}";
+                return RedirectToPage();
+            }
+        }
+
         public IActionResult OnPostUpdateContext()
         {
             if (string.IsNullOrWhiteSpace(Model))

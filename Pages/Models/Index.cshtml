@@ -135,6 +135,14 @@
                                     <li><a class="dropdown-item" href="/Models/Edit?name=@Uri.EscapeDataString(m.Name)">Edit</a></li>
                                     <li><a class="dropdown-item" href="/Chat?model=@Uri.EscapeDataString(m.Name)">💬 Chat</a></li>
                                     <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <form method="post" action="?handler=DeleteModel" class="m-0" onsubmit="return confirm('Sei sicuro di voler eliminare il modello @m.Name?');">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="Model" value="@m.Name" />
+                                            <button type="submit" class="dropdown-item text-danger">🗑️ Elimina</button>
+                                        </form>
+                                    </li>
+                                    <li><hr class="dropdown-divider"></li>
                                     <li><h6 class="dropdown-header">Run Tests</h6></li>
                                     @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
                                     {

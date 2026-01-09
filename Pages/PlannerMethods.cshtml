@@ -1,0 +1,323 @@
+@page
+@model TinyGenerator.Pages.PlannerMethodsModel
+@{
+    ViewData["Title"] = "Metodi di Pianificazione";
+}
+
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>@ViewData["Title"]</h2>
+        <button type="button" class="btn btn-primary" onclick="showCreateModal()">
+            <i class="bi bi-plus-circle"></i> Nuovo Metodo
+        </button>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <table id="plannerMethodsTable" class="table table-sm table-hover" style="width:100%">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Codice</th>
+                        <th>Nome</th>
+                        <th>Categoria</th>
+                        <th>Beat</th>
+                        <th>Serie</th>
+                        <th>Attivo</th>
+                        <th>Azioni</th>
+                    </tr>
+                </thead>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Crea/Modifica -->
+<div class="modal fade" id="methodModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="methodModalTitle">Nuovo Metodo</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="methodForm">
+                    <input type="hidden" id="methodId" />
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="methodCode" class="form-label">Codice *</label>
+                            <input type="text" class="form-control" id="methodCode" required maxlength="100" />
+                            <small class="text-muted">Es: SAVE_THE_CAT, STORY_GRID</small>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="methodName" class="form-label">Nome *</label>
+                            <input type="text" class="form-control" id="methodName" required maxlength="200" />
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label for="methodCategory" class="form-label">Categoria</label>
+                            <select class="form-select" id="methodCategory">
+                                <option value="">-- Seleziona --</option>
+                                <option value="planner">Planner</option>
+                                <option value="validator">Validator</option>
+                                <option value="hybrid">Hybrid</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="methodBeatCount" class="form-label">Numero Beat</label>
+                            <input type="number" class="form-control" id="methodBeatCount" min="1" />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label d-block">Opzioni</label>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" id="methodSupportsSeries" />
+                                <label class="form-check-label" for="methodSupportsSeries">Supporta Serie</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" id="methodIsActive" checked />
+                                <label class="form-check-label" for="methodIsActive">Attivo</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="methodDescription" class="form-label">Descrizione</label>
+                        <textarea class="form-control" id="methodDescription" rows="2"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="methodStructureSchema" class="form-label">Schema Struttura (JSON)</label>
+                        <textarea class="form-control font-monospace" id="methodStructureSchema" rows="3"></textarea>
+                        <small class="text-muted">JSON schema della struttura prodotta dal planner</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="methodPlannerPrompt" class="form-label">Prompt Planner</label>
+                        <textarea class="form-control" id="methodPlannerPrompt" rows="4"></textarea>
+                        <small class="text-muted">Prompt completo per l'agente planner che usa questo metodo</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="methodValidationRules" class="form-label">Regole di Validazione</label>
+                        <textarea class="form-control" id="methodValidationRules" rows="3"></textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="methodStrengths" class="form-label">Punti di Forza</label>
+                            <textarea class="form-control" id="methodStrengths" rows="3"></textarea>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="methodWeaknesses" class="form-label">Limiti Noti</label>
+                            <textarea class="form-control" id="methodWeaknesses" rows="3"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="methodRecommendedGenres" class="form-label">Generi Raccomandati</label>
+                        <input type="text" class="form-control" id="methodRecommendedGenres" />
+                        <small class="text-muted">Es: sci-fi, thriller, drama</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="methodNotes" class="form-label">Note</label>
+                        <textarea class="form-control" id="methodNotes" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
+                <button type="button" class="btn btn-primary" onclick="saveMethod()">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+let table;
+let currentMethodId = null;
+
+$(document).ready(function() {
+    initDataTable();
+});
+
+function initDataTable() {
+    table = $('#plannerMethodsTable').DataTable({
+        ajax: {
+            url: '/api/planner-methods',
+            dataSrc: ''
+        },
+        columns: [
+            { data: 'id' },
+            { data: 'code' },
+            { data: 'name' },
+            { data: 'category', defaultContent: '-' },
+            { 
+                data: 'beatCount',
+                render: function(data) {
+                    return data || '-';
+                }
+            },
+            {
+                data: 'supportsSeries',
+                render: function(data) {
+                    return data ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-muted"></i>';
+                }
+            },
+            {
+                data: 'isActive',
+                render: function(data) {
+                    return data 
+                        ? '<span class="badge bg-success">Attivo</span>' 
+                        : '<span class="badge bg-secondary">Inattivo</span>';
+                }
+            },
+            {
+                data: null,
+                orderable: false,
+                render: function(data, type, row) {
+                    return `
+                        <button class="btn btn-sm btn-outline-primary" onclick="editMethod(${row.id})" title="Modifica">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteMethod(${row.id}, '${row.name}')" title="Elimina">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="toggleActive(${row.id})" title="Attiva/Disattiva">
+                            <i class="bi bi-toggle-on"></i>
+                        </button>
+                    `;
+                }
+            }
+        ],
+        dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+             "rt" +
+             "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+        buttons: [
+            {
+                extend: 'colvis',
+                text: 'Colonne',
+                className: 'btn-sm'
+            }
+        ],
+        pageLength: 25,
+        order: [[2, 'asc']], // Ordina per nome
+        language: {
+            url: '//cdn.datatables.net/plug-ins/1.13.7/i18n/it-IT.json'
+        },
+        stateSave: true,
+        stateDuration: -1
+    });
+}
+
+function showCreateModal() {
+    currentMethodId = null;
+    document.getElementById('methodModalTitle').textContent = 'Nuovo Metodo';
+    document.getElementById('methodForm').reset();
+    document.getElementById('methodId').value = '';
+    document.getElementById('methodIsActive').checked = true;
+    new bootstrap.Modal(document.getElementById('methodModal')).show();
+}
+
+function editMethod(id) {
+    currentMethodId = id;
+    $.get(`/api/planner-methods/${id}`, function(method) {
+        document.getElementById('methodModalTitle').textContent = 'Modifica Metodo';
+        document.getElementById('methodId').value = method.id;
+        document.getElementById('methodCode').value = method.code || '';
+        document.getElementById('methodName').value = method.name || '';
+        document.getElementById('methodCategory').value = method.category || '';
+        document.getElementById('methodBeatCount').value = method.beatCount || '';
+        document.getElementById('methodDescription').value = method.description || '';
+        document.getElementById('methodStructureSchema').value = method.structureSchema || '';
+        document.getElementById('methodPlannerPrompt').value = method.plannerPrompt || '';
+        document.getElementById('methodValidationRules').value = method.validationRules || '';
+        document.getElementById('methodStrengths').value = method.strengths || '';
+        document.getElementById('methodWeaknesses').value = method.weaknesses || '';
+        document.getElementById('methodRecommendedGenres').value = method.recommendedGenres || '';
+        document.getElementById('methodSupportsSeries').checked = method.supportsSeries;
+        document.getElementById('methodIsActive').checked = method.isActive;
+        document.getElementById('methodNotes').value = method.notes || '';
+        
+        new bootstrap.Modal(document.getElementById('methodModal')).show();
+    }).fail(function() {
+        alert('Errore nel caricamento del metodo');
+    });
+}
+
+function saveMethod() {
+    const methodData = {
+        code: document.getElementById('methodCode').value.trim(),
+        name: document.getElementById('methodName').value.trim(),
+        category: document.getElementById('methodCategory').value || null,
+        beatCount: document.getElementById('methodBeatCount').value || null,
+        description: document.getElementById('methodDescription').value.trim() || null,
+        structureSchema: document.getElementById('methodStructureSchema').value.trim() || null,
+        plannerPrompt: document.getElementById('methodPlannerPrompt').value.trim() || null,
+        validationRules: document.getElementById('methodValidationRules').value.trim() || null,
+        strengths: document.getElementById('methodStrengths').value.trim() || null,
+        weaknesses: document.getElementById('methodWeaknesses').value.trim() || null,
+        recommendedGenres: document.getElementById('methodRecommendedGenres').value.trim() || null,
+        supportsSeries: document.getElementById('methodSupportsSeries').checked,
+        isActive: document.getElementById('methodIsActive').checked,
+        notes: document.getElementById('methodNotes').value.trim() || null
+    };
+
+    if (!methodData.code || !methodData.name) {
+        alert('Codice e Nome sono obbligatori');
+        return;
+    }
+
+    const isEdit = currentMethodId !== null;
+    const url = isEdit ? `/api/planner-methods/${currentMethodId}` : '/api/planner-methods';
+    const method = isEdit ? 'PUT' : 'POST';
+
+    $.ajax({
+        url: url,
+        method: method,
+        contentType: 'application/json',
+        data: JSON.stringify(methodData),
+        success: function() {
+            bootstrap.Modal.getInstance(document.getElementById('methodModal')).hide();
+            table.ajax.reload();
+        },
+        error: function(xhr) {
+            const error = xhr.responseJSON?.error || 'Errore durante il salvataggio';
+            alert(error);
+        }
+    });
+}
+
+function deleteMethod(id, name) {
+    if (!confirm(`Eliminare il metodo "${name}"?`)) return;
+
+    $.ajax({
+        url: `/api/planner-methods/${id}`,
+        method: 'DELETE',
+        success: function() {
+            table.ajax.reload();
+        },
+        error: function() {
+            alert('Errore durante l\'eliminazione');
+        }
+    });
+}
+
+function toggleActive(id) {
+    $.ajax({
+        url: `/api/planner-methods/${id}/toggle-active`,
+        method: 'POST',
+        success: function() {
+            table.ajax.reload();
+        },
+        error: function() {
+            alert('Errore durante il cambio di stato');
+        }
+    });
+}
+</script>
+}

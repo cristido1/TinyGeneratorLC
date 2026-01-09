@@ -237,6 +237,9 @@ namespace TinyGenerator.Services.Commands
             string runId,
             CancellationToken ct)
         {
+            var inputLength = chunkText.Length;
+            string? lastError = null;
+
             for (int attempt = 1; attempt <= MaxAttemptsPerChunk; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -250,23 +253,56 @@ namespace TinyGenerator.Services.Commands
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
 
+                    // Add error feedback for retry attempts
+                    if (attempt > 1 && !string.IsNullOrWhiteSpace(lastError))
+                    {
+                        messages.Add(new ConversationMessage 
+                        { 
+                            Role = "system", 
+                            Content = $"{lastError} Questo è il tentativo {attempt} di {MaxAttemptsPerChunk}." 
+                        });
+                    }
+
                     messages.Add(new ConversationMessage { Role = "user", Content = chunkText });
 
                     var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
                     var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
                     var cleaned = textContent?.Trim() ?? string.Empty;
 
-                    if (!string.IsNullOrWhiteSpace(cleaned))
+                    if (string.IsNullOrWhiteSpace(cleaned))
                     {
-                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Success on attempt {attempt}");
-                        return cleaned;
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Empty response on attempt {attempt}", "warn");
+                        lastError = "Il testo ritornato è vuoto.";
+                        continue;
                     }
 
-                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Empty response on attempt {attempt}", "warn");
+                    // Validation 1: Check if text is shorter than input
+                    if (cleaned.Length < inputLength)
+                    {
+                        var ratio = (double)cleaned.Length / inputLength;
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Output too short: {cleaned.Length} chars vs {inputLength} input ({ratio:P0})", "warn");
+                        lastError = "Il testo ritornato è più corto dell'originale. NON devi tagliare o rimuovere testo, devi solo aggiungere i tag [AMBIENTE:] e [RUMORE:] mantenendo tutto il contenuto originale.";
+                        continue;
+                    }
+
+                    // Validation 2: Check for minimum tag count (at least 3 ambient/rumore tags)
+                    var tagCount = System.Text.RegularExpressions.Regex.Matches(cleaned, @"\[(?:AMBIENTE|RUMORE):", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+                    if (tagCount < 3)
+                    {
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough ambient tags: {tagCount} found, minimum 3 required", "warn");
+                        lastError = $"Hai inserito solo {tagCount} tag [AMBIENTE:] o [RUMORE:]. Devi inserire ALMENO 3 tag di questo tipo per arricchire l'atmosfera della scena.";
+                        continue;
+                    }
+
+                    // All validations passed
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated: {cleaned.Length} chars, {tagCount} ambient tags");
+                    return cleaned;
                 }
                 catch (Exception ex)
                 {
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Error on attempt {attempt}: {ex.Message}", "error");
+                    lastError = $"Errore durante l'elaborazione: {ex.Message}";
+                    
                     if (attempt == MaxAttemptsPerChunk)
                     {
                         throw;
@@ -276,7 +312,7 @@ namespace TinyGenerator.Services.Commands
                 }
             }
 
-            throw new InvalidOperationException($"Failed to process chunk {chunkIndex}/{chunkCount} after {MaxAttemptsPerChunk} attempts");
+            throw new InvalidOperationException($"Failed to process chunk {chunkIndex}/{chunkCount} after {MaxAttemptsPerChunk} attempts. Last error: {lastError}");
         }
 
         private string? BuildSystemPrompt(TinyGenerator.Models.Agent agent)

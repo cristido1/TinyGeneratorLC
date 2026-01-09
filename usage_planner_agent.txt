@@ -1,0 +1,40 @@
+ARCHITETTURA NARRATIVA – USO DEL PLANNER
+
+1) Inserisci un AGENTE DI PIANIFICAZIONE NARRATIVA (Planner)
+   - Input: idea di storia + genere + vincoli
+   - Output: struttura JSON con 15 beat (Save the Cat)
+
+2) NON permettere ai writer di partire senza il planner.
+   Il planner è obbligatorio.
+
+3) Salva l’output del planner come "story_structure".
+
+4) Per ogni beat in story_structure:
+   - genera un prompt per il writer usando SOLO i dati del beat:
+     - beat_name
+     - summary
+     - protagonist_goal
+     - conflict
+     - stakes
+     - tension_level
+
+5) Prompt del writer (linee guida):
+   - scrivere SOLO il contenuto del beat corrente
+   - NON anticipare eventi futuri
+   - NON risolvere conflitti non previsti
+   - rispettare tension_level
+   - mantenere coerenza con beat precedenti
+
+6) Dopo la scrittura del beat:
+   - valida:
+     - lunghezza minima
+     - coerenza semantica con summary
+     - assenza di anticipazioni
+
+7) Se il beat fallisce:
+   - rigenera SOLO quel beat
+   - NON rigenerare l’intera storia
+
+8) Solo dopo aver completato tutti i beat:
+   - concatena i testi
+   - passa al revisore globale

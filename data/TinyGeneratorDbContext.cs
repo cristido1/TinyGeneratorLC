@@ -45,6 +45,7 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<GlobalCoherence> GlobalCoherences => Set<GlobalCoherence>();
     public DbSet<LogAnalysis> LogAnalyses => Set<LogAnalysis>();
     public DbSet<AppEventDefinition> AppEvents => Set<AppEventDefinition>();
+    public DbSet<PlannerMethod> PlannerMethods => Set<PlannerMethod>();
     // Note: Memory table excluded - using Dapper for embedding queries
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

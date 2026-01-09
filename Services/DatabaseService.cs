@@ -622,6 +622,26 @@ public sealed class DatabaseService
         catch { }
     }
 
+    /// <summary>
+    /// Check if a model is used by any agent. Returns list of agent names using the model.
+    /// </summary>
+    public List<string> GetAgentsUsingModel(string modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName)) return new List<string>();
+        
+        using var context = CreateDbContext();
+        var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+        if (model == null || !model.Id.HasValue) return new List<string>();
+        
+        var agents = context.Agents
+            .Where(a => a.ModelId == model.Id.Value)
+            .Select(a => a.Name ?? string.Empty)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+        
+        return agents;
+    }
+
     public bool TryReserveUsage(string monthKey, long tokensToAdd, double costToAdd, long maxTokensPerRun, double maxCostPerMonth)
     {
         using var context = CreateDbContext();
@@ -2654,6 +2674,30 @@ WHERE agent_id IS NOT NULL
             var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
             Console.WriteLine($"[DB][ERROR] Failed to save summary for story {storyId}: {fullMessage}");
             throw new InvalidOperationException($"Failed to update summary for story {storyId}: {fullMessage}", ex);
+        }
+        
+        return true;
+    }
+
+    /// <summary>
+    /// Updates the story_structure field for a story.
+    /// </summary>
+    public bool UpdateStoryStructure(long storyId, string structureJson)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.StoryStructure = structureJson;
+        
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save story_structure for story {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update story_structure for story {storyId}: {fullMessage}", ex);
         }
         
         return true;

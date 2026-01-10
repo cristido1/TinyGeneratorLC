@@ -160,10 +160,34 @@ namespace TinyGenerator.Pages
             }
         }
 
-        public IActionResult OnGetClearChat(string model, string? returnUrl)
+        public async Task<IActionResult> OnGetClearChat(string model, string? returnUrl)
         {
             if (!string.IsNullOrEmpty(model))
             {
+                // Also attempt to remove persisted memories stored in PersistentMemoryService
+                try
+                {
+                    var apiHistory = GetConversationHistoryForApi(model);
+                    if (apiHistory != null && apiHistory.Count > 0)
+                    {
+                        foreach (var m in apiHistory)
+                        {
+                            try
+                            {
+                                await _memoryService.DeleteAsync("chat", m.Content).ConfigureAwait(false);
+                            }
+                            catch (Exception exInner)
+                            {
+                                _logger?.Log("Warn", "ChatPage", $"Failed to delete persisted memory: {exInner.Message}");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Log("Warn", "ChatPage", $"Error while deleting persisted chat memory: {ex.Message}");
+                }
+
                 HttpContext.Session.Remove($"chat_{model}");
             }
 

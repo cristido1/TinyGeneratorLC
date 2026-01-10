@@ -2716,15 +2716,34 @@ WHERE agent_id IS NOT NULL
         // Remove markdown italic markers (single asterisks) - careful to not break normal asterisks
         text = System.Text.RegularExpressions.Regex.Replace(text, @"\*([^\*]+)\*", "$1");
         
-        // Remove all quote characters
+        // Normalize and remove specific quote characters.
+        // Keep standard single-quote/apostrophe (') for internal uses (e.g., don't, l'amore),
+        // but remove single quotes that are only enclosing a phrase (leading/trailing).
         text = text.Replace("\u00AB", ""); // guillemet left
         text = text.Replace("\u00BB", ""); // guillemet right
         text = text.Replace("\u201C", ""); // left double quote
         text = text.Replace("\u201D", ""); // right double quote
-        text = text.Replace("\u2018", ""); // left single quote
-        text = text.Replace("\u2019", ""); // right single quote
+        // Convert curly single quotes to standard apostrophe so we can treat them uniformly
+        text = text.Replace("\u2018", "'"); // left single quote -> '
+        text = text.Replace("\u2019", "'"); // right single quote -> '
+        // Remove standard double quote entirely
         text = text.Replace("\"", "");     // standard double quote
-        text = text.Replace("'", "");      // standard single quote
+
+        // Remove single quotes that are at the start or end of a phrase/word boundary
+        // Keep internal apostrophes like don't or l'amore (they have non-space on both sides).
+        try
+        {
+            // Remove single quote when it appears at the start of a token/phrase: (?<=^|\s|\p{P})'(?=\S)
+            text = System.Text.RegularExpressions.Regex.Replace(text, "(?<=^|[\\s\\p{P}])'(?=\\S)", "");
+            // Remove single quote when it appears at the end of a token/phrase: (?<=\S)'(?=$|\s|\p{P})
+            text = System.Text.RegularExpressions.Regex.Replace(text, "(?<=\\S)'(?=$|[\\s\\p{P}])", "");
+        }
+        catch
+        {
+            // If regex fails for any reason, fall back to removing only isolated leading/trailing single quotes
+            if (text.Length > 0 && text[0] == '\'') text = text.Substring(1);
+            if (text.Length > 0 && text[text.Length - 1] == '\'') text = text.Substring(0, text.Length - 1);
+        }
         
         return text;
     }

@@ -8,6 +8,13 @@
     <link href="~/lib/bootstrap-icons/bootstrap-icons.css" rel="stylesheet" />
     <link rel="stylesheet" href="~/css/sidebar.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <style>
+        /* Slightly darker column headers for DataTables */
+        table.dataTable thead th {
+            color: #111827; /* slate-900, slightly darker */
+            font-weight: 600;
+        }
+    </style>
     @await RenderSectionAsync("Styles", required: false)
 </head>
 <body class="has-sidebar">
@@ -64,8 +71,15 @@
     </nav>
 
     <div class="main-content">
-        <div class="d-flex align-items-center mb-3">
+        @{
+            var pageDescription = ViewData["PageDescription"] as string ?? string.Empty;
+        }
+        <div class="d-flex align-items-center mb-3 justify-content-between">
             <h4 class="mb-0">@ViewData["Title"]</h4>
+            @if (!string.IsNullOrWhiteSpace(pageDescription))
+            {
+                <small id="pageDescriptionText" class="text-muted ms-3" style="font-size:0.95rem; opacity:0.9;">@pageDescription</small>
+            }
         </div>
         @RenderBody()
     </div>

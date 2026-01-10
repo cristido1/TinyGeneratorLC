@@ -2,78 +2,36 @@
 @model TinyGenerator.Pages.Agents.IndexModel
 @{
     ViewData["Title"] = "Agents";
+    ViewData["PageDescription"] = "Gestione agenti AI del sistema";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
 }
 
 <div class="page-wrapper">
-    <div class="d-flex mb-2 align-items-center toolbar-row">
-        <form method="get" class="d-flex" style="gap:.5rem;">
-            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
-            <select name="modelFilter" class="form-select form-select-sm" style="max-width:220px;">
-                <option value="">Tutti i modelli</option>
-                <option value="__none__" selected="@(Model.ModelFilter == "__none__" ? "selected" : null)">Nessun modello</option>
-                @foreach (var m in Model.Models)
-                {
-                    if (!string.IsNullOrWhiteSpace(m.Name))
-                    {
-                        <option value="@m.Name" selected="@(Model.ModelFilter == m.Name ? "selected" : null)">@m.Name @(m.Speed.HasValue ? "(sp:" + m.Speed.ToString() + ")" : "(sp:-)")</option>
-                    }
-                }
-            </select>
-            <select name="roleFilter" id="roleFilterSelect" class="form-select form-select-sm" style="max-width:220px;">
-                <option value="">Tutti i ruoli</option>
-                @foreach (var r in Model.Roles)
-                {
-                    <option value="@r" selected="@(Model.RoleFilter == r ? "selected" : null)">@r</option>
-                }
-            </select>
-            <select name="pageSize" class="form-select form-select-sm" style="width:90px;">
-                @{ var sizes = new[] { 10, 25, 50 }; }
-                @foreach (var s in sizes)
-                {
-                    if (s == Model.PageSize)
-                    {
-                        <option value="@s" selected>@s</option>
-                    }
-                    else
-                    {
-                        <option value="@s">@s</option>
-                    }
-                }
-            </select>
-            <input type="hidden" name="orderBy" value="@Model.OrderBy" />
-            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
-        </form>
-        <div class="ms-auto d-flex gap-1">
-            <div class="dropdown">
-                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
-                    <i class="bi bi-layout-three-columns"></i>
-                </button>
-                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
-            </div>
-            <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
-            <a class="btn btn-sm btn-primary" asp-page="./Create">Nuovo</a>
-        </div>
-    </div>
+    
 
     <div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
-        <table class="table table-sm table-striped mb-0" id="agentsTable">
+        <table class="table table-sm table-hover mb-0" id="agentsTable">
             <thead class="table-light">
                 <tr>
-                    <th data-col="name"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "name" })">Name</a></th>
-                    <th data-col="role"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "role" })">Role</a></th>
-                    <th data-col="model"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "model" })">Model</a></th>
-                    <th data-col="temp"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "temperature" })">Temp</a></th>
-                    <th data-col="topp"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "topp" })">TopP</a></th>
-                    <th data-col="repeatpenalty"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "repeatpenalty" })">Repeat</a></th>
-                    <th data-col="topk"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "topk" })">TopK</a></th>
-                    <th data-col="repeatlastn"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "repeatlastn" })">Repeat N</a></th>
-                    <th data-col="numpredict"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "numpredict" })">Predict</a></th>
-                    <th data-col="voice"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "voice" })">Voice</a></th>
-                    <th data-col="skills"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, modelFilter = Model.ModelFilter, roleFilter = Model.RoleFilter, orderBy = "skills" })">Skills</a></th>
+                    <th></th>
+                    <th data-col="name">Name</th>
+                    <th data-col="role">Role</th>
+                    <th data-col="model">Model</th>
+                    <th data-col="temp">Temp</th>
+                    <th data-col="topp">TopP</th>
+                    <th data-col="repeatpenalty">Repeat</th>
+                    <th data-col="topk">TopK</th>
+                    <th data-col="repeatlastn">Repeat N</th>
+                    <th data-col="numpredict">Predict</th>
+                    <th data-col="voice">Voice</th>
+                    <th data-col="skills">Skills</th>
                     <th data-col="multistep">MultiStep Template</th>
                     <th data-col="json">JSON Format</th>
                     <th data-col="active">Active</th>
-                    <th data-col="detail">Dettaglio</th>
                     <th data-col="actions">Azioni</th>
                 </tr>
             </thead>
@@ -81,6 +39,7 @@
                 @foreach (var agent in Model.Items)
                 {
                     <tr data-id="@agent.Id" data-name="@agent.Name" data-role="@agent.Role">
+                        <td class="dt-control"></td>
                         <td data-col="name">@agent.Name</td>
                         <td data-col="role">@agent.Role</td>
                         <td data-col="model">@(!string.IsNullOrWhiteSpace(agent.ModelName) ? agent.ModelName : agent.ModelId?.ToString() ?? "-")</td>
@@ -95,9 +54,6 @@
                         <td data-col="multistep">@(!string.IsNullOrWhiteSpace(agent.MultiStepTemplateName) ? agent.MultiStepTemplateName : "-")</td>
                         <td data-col="json">@agent.JsonResponseFormat</td>
                         <td data-col="active">@(agent.IsActive ? "Yes" : "No")</td>
-                        <td data-col="detail">
-                            <button type="button" class="btn btn-sm btn-outline-secondary detail-toggle" data-detail-toggle aria-expanded="false">Dettaglio</button>
-                        </td>
                         <td data-col="actions">
                             <div class="dropdown">
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
@@ -132,71 +88,10 @@
                             </div>
                         </td>
                     </tr>
-                    <tr class="agent-detail-row d-none" data-detail-row="agent">
-                        <td colspan="15">
-                            <div class="p-3 bg-light border rounded">
-                                <div class="row g-3">
-                                    @if (!string.IsNullOrWhiteSpace(agent.Prompt))
-                                    {
-                                        <div class="col-12">
-                                            <div class="small text-muted">Prompt</div>
-                                            <div style="white-space:pre-wrap;">@agent.Prompt</div>
-                                        </div>
-                                    }
-                                    @if (!string.IsNullOrWhiteSpace(agent.Instructions))
-                                    {
-                                        <div class="col-12">
-                                            <div class="small text-muted">Instructions</div>
-                                            <div style="white-space:pre-wrap;">@agent.Instructions</div>
-                                        </div>
-                                    }
-                                    @if (!string.IsNullOrWhiteSpace(agent.Config))
-                                    {
-                                        <div class="col-12">
-                                            <div class="small text-muted">Config</div>
-                                            <pre class="border rounded p-2" style="white-space:pre-wrap;">@agent.Config</pre>
-                                        </div>
-                                    }
-                                    @if (!string.IsNullOrWhiteSpace(agent.ExecutionPlan))
-                                    {
-                                        <div class="col-12">
-                                            <div class="small text-muted">Execution Plan</div>
-                                            <div style="white-space:pre-wrap;">@agent.ExecutionPlan</div>
-                                        </div>
-                                    }
-                                    @if (!string.IsNullOrWhiteSpace(agent.Notes))
-                                    {
-                                        <div class="col-12">
-                                            <div class="small text-muted">Notes</div>
-                                            <div style="white-space:pre-wrap;">@agent.Notes</div>
-                                        </div>
-                                    }
-                                    <div class="col-12 col-md-6">
-                                        <div class="small text-muted">Model</div>
-                                        <div>@(string.IsNullOrWhiteSpace(agent.ModelName) ? (agent.ModelId?.ToString() ?? "-") : agent.ModelName)</div>
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <div class="small text-muted">Voice</div>
-                                        <div>@(string.IsNullOrWhiteSpace(agent.VoiceName) ? (agent.VoiceId?.ToString() ?? "-") : agent.VoiceName)</div>
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <div class="small text-muted">Created At</div>
-                                        <div>@agent.CreatedAt</div>
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <div class="small text-muted">Updated At</div>
-                                        <div>@(string.IsNullOrWhiteSpace(agent.UpdatedAt) ? "-" : agent.UpdatedAt)</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </td>
-                    </tr>
                 }
             </tbody>
         </table>
     </div>
-
-    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" data-model-filter="@Model.ModelFilter" data-role-filter="@Model.RoleFilter"></div>
 </div>
 
 <!-- Story Generation Modal -->
@@ -226,94 +121,144 @@
     </div>
 </div>
 
-@section Scripts {
-    <script src="/js/shared/pagination.js"></script>
-    <script src="/js/shared/list-ui.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            if (window.ListUI && typeof window.ListUI.init === 'function') {
-                window.ListUI.init({ tableSelector: '#agentsTable', colsMenuId: 'colVisMenu', storageKey: 'agents_cols_v1', pagerId: 'pager' });
+<script>
+(function initDataTable() {
+    // Aspetta che jQuery sia disponibile
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initDataTable, 50);
+        return;
+    }
+
+    // Carica gli script DataTables in sequenza (non parallelo!)
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var currentScriptIndex = 0;
+
+    function loadScript(url, callback) {
+        var script = document.createElement('script');
+        script.src = url;
+        script.onload = callback;
+        script.onerror = function() {
+            console.error('Failed to load script:', url);
+            callback();
+        };
+        document.head.appendChild(script);
+    }
+
+    function loadNextScript() {
+        if (currentScriptIndex < scripts.length) {
+            loadScript(scripts[currentScriptIndex], function() {
+                currentScriptIndex++;
+                loadNextScript();
+            });
+        } else {
+            initializeDataTable();
+        }
+    }
+
+    loadNextScript();
+
+    function initializeDataTable() {
+        jQuery(document).ready(function($) {
+            console.log('Init DataTable - jQuery:', typeof $, 'DataTable:', typeof $.fn.DataTable);
+            
+            if (typeof $.fn.DataTable === 'undefined') {
+                console.error('DataTables non caricato');
+                return;
             }
 
-            document.querySelectorAll('.action-generate').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const agentId = btn.getAttribute('data-agent-id');
-                    const agentName = btn.getAttribute('data-agent-name') || '';
-                    document.getElementById('modalAgentId').value = agentId || '';
-                    document.querySelector('#storyModal .modal-title').textContent = 'Generate Story - ' + agentName;
-                    new bootstrap.Modal(document.getElementById('storyModal')).show();
-                });
+            var table = $('#agentsTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                paging: true,
+                pageLength: 25,
+                lengthChange: true,
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                order: [[1, 'asc']],
+                ordering: true,
+                searching: true,
+                columnDefs: [
+                    { className: 'dt-control', orderable: false, targets: 0 },
+                    { orderable: false, targets: -1 }
+                ],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Agent',
+                        className: 'btn btn-sm btn-primary',
+                        attr: {
+                            style: 'width: auto; flex: 0 0 auto;'
+                        },
+                        action: function() {
+                            window.location.href = '/Agents/Create';
+                        }
+                    },
+                    {
+                        extend: 'colvis',
+                        text: 'Colonne',
+                        className: 'btn btn-sm btn-secondary'
+                    }
+                ],
+                language: {
+                    search: "Cerca:",
+                    lengthMenu: "Mostra _MENU_ record",
+                    info: "Showing _START_ to _END_ of _TOTAL_ entries",
+                    infoEmpty: "Nessun record disponibile",
+                    infoFiltered: "(filtrati da _MAX_ record totali)",
+                    zeroRecords: "Nessun record trovato",
+                    paginate: {
+                        first: "Prima",
+                        last: "Ultima",
+                        next: "Succ",
+                        previous: "Prec"
+                    }
+                }
             });
 
-            const STORAGE_KEY = 'lastStoryTheme';
-            const storyThemeInput = document.getElementById('storyThemeInput');
-            const lastTheme = localStorage.getItem(STORAGE_KEY);
-            if (lastTheme && storyThemeInput) {
-                storyThemeInput.value = lastTheme;
-            }
+            console.log('DataTable inizializzata:', table);
 
-            const storyForm = document.getElementById('storyForm');
-            if (storyForm) {
-                storyForm.addEventListener('submit', () => {
-                    const theme = storyThemeInput ? storyThemeInput.value.trim() : '';
-                    if (theme) {
-                        localStorage.setItem(STORAGE_KEY, theme);
-                    }
-                });
-            }
+            // Child row expansion
+            table.on('click', 'td.dt-control', function () {
+                var $tr = $(this).closest('tr');
+                var row = table.row($tr);
 
-            const roleFilterSelect = document.getElementById('roleFilterSelect');
-            const roleStorageKey = 'agents_role_filter_v1';
-            if (roleFilterSelect) {
-                const qs = new URLSearchParams(window.location.search);
-                const roleParam = qs.get('roleFilter');
-                if (roleParam === null) {
-                    const stored = localStorage.getItem(roleStorageKey);
-                    if (stored !== null) {
-                        roleFilterSelect.value = stored;
-                        if (stored) {
-                            const form = roleFilterSelect.closest('form');
-                            if (form) form.submit();
-                        }
-                    }
-                } else {
-                    localStorage.setItem(roleStorageKey, roleParam);
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $tr.removeClass('shown');
+                    return;
                 }
 
-                roleFilterSelect.addEventListener('change', () => {
-                    localStorage.setItem(roleStorageKey, roleFilterSelect.value || '');
-                });
-            }
-        });
-    </script>
-    <script>
-        // Page-local fallback: ensures the "Dettaglio" button toggles the next detail row
-        // even if shared scripts fail or are cached.
-        document.addEventListener('click', function (evt) {
-            // If ListUI has already bound the detail handler, don't run the fallback
-            // (otherwise the row gets toggled twice and ends up hidden).
-            if (document.documentElement.getAttribute('data-listui-detail-bound') === '1') return;
-            const btn = evt.target.closest('[data-detail-toggle]');
-            if (!btn) return;
-            const tr = btn.closest('tr');
-            if (!tr) return;
+                var id = $tr.data('id');
+                if (!id) return;
 
-            let detailRow = tr.nextElementSibling;
-            while (detailRow && !(detailRow.matches('[data-detail-row]') || detailRow.classList.contains('agent-detail-row'))) {
-                detailRow = detailRow.nextElementSibling;
-            }
-            if (!detailRow) return;
+                fetch('/api/agents/details/' + id)
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var html = '<div class="card"><div class="card-body">' +
+                            '<h5>' + (data.title || '') + '</h5>' +
+                            '<p style="white-space: pre-wrap;">' + (data.description || '') + '</p>' +
+                            '</div></div>';
+                        row.child(html).show();
+                        $tr.addClass('shown');
+                    });
+            });
 
-            const isHidden = detailRow.classList.contains('d-none') || detailRow.style.display === 'none';
-            if (isHidden) {
-                detailRow.classList.remove('d-none');
-                detailRow.style.display = 'table-row';
-                btn.setAttribute('aria-expanded', 'true');
-            } else {
-                detailRow.style.display = 'none';
-                detailRow.classList.add('d-none');
-                btn.setAttribute('aria-expanded', 'false');
-            }
+            // Generate story modal
+            $(document).on('click', '.action-generate', function() {
+                var agentId = $(this).data('agent-id');
+                var agentName = $(this).data('agent-name');
+                $('#modalAgentId').val(agentId);
+                $('#storyModal .modal-title').text('Generate Story - ' + agentName);
+                new bootstrap.Modal(document.getElementById('storyModal')).show();
+            });
         });
-    </script>
-}
+    }
+})();
+</script>

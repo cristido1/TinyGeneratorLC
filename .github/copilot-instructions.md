@@ -1,3 +1,46 @@
+## AI Coding Assistant — TinyGenerator (concise)
+
+This file gives the minimal, actionable facts an AI coding assistant needs to be productive in this repo.
+
+**Big picture**
+- **What**: ASP.NET Core Razor Pages app that orchestrates multiple AI writer/evaluator agents to generate stories via a LangChain-style ReAct loop.
+- **Where to look first**: [Program.cs](Program.cs), [Controllers/StoriesApiController.cs](Controllers/StoriesApiController.cs#L1), [Pages/Genera.cshtml](Pages/Genera.cshtml#L1).
+
+**Core components & flow**
+- **Orchestrators**: `LangChainKernelFactory` (in `Services/`) creates `HybridLangChainOrchestrator` instances and registers tools.
+- **Pipeline**: `FullStoryPipelineCommand` runs writer agents, then `LangChainTestService`/evaluators score outputs; `MultiStepOrchestrationService` handles step templates and retries.
+- **Tools**: Implement tools in `Skills/` by inheriting `BaseLangChainTool` and exposing OpenAI-compatible function schemas (use `CreateFunctionSchema()`).
+- **Persistence & memory**: SQLite via `TinyGeneratorDbContext` (`data/`), persistent memory service for vector embeddings.
+- **Realtime & logging**: SignalR hub in [Hubs/ProgressHub.cs](Hubs/ProgressHub.cs#L1); logs written to `app_events` via `ICustomLogger`.
+
+**Common workflows (commands & VS Code tasks)**
+- Build: `dotnet build` (VS Code task `build` exists and runs `dotnet build TinyGenerator.csproj`).
+- Run dev: `dotnet run` or `dotnet watch run` (task `watch`) for hot reload.
+- Tests: `dotnet test` (task `test`). Unit/integration tests live under `Tests/`.
+- Start local model services: `ollama_start.bat` / `start_ollama.sh`; TTS/Audiocraft helpers: `start_audiocraft.ps1`.
+
+**Repo-specific conventions & gotchas**
+- Razor Pages first: prefer page model handlers (`Pages/*.cshtml.cs`) over heavy client-side JS. See `Pages/Genera.cshtml` for generation flow.
+- **Data grids**: use DataTables.net (NOT Ag Grid) with Bootstrap 5 for all list/grid pages. Follow the complete standard in [usage_index_standard.txt](usage_index_standard.txt) for layout, DOM structure, client-side processing, ColVis button, state persistence, and child row expansion.
+- Tool function-calling is enforced by tests — tools must expose valid JSON function schemas and be registered in `LangChainToolFactory`.
+- Pipelines fail-fast on tool invocation errors; retry logic covers recoverable failures but do not silently swallow tool errors.
+
+**How to add/modify things (short examples)**
+- Add a tool: create `Skills/MyTool.cs` inheriting `BaseLangChainTool`, implement `GetFunctionSchemas()` and `ExecuteAsync()`, then register in `LangChainToolFactory`.
+- Add/update an agent: seed/update a DB row in `agents` with `model_name`, `Skills` (JSON array), `Prompt`, and optional `MultiStepTemplateId`.
+- Edit multi-step flow: update `step_templates` entries (each step has prompt, tools, validators used by `MultiStepOrchestrationService`).
+
+**External integrations**
+- Ollama/OpenAI-compatible models (local Ollama recommended). Default TTS endpoint: `http://127.0.0.1:8004`. AudioCraft default: `http://localhost:8003`.
+
+**File map (inspect these first)**
+- `Program.cs` — DI, startup and orchestrator registration.
+- `Services/` — core orchestration and pipeline: search for `FullStoryPipelineCommand`, `LangChainKernelFactory`, `MultiStepOrchestrationService`.
+- `Skills/` — all tool implementations.
+- `Hubs/ProgressHub.cs` — SignalR progress/log streaming.
+- `Pages/Genera.cshtml`, `Pages/Models.cshtml` — UI generation and model-test flows.
+
+If you want, I can expand any section with concrete code snippets (example `BaseLangChainTool` implementation, sample agent JSON row, or DB migration commands). Reply with which section to expand.
 # AI Coding Assistant Instructions for TinyGenerator
 
 ## Project Overview
@@ -46,5 +89,12 @@ TinyGenerator is an ASP.NET Core web application that generates stories using AI
 - Memory is persistent SQLite via `PersistentMemoryService` with vector embeddings (Ollama `nomic-embed-text`).
 - Tool schemas must be OpenAI-compatible. Use `CreateFunctionSchema()` helper in `BaseLangChainTool`.
 - Avoid fallbacks that bypass tool calling - prefer failing tests to expose integration issues.
-- Priority system: 1 = highest (TTS/audio), 2 = normal (generation), 3+ = low priority background tasks.</content>
-<parameter name="filePath">/Users/cristianodonaggio/Documents/ai/TinyGenerator/.github/copilot-instructions.md
+- Priority system: 1 = highest (TTS/audio), 2 = normal (generation), 3+ = low priority background tasks.
+
+## Additional Best Practices
+- **LangChain First**: Prefer LangChain for new features; Semantic Kernel is maintained for backward compatibility.
+- **Concise Prompts**: Keep prompts minimal and leverage function/tool calling for complex operations.
+- **Scripts**: Use `start_ollama.sh` or `ollama_start.bat` for quick Ollama setup. Populate data with `populate_*.sql` scripts.
+- **TTS Schema**: Ensure `tts_schema.json` is generated with proper validation and saved under `data/tts/`.
+- **UI Standards**: Razor Pages must follow the structure outlined in `interfaccia_ag_grid.txt`. Use AG Grid in pure JavaScript mode with Bootstrap 5.
+- **Testing**: Validate ReAct loops and tool schemas using xUnit tests. Ensure all tools are registered and functional.

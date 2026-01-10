@@ -17,6 +17,75 @@ TECNOLOGIE OBBLIGATORIE
 - NO stili legacy DataTables
 - NO classi CSS obsolete (display, stripe, dataTable)
 
+CARICAMENTO SCRIPT DATATABLES (CRITICO!)
+- NON usare `@section Scripts` per DataTables - causa problemi di timing con jQuery
+- Caricare gli script DataTables INLINE alla fine della pagina DOPO il markup HTML
+- jQuery DEVE essere disponibile PRIMA di caricare DataTables
+- Script DataTables DEVONO essere caricati in SEQUENZA (non parallelo!)
+- Ordine obbligatorio: jquery.dataTables.min.js → dataTables.bootstrap5.min.js → buttons → colvis
+
+ESEMPIO CARICAMENTO CORRETTO (obbligatorio):
+```javascript
+<script>
+(function initDataTable() {
+    // 1. Aspetta che jQuery del layout sia disponibile
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initDataTable, 50);
+        return;
+    }
+
+    // 2. Carica script DataTables in SEQUENZA (uno alla volta!)
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var currentScriptIndex = 0;
+
+    function loadScript(url, callback) {
+        var script = document.createElement('script');
+        script.src = url;
+        script.onload = callback;
+        script.onerror = function() {
+            console.error('Failed to load script:', url);
+            callback();
+        };
+        document.head.appendChild(script);
+    }
+
+    function loadNextScript() {
+        if (currentScriptIndex < scripts.length) {
+            loadScript(scripts[currentScriptIndex], function() {
+                currentScriptIndex++;
+                loadNextScript();
+            });
+        } else {
+            // 3. Inizializza DataTable solo dopo che tutti gli script sono caricati
+            initializeDataTable();
+        }
+    }
+
+    loadNextScript();
+
+    function initializeDataTable() {
+        jQuery(document).ready(function($) {
+            // Configurazione DataTable qui...
+        });
+    }
+})();
+</script>
+```
+
+ERRORI COMUNI DA EVITARE:
+1. ❌ Usare `@section Scripts` - causa "jQuery is not defined"
+2. ❌ Caricare script DataTables in parallelo - causa "Cannot read properties of undefined"
+3. ❌ Tag `<script src="...">` statici inline - vengono eseguiti prima di jQuery
+4. ❌ Assumere che jQuery sia disponibile immediatamente
+5. ✅ Caricare dinamicamente in sequenza aspettando jQuery
+
 STRUTTURA GENERALE DELLA PAGINA
 
 1) BACKEND (PageModel)
@@ -121,12 +190,27 @@ ESEMPIO CONFIGURAZIONE:
 ```javascript
 buttons: [
   {
+    text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Record',
+    className: 'btn btn-sm btn-primary',
+    attr: {
+      style: 'width: auto; flex: 0 0 auto;' // Impedisce allargamento
+    },
+    action: function() {
+      window.location.href = '/Path/Create';
+    }
+  },
+  {
     extend: 'colvis',
     text: 'Colonne',
-    className: 'btn btn-sm btn-outline-secondary'
+    className: 'btn btn-sm btn-secondary' // NON outline per migliore visibilità
   }
 ]
 ```
+
+NOTA SUI PULSANTI:
+- DataTables applica `flex: 1 1 auto` ai pulsanti di default, causando allargamento
+- Usare `attr: { style: 'width: auto; flex: 0 0 auto;' }` per dimensione contenuto
+- Evitare `btn-outline-*` per pulsante Colonne (testo poco leggibile su grigio)
 
 7) PERSISTENZA STATO (STATE SAVE)
 
@@ -184,12 +268,17 @@ function formatDetail(data) {
     <div class="card">
       <div class="card-body">
         <h5 class="card-title">${data.title}</h5>
-        <p class="card-text">${data.description}</p>
+        <p class="card-text" style="white-space: pre-wrap;">${data.description}</p>
       </div>
     </div>
   `;
 }
 ```
+
+NOTA CHILD ROW:
+- Usare `white-space: pre-wrap;` per preservare ritorni a capo del testo originale
+- Lazy loading via fetch/AJAX per performance
+- Gestire stato shown/hidden per evitare reload multipli
 
 9) AZIONI DI RIGA
 
@@ -382,6 +471,14 @@ document.addEventListener('DOMContentLoaded', function() {
 - Filtri/ordinamento/paginazione nel DB (EF/SQL), non in-memory.
 
 CHANGELOG
+- 2026-01-10: Aggiornate best practices per risoluzione problemi comuni
+  - Aggiunta sezione CARICAMENTO SCRIPT DATATABLES con pattern obbligatorio
+  - Documentati errori comuni: jQuery undefined, script caricati in parallelo
+  - Soluzione: caricamento dinamico in sequenza con wait per jQuery
+  - Aggiunto attr style per pulsanti (evitare allargamento flex)
+  - Cambiato pulsante Colonne da outline a secondary per leggibilità
+  - Aggiunto white-space: pre-wrap per child row text formatting
+  - Integrazione pulsanti azione (es. Nuovo Record) nei buttons DataTables
 - 2026-01-08: Aggiornato standard per usare DataTables.net con Bootstrap 5
   - Rimosso AG Grid come requisito
   - Aggiunto DOM layout obbligatorio per stile dashboard moderno

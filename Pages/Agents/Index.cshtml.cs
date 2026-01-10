@@ -42,15 +42,15 @@ namespace TinyGenerator.Pages.Agents
 
         public void OnGet()
         {
-            if (int.TryParse(Request.Query["page"], out var p) && p > 0) PageIndex = p;
-            if (int.TryParse(Request.Query["pageSize"], out var ps) && ps > 0) PageSize = ps;
-            OrderBy = string.IsNullOrWhiteSpace(Request.Query["orderBy"]) ? null : Request.Query["orderBy"].ToString();
+            // Load all data for client-side DataTables processing
+            PageSize = 10000; // Large number to get all records
+            PageIndex = 1;
 
             try
             {
                 Models = _database.ListModels() ?? new List<ModelInfo>();
                 Roles = _database.ListAgentRoles() ?? new List<string>();
-                var (items, total) = _database.GetPagedAgents(Search, OrderBy, PageIndex, PageSize, ModelFilter, RoleFilter);
+                var (items, total) = _database.GetPagedAgents(null, null, 1, 10000, null, null);
                 Items = items;
                 TotalCount = total;
             }

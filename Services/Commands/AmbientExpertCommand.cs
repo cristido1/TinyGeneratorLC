@@ -281,16 +281,16 @@ namespace TinyGenerator.Services.Commands
                     {
                         var ratio = (double)cleaned.Length / inputLength;
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Output too short: {cleaned.Length} chars vs {inputLength} input ({ratio:P0})", "warn");
-                        lastError = "Il testo ritornato è più corto dell'originale. NON devi tagliare o rimuovere testo, devi solo aggiungere i tag [AMBIENTE:] e [RUMORE:] mantenendo tutto il contenuto originale.";
+                        lastError = "Il testo ritornato è più corto dell'originale. NON devi tagliare o rimuovere testo, devi solo aggiungere i tag [RUMORE] mantenendo tutto il contenuto originale.";
                         continue;
                     }
 
                     // Validation 2: Check for minimum tag count (at least 3 ambient/rumore tags)
-                    var tagCount = System.Text.RegularExpressions.Regex.Matches(cleaned, @"\[(?:AMBIENTE|RUMORE):", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+                    var tagCount = System.Text.RegularExpressions.Regex.Matches(cleaned, @"\[(?:AMBIENTE|RUMORE)\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
                     if (tagCount < 3)
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough ambient tags: {tagCount} found, minimum 3 required", "warn");
-                        lastError = $"Hai inserito solo {tagCount} tag [AMBIENTE:] o [RUMORE:]. Devi inserire ALMENO 3 tag di questo tipo per arricchire l'atmosfera della scena.";
+                        lastError = $"Hai inserito solo {tagCount} tag [RUMORE]. Devi inserire ALMENO 3 tag di questo tipo per arricchire l'atmosfera della scena, non ripetere gli stessi tag.";
                         continue;
                     }
 

@@ -2,6 +2,12 @@
 @model TinyGenerator.Pages.Models.IndexModel
 @{
     ViewData["Title"] = "Models";
+    ViewData["PageDescription"] = "Gestione modelli e discovery";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
 }
 
 @if (TempData["TestResultMessage"] != null)
@@ -167,14 +173,74 @@
     <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" data-show-disabled="@(Model.ShowDisabled ? "true" : "")"></div>
 </div>
 
-@section Scripts {
-    <script src="/js/shared/pagination.js"></script>
-    <script src="/js/shared/list-ui.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            if (window.ListUI && typeof window.ListUI.init === 'function') {
-                window.ListUI.init({ tableSelector: '#modelsTable', colsMenuId: 'colVisMenu', storageKey: 'models_cols_v1', pagerId: 'pager' });
-            }
+<script>
+(function initModelsTable() {
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initModelsTable, 50);
+        return;
+    }
+
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var idx = 0;
+    function loadScript(u, cb) {
+        var s = document.createElement('script'); s.src = u; s.onload = cb; s.onerror = cb; document.head.appendChild(s);
+    }
+    function next() { if (idx < scripts.length) loadScript(scripts[idx++], next); else initialize(); }
+    next();
+
+    function initialize() {
+        jQuery(document).ready(function($) {
+            if (typeof $.fn.DataTable === 'undefined') { console.error('DataTables not loaded'); return; }
+
+            var table = $('#modelsTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                paging: true,
+                pageLength: 25,
+                lengthChange: true,
+                lengthMenu: [[10,25,50,100],[10,25,50,100]],
+                order: [[0,'asc']],
+                ordering: true,
+                searching: true,
+                columnDefs: [ { orderable: false, targets: -1 } ],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Model',
+                        className: 'btn btn-sm btn-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() { window.location.href = '/Models/Edit'; }
+                    },
+                    { extend: 'colvis', text: 'Colonne', className: 'btn btn-sm btn-secondary' }
+                ],
+                language: {
+                    search: "Cerca:",
+                    lengthMenu: "Mostra _MENU_ record",
+                    info: "Showing _START_ to _END_ of _TOTAL_ entries",
+                    infoEmpty: "Nessun record disponibile",
+                    infoFiltered: "(filtrati da _MAX_ record totali)",
+                    zeroRecords: "Nessun record trovato",
+                    paginate: { first: "Prima", last: "Ultima", next: "Succ", previous: "Prec" }
+                }
+            });
+
+            // Wire up colVisMenu fallback if present
+            try {
+                if ($('#colVisMenu').length && table && table.buttons) {
+                    // populate the existing colVisMenu with toggle items
+                    var btn = table.button('.buttons-colvis');
+                    if (btn.length) { /* keep built-in button visible; no extra handling needed */ }
+                }
+            } catch (e) { console.warn(e); }
         });
-    </script>
-}
+    }
+})();
+</script>

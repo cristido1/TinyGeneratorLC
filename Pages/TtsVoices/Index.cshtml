@@ -4,6 +4,15 @@
     ViewData["Title"] = "TTS Voices";
 }
 
+@{
+    ViewData["PageDescription"] = "Voices per TTS e impostazioni";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
+}
+
 <form id="ttsRefreshForm" method="post" class="d-none">
     @Html.AntiForgeryToken()
 </form>
@@ -48,7 +57,7 @@
     </div>
 
     <div class="card" style="border:2px solid #ddd; border-radius:8px; padding:12px;">
-        <table class="table table-sm table-striped mb-0">
+        <table id="ttsVoicesTable" class="table table-sm table-striped mb-0">
             <thead>
                 <tr>
                     <th data-col="actions">Azioni</th>
@@ -133,29 +142,29 @@
     </div>
 </div>
 
-<script src="/js/shared/pagination.js"></script>
-<script src="/js/shared/list-ui.js"></script>
 <script>
-    // Ensure list-ui initializes after DOM ready and show toast when TempData present
-    document.addEventListener('DOMContentLoaded', () => {
-        if (window.ListUI && typeof window.ListUI.init === 'function') {
-            window.ListUI.init({ storageKey: 'ttsvoices_cols_v1', pagerId: 'pager', colsMenuId: 'ttsVoicesColsMenu' });
-        }
+    (function initTtsVoicesTable(){
+        if (typeof jQuery === 'undefined') { document.addEventListener('DOMContentLoaded', initTtsVoicesTable); return; }
+        var scripts = ['/lib/datatables/js/jquery.dataTables.min.js','/lib/datatables/js/dataTables.bootstrap5.min.js','/lib/datatables/js/dataTables.buttons.min.js','/lib/datatables/js/buttons.bootstrap5.min.js','/lib/datatables/js/buttons.colVis.min.js'];
+        var i=0; function load(u,cb){var s=document.createElement('script');s.src=u;s.onload=cb;s.onerror=cb;document.head.appendChild(s);} function next(){ if(i<scripts.length) load(scripts[i++], next); else init(); } next();
+        function init(){ jQuery(document).ready(function($){ if(typeof $.fn.DataTable==='undefined'){ console.error('DataTables not loaded'); return; }
+            var table = $('#ttsVoicesTable').DataTable({ dom:"<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>", stateSave:true, paging:true, pageLength:25, lengthChange:true, lengthMenu:[[10,25,50,100],[10,25,50,100]], order:[[1,'asc']], columnDefs:[{ orderable:false, targets:0 }], buttons:[{ text:'<i class="bi bi-plus-circle me-1"></i>Nuovo', className:'btn btn-sm btn-primary', attr:{style:'width:auto;flex:0 0 auto;'}, action:function(){ window.location.href='/TtsVoices/Create'; } },{ extend:'colvis', text:'Colonne', className:'btn btn-sm btn-secondary' } ] });
 
-        // Show TempData toast if present
-        try {
-            var message = '@(TempData["TtsVoiceMessage"] ?? string.Empty)';
-            if (message && message.length > 0) {
-                var toastEl = document.getElementById('ttsToast');
-                if (toastEl) {
-                    document.getElementById('ttsToastBody').innerText = message;
-                    document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
-                    var bsToast = new bootstrap.Toast(toastEl);
-                    bsToast.show();
+            // Show TempData toast if present
+            try {
+                var message = '@(TempData["TtsVoiceMessage"] ?? string.Empty)';
+                if (message && message.length > 0) {
+                    var toastEl = document.getElementById('ttsToast');
+                    if (toastEl) {
+                        document.getElementById('ttsToastBody').innerText = message;
+                        document.getElementById('ttsToastTime').innerText = new Date().toLocaleTimeString();
+                        var bsToast = new bootstrap.Toast(toastEl);
+                        bsToast.show();
+                    }
                 }
-            }
-        } catch(e) { /* ignore */ }
-    });
+            } catch(e) { /* ignore */ }
+        }); }
+    })();
 </script>
 <script>
     // Toggle disabled via AJAX; uses antiforgery token present in hidden form

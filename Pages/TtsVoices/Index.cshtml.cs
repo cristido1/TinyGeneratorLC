@@ -16,7 +16,7 @@ namespace TinyGenerator.Pages.TtsVoices
         // Server-side paging/filtering properties required by the standard
         public IReadOnlyList<TtsVoice> Items { get; set; } = Array.Empty<TtsVoice>();
         public int PageIndex { get; set; } = 1; // 1-based
-        public int PageSize { get; set; } = 25;
+        public int PageSize { get; set; } = 10000;
         public int TotalCount { get; set; } = 0;
         public string? Search { get; set; }
         public string? OrderBy { get; set; }

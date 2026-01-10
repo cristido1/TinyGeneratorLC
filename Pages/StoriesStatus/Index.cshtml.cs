@@ -20,7 +20,7 @@ namespace TinyGenerator.Pages.StoriesStatus
         public int PageIndex { get; set; } = 1;
 
         [BindProperty(SupportsGet = true, Name = "pageSize")]
-        public int PageSize { get; set; } = 25;
+        public int PageSize { get; set; } = 10000;
 
         [BindProperty(SupportsGet = true)]
         public string? Search { get; set; }

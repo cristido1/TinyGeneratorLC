@@ -43,7 +43,7 @@ namespace TinyGenerator.Pages.Stories
         public IEnumerable<StoryRecord> Stories { get; set; } = new List<StoryRecord>();
         // Paging/search properties (server-side)
         public int PageIndex { get; set; } = 1;
-        public int PageSize { get; set; } = 25;
+        public int PageSize { get; set; } = 10000;
         public int TotalCount { get; set; }
         public string? Search { get; set; }
         public string? OrderBy { get; set; }

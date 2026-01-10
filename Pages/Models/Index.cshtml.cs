@@ -41,7 +41,7 @@ namespace TinyGenerator.Pages.Models
         public List<string> TestGroups { get; set; } = new();
         public IReadOnlyList<ModelInfo> Items { get; set; } = Array.Empty<ModelInfo>();
         public int PageIndex { get; set; } = 1;
-        public int PageSize { get; set; } = 25;
+        public int PageSize { get; set; } = 10000;
         public int TotalCount { get; set; }
         public string? Search { get; set; }
         public string? OrderBy { get; set; }

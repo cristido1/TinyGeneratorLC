@@ -20,7 +20,7 @@ namespace TinyGenerator.Pages.Series
 
         public IReadOnlyList<TinyGenerator.Models.Series> Items { get; set; } = Array.Empty<TinyGenerator.Models.Series>();
         public int PageIndex { get; set; } = 1;
-        public int PageSize { get; set; } = 25;
+        public int PageSize { get; set; } = 10000;
         public int TotalCount { get; set; }
         public string? Search { get; set; }
         public string? OrderBy { get; set; }

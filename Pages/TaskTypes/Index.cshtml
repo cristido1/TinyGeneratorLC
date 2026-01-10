@@ -2,6 +2,12 @@
 @model TinyGenerator.Pages.TaskTypes.IndexModel
 @{
     ViewData["Title"] = "Task Types";
+    ViewData["PageDescription"] = "Gestione tipi di task";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
 }
 
 <div class="page-wrapper">
@@ -33,7 +39,7 @@
                 <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
             </div>
             <button id="refreshBtn" class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
-            <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#modalEdit" onclick="openCreateModal()">Nuovo</button>
+            <button class="btn btn-sm btn-primary" onclick="openCreateModal()">Nuovo</button>
         </div>
     </div>
 
@@ -41,55 +47,26 @@
         <table class="table table-sm table-striped mb-0" id="taskTypesTable">
             <thead class="table-light">
                 <tr>
-                    <th data-col="code"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "code" })">Code</a></th>
-                    <th data-col="description"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "description" })">Description</a></th>
-                    <th data-col="executor"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "executor" })">Executor Role</a></th>
-                    <th data-col="checker"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "checker" })">Checker Role</a></th>
-                    <th data-col="merge"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "merge" })">Merge Strategy</a></th>
-                    <th data-col="actions">Actions</th>
+                    <th>Code</th>
+                    <th>Description</th>
+                    <th>Executor</th>
+                    <th>Checker</th>
+                    <th>Merge</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 @foreach (var item in Model.Items)
                 {
-                    <tr data-code="@item.Code"
-                        data-description="@item.Description"
-                        data-executor="@item.DefaultExecutorRole"
-                        data-checker="@item.DefaultCheckerRole"
-                        data-merge="@item.OutputMergeStrategy"
-                        data-validation="@item.ValidationCriteria">
-                        <td data-col="code">@item.Code</td>
-                        <td data-col="description">@item.Description</td>
-                        <td data-col="executor">@item.DefaultExecutorRole</td>
-                        <td data-col="checker">@item.DefaultCheckerRole</td>
-                        <td data-col="merge">@item.OutputMergeStrategy</td>
-                        <td data-col="actions">
-                            <div class="dropdown">
-                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
-                                <ul class="dropdown-menu dropdown-menu-end">
-                                    @foreach (var action in Model.GetActionList(item))
-                                    {
-                                        if (action.Method == "CLIENT")
-                                        {
-                                            var cls = action.Id == "details" ? "action-details" : "action-edit";
-                                            <li><button class="dropdown-item @cls" type="button">@action.Title</button></li>
-                                        }
-                                        else if (action.Method == "POST")
-                                        {
-                                            <li>
-                                                <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Delete task type?')" : "true")">
-                                                    @Html.AntiForgeryToken()
-                                                    @foreach (var field in action.Fields)
-                                                    {
-                                                        <input type="hidden" name="@field.Key" value="@field.Value" />
-                                                    }
-                                                    <button type="submit" class="dropdown-item">@action.Title</button>
-                                                </form>
-                                            </li>
-                                        }
-                                    }
-                                </ul>
-                            </div>
+                    <tr data-code="@item.Code" data-description="@item.Description" data-executor="@item.DefaultExecutorRole" data-checker="@item.DefaultCheckerRole" data-merge="@item.OutputMergeStrategy" data-validation="@Html.Raw(item.ValidationCriteria ?? string.Empty)">
+                        <td>@item.Code</td>
+                        <td>@item.Description</td>
+                        <td>@item.DefaultExecutorRole</td>
+                        <td>@item.DefaultCheckerRole</td>
+                        <td>@item.OutputMergeStrategy</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-secondary action-details">Dettagli</button>
+                            <button class="btn btn-sm btn-outline-secondary action-edit">Edit</button>
                         </td>
                     </tr>
                 }
@@ -100,7 +77,7 @@
     <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
 </div>
 
-<!-- Modal -->
+<!-- Edit Modal (placeholder) -->
 <div class="modal fade" id="modalEdit" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
@@ -168,67 +145,26 @@
     <script src="/js/shared/pagination.js"></script>
     <script src="/js/shared/list-ui.js"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            if (window.ListUI && typeof window.ListUI.init === 'function') {
-                window.ListUI.init({ tableSelector: '#taskTypesTable', colsMenuId: 'colVisMenu', storageKey: 'tasktypes_cols_v1', pagerId: 'pager' });
-            }
+        (function(){
+            function ensureDataTables(cb){ if(typeof jQuery==='undefined'){ return setTimeout(()=>ensureDataTables(cb),50); } var scripts=['/lib/datatables/js/jquery.dataTables.min.js','/lib/datatables/js/dataTables.bootstrap5.min.js','/lib/datatables/js/dataTables.buttons.min.js','/lib/datatables/js/buttons.bootstrap5.min.js','/lib/datatables/js/buttons.colVis.min.js']; var i=0; function load(u,d){var s=document.createElement('script'); s.src=u; s.onload=d; s.onerror=d; document.head.appendChild(s);} function next(){ if(i<scripts.length) load(scripts[i++], next); else cb(); } next(); }
+            ensureDataTables(function(){ jQuery(function($){ if(typeof $.fn.DataTable==='undefined'){ console.error('DataTables not loaded'); return; } $('#taskTypesTable').DataTable({ dom:"<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>", stateSave:true, paging:true, pageLength:25, lengthChange:true, lengthMenu:[[10,25,50,100],[10,25,50,100]], order:[[0,'asc']], columnDefs:[{ orderable:false, targets:-1 }], buttons:[{ text:'<i class=\"bi bi-plus-circle me-1\"></i>Nuovo', className:'btn btn-sm btn-primary', action:function(){ openCreateModal(); } },{ extend:'colvis', text:'Colonne', className:'btn btn-sm btn-secondary' } ] });
+                $(document).on('click','.action-details', function(){ var tr=$(this).closest('tr'); showDetails(tr.data()); });
+                $(document).on('click','.action-edit', function(){ var tr=$(this).closest('tr'); openEditModal(tr.data()); });
+            }); });
 
-            document.querySelectorAll('.action-details').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const tr = btn.closest('tr');
-                    if (!tr) return;
-                    showDetails(tr.dataset);
-                });
+            document.addEventListener('DOMContentLoaded', () => {
+                if (window.ListUI && typeof window.ListUI.init === 'function') {
+                    window.ListUI.init({ tableSelector: '#taskTypesTable', colsMenuId: 'colVisMenu', storageKey: 'tasktypes_cols_v1', pagerId: 'pager' });
+                }
             });
 
-            document.querySelectorAll('.action-edit').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const tr = btn.closest('tr');
-                    if (!tr) return;
-                    openEditModal(tr.dataset);
-                });
-            });
-        });
+            window.showDetails = function(data){ const body = document.getElementById('detailsModalBody'); body.innerHTML = `<dl class=\"row mb-0\"><dt class=\"col-sm-4\">Code</dt><dd class=\"col-sm-8\">${escapeHtml(data.code||'')}</dd><dt class=\"col-sm-4\">Description</dt><dd class=\"col-sm-8\">${escapeHtml(data.description||'')}</dd><dt class=\"col-sm-4\">Executor</dt><dd class=\"col-sm-8\">${escapeHtml(data.executor||'')}</dd><dt class=\"col-sm-4\">Checker</dt><dd class=\"col-sm-8\">${escapeHtml(data.checker||'')}</dd><dt class=\"col-sm-4\">Merge</dt><dd class=\"col-sm-8\">${escapeHtml(data.merge||'')}</dd></dl>${data.validation?`<hr/><strong>Validation Criteria:</strong><pre class=\"bg-light p-2 mt-2\" style=\"max-height:200px;overflow:auto;\">${escapeHtml(data.validation)}</pre>`:''}`; new bootstrap.Modal(document.getElementById('detailsModal')).show(); };
 
-        function showDetails(data) {
-            const body = document.getElementById('detailsModalBody');
-            body.innerHTML = `
-                <dl class="row mb-0">
-                    <dt class="col-sm-4">Code</dt><dd class="col-sm-8">${escapeHtml(data.code || '')}</dd>
-                    <dt class="col-sm-4">Description</dt><dd class="col-sm-8">${escapeHtml(data.description || '')}</dd>
-                    <dt class="col-sm-4">Executor Role</dt><dd class="col-sm-8">${escapeHtml(data.executor || '')}</dd>
-                    <dt class="col-sm-4">Checker Role</dt><dd class="col-sm-8">${escapeHtml(data.checker || '')}</dd>
-                    <dt class="col-sm-4">Merge Strategy</dt><dd class="col-sm-8">${escapeHtml(data.merge || '')}</dd>
-                </dl>
-                ${data.validation ? `<hr/><strong>Validation Criteria:</strong><pre class="bg-light p-2 mt-2" style="max-height:200px;overflow:auto;">${escapeHtml(data.validation)}</pre>` : '' }
-            `;
-            new bootstrap.Modal(document.getElementById('detailsModal')).show();
-        }
+            window.openEditModal = function(data){ document.getElementById('modalTitle').textContent = 'Edit Task Type: ' + (data.code||''); document.getElementById('codeInput').value = data.code||''; document.getElementById('descInput').value = data.description||''; document.getElementById('execRole').value = data.executor||''; document.getElementById('checkRole').value = data.checker||''; document.getElementById('mergeStrategy').value = data.merge||''; document.getElementById('validationCriteria').value = data.validation||''; new bootstrap.Modal(document.getElementById('modalEdit')).show(); };
 
-        function openEditModal(data) {
-            document.getElementById('modalTitle').textContent = 'Edit Task Type: ' + (data.code || '');
-            document.getElementById('codeInput').value = data.code || '';
-            document.getElementById('descInput').value = data.description || '';
-            document.getElementById('execRole').value = data.executor || '';
-            document.getElementById('checkRole').value = data.checker || '';
-            document.getElementById('mergeStrategy').value = data.merge || '';
-            document.getElementById('validationCriteria').value = data.validation || '';
-            new bootstrap.Modal(document.getElementById('modalEdit')).show();
-        }
+            window.openCreateModal = function(){ document.getElementById('modalTitle').textContent = 'Create Task Type'; document.getElementById('codeInput').value=''; document.getElementById('descInput').value=''; document.getElementById('execRole').value=''; document.getElementById('checkRole').value=''; document.getElementById('mergeStrategy').value=''; document.getElementById('validationCriteria').value=''; new bootstrap.Modal(document.getElementById('modalEdit')).show(); };
 
-        function openCreateModal() {
-            document.getElementById('modalTitle').textContent = 'Create Task Type';
-            document.getElementById('codeInput').value = '';
-            document.getElementById('descInput').value = '';
-            document.getElementById('execRole').value = '';
-            document.getElementById('checkRole').value = '';
-            document.getElementById('mergeStrategy').value = '';
-            document.getElementById('validationCriteria').value = '';
-        }
-
-        function escapeHtml(text) {
-            if (!text) return '';
-            return String(text).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#039;"})[m]);
-        }
+            function escapeHtml(text){ if(!text) return ''; return String(text).replace(/[&<>\"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":"&#039;"})[m]); }
+        })();
     </script>
 }

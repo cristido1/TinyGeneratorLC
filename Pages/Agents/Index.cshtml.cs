@@ -16,7 +16,7 @@ namespace TinyGenerator.Pages.Agents
         public IReadOnlyList<string> Roles { get; set; } = Array.Empty<string>();
 
         public int PageIndex { get; set; } = 1;
-        public int PageSize { get; set; } = 25;
+        public int PageSize { get; set; } = 10000;
         public int TotalCount { get; set; }
         public string? OrderBy { get; set; }
 

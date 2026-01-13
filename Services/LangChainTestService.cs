@@ -147,14 +147,15 @@ namespace TinyGenerator.Services
 
         public TestGroupRunContext? PrepareGroupRun(string model, string group)
         {
-            var modelInfo = _database.GetModelInfo(model);
+            // Resolve model by name locally (DBService no longer exposes name-based GetModelInfo)
+            var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
             if (modelInfo == null) return null;
 
             var tests = _database.GetPromptsByGroup(group) ?? new List<TestDefinition>();
             string? testFolder = SetupTestFolder(modelInfo.Name, group, tests);
 
             var runId = _database.CreateTestRun(
-                modelInfo.Name,
+                modelInfo.Id.Value,
                 group,
                 $"Group run {group} (LangChain)",
                 false,
@@ -237,12 +238,12 @@ namespace TinyGenerator.Services
 
             _database.UpdateTestRunResult(runId, passedFlag, durationMs);
             _database.UpdateModelTestResults(
-                modelInfo.Name,
+                modelInfo.Id.Value,
                 score,
                 new Dictionary<string, bool?>(),
                 durationMs.HasValue ? (double?)(durationMs.Value / 1000.0) : null);
 
-            _database.RecalculateModelScore(modelInfo.Name);
+            _database.RecalculateModelScore(modelInfo.Id.Value);
 
             if (passedFlag)
             {

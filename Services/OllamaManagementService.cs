@@ -88,7 +88,7 @@ namespace TinyGenerator.Services
                         continue;
                     }
 
-                    var existing = _database.GetModelInfo(r.Name);
+                    var existing = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, r.Name, StringComparison.OrdinalIgnoreCase));
                     if (existing == null)
                     {
                         // Create a new model entry for this Ollama model

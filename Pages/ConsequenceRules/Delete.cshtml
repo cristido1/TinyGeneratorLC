@@ -1,0 +1,24 @@
+@page
+@model TinyGenerator.Pages.ConsequenceRules.DeleteModel
+@{
+    ViewData["Title"] = "Delete Consequence Rule";
+    ViewData["PageDescription"] = "Elimina una consequence rule";
+}
+
+<div class="alert alert-warning">
+    <div class="fw-semibold">Confermi l'eliminazione?</div>
+    <div class="small text-muted">Operazione irreversibile.</div>
+</div>
+
+<div class="border rounded p-3 bg-light">
+    <div class="mb-2"><strong>Id:</strong> @Model.Item.Id</div>
+    <div class="mb-2"><strong>Profilo:</strong> @(Model.Item.NarrativeProfile?.Name ?? $"#{Model.Item.NarrativeProfileId}")</div>
+</div>
+
+<form method="post" class="mt-3">
+    <input type="hidden" name="id" value="@Model.Item.Id" />
+    <div class="d-flex gap-2">
+        <button class="btn btn-danger" type="submit">Delete</button>
+        <a class="btn btn-outline-secondary" asp-page="./Index">Annulla</a>
+    </div>
+</form>

@@ -170,5 +170,84 @@ namespace TinyGenerator.Controllers
 
             return Ok(new { runId, minScore, message = "Batch summarization started" });
         }
+
+        /// <summary>
+        /// POST /api/commands/state-story/start
+        /// Creates a new state-driven story with a NarrativeProfile and activates it (single active story enforced).
+        /// </summary>
+        [HttpPost("state-story/start")]
+        public async Task<IActionResult> StartStateDrivenStory([FromBody] StartStateDrivenStoryRequest request)
+        {
+            if (request == null) return BadRequest(new { error = "Missing request body" });
+            if (string.IsNullOrWhiteSpace(request.Theme)) return BadRequest(new { error = "Theme is required" });
+            if (string.IsNullOrWhiteSpace(request.Title)) return BadRequest(new { error = "Title is required" });
+            if (request.NarrativeProfileId <= 0) return BadRequest(new { error = "NarrativeProfileId is required" });
+
+            var cmd = new StartStateDrivenStoryCommand(_database);
+            var (success, storyId, error) = await cmd.ExecuteAsync(
+                theme: request.Theme,
+                title: request.Title,
+                narrativeProfileId: request.NarrativeProfileId,
+                serieId: request.SeriesId,
+                serieEpisode: request.EpisodeId,
+                plannerMode: request.PlannerMode,
+                ct: HttpContext.RequestAborted);
+
+            if (!success)
+            {
+                return BadRequest(new { error = error ?? "Failed to start story" });
+            }
+
+            return Ok(new { storyId, message = "State-driven story created and activated" });
+        }
+
+        /// <summary>
+        /// POST /api/commands/state-story/next-chunk
+        /// Enqueues a GenerateNextChunkCommand for the active runtime story.
+        /// </summary>
+        [HttpPost("state-story/next-chunk")]
+        public IActionResult GenerateNextChunk([FromBody] GenerateNextChunkRequest request)
+        {
+            if (request == null) return BadRequest(new { error = "Missing request body" });
+            if (request.StoryId <= 0) return BadRequest(new { error = "StoryId is required" });
+            if (request.WriterAgentId <= 0) return BadRequest(new { error = "WriterAgentId is required" });
+
+            var snap = _database.GetStateDrivenStorySnapshot(request.StoryId);
+            if (snap == null) return NotFound(new { error = $"Story {request.StoryId} not found or not state-driven" });
+            if (!snap.IsActive) return BadRequest(new { error = "Story runtime is not active" });
+
+            var runId = Guid.NewGuid().ToString();
+            var cmd = new GenerateNextChunkCommand(request.StoryId, request.WriterAgentId, _database, _kernelFactory, _logger);
+
+            _dispatcher.Enqueue(
+                "GenerateNextChunk",
+                async ctx => await cmd.ExecuteAsync(ctx.CancellationToken),
+                runId: runId,
+                metadata: new Dictionary<string, string>
+                {
+                    ["storyId"] = request.StoryId.ToString(),
+                    ["agentId"] = request.WriterAgentId.ToString(),
+                    ["operation"] = "state_driven_next_chunk"
+                },
+                priority: 2);
+
+            return Ok(new { runId, storyId = request.StoryId, message = "Next chunk enqueued" });
+        }
+    }
+
+    public sealed class StartStateDrivenStoryRequest
+    {
+        public string Theme { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public int NarrativeProfileId { get; set; }
+        public int? SeriesId { get; set; }
+        public int? EpisodeId { get; set; }
+        public string? PlannerMode { get; set; }
+    }
+
+    public sealed class GenerateNextChunkRequest
+    {
+        public long StoryId { get; set; }
+        public int WriterAgentId { get; set; }
     }
 }

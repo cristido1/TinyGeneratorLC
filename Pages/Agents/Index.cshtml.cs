@@ -155,7 +155,7 @@ namespace TinyGenerator.Pages.Agents
                 var baseName = $"{source.Name} copia".Trim();
                 var newName = baseName;
                 var suffix = 2;
-                while (_database.GetAgentIdByName(newName) != null)
+                while (_database.ListAgents().Any(a => string.Equals(a.Name, newName, StringComparison.OrdinalIgnoreCase)))
                 {
                     newName = $"{baseName} {suffix}";
                     suffix++;

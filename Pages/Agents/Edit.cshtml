@@ -1,8 +1,6 @@
 @page
 @model TinyGenerator.Pages.Agents.EditModel
-@{
-    Layout = "_Layout";
-}
+
 
 <h2>Edit Agent</h2>
 
@@ -31,11 +29,11 @@
     <div class="row mb-3">
         <div class="col-md-8">
             <label class="form-label">Model (optional)</label>
-            <select asp-for="SelectedModelName" class="form-select">
+            <select asp-for="Agent.ModelId" class="form-select">
                 <option value="">-- none --</option>
                 @foreach (var m in Model.Models)
                 {
-                    <option value="@m.Name" selected="@((Model.SelectedModelName == m.Name) ? "selected" : null)">@m.Name @((!string.IsNullOrWhiteSpace(m.Provider)) ? "(" + m.Provider + ")" : "") @(m.Speed.HasValue ? "(sp:" + m.Speed.ToString() + ")" : "(sp:-)")</option>
+                    <option value="@m.Id" selected="@((Model.Agent.ModelId.HasValue && Model.Agent.ModelId.Value == m.Id) ? "selected" : null)">@m.Name @((!string.IsNullOrWhiteSpace(m.Provider)) ? "(" + m.Provider + ")" : "") @(m.Speed.HasValue ? "(sp:" + m.Speed.ToString() + ")" : "(sp:-)")</option>
                 }
             </select>
         </div>

@@ -41,8 +41,8 @@ namespace TinyGenerator.Controllers
                     return BadRequest(new { success = false, error = "Model and message are required" });
                 }
 
-                // Get model info
-                var modelInfo = _database.GetModelInfo(request.Model);
+                // Get model info (resolve by name via ListModels)
+                var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, request.Model, StringComparison.OrdinalIgnoreCase));
                 if (modelInfo == null)
                 {
                     return BadRequest(new { success = false, error = "Model not found" });

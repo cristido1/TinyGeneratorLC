@@ -1,0 +1,332 @@
+INIZIO FILE TESTO
+NARRATIVE ENGINE – STRUTTURA OGGETTI E DATI DI ESEMPIO
+Target: EF Core .NET 10 – Command Dispatcher – DI
+
+OBIETTIVO DEL DOCUMENTO
+Questo documento descrive:
+
+le classi di dominio necessarie
+
+come estendere Models, Agents, Stories, Series
+
+quali nuove classi aggiungere
+
+dati di esempio da inserire nel database
+
+Il documento è pensato per essere usato come:
+
+documentazione tecnica
+
+input diretto a un LLM sviluppatore
+
+base di implementazione EF Core
+
+SEZIONE 1 – CLASSI GIÀ ESISTENTI (PUNTO DI PARTENZA)
+
+CLASSI GIÀ PRESENTI:
+
+Model
+
+Agent
+
+Story
+
+Series
+
+Queste classi NON vanno eliminate.
+Vanno estese con collegamenti narrativi.
+
+SEZIONE 2 – NUOVE CLASSI DA AGGIUNGERE (NECESSARIE)
+
+NarrativeProfile
+Definisce il GENERE e le regole narrative.
+
+Campi:
+
+Id (PK)
+
+Name
+
+Description
+
+BaseSystemPrompt
+
+StylePrompt
+
+Relazioni:
+
+1 NarrativeProfile -> N NarrativeResource
+
+1 NarrativeProfile -> N MicroObjective
+
+1 NarrativeProfile -> N FailureRule
+
+1 NarrativeProfile -> N ConsequenceRule
+
+NarrativeResource
+Risorsa astratta gestita dalla state machine.
+
+Campi:
+
+Id (PK)
+
+NarrativeProfileId (FK)
+
+Name
+
+InitialValue
+
+MinValue
+
+MaxValue
+
+Esempi:
+
+Energia
+
+SanitàMentale
+
+Fiducia
+
+Integrità
+
+MicroObjective
+Obiettivi a breve termine.
+
+Campi:
+
+Id (PK)
+
+NarrativeProfileId (FK)
+
+Code
+
+Description
+
+Difficulty (int)
+
+FailureRule
+Definisce quando un errore è plausibile.
+
+Campi:
+
+Id (PK)
+
+NarrativeProfileId (FK)
+
+Description
+
+TriggerType
+
+TriggerType esempi:
+
+ResourceBelowThreshold
+
+RandomUnderPressure
+
+ExplicitNarrativeFailure
+
+ConsequenceRule
+Definisce cosa succede dopo un errore.
+
+Campi:
+
+Id (PK)
+
+NarrativeProfileId (FK)
+
+Description
+
+Relazioni:
+
+1 ConsequenceRule -> N ConsequenceImpact
+
+ConsequenceImpact
+Impatto su una risorsa.
+
+Campi:
+
+Id (PK)
+
+ConsequenceRuleId (FK)
+
+ResourceName
+
+DeltaValue
+
+StoryRuntimeState
+STATO DINAMICO DELLA STORIA (fondamentale)
+
+Questa è la classe che collega tutto.
+
+Campi:
+
+Id (PK)
+
+StoryId (FK)
+
+NarrativeProfileId (FK)
+
+CurrentChunkIndex
+
+CurrentPhase
+
+CurrentPOV
+
+FailureCount
+
+LastContext (string, max ~4000 char)
+
+IsActive (bool)
+
+StoryResourceState
+Valore runtime delle risorse.
+
+Campi:
+
+Id (PK)
+
+StoryRuntimeStateId (FK)
+
+ResourceName
+
+CurrentValue
+
+SEZIONE 3 – ESTENSIONE CLASSI ESISTENTI
+
+MODEL
+AGGIUNGERE:
+
+IsNarrativeCompatible (bool)
+
+MaxContextTokens
+
+InstructionFollowingScore (int 1–10)
+
+AGENT
+AGGIUNGERE:
+
+Role (Writer, Continuer, Evaluator)
+
+Priority
+
+AllowedProfiles (lista o json)
+
+STORY
+AGGIUNGERE:
+
+NarrativeProfileId (FK)
+
+RuntimeStateId (FK)
+
+Status (Draft, Running, Paused, Completed)
+
+SERIES
+AGGIUNGERE:
+
+DefaultNarrativeProfileId (FK)
+
+NarrativeConsistencyLevel (int)
+
+SEZIONE 4 – INTEGRAZIONE CON COMMAND DISPATCHER
+
+COMANDI CONSIGLIATI:
+
+StartStoryCommand
+
+GenerateNextChunkCommand
+
+PauseStoryCommand
+
+ResumeStoryCommand
+
+StopStoryCommand
+
+Ogni comando:
+
+ha priorità
+
+usa DbService
+
+verifica che non ci sia un’altra StoryRuntimeState.IsActive = true
+
+GenerateNextChunkCommand:
+
+legge StoryRuntimeState
+
+decide Phase (via PhaseController)
+
+costruisce prompt (via PromptBuilder)
+
+chiama Agent Writer
+
+aggiorna StoryRuntimeState
+
+salva nuovo chunk
+
+SEZIONE 5 – DATI DI ESEMPIO (SEED DATABASE)
+
+NARRATIVE PROFILE
+
+Id: 1
+Name: "SciFi Militare"
+Description: "Conflitto armato ad alta tensione"
+BaseSystemPrompt: "Scrivi narrativa a chunk continuo senza conclusioni."
+StylePrompt: "Tono tecnico, militare, concreto."
+
+NARRATIVE RESOURCES
+
+(1) Energia – Initial: 100
+(2) Integrità – Initial: 100
+(3) Uomini – Initial: 100
+
+MICRO OBJECTIVES
+
+(1) Code: DEFEND
+Description: "Difendere un settore critico"
+Difficulty: 2
+
+(2) Code: DELAY
+Description: "Guadagnare tempo sotto pressione"
+Difficulty: 3
+
+FAILURE RULES
+
+(1) "Decisione affrettata sotto pressione"
+TriggerType: RandomUnderPressure
+
+(2) "Risorsa critica sotto soglia"
+TriggerType: ResourceBelowThreshold
+
+CONSEQUENCE RULES
+
+(1) "Perdita di uomini"
+Impact: Uomini -10
+
+(2) "Danni strutturali"
+Impact: Integrità -15
+
+STORY RUNTIME STATE (ESEMPIO)
+
+StoryId: 42
+NarrativeProfileId: 1
+CurrentChunkIndex: 0
+CurrentPhase: Action
+CurrentPOV: Plancia
+FailureCount: 0
+IsActive: true
+
+SEZIONE 6 – REGOLA ARCHITETTURALE FINALE
+
+L’engine non conosce il genere
+
+Il genere vive nel NarrativeProfile
+
+Lo stato vive in StoryRuntimeState
+
+I comandi orchestrano, non decidono
+
+Il modello scrive, non controlla
+
+============================================================
+FINE FILE

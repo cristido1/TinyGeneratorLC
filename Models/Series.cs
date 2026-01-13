@@ -81,6 +81,20 @@ public sealed class Series
     
     [Column("regole_narrative")]
     public string? RegoleNarrative { get; set; }
+
+    // Narrative Engine extensions
+    [Column("default_narrative_profile_id")]
+    public int? DefaultNarrativeProfileId { get; set; }
+
+    /// <summary>
+    /// Default planner mode for stories in this series: Off / Assist / Auto.
+    /// </summary>
+    [Column("default_planner_mode")]
+    [MaxLength(20)]
+    public string? DefaultPlannerMode { get; set; }
+
+    [Column("narrative_consistency_level")]
+    public int NarrativeConsistencyLevel { get; set; } = 0;
     
     [Column("note_ai")]
     public string? NoteAI { get; set; }

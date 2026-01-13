@@ -1,0 +1,47 @@
+@page
+@model TinyGenerator.Pages.NarrativeProfiles.EditModel
+@{
+    ViewData["Title"] = Model.IsNew ? "Nuovo Narrative Profile" : "Edit Narrative Profile";
+    ViewData["PageDescription"] = "Configura prompt base/stile del profilo";
+}
+
+<form method="post" class="mt-2">
+    <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+
+    <input type="hidden" asp-for="Item.Id" />
+
+    <div class="row g-3">
+        <div class="col-12 col-lg-6">
+            <label class="form-label" asp-for="Item.Name"></label>
+            <input class="form-control" asp-for="Item.Name" />
+            <span class="text-danger" asp-validation-for="Item.Name"></span>
+        </div>
+
+        <div class="col-12">
+            <label class="form-label" asp-for="Item.Description"></label>
+            <textarea class="form-control" asp-for="Item.Description" rows="3"></textarea>
+            <span class="text-danger" asp-validation-for="Item.Description"></span>
+        </div>
+
+        <div class="col-12">
+            <label class="form-label" asp-for="Item.BaseSystemPrompt">Base system prompt</label>
+            <textarea class="form-control" asp-for="Item.BaseSystemPrompt" rows="8"></textarea>
+            <span class="text-danger" asp-validation-for="Item.BaseSystemPrompt"></span>
+        </div>
+
+        <div class="col-12">
+            <label class="form-label" asp-for="Item.StylePrompt">Style prompt</label>
+            <textarea class="form-control" asp-for="Item.StylePrompt" rows="6"></textarea>
+            <span class="text-danger" asp-validation-for="Item.StylePrompt"></span>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2 mt-3">
+        <button class="btn btn-primary" type="submit">Salva</button>
+        <a class="btn btn-outline-secondary" asp-page="./Index">Annulla</a>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

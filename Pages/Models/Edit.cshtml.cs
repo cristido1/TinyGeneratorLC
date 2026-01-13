@@ -21,7 +21,7 @@ namespace TinyGenerator.Pages.Models
         {
             if (!string.IsNullOrWhiteSpace(name))
             {
-                var existing = _database.GetModelInfo(name);
+                var existing = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
                 if (existing != null)
                 {
                     Model = existing;
@@ -54,7 +54,7 @@ namespace TinyGenerator.Pages.Models
             }
 
             // Preserve any existing data not present in the edit form
-            var existing = _database.GetModelInfo(Model.Name);
+            var existing = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, Model.Name, StringComparison.OrdinalIgnoreCase));
             if (existing == null)
             {
                 existing = new ModelInfo();

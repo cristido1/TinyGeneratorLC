@@ -100,6 +100,277 @@ public sealed class DatabaseService
     // connection is required.
     private IDbConnection CreateDapperConnection() => new SqliteConnection(_connectionString);
 
+    // ============================================================
+    // State-driven narrative generation (Narrative Engine runtime)
+    // ============================================================
+
+    public sealed record StateDrivenNarrativeResourceDto(
+        string Name,
+        int InitialValue,
+        int MinValue,
+        int MaxValue);
+
+    public sealed record StateDrivenConsequenceImpactDto(
+        string ResourceName,
+        int DeltaValue);
+
+    public sealed record StateDrivenConsequenceRuleDto(
+        int Id,
+        string? Description,
+        IReadOnlyList<StateDrivenConsequenceImpactDto> Impacts);
+
+    public sealed record StateDrivenStorySnapshot(
+        long StoryId,
+        string Prompt,
+        string? Title,
+        string MemoryKey,
+        int NarrativeProfileId,
+        string? PlannerMode,
+        long RuntimeStateId,
+        int CurrentChunkIndex,
+        string? CurrentPhase,
+        string? CurrentPOV,
+        int FailureCount,
+        string LastContext,
+        bool IsActive,
+        string? ProfileBaseSystemPrompt,
+        string? ProfileStylePrompt,
+        string? ProfilePovListJson,
+        IReadOnlyList<StateDrivenNarrativeResourceDto> ProfileResources,
+        IReadOnlyDictionary<string, int> CurrentResourceValues,
+        IReadOnlyList<StateDrivenConsequenceRuleDto> ConsequenceRules);
+
+    public long StartStateDrivenStory(
+        string prompt,
+        string title,
+        int narrativeProfileId,
+        int? serieId,
+        int? serieEpisode,
+        string? plannerMode)
+    {
+        using var wrapper = CreateDbContextWrapper();
+        var ctx = wrapper.Context;
+        using var tx = ctx.Database.BeginTransaction();
+
+        // Single active story: deactivate all previous runtime states.
+        ctx.Database.ExecuteSqlRaw("UPDATE story_runtime_states SET is_active = 0 WHERE is_active = 1");
+
+        // Create story record (empty story body; chunks will be stored in chapters).
+        var story = new StoryRecord
+        {
+            GenerationId = Guid.NewGuid().ToString(),
+            MemoryKey = Guid.NewGuid().ToString(),
+            Timestamp = DateTime.UtcNow.ToString("o"),
+            Prompt = prompt ?? string.Empty,
+            Title = title,
+            StoryRaw = string.Empty,
+            StoryRevised = null,
+            StoryTagged = null,
+            StoryTaggedVersion = null,
+            CharCount = 0,
+            Eval = string.Empty,
+            Score = 0,
+            Approved = false,
+            StatusId = null,
+            SerieId = serieId,
+            SerieEpisode = serieEpisode,
+            NarrativeProfileId = narrativeProfileId,
+            PlannerMode = plannerMode,
+            NarrativeEngineStatus = "active"
+        };
+        ctx.Stories.Add(story);
+        ctx.SaveChanges();
+
+        var runtime = new StoryRuntimeState
+        {
+            StoryId = story.Id,
+            NarrativeProfileId = narrativeProfileId,
+            CurrentChunkIndex = 0,
+            CurrentPhase = null,
+            CurrentPOV = null,
+            FailureCount = 0,
+            LastContext = string.Empty,
+            IsActive = true
+        };
+        ctx.StoryRuntimeStates.Add(runtime);
+        ctx.SaveChanges();
+
+        story.RuntimeStateId = runtime.Id;
+        ctx.SaveChanges();
+
+        // Initialize resources from the profile.
+        var profile = ctx.NarrativeProfiles
+            .Include(p => p.Resources)
+            .FirstOrDefault(p => p.Id == narrativeProfileId);
+
+        if (profile != null)
+        {
+            foreach (var resource in profile.Resources)
+            {
+                var clamped = Math.Min(resource.MaxValue, Math.Max(resource.MinValue, resource.InitialValue));
+                ctx.StoryResourceStates.Add(new StoryResourceState
+                {
+                    StoryRuntimeStateId = runtime.Id,
+                    ResourceName = resource.Name,
+                    CurrentValue = clamped
+                });
+            }
+            ctx.SaveChanges();
+        }
+
+        tx.Commit();
+        return story.Id;
+    }
+
+    public StateDrivenStorySnapshot? GetStateDrivenStorySnapshot(long storyId)
+    {
+        using var wrapper = CreateDbContextWrapper();
+        var ctx = wrapper.Context;
+
+        var story = ctx.Stories.AsNoTracking().FirstOrDefault(s => s.Id == storyId);
+        if (story == null) return null;
+
+        var runtimeStateId = story.RuntimeStateId;
+        if (!runtimeStateId.HasValue)
+        {
+            // Fallback: locate by story_id if link is missing
+            runtimeStateId = ctx.StoryRuntimeStates.AsNoTracking().Where(r => r.StoryId == storyId).Select(r => (long?)r.Id).FirstOrDefault();
+        }
+        if (!runtimeStateId.HasValue) return null;
+
+        var runtime = ctx.StoryRuntimeStates.AsNoTracking().FirstOrDefault(r => r.Id == runtimeStateId.Value);
+        if (runtime == null) return null;
+
+        var profile = ctx.NarrativeProfiles.AsNoTracking().FirstOrDefault(p => p.Id == runtime.NarrativeProfileId);
+        if (profile == null) return null;
+
+        var profileResources = ctx.NarrativeResources.AsNoTracking()
+            .Where(r => r.NarrativeProfileId == profile.Id)
+            .OrderBy(r => r.Id)
+            .Select(r => new StateDrivenNarrativeResourceDto(r.Name, r.InitialValue, r.MinValue, r.MaxValue))
+            .ToList();
+
+        var resourceValues = ctx.StoryResourceStates.AsNoTracking()
+            .Where(r => r.StoryRuntimeStateId == runtime.Id)
+            .ToList()
+            .GroupBy(r => r.ResourceName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().CurrentValue, StringComparer.OrdinalIgnoreCase);
+
+        var consequenceRules = ctx.ConsequenceRules.AsNoTracking()
+            .Where(r => r.NarrativeProfileId == profile.Id)
+            .OrderBy(r => r.Id)
+            .Select(r => new StateDrivenConsequenceRuleDto(
+                r.Id,
+                r.Description,
+                ctx.ConsequenceImpacts.AsNoTracking()
+                    .Where(i => i.ConsequenceRuleId == r.Id)
+                    .OrderBy(i => i.Id)
+                    .Select(i => new StateDrivenConsequenceImpactDto(i.ResourceName, i.DeltaValue))
+                    .ToList()))
+            .ToList();
+
+        return new StateDrivenStorySnapshot(
+            StoryId: story.Id,
+            Prompt: story.Prompt ?? string.Empty,
+            Title: story.Title,
+            MemoryKey: story.MemoryKey ?? string.Empty,
+            NarrativeProfileId: runtime.NarrativeProfileId,
+            PlannerMode: story.PlannerMode,
+            RuntimeStateId: runtime.Id,
+            CurrentChunkIndex: runtime.CurrentChunkIndex,
+            CurrentPhase: runtime.CurrentPhase,
+            CurrentPOV: runtime.CurrentPOV,
+            FailureCount: runtime.FailureCount,
+            LastContext: runtime.LastContext ?? string.Empty,
+            IsActive: runtime.IsActive,
+            ProfileBaseSystemPrompt: profile.BaseSystemPrompt,
+            ProfileStylePrompt: profile.StylePrompt,
+            ProfilePovListJson: profile.PovListJson,
+            ProfileResources: profileResources,
+            CurrentResourceValues: resourceValues,
+            ConsequenceRules: consequenceRules);
+    }
+
+    public bool TryApplyStateDrivenChunk(
+        long storyId,
+        int expectedChunkIndex,
+        string phase,
+        string pov,
+        string chunkText,
+        int failureCountDelta,
+        IReadOnlyDictionary<string, int> newResourceValues,
+        string newLastContextTail,
+        out string error)
+    {
+        error = string.Empty;
+        using var wrapper = CreateDbContextWrapper();
+        var ctx = wrapper.Context;
+        using var tx = ctx.Database.BeginTransaction();
+
+        var story = ctx.Stories.FirstOrDefault(s => s.Id == storyId);
+        if (story == null)
+        {
+            error = $"Story {storyId} not found";
+            return false;
+        }
+
+        StoryRuntimeState? runtime = null;
+        if (story.RuntimeStateId.HasValue)
+        {
+            runtime = ctx.StoryRuntimeStates.FirstOrDefault(r => r.Id == story.RuntimeStateId.Value);
+        }
+        runtime ??= ctx.StoryRuntimeStates.FirstOrDefault(r => r.StoryId == storyId);
+
+        if (runtime == null)
+        {
+            error = $"Runtime state for story {storyId} not found";
+            return false;
+        }
+
+        if (!runtime.IsActive)
+        {
+            error = "Story runtime is not active";
+            return false;
+        }
+
+        if (runtime.CurrentChunkIndex != expectedChunkIndex)
+        {
+            error = $"Chunk index mismatch (db={runtime.CurrentChunkIndex}, expected={expectedChunkIndex})";
+            return false;
+        }
+
+        // Persist chapter (1-based numbering for display).
+        var chapter = new Chapter
+        {
+            MemoryKey = story.MemoryKey ?? string.Empty,
+            ChapterNumber = expectedChunkIndex + 1,
+            Content = chunkText ?? string.Empty,
+            Ts = DateTime.UtcNow.ToString("o")
+        };
+        ctx.Chapters.Add(chapter);
+
+        // Update runtime.
+        runtime.CurrentPhase = phase;
+        runtime.CurrentPOV = pov;
+        runtime.LastContext = newLastContextTail;
+        runtime.FailureCount = Math.Max(0, runtime.FailureCount + failureCountDelta);
+        runtime.CurrentChunkIndex = runtime.CurrentChunkIndex + 1;
+
+        // Update resources.
+        var states = ctx.StoryResourceStates.Where(r => r.StoryRuntimeStateId == runtime.Id).ToList();
+        foreach (var state in states)
+        {
+            if (newResourceValues.TryGetValue(state.ResourceName, out var val))
+            {
+                state.CurrentValue = val;
+            }
+        }
+
+        ctx.SaveChanges();
+        tx.Commit();
+        return true;
+    }
+
     // Dapper-only helpers for embedding management
     /// <summary>
     /// Save embedding vector for a row into the specified table.
@@ -529,17 +800,7 @@ public sealed class DatabaseService
         }
     }
 
-    public ModelInfo? GetModelInfo(string modelOrProvider)
-    {
-        if (string.IsNullOrWhiteSpace(modelOrProvider)) return null;
-        using var context = CreateDbContext();
-        
-        var byName = context.Models.FirstOrDefault(m => m.Name == modelOrProvider);
-        if (byName != null) return byName;
-        
-        var provider = modelOrProvider.Split(':')[0];
-        return context.Models.FirstOrDefault(m => m.Provider == provider);
-    }
+    // Removed name-based GetModelInfo(string) to enforce id-based model operations.
 
     /// <summary>
     /// Get model info by explicit ID (preferred over name-based lookup).
@@ -602,6 +863,20 @@ public sealed class DatabaseService
         using var context = CreateDbContext();
         try
         {
+            // If caller supplied a numeric id as a string, delete by id to avoid ambiguous name collisions
+            if (int.TryParse(name, out var mid))
+            {
+                var modelById = context.Models.FirstOrDefault(m => m.Id == mid);
+                if (modelById != null)
+                {
+                    var runs = context.ModelTestRuns.Where(r => r.ModelId == mid).ToList();
+                    if (runs.Any()) context.ModelTestRuns.RemoveRange(runs);
+                    context.Models.Remove(modelById);
+                    context.SaveChanges();
+                }
+                return;
+            }
+
             var model = context.Models.FirstOrDefault(m => m.Name == name);
             if (model != null)
             {
@@ -623,23 +898,17 @@ public sealed class DatabaseService
     }
 
     /// <summary>
-    /// Check if a model is used by any agent. Returns list of agent names using the model.
+    /// Check if a model is used by any agent. Accepts either a model name or a numeric id (as string).
+    /// Returns list of agent names using the model.
     /// </summary>
-    public List<string> GetAgentsUsingModel(string modelName)
+    public List<string> GetAgentsUsingModel(int modelId)
     {
-        if (string.IsNullOrWhiteSpace(modelName)) return new List<string>();
-        
         using var context = CreateDbContext();
-        var model = context.Models.FirstOrDefault(m => m.Name == modelName);
-        if (model == null || !model.Id.HasValue) return new List<string>();
-        
-        var agents = context.Agents
-            .Where(a => a.ModelId == model.Id.Value)
+        return context.Agents
+            .Where(a => a.ModelId == modelId)
             .Select(a => a.Name ?? string.Empty)
             .Where(n => !string.IsNullOrWhiteSpace(n))
             .ToList();
-        
-        return agents;
     }
 
     public bool TryReserveUsage(string monthKey, long tokensToAdd, double costToAdd, long maxTokensPerRun, double maxCostPerMonth)
@@ -746,14 +1015,26 @@ public sealed class DatabaseService
     public (long tokensThisMonth, double costThisMonth) GetMonthUsage(string monthKey)
     {
         using var context = CreateDbContext();
-        EnsureUsageRow(context, monthKey);
-        var row = context.UsageStates.FirstOrDefault(u => u.Month == monthKey);
-        if (row == null) return (0L, 0.0);
-        return (row.TokensThisMonth, row.CostThisMonth);
+
+        try
+        {
+            EnsureUsageRow(context, monthKey);
+            var row = context.UsageStates.FirstOrDefault(u => u.Month == monthKey);
+            if (row == null) return (0L, 0.0);
+            return (row.TokensThisMonth, row.CostThisMonth);
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+            when (ex.SqliteErrorCode == 1 && ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase))
+        {
+            // DB might be missing the usage_state table (older schema). Treat as zero usage.
+            return (0L, 0.0);
+        }
     }
 
+    
     // calls table and CallRecord model removed; call tracking disabled.
     // If you need to re-enable tracking later, reintroduce the `calls` table and corresponding methods.
+    
 
     // Agents CRUD (EF Core)
     public List<TinyGenerator.Models.Agent> ListAgents()
@@ -816,7 +1097,16 @@ public sealed class DatabaseService
             }
             else
             {
-                query = query.Where(x => (x.ModelName ?? string.Empty) == modelFilter);
+                // Prefer numeric model id filtering. If a numeric id is provided, filter by ModelId.
+                if (int.TryParse(modelFilter, out var mid))
+                {
+                    query = query.Where(x => x.Agent.ModelId.HasValue && x.Agent.ModelId.Value == mid);
+                }
+                else
+                {
+                    // Fallback: legacy behavior (match by model name) to avoid breaking callers that still pass names.
+                    query = query.Where(x => (x.ModelName ?? string.Empty) == modelFilter);
+                }
             }
         }
 
@@ -859,19 +1149,28 @@ public sealed class DatabaseService
     public TinyGenerator.Models.Agent? GetAgentById(int id)
     {
         using var context = CreateDbContext();
-        return context.Agents.Find(id);
+
+        var row = (from a in context.Agents
+                   where a.Id == id
+                   join m in context.Models on a.ModelId equals m.Id into models
+                   from m in models.DefaultIfEmpty()
+                   join t in context.StepTemplates on a.MultiStepTemplateId equals (int?)t.Id into templates
+                   from t in templates.DefaultIfEmpty()
+                   select new
+                   {
+                       Agent = a,
+                       ModelName = m != null ? m.Name : null,
+                       TemplateName = t != null ? t.Name : null
+                   }).FirstOrDefault();
+
+        if (row == null) return null;
+
+        row.Agent.ModelName = row.ModelName;
+        row.Agent.MultiStepTemplateName = row.TemplateName;
+        return row.Agent;
     }
 
-    public int? GetAgentIdByName(string name)
-    {
-        using var context = CreateDbContext();
-        try
-        {
-            var agent = context.Agents.FirstOrDefault(a => a.Name == name);
-            return agent?.Id;
-        }
-        catch { return null; }
-    }
+    // Removed GetAgentIdByName(name) to enforce id-based agent operations. Use GetAgentById(int) or query agents list where needed.
 
     public TinyGenerator.Models.Agent? GetAgentByRole(string role)
     {
@@ -1020,8 +1319,12 @@ public sealed class DatabaseService
     {
         if (string.IsNullOrWhiteSpace(contentRootPath)) return 0;
 
-        using var context = CreateDbContext();
-        var list = context.Series.ToList();
+        // Use direct SQL updates here to avoid optimistic concurrency issues on Series.Timestamp.
+        // This method runs at startup and should be best-effort.
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        var list = conn.Query<(int Id, string? Folder)>("SELECT id AS Id, folder AS Folder FROM series").ToList();
         if (list.Count == 0) return 0;
 
         var updated = 0;
@@ -1034,17 +1337,14 @@ public sealed class DatabaseService
             if (string.IsNullOrWhiteSpace(folder))
             {
                 folder = $"serie_{s.Id:D4}";
-                s.Folder = folder;
+                conn.Execute(
+                    "UPDATE series SET folder = @folder WHERE id = @id AND (folder IS NULL OR TRIM(folder) = '')",
+                    new { id = s.Id, folder });
                 updated++;
             }
 
             var full = Path.Combine(seriesRoot, folder);
             Directory.CreateDirectory(full);
-        }
-
-        if (updated > 0)
-        {
-            context.SaveChanges();
         }
 
         return updated;
@@ -1112,7 +1412,7 @@ public sealed class DatabaseService
         if (qwenModelExists == 0)
         {
             Console.WriteLine("[DB] Adding qwen2.5:7b-instruct model");
-            conn.Execute(@"INSERT INTO models (name, provider, context_length, created_at, updated_at, note)
+            conn.Execute(@"INSERT INTO models (Name, Provider, MaxContext, CreatedAt, UpdatedAt, Note)
                 VALUES ('qwen2.5:7b-instruct', 'ollama', 128000, datetime('now'), datetime('now'), 
                 'Qwen 2.5 7B Instruct - Excellent for summarization with 128k context')");
             Console.WriteLine("[DB] ✓ qwen2.5:7b-instruct model added");
@@ -1173,11 +1473,10 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
     // ║ End of Series Methods                                         ║
     // ╚══════════════════════════════════════════════════════════════╝
 
-    public void UpdateModelTestResults(string modelName, int functionCallingScore, IReadOnlyDictionary<string, bool?> skillFlags, double? testDurationSeconds = null)
+    public void UpdateModelTestResults(int modelId, int functionCallingScore, IReadOnlyDictionary<string, bool?> skillFlags, double? testDurationSeconds = null)
     {
-        if (string.IsNullOrWhiteSpace(modelName)) return;
         using var context = CreateDbContext();
-        var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+        var model = context.Models.FirstOrDefault(m => m.Id == modelId);
         if (model == null) return;
         model.FunctionCallingScore = functionCallingScore;
         model.UpdatedAt = DateTime.UtcNow.ToString("o");
@@ -1189,11 +1488,10 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
         context.SaveChanges();
     }
 
-    public void UpdateModelTtsScore(string modelName, double score)
+    public void UpdateModelTtsScore(int modelId, double score)
     {
-        if (string.IsNullOrWhiteSpace(modelName)) return;
         using var context = CreateDbContext();
-        var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+        var model = context.Models.FirstOrDefault(m => m.Id == modelId);
         if (model == null) return;
         model.TtsScore = score;
         model.TotalScore = model.WriterScore + model.BaseScore + model.TextEvalScore + score + model.MusicScore + model.FxScore + model.AmbientScore;
@@ -1399,17 +1697,14 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
     }
 
     /// <summary>
-    /// Return the latest run score (0-10) for a given model name and group (test_code).
+    /// Return the latest run score (0-10) for a given model id and group (test_code).
     /// Returns null if no run exists for that model+group.
     /// </summary>
-    public int? GetLatestGroupScore(string modelName, string groupName)
+    public int? GetLatestGroupScore(int modelId, string groupName)
     {
         try
         {
             using var context = CreateDbContext();
-            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
-            if (model == null || !model.Id.HasValue) return null;
-            var modelId = model.Id.Value;
             var run = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == groupName).OrderByDescending(r => r.Id).FirstOrDefault();
             if (run == null) return null;
             var counts = GetRunStepCounts(run.Id);
@@ -1424,18 +1719,15 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
     }
 
     /// <summary>
-    /// Return the latest run's step results as a JSON array for the given model and group.
+    /// Return the latest run's step results as a JSON array for the given model id and group.
     /// Each element contains: step_name, passed (bool), message (error or null), duration_ms (nullable), output_json (nullable)
     /// Returns null if no run exists.
     /// </summary>
-    public string? GetLatestRunStepsJson(string modelName, string groupName)
+    public string? GetLatestRunStepsJson(int modelId, string groupName)
     {
         try
         {
             using var context = CreateDbContext();
-            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
-            if (model == null || !model.Id.HasValue) return null;
-            var modelId = model.Id.Value;
             var run = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == groupName).OrderByDescending(r => r.Id).FirstOrDefault();
             if (run == null) return null;
 
@@ -1468,14 +1760,9 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
     /// Create a new test run and return its id.
     /// Automatically cleans old test runs for the same model+group, keeping only the most recent one.
     /// </summary>
-    public int CreateTestRun(string modelName, string testCode, string? description = null, bool passed = false, long? durationMs = null, string? notes = null, string? testFolder = null)
+    public int CreateTestRun(int modelId, string testCode, string? description = null, bool passed = false, long? durationMs = null, string? notes = null, string? testFolder = null)
     {
         using var context = CreateDbContext();
-
-        // Resolve model
-        var model = context.Models.FirstOrDefault(m => m.Name == modelName);
-        if (model == null || !model.Id.HasValue) return 0;
-        var modelId = model.Id.Value;
 
         // Cleanup older runs for this model+group, keep only the most recent one
         var runs = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == testCode).OrderByDescending(r => r.Id).ToList();
@@ -1572,16 +1859,19 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
                 try
                 {
                     if (string.IsNullOrWhiteSpace(m?.Name)) continue;
-                    var existing = GetModelInfo(m.Name);
-                    if (existing != null) continue; // do not update existing models
+                    using (var ctx = CreateDbContext())
+                    {
+                        var existing = ctx.Models.FirstOrDefault(x => x.Name == m.Name);
+                        if (existing != null) continue; // do not update existing models
+                    }
 
-                    var ctx = 0;
+                    var contextSize = 0;
                     try
                     {
                         if (!string.IsNullOrWhiteSpace(m.Context))
                         {
                             var digits = new string(m.Context.Where(char.IsDigit).ToArray());
-                            if (int.TryParse(digits, out var parsed)) ctx = parsed;
+                            if (int.TryParse(digits, out var parsed)) contextSize = parsed;
                         }
                     }
                     catch { }
@@ -1591,8 +1881,8 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
                         Name = m.Name ?? string.Empty,
                         Provider = "ollama",
                         IsLocal = true,
-                        MaxContext = ctx > 0 ? ctx : 4096,
-                        ContextToUse = ctx > 0 ? ctx : 4096,
+                        MaxContext = contextSize > 0 ? contextSize : 4096,
+                        ContextToUse = contextSize > 0 ? contextSize : 4096,
                         CostInPerToken = 0.0,
                         CostOutPerToken = 0.0,
                         LimitTokensDay = 0,
@@ -2096,7 +2386,7 @@ SET TotalScore = (
         var genId = Guid.NewGuid().ToString();
         var ts = DateTime.UtcNow.ToString("o");
 
-        int? aidA = GetAgentIdByName("WriterA");
+        int? aidA = context.Agents.FirstOrDefault(a => a.Name == "WriterA")?.Id;
         var charCountA = (r.StoryA ?? string.Empty).Length;
         var storyA = new StoryRecord
         {
@@ -2114,7 +2404,7 @@ SET TotalScore = (
         };
         context.Stories.Add(storyA);
 
-        int? aidB = GetAgentIdByName("WriterB");
+        int? aidB = context.Agents.FirstOrDefault(a => a.Name == "WriterB")?.Id;
         var charCountB = (r.StoryB ?? string.Empty).Length;
         var storyB = new StoryRecord
         {
@@ -2132,7 +2422,7 @@ SET TotalScore = (
         };
         context.Stories.Add(storyB);
 
-        int? aidC = GetAgentIdByName("WriterC");
+        int? aidC = context.Agents.FirstOrDefault(a => a.Name == "WriterC")?.Id;
         var charCountC = (r.StoryC ?? string.Empty).Length;
         var storyC = new StoryRecord
         {
@@ -3391,6 +3681,29 @@ WHERE agent_id IS NOT NULL
     /// </summary>
     private void RunMigrations(IDbConnection conn)
     {
+        // Migration: create usage_state table if missing (used by /Admin cost tracking)
+        try
+        {
+            var hasUsageState = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='usage_state'") > 0;
+            if (!hasUsageState)
+            {
+                Console.WriteLine("[DB] Migration: creating usage_state table");
+                conn.Execute(@"
+CREATE TABLE IF NOT EXISTS usage_state (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    month TEXT NOT NULL UNIQUE,
+    tokens_this_run INTEGER NOT NULL DEFAULT 0,
+    tokens_this_month INTEGER NOT NULL DEFAULT 0,
+    cost_this_month REAL NOT NULL DEFAULT 0
+);
+");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to create usage_state table: {ex.Message}");
+        }
+
         // Migration: add story_revised column to stories if missing
         try
         {
@@ -3665,13 +3978,13 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
         }
 
         // Migration: Add note column to models if not exists
-        var hasNote = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='note'");
+        var hasNote = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE lower(name)='note'");
         if (hasNote == 0)
         {
             Console.WriteLine("[DB] Adding note column to models");
             try
             {
-                conn.Execute("ALTER TABLE models ADD COLUMN note TEXT");
+                conn.Execute("ALTER TABLE models ADD COLUMN Note TEXT");
             }
             catch (Exception ex)
             {
@@ -4073,7 +4386,7 @@ CREATE TABLE global_coherence (
             {
                 Console.WriteLine("[DB] Seeding SentimentMapper agent");
                 conn.Execute(@"
-INSERT INTO agents (name, description, is_active, role, prompt, instructions, created_at, updated_at)
+INSERT INTO agents (name, notes, is_active, role, prompt, instructions, created_at, updated_at)
 VALUES (
     'SentimentMapper',
     'Mappa sentimenti liberi ai 7 sentimenti TTS supportati (neutral, happy, sad, angry, fearful, disgusted, surprised)',
@@ -4530,7 +4843,8 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
     {
         if (string.IsNullOrWhiteSpace(modelName)) return;
 
-        var existing = GetModelInfo(modelName) ?? new ModelInfo { Name = modelName };
+        using var ctx = CreateDbContext();
+        var existing = ctx.Models.FirstOrDefault(m => m.Name == modelName) ?? new ModelInfo { Name = modelName };
         existing.ContextToUse = contextToUse;
 
         // Also update MaxContext if it was default or lower than submitted value (safe heuristic)
@@ -4546,7 +4860,8 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
     {
         if (string.IsNullOrWhiteSpace(modelName)) return;
 
-        var existing = GetModelInfo(modelName) ?? new ModelInfo { Name = modelName };
+        using var ctx = CreateDbContext();
+        var existing = ctx.Models.FirstOrDefault(m => m.Name == modelName) ?? new ModelInfo { Name = modelName };
 
         if (costInPer1k.HasValue)
         {
@@ -4578,7 +4893,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         var results = new List<TestGroupSummary>();
         foreach (var group in groups)
         {
-            var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = group });
+            var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId, g = group });
             if (!runId.HasValue) continue;
 
             var run = conn.QueryFirstOrDefault("SELECT run_date AS RunDate, passed AS Passed FROM model_test_runs WHERE id = @id", new { id = runId.Value });
@@ -4682,16 +4997,13 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
     /// Recalculate and update the FunctionCallingScore for a model based on all latest group test results.
     /// Score = sum of (1 point per passed test) across all groups' most recent runs.
     /// </summary>
-    public void RecalculateModelScore(string modelName)
+    public void RecalculateModelScore(int modelId)
     {
         using var conn = CreateConnection();
         conn.Open();
 
-        var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
-        if (!modelId.HasValue) return;
-
         // Get all unique test groups for this model
-        var groups = conn.Query<string>("SELECT DISTINCT test_group FROM model_test_runs WHERE model_id = @mid", new { mid = modelId.Value }).ToList();
+        var groups = conn.Query<string>("SELECT DISTINCT test_group FROM model_test_runs WHERE model_id = @mid", new { mid = modelId }).ToList();
 
         double totalScore = 0;
         int groupCount = 0;
@@ -4699,10 +5011,10 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         foreach (var group in groups)
         {
             // Calculate group-specific score
-            RecalculateModelGroupScore(modelName, group);
+            RecalculateModelGroupScore(modelId, group);
             
             // Get latest run for this group
-            var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = group });
+            var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId, g = group });
             if (!runId.HasValue) continue;
 
             // Get all test definitions for this group to determine test type
@@ -4758,24 +5070,21 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
 
         // Update model's FunctionCallingScore
         conn.Execute("UPDATE models SET FunctionCallingScore = @score, UpdatedAt = @now WHERE Id = @id",
-            new { score = finalScore, id = modelId.Value, now = DateTime.UtcNow.ToString("o") });
+            new { score = finalScore, id = modelId, now = DateTime.UtcNow.ToString("o") });
         
         // Recalculate TotalScore after updating individual scores
-        RecalculateTotalScore(conn, modelId.Value);
+        RecalculateTotalScore(conn, modelId);
     }
 
     /// <summary>
     /// Recalculate the score for a specific test group and update the corresponding column.
     /// Call this after completing a test run for a group.
     /// </summary>
-    public void RecalculateModelGroupScore(string modelName, string groupName)
+    public void RecalculateModelGroupScore(int modelId, string groupName)
     {
         using var conn = CreateConnection();
         conn.Open();
-        
-        var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
-        if (!modelId.HasValue) return;
-        
+
         // Map group name to score column
         string? scoreColumn = groupName.ToLower() switch
         {
@@ -4788,14 +5097,14 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             "writer" => "WriterScore", // writer uses complex calculation, skip here
             _ => null
         };
-        
+
         if (scoreColumn == null || scoreColumn == "WriterScore") return;
-        
+
         // Calculate score for this group
         RecalculateGroupScore(conn, groupName, scoreColumn);
-        
+
         // Recalculate TotalScore
-        RecalculateTotalScore(conn, modelId.Value);
+        RecalculateTotalScore(conn, modelId);
     }
 
     /// <summary>

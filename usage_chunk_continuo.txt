@@ -1,0 +1,292 @@
+========================================
+CHUNK CONTINUO – GUIDA OPERATIVA
+Storytelling lungo con modelli locali
+========================================
+
+OBIETTIVO
+---------
+Generare una storia molto lunga suddivisa in CHUNK consecutivi,
+senza perdita di tensione narrativa, senza riassunti e senza
+conclusioni premature.
+
+Ogni risposta del modello rappresenta un segmento CONTINUATIVO
+della stessa storia.
+
+
+CONCETTO DI "CHUNK CONTINUO"
+---------------------------
+Un "chunk" è una porzione di testo narrativo che:
+- continua esattamente dal punto precedente
+- non chiude archi narrativi
+- termina sempre in tensione aperta
+- non riassume ciò che è già accaduto
+
+Il modello NON deve mai sapere che la storia finirà.
+
+
+REGOLE FONDAMENTALI
+------------------
+Queste regole DEVONO essere imposte nel SYSTEM PROMPT:
+
+- NON concludere la storia
+- NON riassumere eventi passati
+- NON anticipare eventi futuri
+- NON saltare fasi intermedie delle azioni
+- NON usare frasi di chiusura o bilancio
+
+Ogni chunk:
+- inizia dal punto ESATTO di interruzione
+- termina durante un’azione, decisione o manovra
+- se una scena finisce, la successiva inizia subito
+
+
+STILE NARRATIVO RICHIESTO
+------------------------
+- "Show, don’t tell"
+- Linguaggio concreto, fisico, tecnico
+- Descrizioni militari dettagliate
+- Dialoghi brevi e funzionali
+- POV limitato (pochi personaggi per volta)
+
+DIVIETI ASSOLUTI:
+- riepiloghi
+- riflessioni retrospettive
+- morale, conclusioni, giudizi finali
+- frasi tipo: "nel frattempo", "più tardi", "alla fine"
+
+
+========================================
+ESEMPIO DI SYSTEM PROMPT (CHUNK INFINITO)
+========================================
+
+=== INFINITE CHUNK NARRATIVE AGENT ===
+
+Scrivi narrativa lunga a chunk consecutivi.
+Ogni risposta è un SEGMENTO CONTINUATIVO della stessa storia.
+
+REGOLE FONDAMENTALI:
+- NON concludere la storia.
+- NON anticipare eventi futuri.
+- NON riassumere eventi passati.
+- NON saltare fasi intermedie delle azioni.
+- NON usare frasi di chiusura o bilancio.
+
+STRUTTURA OBBLIGATORIA:
+- Inizia ESATTAMENTE dal punto in cui il chunk precedente si è interrotto.
+- Termina SEMPRE durante un’azione, una manovra o una tensione aperta.
+- Quando una scena finisce, inizia subito la successiva.
+
+STILE:
+- Mostra eventi tramite azioni, dialoghi e sensazioni fisiche.
+- Linguaggio tecnico, militare, concreto.
+- Segui pochi punti di vista per volta.
+
+DIVIETI ASSOLUTI:
+- Niente riepiloghi.
+- Niente anticipazioni.
+- Niente conclusioni.
+
+OBIETTIVO:
+Mantenere tensione continua chunk dopo chunk.
+
+
+========================================
+ESEMPIO DI USER PROMPT – PRIMO CHUNK
+========================================
+
+Devi scrivere il primo chunk narrativo di una storia molto lunga.
+
+LINGUA:
+L’intero testo DEVE essere in ITALIANO.
+
+CONTESTO:
+Gli umani e i Krakon, una razza aliena guerriera, si incontrano per la
+prima volta a Tau Ceti. Gli umani hanno una nave esplorativa
+pesantemente armata. I Krakon dispongono di una flotta di dieci
+navi da guerra. Il primo contatto è ostile.
+
+VINCOLI:
+- Segui il punto di vista umano.
+- Mostra preparazione, manovre e combattimento.
+- Battaglie spaziali strategiche e tecniche.
+- Abilita abbordaggi con fanteria d’assalto.
+- I Krakon sono tecnologicamente superiori.
+- Gli umani compensano con astuzia e sacrificio.
+
+Inizia dalla fase immediatamente precedente allo scontro.
+
+
+========================================
+ESEMPIO DI USER PROMPT – CHUNK SUCCESSIVI
+========================================
+
+Continua la storia dal punto esatto in cui si è interrotta.
+
+
+========================================
+PARAMETRI CONSIGLIATI
+========================================
+
+temperature:        0.5
+top_p:              0.88
+top_k:              40
+repeat_penalty:     1.12
+repeat_last_n:      2048
+num_predict:        4500
+
+
+NOTE OPERATIVE IMPORTANTI
+-------------------------
+- NON cambiare parametri tra i chunk
+- Passare solo gli ultimi 500–800 token come contesto
+- Evitare di reinviare tutta la storia
+- Ogni chunk deve sembrare "incompleto ma intenso"
+
+RISULTATO ATTESO
+----------------
+- Storie molto lunghe (50k–100k token reali)
+- Nessun collasso narrativo
+- Nessuna chiusura anticipata
+- Alta tensione costante
+
+========================================
+FINE DOCUMENTO
+========================================
+STRATEGIE AVANZATE OLTRE IL CHUNK CONTINUO
+(per storytelling lungo con modelli locali)
+
+Il chunk continuo è la base per evitare chiusure premature e riassunti, ma da solo non sfrutta tutto il potenziale del modello. Le strategie seguenti possono essere usate singolarmente oppure combinate, a seconda dell’obiettivo narrativo.
+
+POV A ROTAZIONE CONTROLLATA
+
+Idea:
+Il punto di vista non deve cambiare in modo spontaneo. Va deciso dall’esterno, chunk per chunk.
+
+Esempio operativo:
+Chunk 1–2: plancia di comando
+Chunk 3: pilota di caccia
+Chunk 4: fante d’assalto
+Chunk 5: ritorno in plancia
+
+Perché funziona:
+Costringe il modello a espandere gli eventi senza inventarne di nuovi, aumenta i dettagli sensoriali e impedisce descrizioni generiche. La lunghezza cresce in modo naturale.
+
+Come applicarlo:
+Nel prompt dei chunk successivi indicare esplicitamente il POV da seguire.
+
+STRUTTURA AZIONE → CONSEGUENZA IMMEDIATA
+
+Idea:
+Ogni azione deve produrre un effetto immediato e visibile nella scena successiva.
+
+Regola pratica:
+Sparo → danno → reazione → nuovo problema
+Decisione → esecuzione → effetto collaterale
+
+Perché funziona:
+Impedisce salti temporali e riassunti. Costringe la narrazione a restare ancorata agli eventi in corso.
+
+MICRO-OBIETTIVI TEMPORANEI
+
+Idea:
+Sostituire i grandi obiettivi narrativi con compiti piccoli e a breve termine.
+
+Esempi:
+Tenere uno scudo attivo per 30 secondi
+Evacuare un ponte
+Bloccare un corridoio
+Guadagnare tempo per una manovra
+
+Effetto:
+La storia avanza senza mai avvicinarsi a una conclusione. Ogni chunk ha una direzione chiara ma non definitiva.
+
+VINCOLO “UNA SOLA MANOVRA PER SCENA”
+
+Problema comune:
+Il modello tende ad accumulare troppe manovre e decisioni nella stessa scena, comprimendo la narrazione.
+
+Soluzione:
+Imporre che ogni scena descriva una sola manovra o decisione critica.
+
+Risultato:
+Scene più lunghe, leggibili e tecnicamente credibili.
+
+LOGICA DI USURA DELLE RISORSE
+
+Idea:
+Le risorse non devono mai ripristinarsi automaticamente.
+
+Risorse da considerare:
+Munizioni
+Carburante
+Uomini
+Sistemi danneggiati
+
+Effetto:
+Evita navi e personaggi “immortali”, introduce pressione costante e allunga la storia in modo realistico.
+
+CHUNK DI STALLO
+
+Idea:
+Non tutti i chunk devono far avanzare la situazione. Alcuni devono mostrare resistenza, contenimento o sopravvivenza.
+
+Esempi:
+Tenere una posizione sotto fuoco continuo
+Aspettare rinforzi che non arrivano
+Mantenere un sistema critico operativo nonostante i danni
+
+Effetto:
+Aumenta il realismo militare e mantiene alta la tensione senza bisogno di nuovi eventi.
+
+CHUNK DI ERRORE
+
+Regola:
+Ogni 3–4 chunk una decisione deve fallire o produrre effetti peggiori del previsto.
+
+Tipi di errore:
+Piano sbagliato
+Sacrificio inutile
+Informazione incompleta
+
+Effetto:
+Evita eroismo piatto e rende credibile una guerra lunga e logorante.
+
+DOPPIO PROMPT: WRITER E CONTINUER
+
+Idea:
+Usare due prompt distinti con lo stesso modello.
+
+Writer:
+Introduce scene, decisioni e svolte.
+
+Continuer:
+Obbligato a espandere, rallentare e dettagliare ciò che è già iniziato.
+
+Risultato:
+Narrazione più densa e controllata, ideale per pipeline locali.
+
+BLOCCO LESSICALE ANTI-LOOP
+
+Problema:
+I modelli tendono a ripetere parole chiave (nave, flotta, umani, nemico).
+
+Soluzione:
+Fornire una lista di parole da evitare o limitare, aggiornata nel tempo.
+
+Effetto:
+Riduce loop lessicali e migliora la varietà stilistica.
+
+REGOLA D’ORO
+
+Non chiedere mai “una storia lunga”.
+Chiedere sempre “la prossima cosa difficile da fare”.
+
+La lunghezza è una conseguenza, non un obiettivo diretto.
+
+Se vuoi, il passo successivo naturale è trasformare questo testo in:
+
+un file di linee guida operative per la pipeline
+
+un prompt master che combini più strategie
+
+una logica automatica di scelta (quando usare stallo, errore, cambio POV)

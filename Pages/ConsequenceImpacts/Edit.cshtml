@@ -1,0 +1,41 @@
+@page
+@model TinyGenerator.Pages.ConsequenceImpacts.EditModel
+@{
+    ViewData["Title"] = Model.IsNew ? "Nuovo Consequence Impact" : "Edit Consequence Impact";
+    ViewData["PageDescription"] = "Configura un delta su una risorsa";
+}
+
+<form method="post" class="mt-2">
+    <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+
+    <input type="hidden" asp-for="Item.Id" />
+
+    <div class="row g-3">
+        <div class="col-12">
+            <label class="form-label" asp-for="Item.ConsequenceRuleId">Consequence rule</label>
+            <select class="form-select" asp-for="Item.ConsequenceRuleId" asp-items="Model.ConsequenceRules"></select>
+            <span class="text-danger" asp-validation-for="Item.ConsequenceRuleId"></span>
+        </div>
+
+        <div class="col-12 col-lg-6">
+            <label class="form-label" asp-for="Item.ResourceName">Resource name</label>
+            <input class="form-control" asp-for="Item.ResourceName" />
+            <span class="text-danger" asp-validation-for="Item.ResourceName"></span>
+        </div>
+
+        <div class="col-12 col-lg-3">
+            <label class="form-label" asp-for="Item.DeltaValue">Delta</label>
+            <input class="form-control" asp-for="Item.DeltaValue" type="number" />
+            <span class="text-danger" asp-validation-for="Item.DeltaValue"></span>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2 mt-3">
+        <button class="btn btn-primary" type="submit">Salva</button>
+        <a class="btn btn-outline-secondary" asp-page="./Index">Annulla</a>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

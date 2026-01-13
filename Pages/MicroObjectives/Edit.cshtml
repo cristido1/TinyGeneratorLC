@@ -1,0 +1,47 @@
+@page
+@model TinyGenerator.Pages.MicroObjectives.EditModel
+@{
+    ViewData["Title"] = Model.IsNew ? "Nuovo Micro Objective" : "Edit Micro Objective";
+    ViewData["PageDescription"] = "Configura un obiettivo micro";
+}
+
+<form method="post" class="mt-2">
+    <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+
+    <input type="hidden" asp-for="Item.Id" />
+
+    <div class="row g-3">
+        <div class="col-12 col-lg-6">
+            <label class="form-label" asp-for="Item.NarrativeProfileId">Profilo</label>
+            <select class="form-select" asp-for="Item.NarrativeProfileId" asp-items="Model.NarrativeProfiles"></select>
+            <span class="text-danger" asp-validation-for="Item.NarrativeProfileId"></span>
+        </div>
+
+        <div class="col-12 col-lg-6">
+            <label class="form-label" asp-for="Item.Code"></label>
+            <input class="form-control" asp-for="Item.Code" />
+            <span class="text-danger" asp-validation-for="Item.Code"></span>
+        </div>
+
+        <div class="col-12">
+            <label class="form-label" asp-for="Item.Description"></label>
+            <textarea class="form-control" asp-for="Item.Description" rows="3"></textarea>
+            <span class="text-danger" asp-validation-for="Item.Description"></span>
+        </div>
+
+        <div class="col-12 col-lg-3">
+            <label class="form-label" asp-for="Item.Difficulty"></label>
+            <input class="form-control" asp-for="Item.Difficulty" type="number" min="0" />
+            <span class="text-danger" asp-validation-for="Item.Difficulty"></span>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2 mt-3">
+        <button class="btn btn-primary" type="submit">Salva</button>
+        <a class="btn btn-outline-secondary" asp-page="./Index">Annulla</a>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

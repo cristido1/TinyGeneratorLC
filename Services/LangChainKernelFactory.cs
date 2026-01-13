@@ -258,7 +258,7 @@ namespace TinyGenerator.Services
         {
             try
             {
-                var modelInfo = _database.GetModelInfo(model);
+                var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
                 if (modelInfo == null)
                 {
                     throw new InvalidOperationException($"Model '{model}' not found in database");
@@ -433,7 +433,7 @@ namespace TinyGenerator.Services
             var schemas = new List<Dictionary<string, object>>();
             try
             {
-                var modelInfo = _database.GetModelInfo(model);
+                var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
                 if (modelInfo == null) return schemas;
 
                 // If model explicitly does not support tools, return empty

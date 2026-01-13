@@ -144,6 +144,7 @@
                                     <li>
                                         <form method="post" action="?handler=DeleteModel" class="m-0" onsubmit="return confirm('Sei sicuro di voler eliminare il modello @m.Name?');">
                                             @Html.AntiForgeryToken()
+                                            <input type="hidden" name="ModelId" value="@m.Id" />
                                             <input type="hidden" name="Model" value="@m.Name" />
                                             <button type="submit" class="dropdown-item text-danger">🗑️ Elimina</button>
                                         </form>
@@ -155,6 +156,7 @@
                                         <li>
                                             <form method="post" action="?handler=RunGroup" class="m-0">
                                                 @Html.AntiForgeryToken()
+                                                <input type="hidden" name="ModelId" value="@m.Id" />
                                                 <input type="hidden" name="Model" value="@m.Name" />
                                                 <input type="hidden" name="Group" value="@g" />
                                                 <button type="submit" class="dropdown-item">▶️ @g</button>

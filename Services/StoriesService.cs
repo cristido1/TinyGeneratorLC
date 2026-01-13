@@ -1912,7 +1912,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         try
         {
             runId = _database.CreateTestRun(
-                model.Name,
+                model.Id.Value,
                 testGroup,
                 description: $"tts_schema story {story.Id}",
                 passed: false,
@@ -1946,7 +1946,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 initialContext: story.StoryTagged ?? string.Empty,
                 threadId: threadId,
                 templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions,
-                executorModelOverrideId: model.Id);
+                executorModelOverrideId: model.Id.Value);
 
             if (executionId.HasValue)
             {
@@ -1956,7 +1956,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             var schemaPath = Path.Combine(folderPath, "tts_schema.json");
             var success = File.Exists(schemaPath);
             var score = success ? 10 : 0;
-            _database.UpdateModelTtsScore(model.Name, score);
+            _database.UpdateModelTtsScore(model.Id.Value, score);
 
             if (stepId.HasValue)
             {
@@ -1979,7 +1979,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 try
                 {
                     _database.UpdateTestRunResult(runId.Value, success, sw.ElapsedMilliseconds);
-                    _database.RecalculateModelGroupScore(model.Name, testGroup);
+                    _database.RecalculateModelGroupScore(model.Id.Value, testGroup);
                 }
                 catch (Exception ex)
                 {
@@ -2018,7 +2018,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 }
             }
 
-            _database.UpdateModelTtsScore(model.Name, partialScore);
+                    _database.UpdateModelTtsScore(model.Id.Value, partialScore);
 
             if (stepId.HasValue)
             {
@@ -2045,7 +2045,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
                     _database.UpdateTestRunResult(runId.Value, false, sw.ElapsedMilliseconds);
                     _database.UpdateTestRunNotes(runId.Value, errMsg);
-                    _database.RecalculateModelGroupScore(model.Name, testGroup);
+                    _database.RecalculateModelGroupScore(model.Id.Value, testGroup);
                 }
                 catch (Exception innerEx)
                 {

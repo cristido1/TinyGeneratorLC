@@ -1,0 +1,46 @@
+@page
+@model TinyGenerator.Pages.ConsequenceRules.IndexModel
+@{
+    ViewData["Title"] = "Consequence Rules";
+    ViewData["PageDescription"] = "Regole di conseguenza per profilo (con impacts)";
+}
+
+<div class="d-flex mb-2 align-items-center toolbar-row">
+    <form method="get" class="d-flex" style="gap:.5rem;">
+        <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:260px;" placeholder="Cerca..." />
+        <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
+    </form>
+
+    <div class="ms-auto d-flex gap-1">
+        <a class="btn btn-sm btn-primary" asp-page="./Edit">Nuovo</a>
+    </div>
+</div>
+
+<div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
+    <table class="table table-sm table-striped mb-0">
+        <thead class="table-light">
+            <tr>
+                <th style="width:70px;">Id</th>
+                <th>Profilo</th>
+                <th>Descrizione</th>
+                <th class="text-end" style="width:120px;">Impacts</th>
+                <th style="width: 180px;">Azioni</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in Model.Items)
+            {
+                <tr>
+                    <td>@item.Id</td>
+                    <td>@(item.NarrativeProfile?.Name ?? $"#{item.NarrativeProfileId}")</td>
+                    <td>@item.Description</td>
+                    <td class="text-end">@item.Impacts.Count</td>
+                    <td>
+                        <a class="btn btn-sm btn-outline-secondary" asp-page="./Edit" asp-route-id="@item.Id">Edit</a>
+                        <a class="btn btn-sm btn-outline-danger" asp-page="./Delete" asp-route-id="@item.Id">Delete</a>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>

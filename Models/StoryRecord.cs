@@ -168,6 +168,23 @@ namespace TinyGenerator.Models
         [Column("story_structure")]
         public string? StoryStructure { get; set; }
 
+        /// <summary>
+        /// Planner mode for this story: Off / Assist / Auto.
+        /// Stored as text to keep it DB-friendly and easily editable.
+        /// </summary>
+        [Column("planner_mode")]
+        public string? PlannerMode { get; set; }
+
+        // Narrative Engine extensions
+        [Column("narrative_profile_id")]
+        public int? NarrativeProfileId { get; set; }
+
+        [Column("runtime_state_id")]
+        public long? RuntimeStateId { get; set; }
+
+        [Column("narrative_status")]
+        public string? NarrativeEngineStatus { get; set; }
+
         // Evaluations attached to the story (one for each saved evaluation)
         [NotMapped]
         public List<StoryEvaluation> Evaluations { get; set; } = new List<StoryEvaluation>();

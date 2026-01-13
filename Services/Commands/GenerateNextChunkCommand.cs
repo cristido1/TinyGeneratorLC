@@ -1,0 +1,357 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using TinyGenerator.Models;
+
+namespace TinyGenerator.Services.Commands;
+
+public sealed class GenerateNextChunkCommand
+{
+    private const int ContextTailChars = 800;
+
+    private readonly long _storyId;
+    private readonly int _writerAgentId;
+    private readonly DatabaseService _database;
+    private readonly ILangChainKernelFactory _kernelFactory;
+    private readonly ICustomLogger? _logger;
+
+    public GenerateNextChunkCommand(
+        long storyId,
+        int writerAgentId,
+        DatabaseService database,
+        ILangChainKernelFactory kernelFactory,
+        ICustomLogger? logger = null)
+    {
+        _storyId = storyId;
+        _writerAgentId = writerAgentId;
+        _database = database ?? throw new ArgumentNullException(nameof(database));
+        _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+        _logger = logger;
+    }
+
+    public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var snap = _database.GetStateDrivenStorySnapshot(_storyId);
+        if (snap == null)
+        {
+            return new CommandResult(false, $"Story {_storyId}: snapshot not found");
+        }
+
+        if (!snap.IsActive)
+        {
+            return new CommandResult(false, $"Story {_storyId}: runtime not active");
+        }
+
+        var writer = _database.GetAgentById(_writerAgentId);
+        if (writer == null)
+        {
+            return new CommandResult(false, $"Writer agent {_writerAgentId} not found");
+        }
+
+        var phase = DecidePhase(snap);
+        var pov = DecidePov(snap);
+
+        // Apply base resource consumption per phase (deterministic, no semantic inference)
+        var newResources = ApplyBaseConsumption(snap, phase);
+
+        // Apply consequence impacts only when in Consequence phase
+        if (string.Equals(phase, "Consequence", StringComparison.OrdinalIgnoreCase))
+        {
+            ApplyConsequenceImpactsInPlace(snap, newResources);
+        }
+
+        var prompt = BuildWriterPrompt(snap, phase, pov);
+
+        string output = string.Empty;
+        string? lastValidationError = null;
+        var attempts = 0;
+        const int maxAttempts = 3; // initial + 2 retries
+
+        while (attempts < maxAttempts)
+        {
+            attempts++;
+            ct.ThrowIfCancellationRequested();
+
+            var attemptPrompt = prompt;
+            if (!string.IsNullOrWhiteSpace(lastValidationError) && attempts > 1)
+            {
+                attemptPrompt += $"\n\n⚠️ CORREZIONE RICHIESTA (tentativo {attempts}/{maxAttempts}):\n{lastValidationError}\n";
+            }
+
+            output = await CallWriterAsync(writer, attemptPrompt, ct).ConfigureAwait(false);
+            output = (output ?? string.Empty).Trim();
+
+            if (EndsInTension(output, out var reason))
+            {
+                lastValidationError = null;
+                break;
+            }
+
+            lastValidationError = reason;
+        }
+
+        var failureDelta = 0;
+        if (!string.IsNullOrWhiteSpace(lastValidationError))
+        {
+            // Deterministic validator failed after retries; register one failure.
+            failureDelta = 1;
+        }
+
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return new CommandResult(
+                false,
+                "Writer returned empty output; chunk not persisted. Verify the writer model service (e.g. Ollama/OpenAI endpoint) is running and the selected model is available.");
+        }
+
+        var tail = GetTail(output, ContextTailChars);
+
+        if (!_database.TryApplyStateDrivenChunk(
+                storyId: snap.StoryId,
+                expectedChunkIndex: snap.CurrentChunkIndex,
+                phase: phase,
+                pov: pov,
+                chunkText: output,
+                failureCountDelta: failureDelta,
+                newResourceValues: newResources,
+                newLastContextTail: tail,
+                out var error))
+        {
+            return new CommandResult(false, $"Persist failed: {error}");
+        }
+
+        var msg = failureDelta == 0
+            ? $"Chunk {snap.CurrentChunkIndex + 1} saved (phase={phase}, pov={pov})"
+            : $"Chunk {snap.CurrentChunkIndex + 1} saved with validator failure (phase={phase}, pov={pov})";
+
+        return new CommandResult(true, msg);
+    }
+
+    private static string DecidePhase(DatabaseService.StateDrivenStorySnapshot snap)
+    {
+        // Base schedule from usage_narrative_engine_OOP.txt
+        var basePhase = (snap.CurrentChunkIndex % 5) switch
+        {
+            3 => "Stall",
+            4 => "Error",
+            _ => "Action"
+        };
+
+        // Numeric overrides only (no semantic inference): failure/resource thresholds trigger Consequence.
+        if (snap.FailureCount >= 3)
+        {
+            return "Consequence";
+        }
+
+        foreach (var res in snap.ProfileResources)
+        {
+            if (snap.CurrentResourceValues.TryGetValue(res.Name, out var current))
+            {
+                if (current <= res.MinValue)
+                {
+                    return "Consequence";
+                }
+            }
+        }
+
+        return basePhase;
+    }
+
+    private static string DecidePov(DatabaseService.StateDrivenStorySnapshot snap)
+    {
+        var list = ParsePovList(snap.ProfilePovListJson);
+        if (list.Count == 0)
+        {
+            return string.IsNullOrWhiteSpace(snap.CurrentPOV) ? "ThirdPersonLimited" : snap.CurrentPOV!;
+        }
+
+        var idx = snap.CurrentChunkIndex % list.Count;
+        return list[idx];
+    }
+
+    private static List<string> ParsePovList(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<List<string>>(json);
+            return parsed?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                   ?? new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
+    private static Dictionary<string, int> ApplyBaseConsumption(DatabaseService.StateDrivenStorySnapshot snap, string phase)
+    {
+        // Deterministic base drain (kept conservative).
+        var drain = phase switch
+        {
+            "Stall" => 1,
+            "Error" => 1,
+            "Consequence" => 2,
+            _ => 0
+        };
+
+        var next = new Dictionary<string, int>(snap.CurrentResourceValues, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var res in snap.ProfileResources)
+        {
+            if (!next.TryGetValue(res.Name, out var current))
+            {
+                current = Math.Min(res.MaxValue, Math.Max(res.MinValue, res.InitialValue));
+            }
+
+            var updated = current - drain;
+            updated = Math.Min(res.MaxValue, Math.Max(res.MinValue, updated));
+            next[res.Name] = updated;
+        }
+
+        return next;
+    }
+
+    private static void ApplyConsequenceImpactsInPlace(DatabaseService.StateDrivenStorySnapshot snap, Dictionary<string, int> resourceValues)
+    {
+        if (snap.ConsequenceRules.Count == 0) return;
+
+        var idx = (snap.CurrentChunkIndex + snap.FailureCount) % snap.ConsequenceRules.Count;
+        var rule = snap.ConsequenceRules[idx];
+
+        foreach (var impact in rule.Impacts)
+        {
+            if (!resourceValues.TryGetValue(impact.ResourceName, out var current)) continue;
+            var resourceDef = snap.ProfileResources.FirstOrDefault(r => r.Name.Equals(impact.ResourceName, StringComparison.OrdinalIgnoreCase));
+            if (resourceDef == null) continue;
+
+            var updated = current + impact.DeltaValue;
+            updated = Math.Min(resourceDef.MaxValue, Math.Max(resourceDef.MinValue, updated));
+            resourceValues[impact.ResourceName] = updated;
+        }
+    }
+
+    private static string BuildWriterPrompt(DatabaseService.StateDrivenStorySnapshot snap, string phase, string pov)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("SCRIVI IL PROSSIMO CHUNK (in italiano).");
+        sb.AppendLine();
+        sb.AppendLine("VINCOLI NON NEGOZIABILI:");
+        sb.AppendLine($"- FASE (decisa dal codice): {phase}");
+        sb.AppendLine($"- POV (deciso dal codice): {pov}");
+        sb.AppendLine("- Il chunk DEVE terminare con tensione aperta (cliffhanger).\n  Vietato chiudere o concludere la storia.");
+        sb.AppendLine("- NON aggiungere sezioni meta (es. 'capitolo', 'fine', 'riassunto').");
+        sb.AppendLine();
+        sb.AppendLine("TEMA/CANONE (input utente):");
+        sb.AppendLine(snap.Prompt);
+
+        if (!string.IsNullOrWhiteSpace(snap.LastContext))
+        {
+            sb.AppendLine();
+            sb.AppendLine("CONTESTO RECENTE (coda del chunk precedente):");
+            sb.AppendLine(snap.LastContext);
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Ora scrivi il prossimo chunk:");
+        return sb.ToString();
+    }
+
+    private async Task<string> CallWriterAsync(Agent writerAgent, string prompt, CancellationToken ct)
+    {
+        try
+        {
+            var orchestrator = _kernelFactory.GetOrchestratorForAgent(writerAgent.Id);
+            if (orchestrator == null)
+            {
+                _logger?.Log("Warning", "StateDriven", $"No orchestrator found for writer {writerAgent.Name}; continuing with direct chat bridge");
+            }
+
+            var bridge = _kernelFactory.CreateChatBridge(
+                writerAgent.ModelName ?? "qwen2.5:7b-instruct",
+                writerAgent.Temperature,
+                writerAgent.TopP,
+                writerAgent.RepeatPenalty,
+                writerAgent.TopK,
+                writerAgent.RepeatLastN,
+                writerAgent.NumPredict);
+
+            var systemMessage = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.";
+            var messages = new List<ConversationMessage>
+            {
+                new ConversationMessage { Role = "system", Content = systemMessage },
+                new ConversationMessage { Role = "user", Content = prompt }
+            };
+
+            var response = await bridge.CallModelWithToolsAsync(
+                messages,
+                new List<Dictionary<string, object>>(),
+                ct).ConfigureAwait(false);
+
+            return response ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log("Error", "StateDriven", $"Writer call failed: {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    private static bool EndsInTension(string text, out string reason)
+    {
+        reason = string.Empty;
+        var t = (text ?? string.Empty).Trim();
+        if (t.Length < 40)
+        {
+            reason = "Il chunk è troppo corto.";
+            return false;
+        }
+
+        var lower = t.ToLowerInvariant();
+        var forbiddenEndings = new[]
+        {
+            "fine.", "the end", "e vissero felici", "epilogo", "conclusione"
+        };
+        if (forbiddenEndings.Any(f => lower.EndsWith(f)))
+        {
+            reason = "Il chunk sembra una conclusione (vietato).";
+            return false;
+        }
+
+        if (t.EndsWith("...") || t.EndsWith("…") || t.EndsWith("?") || t.EndsWith("!") || t.EndsWith("—") || t.EndsWith(":") || t.EndsWith("…\"") || t.EndsWith("...\""))
+        {
+            return true;
+        }
+
+        // If it ends with a full stop, assume closed beat.
+        if (t.EndsWith("."))
+        {
+            reason = "Il chunk termina con un punto fermo (serve tensione aperta).";
+            return false;
+        }
+
+        // Fallback: accept if last line ends with open punctuation.
+        var lastLine = t.Split('\n').LastOrDefault()?.Trim() ?? t;
+        if (lastLine.EndsWith("...") || lastLine.EndsWith("…") || lastLine.EndsWith("?") || lastLine.EndsWith("!") || lastLine.EndsWith("—") || lastLine.EndsWith(":"))
+        {
+            return true;
+        }
+
+        reason = "Il chunk non termina in tensione aperta (usa ? / ... / … / ! / —).";
+        return false;
+    }
+
+    private static string GetTail(string text, int maxChars)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+        if (maxChars <= 0) return string.Empty;
+        var t = text.Trim();
+        return t.Length <= maxChars ? t : t.Substring(t.Length - maxChars);
+    }
+}

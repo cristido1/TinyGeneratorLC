@@ -51,8 +51,8 @@ namespace TinyGenerator.Pages
                     return RedirectToPage();
                 }
 
-                // Get model info
-                var modelInfo = _database.GetModelInfo(model);
+                // Get model info (resolve by name via ListModels)
+                var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
                 if (modelInfo == null)
                 {
                     TempData["Error"] = $"Modello '{model}' non trovato nel database";

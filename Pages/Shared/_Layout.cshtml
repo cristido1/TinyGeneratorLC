@@ -4,78 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>@ViewData["Title"] - TinyGenerator</title>
-    <script type="importmap"></script>
-    <!-- Bootstrap 5 (local) -->
     <link href="~/lib/bootstrap/dist/css/bootstrap.min.css" rel="stylesheet" />
-    <!-- Local copy of Bootstrap Icons (use scripts/vendor_assets.sh to fetch) -->
     <link href="~/lib/bootstrap-icons/bootstrap-icons.css" rel="stylesheet" />
-    
-    <!-- Font Awesome per le icone -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
-    <!-- SweetAlert2 CSS (local) -->
-    <link rel="stylesheet" href="~/lib/sweetalert2/sweetalert2.min.css" />
-    
-    <!-- New minimalist panel design CSS -->
-    <link rel="stylesheet" href="~/css/minimalist-panels.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/TinyGenerator.styles.css" asp-append-version="true" />
-    <!-- DataTables CSS (shared) -->
-    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
-    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <!-- Sidebar navigation CSS -->
     <link rel="stylesheet" href="~/css/sidebar.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/css/custom-nav.css" asp-append-version="true" />
-    
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <style>
-        /* Minimal layout styles only: spacing and container sizing.
-           Removed explicit font-family and DataTables/AG Grid overrides
-           to allow components to use their own defaults. */
-        body {
-            background: #f0f2f5;
-            min-height: 100vh;
-            position: relative;
-            overflow-x: hidden;
-            padding: 40px 20px 70px 20px;
-        }
-
-        #matrix-canvas { display: none; }
-
-        /* Make the main content panel use all available horizontal space
-           (not centered). Keep inner padding but remove max-width and margins. */
-        main.page-container, main.container {
-            background: #ffffff;
-            border-radius: 0;
-            padding: 18px;
-            position: relative;
-            z-index: 1;
-            max-width: none;
-            width: 100%;
-            margin: 0;
-        }
-
-        .page-header-outside h1 {
-            font-size: 36px;
-            font-weight: 700;
-        }
-
-        .btn-primary, .btn-success {
-            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
-            border: none;
-            box-shadow: 0 4px 12px rgba(22, 163, 74, 0.4);
+        /* Slightly darker column headers for DataTables */
+        table.dataTable thead th {
+            color: #111827; /* slate-900, slightly darker */
             font-weight: 600;
-            transition: all 0.3s ease;
-        }
-
-        /* Wider central panel on large screens */
-        @@media (min-width: 1200px) {
-            main.container { max-width: 1400px; }
-        }
-        @@media (min-width: 1400px) {
-            main.container { max-width: 1600px; }
         }
     </style>
-    
     @await RenderSectionAsync("Styles", required: false)
 </head>
 <body class="has-sidebar">
@@ -100,246 +39,69 @@
         </div>
         
         <div class="sidebar-nav">
-            <!-- Main section -->
             <div class="sidebar-section">
                 <div class="sidebar-section-title">Principale</div>
-                <a href="/" title="Home">
-                    <i class="bi bi-house"></i>
-                    <span>Home</span>
-                </a>
-                <a asp-page="/Genera" title="Genera storia">
-                    <i class="bi bi-pencil-square"></i>
-                    <span>Genera storia</span>
-                </a>
-                <a asp-page="/Stories/Index" title="Storie salvate">
-                    <i class="bi bi-journal-text"></i>
-                    <span>Storie salvate</span>
-                </a>
-                <a asp-page="/Chat" title="Chat">
-                    <i class="bi bi-chat-dots"></i>
-                    <span>Chat</span>
-                </a>
+                <a href="/" title="Home"><i class="bi bi-house"></i><span>Home</span></a>
+                <a asp-page="/Genera" title="Genera storia"><i class="bi bi-pencil-square"></i><span>Genera storia</span></a>
+                <a asp-page="/Stories/Index" title="Storie salvate"><i class="bi bi-journal-text"></i><span>Storie salvate</span></a>
+                <a asp-page="/Chat" title="Chat"><i class="bi bi-chat-dots"></i><span>Chat</span></a>
             </div>
-            
-            <!-- Monitoring section -->
             <div class="sidebar-section">
                 <div class="sidebar-section-title">Monitoraggio</div>
-                <a asp-page="/Logs/Index" title="Logs">
-                    <i class="bi bi-list-check"></i>
-                    <span>Logs</span>
-                </a>
-                <a asp-page="/ChatLog/Index" title="Chat Log">
-                    <i class="bi bi-chat-left-text"></i>
-                    <span>Chat Log</span>
-                </a>
-                <a asp-page="/OllamaMonitor" title="Ollama Monitor">
-                    <i class="bi bi-cpu"></i>
-                    <span>Ollama Monitor</span>
-                </a>
-                <a asp-page="/StoriesStatus/Index" title="Stories Status">
-                    <i class="bi bi-flag"></i>
-                    <span>Stories Status</span>
-                </a>
+                <a asp-page="/Logs/Index" title="Logs"><i class="bi bi-list-check"></i><span>Logs</span></a>
+                <a asp-page="/ChatLog/Index" title="Chat Log"><i class="bi bi-chat-left-text"></i><span>Chat Log</span></a>
+                <a asp-page="/OllamaMonitor" title="Ollama Monitor"><i class="bi bi-cpu"></i><span>Ollama Monitor</span></a>
+                <a asp-page="/StoriesStatus/Index" title="Stories Status"><i class="bi bi-flag"></i><span>Stories Status</span></a>
             </div>
-            
-            <!-- Configuration section -->
             <div class="sidebar-section">
                 <div class="sidebar-section-title">Configurazione</div>
-                <a asp-page="/Models/Index" title="Modelli">
-                    <i class="bi bi-diagram-3"></i>
-                    <span>Modelli</span>
-                </a>
-                <a asp-page="/Agents/Index" title="Agents">
-                    <i class="bi bi-people"></i>
-                    <span>Agents</span>
-                </a>
-                <a asp-page="/Series/Index" title="Serie">
-                    <i class="bi bi-collection"></i>
-                    <span>Serie</span>
-                </a>
-                <a asp-page="/TaskTypes/Index" title="Task Types">
-                    <i class="bi bi-tags"></i>
-                    <span>Task Types</span>
-                </a>
-                <a asp-page="/StepTemplates/Index" title="Step Templates">
-                    <i class="bi bi-list-ol"></i>
-                    <span>Step Templates</span>
-                </a>
-                <a asp-page="/PlannerMethods" title="Metodi Pianificazione">
-                    <i class="bi bi-diagram-2"></i>
-                    <span>Metodi Pianificazione</span>
-                </a>
+                <a asp-page="/Models/Index" title="Modelli"><i class="bi bi-diagram-3"></i><span>Modelli</span></a>
+                <a asp-page="/Agents/Index" title="Agents"><i class="bi bi-people"></i><span>Agents</span></a>
+                <a asp-page="/Series/Index" title="Serie"><i class="bi bi-collection"></i><span>Serie</span></a>
+                <a asp-page="/TaskTypes/Index" title="Task Types"><i class="bi bi-tags"></i><span>Task Types</span></a>
+                <a asp-page="/StepTemplates/Index" title="Step Templates"><i class="bi bi-list-ol"></i><span>Step Templates</span></a>
+                <a asp-page="/PlannerMethods" title="Metodi Pianificazione"><i class="bi bi-diagram-2"></i><span>Metodi Pianificazione</span></a>
             </div>
-            
-            <!-- Admin section -->
+
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Narrative Engine</div>
+                <a asp-page="/NarrativeProfiles/Index" title="Narrative Profiles"><i class="bi bi-journal-bookmark"></i><span>Narrative Profiles</span></a>
+                <a asp-page="/NarrativeResources/Index" title="Narrative Resources"><i class="bi bi-sliders"></i><span>Narrative Resources</span></a>
+                <a asp-page="/MicroObjectives/Index" title="Micro Objectives"><i class="bi bi-bullseye"></i><span>Micro Objectives</span></a>
+                <a asp-page="/FailureRules/Index" title="Failure Rules"><i class="bi bi-exclamation-triangle"></i><span>Failure Rules</span></a>
+                <a asp-page="/ConsequenceRules/Index" title="Consequence Rules"><i class="bi bi-arrow-repeat"></i><span>Consequence Rules</span></a>
+                <a asp-page="/ConsequenceImpacts/Index" title="Consequence Impacts"><i class="bi bi-graph-down-arrow"></i><span>Consequence Impacts</span></a>
+            </div>
             <div class="sidebar-section">
                 <div class="sidebar-section-title">Admin</div>
-                <a asp-page="/Admin" title="Pannello Admin">
-                    <i class="bi bi-graph-up"></i>
-                    <span>Admin</span>
-                </a>
-                <a asp-page="/TestDefinitions/Index" title="Test Definitions">
-                    <i class="bi bi-list-ul"></i>
-                    <span>Test Definitions</span>
-                </a>
-                <a asp-page="/TtsVoices/Index" title="TTS Voices">
-                    <i class="bi bi-megaphone"></i>
-                    <span>TTS Voices</span>
-                </a>
+                <a asp-page="/Admin" title="Pannello Admin"><i class="bi bi-graph-up"></i><span>Admin</span></a>
+                <a asp-page="/TestDefinitions/Index" title="Test Definitions"><i class="bi bi-list-ul"></i><span>Test Definitions</span></a>
+                <a asp-page="/TtsVoices/Index" title="TTS Voices"><i class="bi bi-megaphone"></i><span>TTS Voices</span></a>
             </div>
         </div>
     </nav>
-    
-    <canvas id="matrix-canvas"></canvas>
-    <!-- Space background canvas (stars + spaceship) -->
-    <!-- Space background canvas removed -->
-    
-    <!-- Main content wrapper -->
+
     <div class="main-content">
         @{
-            var path = Context.Request.Path.HasValue ? Context.Request.Path.Value.ToLowerInvariant() : "/";
-            var isHome = path == "/" || path == "/index" || path == "/index/";
-            var pageTitle = ViewData["Title"] as string ?? string.Empty;
+            var pageDescription = ViewData["PageDescription"] as string ?? string.Empty;
         }
-
-        <main class="page-container">
-            @if (!isHome && !string.IsNullOrWhiteSpace(pageTitle))
+        <div class="d-flex align-items-center mb-3 justify-content-between">
+            <h4 class="mb-0">@ViewData["Title"]</h4>
+            @if (!string.IsNullOrWhiteSpace(pageDescription))
             {
-                var pageDescription = ViewData["PageDescription"] as string ?? string.Empty;
-                <div class="d-flex align-items-center mb-3 justify-content-between">
-                    <h2 class="mb-0">@pageTitle</h2>
-                    @if (!string.IsNullOrWhiteSpace(pageDescription))
-                    {
-                        <small id="pageDescriptionText" class="text-muted ms-3" style="font-size:0.95rem; opacity:0.9;">@pageDescription</small>
-                    }
-                </div>
+                <small id="pageDescriptionText" class="text-muted ms-3" style="font-size:0.95rem; opacity:0.9;">@pageDescription</small>
             }
-
-            @RenderBody()
-        </main>
+        </div>
+        @RenderBody()
     </div>
-
-    <!-- Toast container for app-wide notifications (Bootstrap toasts) -->
-    <div id="toast-container" class="toast-container tg-toast-sm-container position-fixed top-0 end-0 p-3" style="z-index:1060;">
-        <!-- toasts appended dynamically by signalr-notifs.js -->
-    </div>
-
-    <!-- Shared JS libs: jQuery (local + CDN fallback), Bootstrap, SignalR, DataTables and Buttons -->
+    
+    <!-- Shared JS -->
     <script src="~/lib/jquery/jquery.min.js"></script>
-    <script>window.jQuery || document.write('<script src="https://code.jquery.com/jquery-3.6.0.min.js"><\/script>');</script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/lib/signalr/signalr.min.js"></script>
-    <script src="~/lib/datatables/js/jquery.dataTables.min.js"></script>
-    <script src="~/lib/datatables/js/dataTables.bootstrap5.min.js"></script>
-    <script src="~/lib/datatables/js/dataTables.buttons.min.js"></script>
-    <script src="~/lib/datatables/js/buttons.bootstrap5.min.js"></script>
-    <script src="~/lib/datatables/js/jszip.min.js"></script>
-    <script src="~/lib/datatables/js/pdfmake.min.js"></script>
-    <script src="~/lib/datatables/js/vfs_fonts.js"></script>
-    <script src="~/lib/datatables/js/buttons.html5.min.js"></script>
-    <script src="~/lib/datatables/js/buttons.print.min.js"></script>
-    <script src="~/lib/datatables/js/buttons.colVis.min.js"></script>
-    <script src="~/lib/datatables/js/dataTables.colReorder.min.js"></script>
-
-    <script src="~/js/site.js" asp-append-version="true"></script>
-    <script src="~/js/command-panel.js" asp-append-version="true"></script>
-
-    <!-- Project DataTables extensions (auto-init, refresh button, colvis persistence) -->
-    <style>
-        /* DataTable action buttons styling: compact white icon buttons, left of search */
-        .dataTables_wrapper .dt-top {
-            display: flex;
-            align-items: center;
-            gap: .5rem;
-            flex-wrap: wrap;
-            width: 100%;
-        }
-
-        .dataTables_wrapper .dt-top .dataTables_filter {
-            margin-left: auto; /* push search to the right */
-        }
-
-        .dt-create-btn {
-            margin-left: .5rem;
-        }
-
-        .dt-action-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0;
-            width: 32px;
-            height: 32px;
-            border-radius: 6px;
-            border: 1px solid #e9ecef;
-            background: #ffffff;
-            color: #444;
-            cursor: pointer;
-            box-shadow: none;
-            font-size: 0.9rem;
-        }
-
-        .dt-action-btn:hover {
-            background: #f8f9fa;
-            color: var(--bs-primary);
-            border-color: #dfe3e6;
-        }
-
-        .dt-btn-icon {
-            width: 16px;
-            height: 16px;
-            display: inline-block;
-            vertical-align: middle;
-            stroke: currentColor;
-        }
-
-        /* ensure buttons container sits inline and doesn't wrap */
-        .dataTables_wrapper .dt-buttons {
-            display: inline-flex !important;
-            align-items: center;
-            gap: .25rem;
-        }
-    </style>
-    <!-- <script src="~/js/datatable-extensions.js" asp-append-version="true"></script> -->
-
-    <!-- SweetAlert2 JS (local) -->
-    <script src="~/lib/sweetalert2/sweetalert2.min.js"></script>
-    <script src="~/js/sweetalert-config.js" asp-append-version="true"></script>
-
-    <!-- Matrix Rain Effect (temporaneamente disabilitato) -->
-    <!-- <script src="~/js/matrix_effect.js" asp-append-version="true"></script> -->
-    
-    <!-- Sidebar toggle functionality -->
     <script src="~/js/sidebar.js" asp-append-version="true"></script>
-
-    <!-- App SignalR notification client (toasts) -->
-    <script src="~/js/signalr-notifs.js" asp-append-version="true"></script>
-    @* Render a toast from TempData if set (server-side notification to the current page) *@
-    @{
-        var tTitle = TempData["ToastTitle"] as string;
-        var tMessage = TempData["ToastMessage"] as string;
-        var tLevel = TempData["ToastLevel"] as string ?? "info";
-    }
-    @if (!string.IsNullOrWhiteSpace(tMessage))
-    {
-        <script>document.addEventListener('DOMContentLoaded', function(){ try{ if (window.appNotify) { window.appNotify.show('@(tTitle ?? "")', '@(tMessage.Replace("\"","\\\""))', '@tLevel'); } }catch(e){} });</script>
-    }
-
+    <!-- Command panel for active commands -->
+    <script src="~/js/command-panel.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
-    <script>
-        document.addEventListener('DOMContentLoaded', function(){
-            try {
-                var el = document.getElementById('pageDescriptionText');
-                console.log('DEBUG pageDescription element present:', !!el, 'content:', el ? el.textContent.trim() : '');
-                if (el) {
-                    el.style.display = 'block';
-                    el.style.color = getComputedStyle(el).color || '#6c757d';
-                    el.style.opacity = '0.95';
-                } else {
-                    console.log('No pageDescription element rendered for this page.');
-                }
-            } catch (e) { console.warn('pageDescription debug error', e); }
-        });
-    </script>
 </body>
 </html>

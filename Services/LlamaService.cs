@@ -34,6 +34,7 @@ namespace TinyGenerator.Services
         private int _currentContextSize;
         private readonly object _lock = new();
         private bool _loggedCudaPreflight;
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _recentStderr = new();
 
         public LlamaService(IConfiguration configuration, ICustomLogger? logger = null)
         {
@@ -161,6 +162,15 @@ namespace TinyGenerator.Services
                         if (string.IsNullOrWhiteSpace(e.Data)) return;
                         var line = e.Data.Trim();
                         _logger?.Log("Warning", "llama.cpp", $"llama.cpp stderr: {line}");
+                        try
+                        {
+                            _recentStderr.Enqueue(line);
+                            while (_recentStderr.Count > 100)
+                            {
+                                _recentStderr.TryDequeue(out var _d);
+                            }
+                        }
+                        catch { }
                     }
                     catch { }
                 };
@@ -301,7 +311,11 @@ namespace TinyGenerator.Services
             {
                 if (_llamaServer != null && _llamaServer.HasExited)
                 {
-                    throw new InvalidOperationException("Llama server exited before it became ready.");
+                    var exitCode = -1;
+                    try { exitCode = _llamaServer.ExitCode; } catch { }
+                    var recent = string.Empty;
+                    try { recent = string.Join(" | ", _recentStderr.ToArray()); } catch { }
+                    throw new InvalidOperationException($"Llama server exited before it became ready. ExitCode={exitCode}. RecentStderr={recent}");
                 }
 
                 try

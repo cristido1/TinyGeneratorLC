@@ -1,0 +1,41 @@
+@page
+@model TinyGenerator.Pages.FailureRules.EditModel
+@{
+    ViewData["Title"] = Model.IsNew ? "Nuova Failure Rule" : "Edit Failure Rule";
+    ViewData["PageDescription"] = "Configura una regola di failure";
+}
+
+<form method="post" class="mt-2">
+    <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+
+    <input type="hidden" asp-for="Item.Id" />
+
+    <div class="row g-3">
+        <div class="col-12 col-lg-6">
+            <label class="form-label" asp-for="Item.NarrativeProfileId">Profilo</label>
+            <select class="form-select" asp-for="Item.NarrativeProfileId" asp-items="Model.NarrativeProfiles"></select>
+            <span class="text-danger" asp-validation-for="Item.NarrativeProfileId"></span>
+        </div>
+
+        <div class="col-12 col-lg-6">
+            <label class="form-label" asp-for="Item.TriggerType">Trigger type</label>
+            <input class="form-control" asp-for="Item.TriggerType" />
+            <span class="text-danger" asp-validation-for="Item.TriggerType"></span>
+        </div>
+
+        <div class="col-12">
+            <label class="form-label" asp-for="Item.Description"></label>
+            <textarea class="form-control" asp-for="Item.Description" rows="4"></textarea>
+            <span class="text-danger" asp-validation-for="Item.Description"></span>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2 mt-3">
+        <button class="btn btn-primary" type="submit">Salva</button>
+        <a class="btn btn-outline-secondary" asp-page="./Index">Annulla</a>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

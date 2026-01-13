@@ -1,0 +1,293 @@
+INIZIO FILE TESTO
+STATE-DRIVEN NARRATIVE GENERATION SYSTEM
+FINAL ARCHITECTURAL ANALYSIS FOR GPT-5.2
+
+SCOPO DI QUESTO DOCUMENTO
+Questo documento fornisce a GPT-5.2 una analisi architetturale finale del sistema chiamato:
+
+STATE-DRIVEN NARRATIVE GENERATION SYSTEM
+
+Il documento NON introduce nuove entità rispetto a
+“NARRATIVE ENGINE – STRUTTURA OGGETTI E DATI DI ESEMPIO”.
+
+Serve a:
+
+validare le scelte fatte
+
+prevenire deviazioni concettuali
+
+chiarire i confini tra componenti
+
+guidare l’implementazione corretta
+
+============================================================
+PARTE 1 – COS’È DAVVERO QUESTO SISTEMA
+
+Questo sistema NON è:
+
+un prompt avanzato
+
+un multistep complesso
+
+un agente che scrive storie
+
+un framework di storytelling tradizionale
+
+Questo sistema È:
+
+un engine stateful
+
+un orchestratore narrativo
+
+un controllore di flusso narrativo persistente
+
+un sistema in cui il testo è un OUTPUT, non lo stato
+
+Il nome corretto è:
+STATE-DRIVEN NARRATIVE GENERATION SYSTEM
+
+============================================================
+PARTE 2 – PRINCIPIO CARDINE (NON NEGOZIABILE)
+
+IL MODELLO LLM NON PRENDE DECISIONI STRUTTURALI.
+
+Il modello:
+
+scrive testo
+
+mostra azioni, reazioni, conseguenze
+
+termina in tensione aperta
+
+Il modello NON decide:
+
+fase narrativa
+
+POV
+
+ritmo
+
+errori
+
+conseguenze
+
+direzione della trama
+
+rispetto del canone
+
+TUTTO questo è responsabilità del codice.
+
+============================================================
+PARTE 3 – I 4 LIVELLI DEL SISTEMA
+
+LIVELLO 1 – STORY PLAN / CANONE
+Contiene:
+
+struttura della serie
+
+episodi
+
+obiettivi narrativi
+
+punti di svolta obbligatori
+
+personaggi e archi
+
+NON genera testo.
+FORNISCE solo vincoli.
+
+LIVELLO 2 – PLANNER
+Responsabilità:
+
+configurazione iniziale
+
+scelta NarrativeProfile
+
+impostazione ritmo e severità
+
+NON scrive testo.
+PUÒ essere disattivato.
+
+LIVELLO 3 – NARRATIVE ENGINE
+Responsabilità:
+
+gestione stato runtime
+
+state machine (Action, Stall, Error, Consequence)
+
+gestione risorse
+
+gestione POV
+
+invocazione writer
+
+È SEMPRE ATTIVO per storie lunghe.
+
+LIVELLO 4 – CHUNK CONTINUO
+Responsabilità:
+
+modalità di emissione del testo
+
+continuità
+
+nessuna chiusura
+
+nessun riassunto
+
+NON prende decisioni.
+È una policy del writer.
+
+============================================================
+PARTE 4 – COSA NON DEVE FARE IL CODICE
+
+GPT-5.2 NON deve:
+
+spostare logica nel prompt
+
+far “capire” al modello la trama
+
+chiedere al modello di pianificare
+
+dedurre lo stato dal testo
+
+usare embedding per decidere il flusso
+
+usare valutazioni semantiche per cambiare fase
+
+Lo stato è ESPLICITO e PERSISTENTE.
+
+============================================================
+PARTE 5 – PERCHÉ NON È “ANDARE ALLA CIECA”
+
+Il sistema NON improvvisa.
+
+La direzione è fornita da:
+
+Story Plan
+
+NarrativeProfile
+
+Character Arcs
+
+Vincoli di episodio
+
+Il runtime esplora SOLO:
+
+il “come”
+
+il dettaglio
+
+la tensione
+
+le reazioni
+
+Mai il “cosa finale”.
+
+============================================================
+PARTE 6 – RUOLO DEL NARRATIVE PROFILE
+
+Il NarrativeProfile:
+
+NON è un prompt
+
+NON è un agente
+
+NON è una storia
+
+È una CONFIGURAZIONE DI GENERE.
+
+Definisce:
+
+risorse (fisiche, emotive, sociali)
+
+errori plausibili
+
+conseguenze
+
+tono e stile
+
+Cambiare genere = cambiare profilo
+NON cambiare engine.
+
+============================================================
+PARTE 7 – RUOLO DEL MULTISTEP ESISTENTE
+
+Il multistep:
+
+NON va eliminato
+
+NON va usato per i chunk
+
+NON va usato per il runtime
+
+Uso corretto:
+
+dentro il Planner
+
+come preflight
+
+come inizializzazione
+
+Il multistep NON gestisce storie lunghe.
+
+============================================================
+PARTE 8 – COMMAND DISPATCHER (VERIFICA)
+
+Il Command Dispatcher:
+
+garantisce una sola storia attiva
+
+serializza le operazioni
+
+applica priorità
+
+NON prende decisioni narrative
+
+GenerateNextChunkCommand:
+
+è deterministico
+
+legge stato
+
+decide fase e POV
+
+invoca writer
+
+aggiorna DB
+
+============================================================
+PARTE 9 – VALIDATION CHECKLIST PER GPT-5.2
+
+Durante l’implementazione, verificare che:
+
+[ ] Il modello non decide mai la fase
+[ ] Il modello non decide mai il POV
+[ ] Lo stato non è mai ricostruito dal testo
+[ ] Il chunk termina sempre in tensione
+[ ] Nessuna conclusione automatica
+[ ] Il planner non scrive testo
+[ ] Il sistema funziona cambiando modello LLM
+[ ] Il genere è solo configurazione
+[ ] I personaggi sono vincolati dal canone
+[ ] La state machine è esplicita
+
+Se uno di questi punti è falso → ARCHITETTURA SBAGLIATA.
+
+============================================================
+PARTE 10 – CONCLUSIONE ARCHITETTURALE
+
+Questo sistema rappresenta:
+
+un’evoluzione del multistep
+
+una separazione corretta delle responsabilità
+
+un uso maturo degli LLM
+
+un engine narrativo vero, non un prompt complesso
+
+Il valore non è nel testo prodotto,
+ma nel controllo persistente della narrazione.
+
+============================================================
+FINE FILE

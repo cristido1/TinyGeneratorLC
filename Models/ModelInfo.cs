@@ -46,6 +46,12 @@ public class ModelInfo
     public string? LastSoundTestFile { get; set; }
     public string? LastTtsTestFile { get; set; }
 
+    // Narrative Engine compatibility fields
+    public bool IsNarrativeCompatible { get; set; } = false;
+    public int MaxContextTokens { get; set; } = 0;
+    // 1-10 (0 means unknown/unset)
+    public int InstructionFollowingScore { get; set; } = 0;
+
     // Per-group latest score columns (UI-only, populated at page render)
     public int? LastScore_Base { get; set; }
     public int? LastScore_Tts { get; set; }

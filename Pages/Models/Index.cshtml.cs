@@ -27,6 +27,9 @@ namespace TinyGenerator.Pages.Models
         public string Model { get; set; } = string.Empty;
 
         [BindProperty]
+        public int? ModelId { get; set; }
+
+        [BindProperty]
         public string Group { get; set; } = string.Empty;
 
         [BindProperty]
@@ -116,6 +119,29 @@ namespace TinyGenerator.Pages.Models
 
         public IActionResult OnPostDeleteModel()
         {
+            // Prefer deletion by numeric id when provided to avoid name collisions
+            if (ModelId.HasValue)
+            {
+                try
+                {
+                    // Use id-based API to check agents using this model
+                    var agentsUsing = _database.GetAgentsUsingModel(ModelId.Value);
+                    if (agentsUsing.Count > 0)
+                    {
+                        TempData["ErrorMessage"] = $"Impossibile eliminare il modello. È utilizzato dagli agenti: {string.Join(", ", agentsUsing)}";
+                        return RedirectToPage();
+                    }
+                    _database.DeleteModel(ModelId.Value.ToString());
+                    TempData["TestResultMessage"] = $"Modello eliminato con successo.";
+                    return RedirectToPage();
+                }
+                catch (Exception ex)
+                {
+                    TempData["ErrorMessage"] = $"Errore durante l'eliminazione del modello: {ex.Message}";
+                    return RedirectToPage();
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(Model))
             {
                 TempData["ErrorMessage"] = "Nome modello mancante.";
@@ -124,8 +150,10 @@ namespace TinyGenerator.Pages.Models
 
             try
             {
-                // Check if model is used by any agent
-                var agentsUsingModel = _database.GetAgentsUsingModel(Model);
+                // Legacy: check by name
+                // Resolve model name to id and call id-based API
+                var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, Model, StringComparison.OrdinalIgnoreCase));
+                var agentsUsingModel = modelInfo != null ? _database.GetAgentsUsingModel(modelInfo.Id.Value) : new System.Collections.Generic.List<string>();
                 if (agentsUsingModel.Count > 0)
                 {
                     var agentsList = string.Join(", ", agentsUsingModel);

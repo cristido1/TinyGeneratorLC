@@ -46,6 +46,14 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<LogAnalysis> LogAnalyses => Set<LogAnalysis>();
     public DbSet<AppEventDefinition> AppEvents => Set<AppEventDefinition>();
     public DbSet<PlannerMethod> PlannerMethods => Set<PlannerMethod>();
+    public DbSet<NarrativeProfile> NarrativeProfiles => Set<NarrativeProfile>();
+    public DbSet<NarrativeResource> NarrativeResources => Set<NarrativeResource>();
+    public DbSet<MicroObjective> MicroObjectives => Set<MicroObjective>();
+    public DbSet<FailureRule> FailureRules => Set<FailureRule>();
+    public DbSet<ConsequenceRule> ConsequenceRules => Set<ConsequenceRule>();
+    public DbSet<ConsequenceImpact> ConsequenceImpacts => Set<ConsequenceImpact>();
+    public DbSet<StoryRuntimeState> StoryRuntimeStates => Set<StoryRuntimeState>();
+    public DbSet<StoryResourceState> StoryResourceStates => Set<StoryResourceState>();
     // Note: Memory table excluded - using Dapper for embedding queries
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -63,5 +71,84 @@ public class TinyGeneratorDbContext : DbContext
             .HasOne<Series>()
             .WithMany(s => s.Episodes)
             .HasForeignKey(se => se.SerieId);
+
+        // Narrative Engine relations
+        modelBuilder.Entity<NarrativeResource>()
+            .HasOne(r => r.NarrativeProfile)
+            .WithMany(p => p.Resources)
+            .HasForeignKey(r => r.NarrativeProfileId);
+
+        modelBuilder.Entity<MicroObjective>()
+            .HasOne(r => r.NarrativeProfile)
+            .WithMany(p => p.MicroObjectives)
+            .HasForeignKey(r => r.NarrativeProfileId);
+
+        modelBuilder.Entity<FailureRule>()
+            .HasOne(r => r.NarrativeProfile)
+            .WithMany(p => p.FailureRules)
+            .HasForeignKey(r => r.NarrativeProfileId);
+
+        modelBuilder.Entity<ConsequenceRule>()
+            .HasOne(r => r.NarrativeProfile)
+            .WithMany(p => p.ConsequenceRules)
+            .HasForeignKey(r => r.NarrativeProfileId);
+
+        modelBuilder.Entity<ConsequenceImpact>()
+            .HasOne(i => i.ConsequenceRule)
+            .WithMany(r => r.Impacts)
+            .HasForeignKey(i => i.ConsequenceRuleId);
+
+        modelBuilder.Entity<StoryRuntimeState>()
+            .HasOne(s => s.NarrativeProfile)
+            .WithMany()
+            .HasForeignKey(s => s.NarrativeProfileId);
+
+        modelBuilder.Entity<StoryRuntimeState>()
+            .HasOne(s => s.Story)
+            .WithMany()
+            .HasForeignKey(s => s.StoryId);
+
+        modelBuilder.Entity<StoryResourceState>()
+            .HasOne(s => s.StoryRuntimeState)
+            .WithMany()
+            .HasForeignKey(s => s.StoryRuntimeStateId);
+
+        // Narrative Engine seed data (from usage_narrative_engine.txt)
+        modelBuilder.Entity<NarrativeProfile>().HasData(
+            new NarrativeProfile
+            {
+                Id = 1,
+                Name = "SciFi Militare",
+                Description = "Conflitto armato ad alta tensione",
+                BaseSystemPrompt = "Scrivi narrativa a chunk continuo senza conclusioni.",
+                StylePrompt = "Tono tecnico, militare, concreto."
+            }
+        );
+
+        modelBuilder.Entity<NarrativeResource>().HasData(
+            new NarrativeResource { Id = 1, NarrativeProfileId = 1, Name = "Energia", InitialValue = 100, MinValue = 0, MaxValue = 100 },
+            new NarrativeResource { Id = 2, NarrativeProfileId = 1, Name = "Integrità", InitialValue = 100, MinValue = 0, MaxValue = 100 },
+            new NarrativeResource { Id = 3, NarrativeProfileId = 1, Name = "Uomini", InitialValue = 100, MinValue = 0, MaxValue = 100 }
+        );
+
+        modelBuilder.Entity<MicroObjective>().HasData(
+            new MicroObjective { Id = 1, NarrativeProfileId = 1, Code = "DEFEND", Description = "Difendere un settore critico", Difficulty = 2 },
+            new MicroObjective { Id = 2, NarrativeProfileId = 1, Code = "DELAY", Description = "Guadagnare tempo sotto pressione", Difficulty = 3 }
+        );
+
+        modelBuilder.Entity<FailureRule>().HasData(
+            new FailureRule { Id = 1, NarrativeProfileId = 1, Description = "Decisione affrettata sotto pressione", TriggerType = "RandomUnderPressure" },
+            new FailureRule { Id = 2, NarrativeProfileId = 1, Description = "Risorsa critica sotto soglia", TriggerType = "ResourceBelowThreshold" }
+        );
+
+        modelBuilder.Entity<ConsequenceRule>().HasData(
+            new ConsequenceRule { Id = 1, NarrativeProfileId = 1, Description = "Perdita di uomini" },
+            new ConsequenceRule { Id = 2, NarrativeProfileId = 1, Description = "Danni strutturali" }
+        );
+
+        modelBuilder.Entity<ConsequenceImpact>().HasData(
+            new ConsequenceImpact { Id = 1, ConsequenceRuleId = 1, ResourceName = "Uomini", DeltaValue = -10 },
+            new ConsequenceImpact { Id = 2, ConsequenceRuleId = 2, ResourceName = "Integrità", DeltaValue = -15 }
+        );
     }
 }

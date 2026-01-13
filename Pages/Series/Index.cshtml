@@ -5,6 +5,11 @@
     ViewData["PageDescription"] = "Gestisci le serie e i racconti generati";
 }
 
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
+}
+
 <div class="page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
         <form method="get" class="d-flex" style="gap:.5rem;">
@@ -253,11 +258,27 @@
     <script src="~/js/shared/pagination.js" asp-append-version="true"></script>
 
     <script>
+        (function initSeriesDataTable(){
+            if (typeof jQuery === 'undefined') { document.addEventListener('DOMContentLoaded', initSeriesDataTable); return; }
+            var scripts = ['/lib/datatables/js/jquery.dataTables.min.js','/lib/datatables/js/dataTables.bootstrap5.min.js','/lib/datatables/js/dataTables.buttons.min.js','/lib/datatables/js/buttons.bootstrap5.min.js','/lib/datatables/js/buttons.colVis.min.js'];
+            var i=0; function load(u,cb){ var s=document.createElement('script'); s.src=u; s.onload=cb; s.onerror=cb; document.head.appendChild(s);} function next(){ if(i<scripts.length) load(scripts[i++], next); else init(); } next();
+            function init(){ jQuery(function($){ if(typeof $.fn.DataTable === 'undefined'){ console.error('DataTables not loaded'); return; }
+                if (window._seriesDataTableInitialized) return; window._seriesDataTableInitialized = true;
+                if ($.fn.DataTable.isDataTable('#seriesTable')) {
+                    try { $('#seriesTable').DataTable().destroy(); } catch(e) { console.warn('Failed to destroy existing DataTable', e); }
+                }
+                var table = $('#seriesTable').DataTable({ dom:"<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>", stateSave:true, paging:true, pageLength:25, lengthChange:true, lengthMenu:[[10,25,50,100],[10,25,50,100]], order:[[1,'asc']], columnDefs:[{ orderable:false, targets:[0,10,11] }], buttons:[{ text:'<i class=\"bi bi-plus-lg me-1\"></i>Crea Serie', className:'btn btn-sm btn-success', action:function(){ window.location.href='@Url.Page("./Edit")'; } },{ extend:'colvis', text:'Colonne', className:'btn btn-sm btn-secondary' } ] });
+
+                // wire detail and edit buttons
+                $(document).off('click.seriesDetail').on('click.seriesDetail', '[data-detail-toggle]', function(){ var tr=$(this).closest('tr'); var detail=tr.next('[data-detail-row]'); if(detail.length){ detail.toggleClass('d-none'); } });
+            }); }
+        })();
+    </script>
+
+    <script>
         // Page-local fallback: ensures the "Dettaglio" button toggles the next detail row
         // even if shared scripts fail or are cached.
         document.addEventListener('click', function (evt) {
-            // If ListUI has already bound the detail handler, don't run the fallback
-            // (otherwise the row gets toggled twice and ends up hidden).
             if (document.documentElement.getAttribute('data-listui-detail-bound') === '1') return;
             const btn = evt.target.closest('[data-detail-toggle]');
             if (!btn) return;

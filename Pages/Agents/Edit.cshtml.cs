@@ -16,7 +16,7 @@ namespace TinyGenerator.Pages.Agents
         public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
         public List<TinyGenerator.Models.StepTemplate> StepTemplates { get; set; } = new();
         [BindProperty]
-        public string? SelectedModelName { get; set; }
+        public int? SelectedModelId { get; set; }
         [BindProperty]
         public string[] SelectedSkills { get; set; } = new string[] { };
         public string[] AvailableSkills { get; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "ttsschema", "voicechoser", "evaluator", "story" };
@@ -37,8 +37,8 @@ namespace TinyGenerator.Pages.Agents
                 StepTemplates = _database.ListStepTemplates();
                 // Show enabled models, but keep agent's assigned model visible even if it's currently disabled
                 Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
-                // Resolve selected model name from numeric ModelId
-                try { SelectedModelName = Agent.ModelId.HasValue ? _database.GetModelInfoById(Agent.ModelId.Value)?.Name : null; } catch { SelectedModelName = null; }
+                // Resolve selected model id from numeric ModelId (bind directly)
+                SelectedModelId = Agent.ModelId;
                 // Load selected skills from JSON array stored in Agent.Skills
                 try {
                     if (!string.IsNullOrWhiteSpace(Agent.Skills)) {
@@ -78,22 +78,7 @@ namespace TinyGenerator.Pages.Agents
                 // Ensure Agent.Skills is serialised from SelectedSkills
                 try { Agent.Skills = System.Text.Json.JsonSerializer.Serialize(SelectedSkills ?? new string[] {}); } catch { Agent.Skills = "[]"; }
 
-                // Resolve model ID from the selected model name (names are shown to the user in the dropdown)
-                if (string.IsNullOrWhiteSpace(SelectedModelName))
-                {
-                    Agent.ModelId = null;
-                }
-                else
-                {
-                    var selected = Models.FirstOrDefault(m => string.Equals(m.Name, SelectedModelName, StringComparison.OrdinalIgnoreCase))
-                        ?? _database.GetModelInfo(SelectedModelName);
-                    if (selected == null)
-                    {
-                        ModelState.AddModelError("SelectedModelName", "Selected model could not be found.");
-                        return Page();
-                    }
-                    Agent.ModelId = selected.Id;
-                }
+                // Model id is bound directly to Agent.ModelId by the form (no extra mapping needed)
                 if (!string.IsNullOrWhiteSpace(Agent.Skills))
                 {
                     var doc = System.Text.Json.JsonDocument.Parse(Agent.Skills);

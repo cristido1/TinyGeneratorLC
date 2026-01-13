@@ -82,6 +82,14 @@ namespace TinyGenerator.Models
         // Multi-step template association
         [Column("multi_step_template_id")]
         public int? MultiStepTemplateId { get; set; }
+
+        // Narrative Engine extensions
+        [Column("priority")]
+        public int Priority { get; set; } = 0;
+
+        // JSON array (or null) of allowed narrative profile names/ids
+        [Column("allowed_profiles")]
+        public string? AllowedProfiles { get; set; }
         
         // Non-persistent helper
         [NotMapped]

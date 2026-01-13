@@ -1,0 +1,366 @@
+========================================================
+ARCHITETTURA OOP PER STORYTELLING A CHUNK CONTINUO
+Modelli LLM locali – Controllo narrativo esterno
+========================================================
+
+
+--------------------------------------------------------
+1) OGGETTO PRINCIPALE: NarrativeEngine
+--------------------------------------------------------
+
+DESCRIZIONE:
+NarrativeEngine è il coordinatore centrale.
+Non scrive testo narrativo.
+Decide cosa deve accadere nel prossimo chunk e orchestra
+gli altri oggetti.
+
+RESPONSABILITÀ:
+- avanzare la storia chunk per chunk
+- decidere fase narrativa e POV
+- aggiornare lo stato globale
+- notificare eventi
+
+
+DEFINIZIONE C#:
+
+public class NarrativeEngine
+{
+    public int CurrentChunkIndex { get; private set; }
+    public NarrativeState State { get; private set; }
+    public PhaseController PhaseController { get; private set; }
+    public POVController POVController { get; private set; }
+    public PromptBuilder PromptBuilder { get; private set; }
+    public IModelClient ModelClient { get; private set; }
+
+    public event Action<ChunkResult> OnChunkGenerated;
+    public event Action<PhaseType> OnPhaseChanged;
+    public event Action<POVType> OnPOVChanged;
+
+    public ChunkResult GenerateNextChunk()
+    {
+        PhaseType nextPhase = PhaseController.DecideNextPhase(CurrentChunkIndex);
+        POVType pov = POVController.GetCurrentPOV();
+
+        string systemPrompt = PromptBuilder.BuildSystemPrompt();
+        string userPrompt = PromptBuilder.BuildUserPrompt(State, nextPhase, pov);
+
+        string text = ModelClient.Generate(systemPrompt, userPrompt, State.LastContext);
+
+        ChunkResult result = new ChunkResult(text);
+        result.Analyze();
+
+        State.UpdateFromChunk(result);
+
+        CurrentChunkIndex++;
+
+        OnChunkGenerated?.Invoke(result);
+        OnPhaseChanged?.Invoke(nextPhase);
+        OnPOVChanged?.Invoke(pov);
+
+        return result;
+    }
+}
+
+
+SPIEGAZIONE CAMPI:
+- CurrentChunkIndex: numero progressivo del chunk
+- State: stato narrativo persistente
+- PhaseController: decide Azione/Stallo/Errore/Conseguenza
+- POVController: controlla il punto di vista
+- PromptBuilder: costruisce prompt dinamici
+- ModelClient: interfaccia verso llama.cpp / ollama
+
+METODO CHIAVE:
+- GenerateNextChunk(): unico entry point per avanzare la storia
+
+
+--------------------------------------------------------
+2) NarrativeState (STATO PERSISTENTE)
+--------------------------------------------------------
+
+DESCRIZIONE:
+Rappresenta lo stato della storia.
+Va salvato su database o file dopo ogni chunk.
+
+DEFINIZIONE C#:
+
+public class NarrativeState
+{
+    public Dictionary<string, int> Resources { get; private set; }
+    public MicroObjective ActiveObjective { get; private set; }
+    public List<string> ForbiddenWords { get; private set; }
+    public string LastContext { get; private set; }
+    public int FailureCount { get; private set; }
+
+    public event Action OnResourcesDepleted;
+    public event Action OnFailureThresholdReached;
+
+    public NarrativeState()
+    {
+        Resources = new Dictionary<string, int>();
+        ForbiddenWords = new List<string>();
+    }
+
+    public void ConsumeResource(string name, int amount)
+    {
+        if (!Resources.ContainsKey(name)) return;
+
+        Resources[name] -= amount;
+
+        if (Resources[name] <= 0)
+            OnResourcesDepleted?.Invoke();
+    }
+
+    public void RegisterFailure()
+    {
+        FailureCount++;
+        if (FailureCount >= 3)
+            OnFailureThresholdReached?.Invoke();
+    }
+
+    public void UpdateContext(string text)
+    {
+        LastContext = text;
+    }
+
+    public void UpdateFromChunk(ChunkResult result)
+    {
+        UpdateContext(result.GetTail(800));
+
+        foreach (var word in result.RepeatedWords)
+            if (!ForbiddenWords.Contains(word))
+                ForbiddenWords.Add(word);
+
+        if (result.DetectedFailure)
+            RegisterFailure();
+    }
+}
+
+
+SPIEGAZIONE:
+- Resources: munizioni, uomini, energia, ecc.
+- ActiveObjective: micro-obiettivo corrente
+- ForbiddenWords: blacklist lessicale dinamica
+- LastContext: ultimi token da rimandare al modello
+- FailureCount: numero di errori narrativi accumulati
+
+
+--------------------------------------------------------
+3) POVController
+--------------------------------------------------------
+
+DESCRIZIONE:
+Gestisce il punto di vista.
+Il modello NON decide mai il POV.
+
+DEFINIZIONE C#:
+
+public enum POVType
+{
+    Plancia,
+    Pilota,
+    Fante
+}
+
+public class POVController
+{
+    private readonly List<POVType> _sequence;
+    private int _index;
+
+    public event Action<POVType> OnPOVChanged;
+
+    public POVController(List<POVType> sequence)
+    {
+        _sequence = sequence;
+        _index = 0;
+    }
+
+    public POVType GetCurrentPOV()
+    {
+        return _sequence[_index];
+    }
+
+    public void MoveNext()
+    {
+        _index = (_index + 1) % _sequence.Count;
+        OnPOVChanged?.Invoke(GetCurrentPOV());
+    }
+
+    public void ForcePOV(POVType pov)
+    {
+        _index = _sequence.IndexOf(pov);
+        OnPOVChanged?.Invoke(pov);
+    }
+}
+
+
+--------------------------------------------------------
+4) PhaseController
+--------------------------------------------------------
+
+DESCRIZIONE:
+Decide il tipo di chunk da generare.
+
+DEFINIZIONE C#:
+
+public enum PhaseType
+{
+    Action,
+    Stall,
+    Error,
+    Consequence
+}
+
+public class PhaseController
+{
+    public PhaseType DecideNextPhase(int chunkIndex)
+    {
+        if (chunkIndex % 5 == 3)
+            return PhaseType.Stall;
+
+        if (chunkIndex % 5 == 4)
+            return PhaseType.Error;
+
+        return PhaseType.Action;
+    }
+}
+
+
+SPIEGAZIONE:
+- Action: avanzamento normale
+- Stall: resistenza, pressione, attesa
+- Error: decisione sbagliata
+- Consequence: effetti negativi
+
+
+--------------------------------------------------------
+5) MicroObjective
+--------------------------------------------------------
+
+DESCRIZIONE:
+Obiettivo narrativo a breve termine.
+
+DEFINIZIONE C#:
+
+public class MicroObjective
+{
+    public int Id { get; }
+    public string Description { get; }
+    public bool IsCompleted { get; private set; }
+
+    public event Action OnCompleted;
+    public event Action OnFailed;
+
+    public MicroObjective(int id, string description)
+    {
+        Id = id;
+        Description = description;
+    }
+
+    public void Complete()
+    {
+        IsCompleted = true;
+        OnCompleted?.Invoke();
+    }
+
+    public void Fail()
+    {
+        IsCompleted = false;
+        OnFailed?.Invoke();
+    }
+}
+
+
+--------------------------------------------------------
+6) PromptBuilder
+--------------------------------------------------------
+
+DESCRIZIONE:
+Trasforma stato + decisioni in testo di prompt.
+
+DEFINIZIONE C#:
+
+public class PromptBuilder
+{
+    public string BaseSystemPrompt { get; set; }
+
+    public string BuildSystemPrompt()
+    {
+        return BaseSystemPrompt;
+    }
+
+    public string BuildUserPrompt(
+        NarrativeState state,
+        PhaseType phase,
+        POVType pov)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Continua la storia dal punto esatto in cui si è interrotta.");
+        sb.AppendLine($"Segui il punto di vista: {pov}.");
+        sb.AppendLine($"Fase narrativa: {phase}.");
+
+        if (state.ActiveObjective != null)
+            sb.AppendLine($"Micro-obiettivo: {state.ActiveObjective.Description}.");
+
+        if (state.ForbiddenWords.Any())
+            sb.AppendLine($"Evita di usare le parole: {string.Join(", ", state.ForbiddenWords)}.");
+
+        return sb.ToString();
+    }
+}
+
+
+--------------------------------------------------------
+7) ChunkResult
+--------------------------------------------------------
+
+DESCRIZIONE:
+Risultato analizzabile del modello.
+
+DEFINIZIONE C#:
+
+public class ChunkResult
+{
+    public string Text { get; }
+    public bool DetectedFailure { get; private set; }
+    public List<string> RepeatedWords { get; private set; }
+
+    public ChunkResult(string text)
+    {
+        Text = text;
+        RepeatedWords = new List<string>();
+    }
+
+    public void Analyze()
+    {
+        // analisi semplice: ripetizioni, fallimenti, ecc.
+    }
+
+    public string GetTail(int length)
+    {
+        if (Text.Length <= length) return Text;
+        return Text.Substring(Text.Length - length);
+    }
+}
+
+
+--------------------------------------------------------
+REGOLA FONDAMENTALE
+--------------------------------------------------------
+
+Il modello NON prende decisioni strutturali.
+Il dominio oggetti decide:
+- POV
+- fase
+- obiettivi
+- limiti
+
+Il modello esegue:
+- descrizione
+- azione
+- tensione
+
+========================================================
+FINE DOCUMENTO
+========================================================

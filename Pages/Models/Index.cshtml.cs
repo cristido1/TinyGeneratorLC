@@ -153,7 +153,7 @@ namespace TinyGenerator.Pages.Models
                 // Legacy: check by name
                 // Resolve model name to id and call id-based API
                 var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, Model, StringComparison.OrdinalIgnoreCase));
-                var agentsUsingModel = modelInfo != null ? _database.GetAgentsUsingModel(modelInfo.Id.Value) : new System.Collections.Generic.List<string>();
+                var agentsUsingModel = modelInfo?.Id != null ? _database.GetAgentsUsingModel(modelInfo.Id.Value) : new System.Collections.Generic.List<string>();
                 if (agentsUsingModel.Count > 0)
                 {
                     var agentsList = string.Join(", ", agentsUsingModel);

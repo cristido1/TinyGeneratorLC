@@ -6,31 +6,42 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
+using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands;
 
 public sealed class GenerateNextChunkCommand
 {
-    private const int ContextTailChars = 800;
+    private readonly CommandTuningOptions _tuning;
+
+    public sealed record GenerateChunkOptions(
+        bool RequireCliffhanger = true,
+        bool IsFinalChunk = false,
+        int? TargetWords = null);
 
     private readonly long _storyId;
     private readonly int _writerAgentId;
     private readonly DatabaseService _database;
     private readonly ILangChainKernelFactory _kernelFactory;
     private readonly ICustomLogger? _logger;
+    private readonly GenerateChunkOptions _options;
 
     public GenerateNextChunkCommand(
         long storyId,
         int writerAgentId,
         DatabaseService database,
         ILangChainKernelFactory kernelFactory,
-        ICustomLogger? logger = null)
+        ICustomLogger? logger = null,
+        GenerateChunkOptions? options = null,
+        CommandTuningOptions? tuning = null)
     {
         _storyId = storyId;
         _writerAgentId = writerAgentId;
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
         _logger = logger;
+        _options = options ?? new GenerateChunkOptions();
+        _tuning = tuning ?? new CommandTuningOptions();
     }
 
     public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
@@ -60,18 +71,18 @@ public sealed class GenerateNextChunkCommand
         // Apply base resource consumption per phase (deterministic, no semantic inference)
         var newResources = ApplyBaseConsumption(snap, phase);
 
-        // Apply consequence impacts only when in Consequence phase
-        if (string.Equals(phase, "Consequence", StringComparison.OrdinalIgnoreCase))
+        // Apply consequence impacts only in EFFETTO phase
+        if (string.Equals(phase, "EFFETTO", StringComparison.OrdinalIgnoreCase))
         {
             ApplyConsequenceImpactsInPlace(snap, newResources);
         }
 
-        var prompt = BuildWriterPrompt(snap, phase, pov);
+        var prompt = BuildWriterPrompt(snap, phase, pov, _options);
 
         string output = string.Empty;
         string? lastValidationError = null;
         var attempts = 0;
-        const int maxAttempts = 3; // initial + 2 retries
+        var maxAttempts = Math.Max(1, _tuning.GenerateNextChunk.MaxAttempts);
 
         while (attempts < maxAttempts)
         {
@@ -85,15 +96,25 @@ public sealed class GenerateNextChunkCommand
             }
 
             output = await CallWriterAsync(writer, attemptPrompt, ct).ConfigureAwait(false);
+            output = ExtractAssistantContent(output);
             output = (output ?? string.Empty).Trim();
 
-            if (EndsInTension(output, out var reason))
+            if (_options.RequireCliffhanger)
             {
+                if (EndsInTension(output, out var reason))
+                {
+                    lastValidationError = null;
+                    break;
+                }
+
+                lastValidationError = reason;
+            }
+            else
+            {
+                // No cliffhanger validation requested (e.g. final chunk).
                 lastValidationError = null;
                 break;
             }
-
-            lastValidationError = reason;
         }
 
         var failureDelta = 0;
@@ -110,7 +131,7 @@ public sealed class GenerateNextChunkCommand
                 "Writer returned empty output; chunk not persisted. Verify the writer model service (e.g. Ollama/OpenAI endpoint) is running and the selected model is available.");
         }
 
-        var tail = GetTail(output, ContextTailChars);
+        var tail = GetTail(output, Math.Max(0, _tuning.GenerateNextChunk.ContextTailChars));
 
         if (!_database.TryApplyStateDrivenChunk(
                 storyId: snap.StoryId,
@@ -135,32 +156,91 @@ public sealed class GenerateNextChunkCommand
 
     private static string DecidePhase(DatabaseService.StateDrivenStorySnapshot snap)
     {
-        // Base schedule from usage_narrative_engine_OOP.txt
-        var basePhase = (snap.CurrentChunkIndex % 5) switch
-        {
-            3 => "Stall",
-            4 => "Error",
-            _ => "Action"
-        };
+        var allowed = ParseSuccessioneStatiOrDefault(snap.EffectiveTipoPlanningSuccessioneStati);
 
-        // Numeric overrides only (no semantic inference): failure/resource thresholds trigger Consequence.
-        if (snap.FailureCount >= 3)
+        // Deterministic overrides (no semantic inference): repeated validator failures or depleted resources force EFFETTO.
+        if (snap.FailureCount >= 3 || AnyResourceAtMin(snap))
         {
-            return "Consequence";
+            return allowed.Contains("EFFETTO", StringComparer.OrdinalIgnoreCase) ? "EFFETTO" : allowed.Last();
         }
 
+        var current = NormalizePhaseToken(snap.CurrentPhase);
+
+        // First chunk: optional per-episode initial phase, otherwise first in grammar.
+        if (string.IsNullOrWhiteSpace(current))
+        {
+            var initial = NormalizePhaseToken(snap.EpisodeInitialPhase);
+            if (!string.IsNullOrWhiteSpace(initial) && allowed.Contains(initial, StringComparer.OrdinalIgnoreCase))
+            {
+                return initial;
+            }
+            return allowed[0];
+        }
+
+        // Next = next in succession (circular).
+        var idx = allowed.FindIndex(s => s.Equals(current, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0)
+        {
+            // If the stored phase was legacy or invalid, restart from grammar.
+            return allowed[0];
+        }
+
+        return allowed[(idx + 1) % allowed.Count];
+    }
+
+    private static bool AnyResourceAtMin(DatabaseService.StateDrivenStorySnapshot snap)
+    {
         foreach (var res in snap.ProfileResources)
         {
             if (snap.CurrentResourceValues.TryGetValue(res.Name, out var current))
             {
-                if (current <= res.MinValue)
-                {
-                    return "Consequence";
-                }
+                if (current <= res.MinValue) return true;
             }
         }
+        return false;
+    }
 
-        return basePhase;
+    private static List<string> ParseSuccessioneStatiOrDefault(string? csv)
+    {
+        static bool IsAllowed(string s) =>
+            s.Equals("AZIONE", StringComparison.OrdinalIgnoreCase)
+            || s.Equals("STASI", StringComparison.OrdinalIgnoreCase)
+            || s.Equals("ERRORE", StringComparison.OrdinalIgnoreCase)
+            || s.Equals("EFFETTO", StringComparison.OrdinalIgnoreCase);
+
+        var parts = (csv ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(NormalizePhaseToken)
+            .Where(s => !string.IsNullOrWhiteSpace(s) && IsAllowed(s))
+            .ToList();
+
+        if (parts.Count == 0)
+        {
+            return new List<string> { "STASI", "AZIONE", "ERRORE", "EFFETTO" };
+        }
+
+        // Keep order and allow repeats, but ensure we have at least one element.
+        return parts;
+    }
+
+    private static string? NormalizePhaseToken(string? phase)
+    {
+        if (string.IsNullOrWhiteSpace(phase)) return null;
+
+        var p = phase.Trim();
+        // Normalize legacy internal names to the 4-state vocabulary.
+        if (p.Equals("Action", StringComparison.OrdinalIgnoreCase)) return "AZIONE";
+        if (p.Equals("Stall", StringComparison.OrdinalIgnoreCase)) return "STASI";
+        if (p.Equals("Error", StringComparison.OrdinalIgnoreCase)) return "ERRORE";
+        if (p.Equals("Consequence", StringComparison.OrdinalIgnoreCase)) return "EFFETTO";
+
+        // Accept already-normalized tokens.
+        if (p.Equals("AZIONE", StringComparison.OrdinalIgnoreCase)) return "AZIONE";
+        if (p.Equals("STASI", StringComparison.OrdinalIgnoreCase)) return "STASI";
+        if (p.Equals("ERRORE", StringComparison.OrdinalIgnoreCase)) return "ERRORE";
+        if (p.Equals("EFFETTO", StringComparison.OrdinalIgnoreCase)) return "EFFETTO";
+
+        return p.ToUpperInvariant();
     }
 
     private static string DecidePov(DatabaseService.StateDrivenStorySnapshot snap)
@@ -195,9 +275,9 @@ public sealed class GenerateNextChunkCommand
         // Deterministic base drain (kept conservative).
         var drain = phase switch
         {
-            "Stall" => 1,
-            "Error" => 1,
-            "Consequence" => 2,
+            "STASI" => 1,
+            "ERRORE" => 1,
+            "EFFETTO" => 2,
             _ => 0
         };
 
@@ -237,16 +317,35 @@ public sealed class GenerateNextChunkCommand
         }
     }
 
-    private static string BuildWriterPrompt(DatabaseService.StateDrivenStorySnapshot snap, string phase, string pov)
+    private static string BuildWriterPrompt(DatabaseService.StateDrivenStorySnapshot snap, string phase, string pov, GenerateChunkOptions options)
     {
         var sb = new StringBuilder();
         sb.AppendLine("SCRIVI IL PROSSIMO CHUNK (in italiano).");
         sb.AppendLine();
         sb.AppendLine("VINCOLI NON NEGOZIABILI:");
-        sb.AppendLine($"- FASE (decisa dal codice): {phase}");
+        sb.AppendLine($"- STATO NARRATIVO (deciso dal Planner/codice): {phase}");
         sb.AppendLine($"- POV (deciso dal codice): {pov}");
-        sb.AppendLine("- Il chunk DEVE terminare con tensione aperta (cliffhanger).\n  Vietato chiudere o concludere la storia.");
+        if (options.RequireCliffhanger)
+        {
+            sb.AppendLine("- Il chunk DEVE terminare con tensione aperta (cliffhanger).\n  Vietato chiudere o concludere la storia.");
+        }
+        else if (options.IsFinalChunk)
+        {
+            sb.AppendLine("- QUESTO È L'ULTIMO CHUNK: deve CHIUDERE l'episodio in modo soddisfacente.");
+            sb.AppendLine("- Vietato cliffhanger finale: niente '...'? niente domanda aperta come ultima frase.");
+        }
+
+        if (options.TargetWords.HasValue && options.TargetWords.Value > 0)
+        {
+            sb.AppendLine($"- Lunghezza target: circa {options.TargetWords.Value} parole (tolleranza ±20%).");
+        }
         sb.AppendLine("- NON aggiungere sezioni meta (es. 'capitolo', 'fine', 'riassunto').");
+        sb.AppendLine();
+        sb.AppendLine("REGOLA SULLO STATO:");
+        sb.AppendLine("- AZIONE: eventi, decisioni, movimento, conflitto in corso.");
+        sb.AppendLine("- STASI: pausa, riflessione, setup, atmosfera, preparazione.");
+        sb.AppendLine("- ERRORE: fallimento, imprevisto, rottura del piano, escalation negativa.");
+        sb.AppendLine("- EFFETTO: conseguenze e ricadute (causa-effetto) degli eventi/errore.");
         sb.AppendLine();
         sb.AppendLine("TEMA/CANONE (input utente):");
         sb.AppendLine(snap.Prompt);
@@ -301,6 +400,67 @@ public sealed class GenerateNextChunkCommand
             _logger?.Log("Error", "StateDriven", $"Writer call failed: {ex.Message}");
             return string.Empty;
         }
+    }
+
+    private static string ExtractAssistantContent(string? response)
+    {
+        var raw = response ?? string.Empty;
+        var trimmed = raw.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed)) return string.Empty;
+
+        // Many backends return a JSON envelope (Ollama chat style / OpenAI style).
+        if (!trimmed.StartsWith("{", StringComparison.Ordinal) && !trimmed.StartsWith("[", StringComparison.Ordinal))
+        {
+            return raw;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            var root = doc.RootElement;
+
+            // Ollama chat format: { message: { content: "..." } }
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("message", out var msg))
+            {
+                if (msg.ValueKind == JsonValueKind.Object && msg.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
+                    return content.GetString() ?? string.Empty;
+                if (msg.ValueKind == JsonValueKind.String)
+                    return msg.GetString() ?? string.Empty;
+            }
+
+            // OpenAI chat format: { choices: [ { message: { content: "..." } } ] }
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array)
+            {
+                var first = choices.EnumerateArray().FirstOrDefault();
+                if (first.ValueKind == JsonValueKind.Object)
+                {
+                    if (first.TryGetProperty("message", out var choiceMsg) && choiceMsg.ValueKind == JsonValueKind.Object &&
+                        choiceMsg.TryGetProperty("content", out var choiceContent) && choiceContent.ValueKind == JsonValueKind.String)
+                    {
+                        return choiceContent.GetString() ?? string.Empty;
+                    }
+
+                    // Streaming-like delta format: { choices: [ { delta: { content: "..." } } ] }
+                    if (first.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object &&
+                        delta.TryGetProperty("content", out var deltaContent) && deltaContent.ValueKind == JsonValueKind.String)
+                    {
+                        return deltaContent.GetString() ?? string.Empty;
+                    }
+                }
+            }
+
+            // Some backends use { response: "..." } or { content: "..." }
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("response", out var resp) && resp.ValueKind == JsonValueKind.String)
+                return resp.GetString() ?? string.Empty;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("content", out var rootContent) && rootContent.ValueKind == JsonValueKind.String)
+                return rootContent.GetString() ?? string.Empty;
+        }
+        catch
+        {
+            // If it's not valid JSON, keep raw.
+        }
+
+        return raw;
     }
 
     private static bool EndsInTension(string text, out string reason)

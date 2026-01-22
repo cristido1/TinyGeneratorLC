@@ -26,7 +26,7 @@ public class PlannerMethodsApiController : ControllerBase
         try
         {
             var methods = _context.PlannerMethods
-                .OrderBy(m => m.Name)
+                .OrderBy(m => m.Code)
                 .ToList();
             return Ok(methods);
         }
@@ -47,7 +47,7 @@ public class PlannerMethodsApiController : ControllerBase
         {
             var methods = _context.PlannerMethods
                 .Where(m => m.IsActive)
-                .OrderBy(m => m.Name)
+                .OrderBy(m => m.Code)
                 .ToList();
             return Ok(methods);
         }
@@ -97,7 +97,7 @@ public class PlannerMethodsApiController : ControllerBase
             _context.PlannerMethods.Add(method);
             _context.SaveChanges();
 
-            _logger.LogInformation("Created planner method {Id}: {Name}", method.Id, method.Name);
+            _logger.LogInformation("Created planner method {Id}: {Code}", method.Id, method.Code);
             return CreatedAtAction(nameof(GetById), new { id = method.Id }, method);
         }
         catch (Exception ex)
@@ -128,23 +128,13 @@ public class PlannerMethodsApiController : ControllerBase
 
             // Update properties
             existingMethod.Code = updatedMethod.Code;
-            existingMethod.Name = updatedMethod.Name;
             existingMethod.Description = updatedMethod.Description;
-            existingMethod.Category = updatedMethod.Category;
-            existingMethod.BeatCount = updatedMethod.BeatCount;
-            existingMethod.StructureSchema = updatedMethod.StructureSchema;
-            existingMethod.PlannerPrompt = updatedMethod.PlannerPrompt;
-            existingMethod.ValidationRules = updatedMethod.ValidationRules;
-            existingMethod.Strengths = updatedMethod.Strengths;
-            existingMethod.Weaknesses = updatedMethod.Weaknesses;
-            existingMethod.RecommendedGenres = updatedMethod.RecommendedGenres;
-            existingMethod.SupportsSeries = updatedMethod.SupportsSeries;
             existingMethod.Notes = updatedMethod.Notes;
             existingMethod.IsActive = updatedMethod.IsActive;
 
             _context.SaveChanges();
 
-            _logger.LogInformation("Updated planner method {Id}: {Name}", id, existingMethod.Name);
+            _logger.LogInformation("Updated planner method {Id}: {Code}", id, existingMethod.Code);
             return Ok(existingMethod);
         }
         catch (Exception ex)
@@ -169,7 +159,7 @@ public class PlannerMethodsApiController : ControllerBase
             _context.PlannerMethods.Remove(method);
             _context.SaveChanges();
 
-            _logger.LogInformation("Deleted planner method {Id}: {Name}", id, method.Name);
+            _logger.LogInformation("Deleted planner method {Id}: {Code}", id, method.Code);
             return Ok(new { message = "Metodo eliminato con successo" });
         }
         catch (Exception ex)

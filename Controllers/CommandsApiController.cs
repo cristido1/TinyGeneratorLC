@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Services;
 using TinyGenerator.Services.Commands;
 
@@ -13,19 +14,22 @@ namespace TinyGenerator.Controllers
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly StoriesService _storiesService;
         private readonly ICustomLogger _logger;
+        private readonly CommandTuningOptions _tuning;
 
         public CommandsApiController(
             ICommandDispatcher dispatcher,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
             StoriesService storiesService,
-            ICustomLogger logger)
+            ICustomLogger logger,
+            IOptions<CommandTuningOptions> tuningOptions)
         {
             _dispatcher = dispatcher;
             _database = database;
             _kernelFactory = kernelFactory;
             _storiesService = storiesService;
             _logger = logger;
+            _tuning = tuningOptions.Value ?? new CommandTuningOptions();
         }
 
         [HttpGet]
@@ -121,7 +125,8 @@ namespace TinyGenerator.Controllers
                 _kernelFactory,
                 _storiesService,
                 _logger,
-                _dispatcher);
+                _dispatcher,
+                _tuning);
 
             _dispatcher.Enqueue(
                 "TransformStoryRawToTagged",
@@ -217,7 +222,7 @@ namespace TinyGenerator.Controllers
             if (!snap.IsActive) return BadRequest(new { error = "Story runtime is not active" });
 
             var runId = Guid.NewGuid().ToString();
-            var cmd = new GenerateNextChunkCommand(request.StoryId, request.WriterAgentId, _database, _kernelFactory, _logger);
+            var cmd = new GenerateNextChunkCommand(request.StoryId, request.WriterAgentId, _database, _kernelFactory, _logger, tuning: _tuning);
 
             _dispatcher.Enqueue(
                 "GenerateNextChunk",

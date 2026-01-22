@@ -24,4 +24,25 @@ public sealed class SeriesEpisode
 
     [Column("trama")]
     public string? Trama { get; set; }
+
+    [Column("episode_goal")]
+    public string? EpisodeGoal { get; set; }
+
+    [Column("start_situation")]
+    public string? StartSituation { get; set; }
+
+    /// <summary>
+    /// Optional initial narrative phase for this episode.
+    /// Allowed values (case-insensitive): AZIONE, STASI, ERRORE, EFFETTO.
+    /// </summary>
+    [Column("initial_phase")]
+    [MaxLength(20)]
+    public string? InitialPhase { get; set; }
+
+    /// <summary>
+    /// Optional tactical planning override for this episode (tipo_planning.id_tipo_planning).
+    /// If null, the series default should be used.
+    /// </summary>
+    [Column("tipo_planning_id")]
+    public int? TipoPlanningId { get; set; }
 }

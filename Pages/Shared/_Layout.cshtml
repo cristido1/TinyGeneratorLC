@@ -6,6 +6,8 @@
     <title>@ViewData["Title"] - TinyGenerator</title>
     <link href="~/lib/bootstrap/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="~/lib/bootstrap-icons/bootstrap-icons.css" rel="stylesheet" />
+    <link href="~/lib/datatables/css/dataTables.bootstrap5.min.css" rel="stylesheet" />
+    <link href="~/lib/datatables/css/buttons.bootstrap5.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="~/css/sidebar.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <style>
@@ -61,16 +63,12 @@
                 <a asp-page="/TaskTypes/Index" title="Task Types"><i class="bi bi-tags"></i><span>Task Types</span></a>
                 <a asp-page="/StepTemplates/Index" title="Step Templates"><i class="bi bi-list-ol"></i><span>Step Templates</span></a>
                 <a asp-page="/PlannerMethods" title="Metodi Pianificazione"><i class="bi bi-diagram-2"></i><span>Metodi Pianificazione</span></a>
+                <a asp-page="/TipoPlanning" title="Tipi Planning"><i class="bi bi-signpost-2"></i><span>Tipi Planning</span></a>
             </div>
 
             <div class="sidebar-section">
                 <div class="sidebar-section-title">Narrative Engine</div>
-                <a asp-page="/NarrativeProfiles/Index" title="Narrative Profiles"><i class="bi bi-journal-bookmark"></i><span>Narrative Profiles</span></a>
-                <a asp-page="/NarrativeResources/Index" title="Narrative Resources"><i class="bi bi-sliders"></i><span>Narrative Resources</span></a>
-                <a asp-page="/MicroObjectives/Index" title="Micro Objectives"><i class="bi bi-bullseye"></i><span>Micro Objectives</span></a>
-                <a asp-page="/FailureRules/Index" title="Failure Rules"><i class="bi bi-exclamation-triangle"></i><span>Failure Rules</span></a>
-                <a asp-page="/ConsequenceRules/Index" title="Consequence Rules"><i class="bi bi-arrow-repeat"></i><span>Consequence Rules</span></a>
-                <a asp-page="/ConsequenceImpacts/Index" title="Consequence Impacts"><i class="bi bi-graph-down-arrow"></i><span>Consequence Impacts</span></a>
+                <a asp-page="/NarrativeProfiles/Index" title="Unified Narrative Engine"><i class="bi bi-journal-bookmark"></i><span>Narrative Engine Profiles</span></a>
             </div>
             <div class="sidebar-section">
                 <div class="sidebar-section-title">Admin</div>
@@ -97,6 +95,11 @@
     
     <!-- Shared JS -->
     <script src="~/lib/jquery/jquery.min.js"></script>
+    <script src="~/lib/datatables/js/jquery.dataTables.min.js"></script>
+    <script src="~/lib/datatables/js/dataTables.bootstrap5.min.js"></script>
+    <script src="~/lib/datatables/js/dataTables.buttons.min.js"></script>
+    <script src="~/lib/datatables/js/buttons.bootstrap5.min.js"></script>
+    <script src="~/lib/datatables/js/buttons.colVis.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/lib/signalr/signalr.min.js"></script>
     <script src="~/js/sidebar.js" asp-append-version="true"></script>

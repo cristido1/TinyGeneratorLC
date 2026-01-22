@@ -336,7 +336,16 @@ namespace TinyGenerator.Services
                     $"Creating ChatBridge for model '{model}' with provider '{modelInfo.Provider}' and endpoint '{endpoint}'");
 
                 var logAsLlama = modelInfo.Provider?.Equals("llama.cpp", StringComparison.OrdinalIgnoreCase) == true;
-                var bridge = new LangChainChatBridge(endpoint, model, apiKey, null, _logger, forceOllama, beforeCall, afterCall, logAsLlama);
+                // Read NoTemperatureModels from config
+                var noTempModels = _config.GetSection("OpenAI:NoTemperatureModels").Get<string[]>() ?? Array.Empty<string>();
+                var noRepeatPenaltyModels = _config.GetSection("OpenAI:NoRepeatPenaltyModels").Get<string[]>() ?? Array.Empty<string>();
+                var noTopPModels = _config.GetSection("OpenAI:NoTopPModels").Get<string[]>() ?? Array.Empty<string>();
+                var noFrequencyPenaltyModels = _config.GetSection("OpenAI:NoFrequencyPenaltyModels").Get<string[]>() ?? Array.Empty<string>();
+                var noMaxTokensModels = _config.GetSection("OpenAI:NoMaxTokensModels").Get<string[]>() ?? Array.Empty<string>();
+                var noTopKModels = _config.GetSection("OpenAI:NoTopKModels").Get<string[]>() ?? Array.Empty<string>();
+                var noRepeatLastNModels = _config.GetSection("OpenAI:NoRepeatLastNModels").Get<string[]>() ?? Array.Empty<string>();
+                var noNumPredictModels = _config.GetSection("OpenAI:NoNumPredictModels").Get<string[]>() ?? Array.Empty<string>();
+                var bridge = new LangChainChatBridge(endpoint, model, apiKey, null, _logger, forceOllama, beforeCall, afterCall, logAsLlama, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels);
                 if (temperature.HasValue) bridge.Temperature = temperature.Value;
                 if (topP.HasValue) bridge.TopP = topP.Value;
                 if (repeatPenalty.HasValue) bridge.RepeatPenalty = repeatPenalty.Value;

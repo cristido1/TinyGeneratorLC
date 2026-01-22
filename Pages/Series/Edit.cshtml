@@ -186,6 +186,18 @@
 
             <div class="row mb-3">
                 <div class="col-md-12">
+                    <label asp-for="SeriesItem.SerieFinalGoal" class="form-label">
+                        Final Goal della Serie
+                        <small class="text-muted d-block">Obiettivo finale/risoluzione attesa dell'arco complessivo della serie.</small>
+                    </label>
+                    <textarea asp-for="SeriesItem.SerieFinalGoal" class="form-control" rows="2"
+                              placeholder="Esempio: La flotta trova un modo sostenibile di coesistere con la minaccia, pagando un prezzo morale."></textarea>
+                    <span asp-validation-for="SeriesItem.SerieFinalGoal" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-12">
                     <label asp-for="SeriesItem.NoteAI" class="form-label">
                         Note AI (Campo Jolly)
                         <small class="text-muted d-block">Istruzioni temporanee o sperimentali per il writer AI.</small>
@@ -195,6 +207,54 @@
                     <span asp-validation-for="SeriesItem.NoteAI" class="text-danger"></span>
                 </div>
             </div>
+
+            <!-- SEZIONE 3: PIANIFICAZIONE (STRATEGICO/TATTICO) -->
+            <h4 class="mt-5 mb-3 text-warning">Pianificazione (Planner)</h4>
+            <p class="text-muted mb-3">Metodo strategico (planner_method) per la serie e grammatica tattica (tipo_planning) di default per gli episodi.</p>
+
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label asp-for="SeriesItem.PlannerMethodId" class="form-label">
+                        Planner Method (Strategico)
+                        <small class="text-muted d-block">Definisce il framework globale della serie (es. Save the Cat, Hero Journey).</small>
+                    </label>
+                    <select asp-for="SeriesItem.PlannerMethodId" class="form-select">
+                        <option value="">-- Nessuno --</option>
+                        @foreach (var m in Model.PlannerMethods)
+                        {
+                            <option value="@m.Id">@m.Code@(string.IsNullOrWhiteSpace(m.Description) ? "" : " - " + m.Description)</option>
+                        }
+                    </select>
+                    <span asp-validation-for="SeriesItem.PlannerMethodId" class="text-danger"></span>
+                </div>
+                <div class="col-md-6">
+                    <label asp-for="SeriesItem.DefaultTipoPlanningId" class="form-label">
+                        Tipo Planning di default (Tattico)
+                        <small class="text-muted d-block">Grammatica degli stati (AZIONE/STASI/ERRORE/EFFETTO) usata se l'episodio non sovrascrive.</small>
+                    </label>
+                    <select asp-for="SeriesItem.DefaultTipoPlanningId" class="form-select">
+                        <option value="">-- Nessuno --</option>
+                        @foreach (var t in Model.TipoPlannings)
+                        {
+                            <option value="@t.Id">@t.Nome (@t.Codice)</option>
+                        }
+                    </select>
+                    <span asp-validation-for="SeriesItem.DefaultTipoPlanningId" class="text-danger"></span>
+                </div>
+            </div>
+                <div class="row mb-3">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">Default narrative profile</label>
+                        <select class="form-select" asp-for="SeriesItem.DefaultNarrativeProfileId">
+                            <option value="">(none)</option>
+                            @foreach (var p in Model.NarrativeProfiles)
+                            {
+                                <option value="@p.Id">@p.Name</option>
+                            }
+                        </select>
+                        <div class="form-text">Used by the state-driven Narrative Engine when starting a new story for this series.</div>
+                    </div>
+                </div>
 
             <!-- SEZIONE 3: METADATI -->
             <h4 class="mt-5 mb-3 text-secondary">Metadati</h4>
@@ -363,7 +423,36 @@
                         <label class="form-label">Titolo</label>
                         <input name="EpisodeInput.Title" class="form-control" maxlength="200" />
                     </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Initial phase</label>
+                        <select name="EpisodeInput.InitialPhase" class="form-select">
+                            <option value="">(vuoto)</option>
+                            <option value="AZIONE">azione</option>
+                            <option value="STASI">stasi</option>
+                            <option value="ERRORE">errore</option>
+                            <option value="EFFETTO">effetto</option>
+                        </select>
+                        <div class="form-text">Valori ammessi: azione, stasi, errore, effetto</div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Tipo Planning (override)</label>
+                        <select name="EpisodeInput.TipoPlanningId" class="form-select">
+                            <option value="">(usa default serie)</option>
+                            @foreach (var t in Model.TipoPlannings)
+                            {
+                                <option value="@t.Id">@t.Nome (@t.Codice)</option>
+                            }
+                        </select>
+                    </div>
                     <div class="col-md-6">
+                        <label class="form-label">Start situation</label>
+                        <textarea name="EpisodeInput.StartSituation" class="form-control" rows="2" placeholder="Situazione iniziale dell'episodio"></textarea>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Episode goal</label>
+                        <textarea name="EpisodeInput.EpisodeGoal" class="form-control" rows="2" placeholder="Obiettivo dell'episodio"></textarea>
+                    </div>
+                    <div class="col-md-12">
                         <label class="form-label">Trama</label>
                         <textarea name="EpisodeInput.Trama" class="form-control" rows="2"></textarea>
                     </div>
@@ -389,7 +478,35 @@
                                 <label class="form-label">Titolo</label>
                                 <input name="EpisodeInput.Title" class="form-control" maxlength="200" value="@e.Title" />
                             </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Initial phase</label>
+                                <select name="EpisodeInput.InitialPhase" class="form-select">
+                                    <option value="" selected="@((string.IsNullOrWhiteSpace(e.InitialPhase)) ? "selected" : null)">(vuoto)</option>
+                                    <option value="AZIONE" selected="@((e.InitialPhase != null && e.InitialPhase.Equals("AZIONE", StringComparison.OrdinalIgnoreCase)) ? "selected" : null)">azione</option>
+                                    <option value="STASI" selected="@((e.InitialPhase != null && e.InitialPhase.Equals("STASI", StringComparison.OrdinalIgnoreCase)) ? "selected" : null)">stasi</option>
+                                    <option value="ERRORE" selected="@((e.InitialPhase != null && e.InitialPhase.Equals("ERRORE", StringComparison.OrdinalIgnoreCase)) ? "selected" : null)">errore</option>
+                                    <option value="EFFETTO" selected="@((e.InitialPhase != null && e.InitialPhase.Equals("EFFETTO", StringComparison.OrdinalIgnoreCase)) ? "selected" : null)">effetto</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Tipo Planning (override)</label>
+                                <select name="EpisodeInput.TipoPlanningId" class="form-select">
+                                    <option value="">(usa default serie)</option>
+                                    @foreach (var t in Model.TipoPlannings)
+                                    {
+                                        <option value="@t.Id" selected="@((e.TipoPlanningId == t.Id) ? "selected" : null)">@t.Nome (@t.Codice)</option>
+                                    }
+                                </select>
+                            </div>
                             <div class="col-md-6">
+                                <label class="form-label">Start situation</label>
+                                <textarea name="EpisodeInput.StartSituation" class="form-control" rows="2">@e.StartSituation</textarea>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Episode goal</label>
+                                <textarea name="EpisodeInput.EpisodeGoal" class="form-control" rows="2">@e.EpisodeGoal</textarea>
+                            </div>
+                            <div class="col-md-12">
                                 <label class="form-label">Trama</label>
                                 <textarea name="EpisodeInput.Trama" class="form-control" rows="2">@e.Trama</textarea>
                             </div>

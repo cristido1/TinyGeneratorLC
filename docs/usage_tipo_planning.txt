@@ -1,0 +1,71 @@
+OBIETTIVO
+Integrare il concetto di "tipo_planning" nel flusso narrativo del sistema.
+Il tipo_planning definisce la successione degli stati narrativi fondamentali:
+AZIONE, STASI, ERRORE, EFFETTO.
+
+Il Planner è UNICO.
+Il tipo_planning è una STRATEGIA applicata a:
+- una SERIE (planning di default)
+- un EPISODIO (override opzionale)
+
+========================
+STRUTTURA TABELLA
+========================
+
+Creare una sola tabella chiamata: tipo_planning
+
+Campi minimi richiesti:
+- id_tipo_planning (PK)
+- codice (stringa breve, univoca)
+- nome (descrizione leggibile)
+- descrizione (testo esplicativo)
+- successione_stati (stringa CSV, es: "STASI,AZIONE,ERRORE,EFFETTO")
+- is_active (boolean)
+
+La colonna successione_stati rappresenta l’ordine e la frequenza
+degli stati narrativi ammessi per quel tipo di planning.
+
+========================
+INTEGRAZIONE NEL FLUSSO
+========================
+
+1) La SERIE ha un campo id_tipo_planning (default).
+2) L’EPISODIO può avere un id_tipo_planning opzionale.
+3) Se l’episodio NON lo specifica, eredita quello della serie.
+4) Il Planner:
+   - legge la successione_stati
+   - decide quale stato narrativo è ammesso come prossimo
+   - NON inventa stati fuori da quelli definiti
+
+5) Il Writer:
+   - riceve lo stato narrativo corrente
+   - scrive SOLO contenuti compatibili con quello stato
+
+6) Il Revisor:
+   - verifica che il testo rispetti lo stato assegnato
+
+========================
+STATO NARRATIVO
+========================
+
+Gli stati ammessi sono ESCLUSIVAMENTE:
+- AZIONE
+- STASI
+- ERRORE
+- EFFETTO
+
+Ogni capitolo / sezione deve essere associato a UNO stato.
+
+========================
+NOTE ARCHITETTURALI
+========================
+
+- Non creare agenti Planner diversi.
+- Non codificare logiche rigide per singolo tipo_planning.
+- Usare successione_stati come grammatica narrativa.
+- In futuro, se servirà maggiore dettaglio, verrà aggiunta
+  una tabella di dettaglio delle transizioni.
+
+========================
+FINE ISTRUZIONI
+========================

@@ -1,11 +1,13 @@
 @page
 @model TinyGenerator.Pages.NarrativeResources.EditModel
 @{
+    if (Request.Query["partial"] == "1") { Layout = null; }
     ViewData["Title"] = Model.IsNew ? "Nuova Narrative Resource" : "Edit Narrative Resource";
     ViewData["PageDescription"] = "Risorsa numerica collegata a un Narrative Profile";
 }
 
 <form method="post" class="mt-2">
+    @Html.AntiForgeryToken()
     <div asp-validation-summary="ModelOnly" class="text-danger"></div>
 
     <input type="hidden" asp-for="Item.Id" />

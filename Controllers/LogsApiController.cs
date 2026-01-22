@@ -38,6 +38,34 @@ namespace TinyGenerator.Controllers
         }
 
         /// <summary>
+        /// Get logs for a specific ThreadId.
+        /// </summary>
+        [HttpGet("thread/{threadId:int}")]
+        public IActionResult GetLogsByThreadId([FromRoute] int threadId, [FromQuery] int limit = 500)
+        {
+            try
+            {
+                if (limit <= 0) limit = 500;
+                if (limit > 5000) limit = 5000;
+
+                var logs = _db.GetLogsByThreadId(threadId)
+                    ?? new List<LogEntry>();
+
+                if (logs.Count > limit)
+                {
+                    logs = logs.GetRange(0, limit);
+                }
+
+                return Ok(logs);
+            }
+            catch (System.Exception ex)
+            {
+                _logger.Log("Error", "LogsApi", $"Failed to get logs for threadId={threadId}", ex.Message);
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// Get log count with optional filtering
         /// </summary>
         [HttpGet("count")]

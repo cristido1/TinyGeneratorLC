@@ -155,7 +155,7 @@ namespace TinyGenerator.Services
             string? testFolder = SetupTestFolder(modelInfo.Name, group, tests);
 
             var runId = _database.CreateTestRun(
-                modelInfo.Id.Value,
+                modelInfo.Id != null ? modelInfo.Id.Value : throw new InvalidOperationException("Model ID is null"),
                 group,
                 $"Group run {group} (LangChain)",
                 false,
@@ -238,12 +238,12 @@ namespace TinyGenerator.Services
 
             _database.UpdateTestRunResult(runId, passedFlag, durationMs);
             _database.UpdateModelTestResults(
-                modelInfo.Id.Value,
+                modelInfo.Id != null ? modelInfo.Id.Value : throw new InvalidOperationException("Model ID is null"),
                 score,
                 new Dictionary<string, bool?>(),
                 durationMs.HasValue ? (double?)(durationMs.Value / 1000.0) : null);
 
-            _database.RecalculateModelScore(modelInfo.Id.Value);
+            _database.RecalculateModelScore(modelInfo.Id != null ? modelInfo.Id.Value : throw new InvalidOperationException("Model ID is null"));
 
             if (passedFlag)
             {

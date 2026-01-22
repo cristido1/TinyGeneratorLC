@@ -46,6 +46,7 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<LogAnalysis> LogAnalyses => Set<LogAnalysis>();
     public DbSet<AppEventDefinition> AppEvents => Set<AppEventDefinition>();
     public DbSet<PlannerMethod> PlannerMethods => Set<PlannerMethod>();
+    public DbSet<TipoPlanning> TipoPlannings => Set<TipoPlanning>();
     public DbSet<NarrativeProfile> NarrativeProfiles => Set<NarrativeProfile>();
     public DbSet<NarrativeResource> NarrativeResources => Set<NarrativeResource>();
     public DbSet<MicroObjective> MicroObjectives => Set<MicroObjective>();
@@ -71,6 +72,29 @@ public class TinyGeneratorDbContext : DbContext
             .HasOne<Series>()
             .WithMany(s => s.Episodes)
             .HasForeignKey(se => se.SerieId);
+
+        modelBuilder.Entity<Series>()
+            .HasOne<PlannerMethod>()
+            .WithMany()
+            .HasForeignKey(s => s.PlannerMethodId);
+
+        modelBuilder.Entity<Series>()
+            .HasOne<TipoPlanning>()
+            .WithMany()
+            .HasForeignKey(s => s.DefaultTipoPlanningId);
+
+        modelBuilder.Entity<SeriesEpisode>()
+            .HasOne<TipoPlanning>()
+            .WithMany()
+            .HasForeignKey(e => e.TipoPlanningId);
+
+        modelBuilder.Entity<TipoPlanning>()
+            .HasIndex(t => t.Codice)
+            .IsUnique();
+
+        modelBuilder.Entity<PlannerMethod>()
+            .HasIndex(m => m.Code)
+            .IsUnique();
 
         // Narrative Engine relations
         modelBuilder.Entity<NarrativeResource>()

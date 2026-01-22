@@ -6,12 +6,14 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using TinyGenerator.Services;
 using TinyGenerator.Models;
 using TinyGenerator.Services.Commands;
+using Microsoft.Extensions.Options;
 
 namespace TinyGenerator.Pages.Stories
 {
@@ -23,11 +25,13 @@ namespace TinyGenerator.Pages.Stories
         private readonly ICustomLogger? _customLogger;
         private readonly ILogger<IndexModel>? _logger;
         private readonly ICommandDispatcher _commandDispatcher;
+    private readonly CommandTuningOptions _tuning;
 
         public IndexModel(
             StoriesService stories,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
+                        IOptions<CommandTuningOptions> tuningOptions,
             ICustomLogger? customLogger = null,
             ICommandDispatcher? commandDispatcher = null,
             ILogger<IndexModel>? logger = null)
@@ -35,6 +39,7 @@ namespace TinyGenerator.Pages.Stories
             _stories = stories;
             _database = database;
             _kernelFactory = kernelFactory;
+                        _tuning = tuningOptions.Value ?? new CommandTuningOptions();
             _customLogger = customLogger;
             _logger = logger;
             _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
@@ -774,13 +779,288 @@ namespace TinyGenerator.Pages.Stories
                         _kernelFactory,
                         _stories,
                         _customLogger,
-                        _commandDispatcher);
+                        _commandDispatcher,
+                        _tuning);
                     return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                 },
                 "Aggiunta tag avviata in background.");
 
             TempData["StatusMessage"] = $"Aggiunta tag avviata (run {runId}).";
             return RedirectToPage();
+        }
+
+        public IActionResult OnPostRegenAmbientTags(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "regen_ambient_tags",
+                async ctx =>
+                {
+                    var story = _database.GetStoryById(id);
+                    if (story == null)
+                    {
+                        return new CommandResult(false, $"Story {id} non trovata");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(story.StoryTagged))
+                    {
+                        return new CommandResult(false, "story_tagged vuoto: impossibile rigenerare RUMORI");
+                    }
+
+                    // Migration-friendly cleanup: remove both legacy [RUMORE] and canonical [RUMORI] blocks.
+                    var (cleaned, removedA) = RemoveTagBlocks(story.StoryTagged, "RUMORI");
+                    var (cleaned2, removedB) = RemoveTagBlocks(cleaned, "RUMORE");
+                    var cleanedFinal = cleaned2;
+                    var removed = removedA + removedB;
+                    var nextVersion = (story.StoryTaggedVersion ?? 0) + 1;
+                    var saved = _database.UpdateStoryTagged(
+                        id,
+                        cleanedFinal,
+                        story.FormatterModelId,
+                        story.FormatterPromptHash,
+                        nextVersion);
+
+                    if (!saved)
+                    {
+                        return new CommandResult(false, "Impossibile salvare story_tagged ripulito");
+                    }
+
+                    var alreadyQueued = IsExpertAlreadyQueued("ambient_expert", id);
+                    if (alreadyQueued)
+                    {
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}). ambient_expert già in coda/in esecuzione");
+                    }
+
+                    var expertRunId = $"ambient_expert_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    _commandDispatcher.Enqueue(
+                        "ambient_expert",
+                        async inner =>
+                        {
+                            var cmd = new AmbientExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning);
+                            return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
+                        },
+                        runId: expertRunId,
+                        threadScope: "story/ambient_expert",
+                        metadata: new Dictionary<string, string>
+                        {
+                            ["storyId"] = id.ToString(),
+                            ["operation"] = "ambient_expert",
+                            ["trigger"] = "stories_index_regen",
+                            ["cleaned"] = "RUMORI",
+                            ["taggedVersion"] = nextVersion.ToString()
+                        },
+                        priority: 2);
+
+                    return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}) e avviato ambient_expert (run {expertRunId})");
+                },
+                "Ripulizia RUMORI + rilancio ambient_expert avviati in background.");
+
+            TempData["StatusMessage"] = $"Rigenerazione RUMORI avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostRegenFxTags(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "regen_fx_tags",
+                async ctx =>
+                {
+                    var story = _database.GetStoryById(id);
+                    if (story == null)
+                    {
+                        return new CommandResult(false, $"Story {id} non trovata");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(story.StoryTagged))
+                    {
+                        return new CommandResult(false, "story_tagged vuoto: impossibile rigenerare FX");
+                    }
+
+                    var (cleaned, removed) = RemoveTagBlocks(story.StoryTagged, "FX");
+                    var nextVersion = (story.StoryTaggedVersion ?? 0) + 1;
+                    var saved = _database.UpdateStoryTagged(
+                        id,
+                        cleaned,
+                        story.FormatterModelId,
+                        story.FormatterPromptHash,
+                        nextVersion);
+
+                    if (!saved)
+                    {
+                        return new CommandResult(false, "Impossibile salvare story_tagged ripulito");
+                    }
+
+                    var alreadyQueued = IsExpertAlreadyQueued("fx_expert", id);
+                    if (alreadyQueued)
+                    {
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}). fx_expert già in coda/in esecuzione");
+                    }
+
+                    var expertRunId = $"fx_expert_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    _commandDispatcher.Enqueue(
+                        "fx_expert",
+                        async inner =>
+                        {
+                            var cmd = new FxExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning);
+                            return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
+                        },
+                        runId: expertRunId,
+                        threadScope: "story/fx_expert",
+                        metadata: new Dictionary<string, string>
+                        {
+                            ["storyId"] = id.ToString(),
+                            ["operation"] = "fx_expert",
+                            ["trigger"] = "stories_index_regen",
+                            ["cleaned"] = "FX",
+                            ["taggedVersion"] = nextVersion.ToString()
+                        },
+                        priority: 2);
+
+                    return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}) e avviato fx_expert (run {expertRunId})");
+                },
+                "Ripulizia FX + rilancio fx_expert avviati in background.");
+
+            TempData["StatusMessage"] = $"Rigenerazione FX avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostRegenMusicTags(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "regen_music_tags",
+                async ctx =>
+                {
+                    var story = _database.GetStoryById(id);
+                    if (story == null)
+                    {
+                        return new CommandResult(false, $"Story {id} non trovata");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(story.StoryTagged))
+                    {
+                        return new CommandResult(false, "story_tagged vuoto: impossibile rigenerare MUSICA");
+                    }
+
+                    var (cleaned, removed) = RemoveTagBlocks(story.StoryTagged, "MUSICA");
+                    var nextVersion = (story.StoryTaggedVersion ?? 0) + 1;
+                    var saved = _database.UpdateStoryTagged(
+                        id,
+                        cleaned,
+                        story.FormatterModelId,
+                        story.FormatterPromptHash,
+                        nextVersion);
+
+                    if (!saved)
+                    {
+                        return new CommandResult(false, "Impossibile salvare story_tagged ripulito");
+                    }
+
+                    var alreadyQueued = IsExpertAlreadyQueued("music_expert", id);
+                    if (alreadyQueued)
+                    {
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}). music_expert già in coda/in esecuzione");
+                    }
+
+                    var expertRunId = $"music_expert_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    _commandDispatcher.Enqueue(
+                        "music_expert",
+                        async inner =>
+                        {
+                            var cmd = new MusicExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning);
+                            return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
+                        },
+                        runId: expertRunId,
+                        threadScope: "story/music_expert",
+                        metadata: new Dictionary<string, string>
+                        {
+                            ["storyId"] = id.ToString(),
+                            ["operation"] = "music_expert",
+                            ["trigger"] = "stories_index_regen",
+                            ["cleaned"] = "MUSICA",
+                            ["taggedVersion"] = nextVersion.ToString()
+                        },
+                        priority: 2);
+
+                    return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}) e avviato music_expert (run {expertRunId})");
+                },
+                "Ripulizia MUSICA + rilancio music_expert avviati in background.");
+
+            TempData["StatusMessage"] = $"Rigenerazione MUSICA avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        private bool IsExpertAlreadyQueued(string operationName, long storyId)
+        {
+            try
+            {
+                // NOTE: CommandDispatcher.GetActiveCommands() includes also recently completed commands (for ~5 minutes)
+                // with status 'completed'/'failed'/'cancelled'. We only want to block re-enqueue when the expert is
+                // actually in-flight.
+                return _commandDispatcher.GetActiveCommands().Any(s =>
+                    string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase) &&
+                    s.Metadata != null &&
+                    s.Metadata.TryGetValue("storyId", out var sid) &&
+                    string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                    (string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static (string Cleaned, int RemovedCount) RemoveTagBlocks(string input, string tagName)
+        {
+            if (string.IsNullOrWhiteSpace(input) || string.IsNullOrWhiteSpace(tagName))
+            {
+                return (input ?? string.Empty, 0);
+            }
+
+            var normalized = input.Replace("\r\n", "\n").Replace("\r", "\n");
+            var lines = normalized.Split('\n').ToList();
+            var removed = 0;
+
+            var tagLineRegex = new Regex($@"^\s*\[(?:{Regex.Escape(tagName)})\b[^\]]*\]\s*(?<tail>.*)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            var looksLikeTagStartRegex = new Regex(@"^\s*\[", RegexOptions.Compiled);
+
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var line = lines[i] ?? string.Empty;
+                var match = tagLineRegex.Match(line);
+                if (!match.Success)
+                {
+                    continue;
+                }
+
+                // Remove the whole line containing the tag (and inline description, if any)
+                lines[i] = string.Empty;
+                removed++;
+
+                // If the tag line has no trailing text, the description might be on the next line.
+                // Heuristic: remove the immediate next non-empty, non-tag line if it looks like a short description.
+                var tail = (match.Groups["tail"].Value ?? string.Empty).Trim();
+                if (tail.Length == 0 && i + 1 < lines.Count)
+                {
+                    var next = lines[i + 1] ?? string.Empty;
+                    var nextTrim = next.Trim();
+                    if (!string.IsNullOrWhiteSpace(nextTrim) &&
+                        !looksLikeTagStartRegex.IsMatch(nextTrim) &&
+                        nextTrim.Length <= 200 &&
+                        !Regex.IsMatch(nextTrim, @"[.!?]"))
+                    {
+                        lines[i + 1] = string.Empty;
+                        removed++;
+                        i++;
+                    }
+                }
+            }
+
+            var rejoined = string.Join("\n", lines);
+            rejoined = Regex.Replace(rejoined, @"\n{3,}", "\n\n");
+            return (rejoined.Trim(), removed);
         }
 
         public StoryStatus? GetNextStatus(StoryRecord story)
@@ -1067,6 +1347,9 @@ namespace TinyGenerator.Pages.Stories
             if (!string.IsNullOrWhiteSpace(s.Folder))
             {
                 actions.Add(new { id = "add_tags", title = "Aggiungi TAG", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "regen_ambient_tags", title = "Rigenera RUMORI (ambient_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenAmbientTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "regen_fx_tags", title = "Rigenera FX (fx_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenFxTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "regen_music_tags", title = "Rigenera MUSICA (music_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenMusicTags", id = s.Id }, Request.Scheme), confirm = true });
                 // Combined operation to prepare TTS schema: generate schema, normalize characters, assign voices, normalize sentiments
                 actions.Add(new { id = "prepare_tts_schema", title = "Prepara TTS schema", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "PrepareTtsSchema", id = s.Id }, Request.Scheme) });
 
@@ -1133,7 +1416,7 @@ namespace TinyGenerator.Pages.Stories
                 });
             }
 
-            var ensureOrder = new[] { "revise", "add_tags" };
+            var ensureOrder = new[] { "revise", "add_tags", "regen_ambient_tags", "regen_fx_tags", "regen_music_tags" };
             var currentIndex = insertAfterIndex >= 0 ? insertAfterIndex + 1 : 0;
             foreach (var desiredId in ensureOrder)
             {
@@ -1153,26 +1436,31 @@ namespace TinyGenerator.Pages.Stories
                 }
             }
 
-            // Ensure TTS-related actions appear immediately after `add_tags` when present
-            var addTagsIndex = actions.FindIndex(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty) == "add_tags");
-            if (addTagsIndex >= 0)
+            // Ensure TTS-related actions appear immediately after the tag-related actions (add_tags + regen*) when present
+            var anchorIndex = actions.FindLastIndex(a =>
+            {
+                var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty;
+                return id == "regen_music_tags" || id == "regen_fx_tags" || id == "regen_ambient_tags" || id == "add_tags";
+            });
+
+            if (anchorIndex >= 0)
             {
                 // prefer to place prepare_tts_schema first, then gen_tts (if present)
                 var prepare = actions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty) == "prepare_tts_schema");
                 if (prepare != null)
                 {
                     actions.Remove(prepare);
-                    var insertPos = addTagsIndex + 1;
+                    var insertPos = anchorIndex + 1;
                     if (insertPos >= 0 && insertPos <= actions.Count) actions.Insert(insertPos, prepare);
                     else actions.Add(prepare);
-                    addTagsIndex = insertPos; // update position so next insertion goes after it
+                    anchorIndex = insertPos; // update position so next insertion goes after it
                 }
 
                 var genTts = actions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty) == "gen_tts");
                 if (genTts != null)
                 {
                     actions.Remove(genTts);
-                    var insertPos = addTagsIndex + 1;
+                    var insertPos = anchorIndex + 1;
                     if (insertPos >= 0 && insertPos <= actions.Count) actions.Insert(insertPos, genTts);
                     else actions.Add(genTts);
                 }

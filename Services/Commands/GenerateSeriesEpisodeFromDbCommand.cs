@@ -78,7 +78,22 @@ namespace TinyGenerator.Services.Commands
             }
 
             var characters = _database.ListSeriesCharacters(_serieId);
-            var seriesContext = BuildSeriesContext(serie, episode, characters);
+
+            var plannerMethod = serie.PlannerMethodId.HasValue
+                ? _database.GetPlannerMethodById(serie.PlannerMethodId.Value)
+                : null;
+
+            var seriesTipoPlanning = serie.DefaultTipoPlanningId.HasValue
+                ? _database.GetTipoPlanningById(serie.DefaultTipoPlanningId.Value)
+                : null;
+
+            var episodeTipoPlanning = episode.TipoPlanningId.HasValue
+                ? _database.GetTipoPlanningById(episode.TipoPlanningId.Value)
+                : null;
+
+            var effectiveTipoPlanning = episodeTipoPlanning ?? seriesTipoPlanning;
+
+            var seriesContext = BuildSeriesContext(serie, episode, characters, plannerMethod, effectiveTipoPlanning);
 
             string? configOverrides = null;
             try
@@ -91,6 +106,32 @@ namespace TinyGenerator.Services.Commands
                         ? $"{serie.Titolo} - Episodio {episode.Number}"
                         : episode.Title
                 };
+
+                if (!string.IsNullOrWhiteSpace(episode.InitialPhase)) cfg["initial_phase"] = episode.InitialPhase;
+                if (!string.IsNullOrWhiteSpace(episode.StartSituation)) cfg["start_situation"] = episode.StartSituation;
+                if (!string.IsNullOrWhiteSpace(episode.EpisodeGoal)) cfg["episode_goal"] = episode.EpisodeGoal;
+
+                if (plannerMethod != null)
+                {
+                    cfg["planner_method_id"] = plannerMethod.Id;
+                    cfg["planner_method_code"] = plannerMethod.Code;
+                }
+
+                if (effectiveTipoPlanning != null)
+                {
+                    cfg["tipo_planning_id"] = effectiveTipoPlanning.Id;
+                    cfg["tipo_planning_code"] = effectiveTipoPlanning.Codice;
+                    cfg["tipo_planning_successione_stati"] = effectiveTipoPlanning.SuccessioneStati;
+                }
+
+                if (episodeTipoPlanning != null)
+                {
+                    cfg["tipo_planning_source"] = "episode";
+                }
+                else if (seriesTipoPlanning != null)
+                {
+                    cfg["tipo_planning_source"] = "series";
+                }
                 if (template.CharactersStep.HasValue)
                 {
                     cfg["characters_step"] = template.CharactersStep.Value;
@@ -141,7 +182,12 @@ namespace TinyGenerator.Services.Commands
             );
         }
 
-        private static string BuildSeriesContext(Series serie, SeriesEpisode episode, List<SeriesCharacter> characters)
+        private static string BuildSeriesContext(
+            Series serie,
+            SeriesEpisode episode,
+            List<SeriesCharacter> characters,
+            PlannerMethod? plannerMethod,
+            TipoPlanning? tipoPlanning)
         {
             var sb = new StringBuilder();
 
@@ -175,11 +221,41 @@ namespace TinyGenerator.Services.Commands
             sb.AppendLine("## Regole Narrative");
             sb.AppendLine(!string.IsNullOrWhiteSpace(serie.RegoleNarrative) ? serie.RegoleNarrative : "(Non specificate)");
 
+            if (!string.IsNullOrWhiteSpace(serie.SerieFinalGoal))
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Final Goal della Serie");
+                sb.AppendLine(serie.SerieFinalGoal);
+            }
+
             if (!string.IsNullOrWhiteSpace(serie.NoteAI))
             {
                 sb.AppendLine();
                 sb.AppendLine("## Note per l'AI");
                 sb.AppendLine(serie.NoteAI);
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("## Pianificazione");
+            if (plannerMethod != null)
+            {
+                var descr = string.IsNullOrWhiteSpace(plannerMethod.Description) ? string.Empty : $" - {plannerMethod.Description}";
+                sb.AppendLine($"**Planner method (strategico):** {plannerMethod.Code}{descr}");
+            }
+            else
+            {
+                sb.AppendLine("**Planner method (strategico):** (Non assegnato)");
+            }
+
+            if (tipoPlanning != null)
+            {
+                sb.AppendLine($"**Tipo planning (tattico):** {tipoPlanning.Nome} ({tipoPlanning.Codice})");
+                sb.AppendLine($"**Successione stati:** {tipoPlanning.SuccessioneStati}");
+                sb.AppendLine("**Stati ammessi:** AZIONE, STASI, ERRORE, EFFETTO");
+            }
+            else
+            {
+                sb.AppendLine("**Tipo planning (tattico):** (Non assegnato)");
             }
 
             sb.AppendLine();
@@ -212,6 +288,25 @@ namespace TinyGenerator.Services.Commands
             if (!string.IsNullOrWhiteSpace(episode.Title))
             {
                 sb.AppendLine($"**Titolo:** {episode.Title}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(episode.InitialPhase))
+            {
+                sb.AppendLine($"**Initial phase:** {episode.InitialPhase}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(episode.StartSituation))
+            {
+                sb.AppendLine();
+                sb.AppendLine("### Start situation");
+                sb.AppendLine(episode.StartSituation);
+            }
+
+            if (!string.IsNullOrWhiteSpace(episode.EpisodeGoal))
+            {
+                sb.AppendLine();
+                sb.AppendLine("### Episode goal");
+                sb.AppendLine(episode.EpisodeGoal);
             }
             sb.AppendLine();
             sb.AppendLine("### Trama");

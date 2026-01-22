@@ -66,22 +66,50 @@ namespace TinyGenerator.Services
 
             var scope = LogScope.Current;
 
-            // Derive a default Result if not provided, to track SUCCESS/FAILED consistently
+            // Derive a default Result if not provided, to track SUCCESS/FAILED consistently.
+            // IMPORTANT: do not derive results for model request/response logs: their payloads may contain
+            // words like "error"/"failed" as part of prompts or JSON, causing false FAILED flags.
             string? derivedResult = result;
             if (string.IsNullOrWhiteSpace(derivedResult))
             {
-                var lvl = (level ?? string.Empty).Trim().ToLowerInvariant();
-                var msg = message?.ToLowerInvariant() ?? string.Empty;
+                var cat = (category ?? string.Empty).Trim();
+                var isModelTraffic =
+                    string.Equals(cat, "ModelPrompt", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cat, "ModelCompletion", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cat, "ModelRequest", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cat, "ModelResponse", StringComparison.OrdinalIgnoreCase);
 
-                // Mark failures on error/fatal or messages that clearly indicate failure
-                if (lvl == "error" || lvl == "fatal" || msg.Contains("fail") || msg.Contains("error"))
+                if (!isModelTraffic)
                 {
-                    derivedResult = "FAILED";
-                }
-                // Mark success on messages that clearly indicate completion/passed
-                else if (msg.Contains("success") || msg.Contains("completed") || msg.Contains("passed"))
-                {
-                    derivedResult = "SUCCESS";
+                    var lvl = (level ?? string.Empty).Trim().ToLowerInvariant();
+                    var msg = message ?? string.Empty;
+                    var msgLower = msg.ToLowerInvariant();
+
+                    // Mark failures on error/fatal.
+                    if (lvl == "error" || lvl == "fatal")
+                    {
+                        derivedResult = "FAILED";
+                    }
+                    else
+                    {
+                        // Use word-boundary matching to reduce false positives (e.g. embedded substrings).
+                        // Keep this lightweight: no heavy parsing.
+                        try
+                        {
+                            if (System.Text.RegularExpressions.Regex.IsMatch(msgLower, @"\b(fail|failed|failure|error|errors|exception)\b"))
+                            {
+                                derivedResult = "FAILED";
+                            }
+                            else if (System.Text.RegularExpressions.Regex.IsMatch(msgLower, @"\b(success|successful|completed|passed)\b"))
+                            {
+                                derivedResult = "SUCCESS";
+                            }
+                        }
+                        catch
+                        {
+                            // If regex fails, fall back to no derived result.
+                        }
+                    }
                 }
             }
 

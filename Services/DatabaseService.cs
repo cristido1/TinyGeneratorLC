@@ -126,6 +126,9 @@ public sealed class DatabaseService
         string MemoryKey,
         int NarrativeProfileId,
         string? PlannerMode,
+        int? EffectiveTipoPlanningId,
+        string? EffectiveTipoPlanningSuccessioneStati,
+        string? EpisodeInitialPhase,
         long RuntimeStateId,
         int CurrentChunkIndex,
         string? CurrentPhase,
@@ -269,6 +272,30 @@ public sealed class DatabaseService
                     .ToList()))
             .ToList();
 
+        int? effectiveTipoPlanningId = null;
+        string? effectiveSuccessioneStati = null;
+        string? episodeInitialPhase = null;
+        if (story.SerieId.HasValue)
+        {
+            var serie = ctx.Series.AsNoTracking().FirstOrDefault(s => s.Id == story.SerieId.Value);
+            SeriesEpisode? episode = null;
+            if (story.SerieEpisode.HasValue)
+            {
+                episode = ctx.SeriesEpisodes.AsNoTracking()
+                    .FirstOrDefault(e => e.SerieId == story.SerieId.Value && e.Number == story.SerieEpisode.Value);
+            }
+
+            episodeInitialPhase = episode?.InitialPhase;
+            effectiveTipoPlanningId = episode?.TipoPlanningId ?? serie?.DefaultTipoPlanningId;
+            if (effectiveTipoPlanningId.HasValue)
+            {
+                effectiveSuccessioneStati = ctx.TipoPlannings.AsNoTracking()
+                    .Where(t => t.Id == effectiveTipoPlanningId.Value)
+                    .Select(t => t.SuccessioneStati)
+                    .FirstOrDefault();
+            }
+        }
+
         return new StateDrivenStorySnapshot(
             StoryId: story.Id,
             Prompt: story.Prompt ?? string.Empty,
@@ -276,6 +303,9 @@ public sealed class DatabaseService
             MemoryKey: story.MemoryKey ?? string.Empty,
             NarrativeProfileId: runtime.NarrativeProfileId,
             PlannerMode: story.PlannerMode,
+            EffectiveTipoPlanningId: effectiveTipoPlanningId,
+            EffectiveTipoPlanningSuccessioneStati: effectiveSuccessioneStati,
+            EpisodeInitialPhase: episodeInitialPhase,
             RuntimeStateId: runtime.Id,
             CurrentChunkIndex: runtime.CurrentChunkIndex,
             CurrentPhase: runtime.CurrentPhase,
@@ -364,6 +394,76 @@ public sealed class DatabaseService
             {
                 state.CurrentValue = val;
             }
+        }
+
+        ctx.SaveChanges();
+        tx.Commit();
+        return true;
+    }
+
+    public List<Chapter> ListChaptersForStory(long storyId)
+    {
+        using var wrapper = CreateDbContextWrapper();
+        var ctx = wrapper.Context;
+
+        var story = ctx.Stories.AsNoTracking().FirstOrDefault(s => s.Id == storyId);
+        if (story == null) return new List<Chapter>();
+        var memoryKey = story.MemoryKey ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(memoryKey)) return new List<Chapter>();
+
+        return ctx.Chapters.AsNoTracking()
+            .Where(c => c.MemoryKey == memoryKey)
+            .OrderBy(c => c.ChapterNumber)
+            .ThenBy(c => c.Id)
+            .ToList();
+    }
+
+    public string? GetLatestChapterTextForStory(long storyId)
+    {
+        using var wrapper = CreateDbContextWrapper();
+        var ctx = wrapper.Context;
+
+        var story = ctx.Stories.AsNoTracking().FirstOrDefault(s => s.Id == storyId);
+        if (story == null) return null;
+        var memoryKey = story.MemoryKey ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(memoryKey)) return null;
+
+        return ctx.Chapters.AsNoTracking()
+            .Where(c => c.MemoryKey == memoryKey)
+            .OrderByDescending(c => c.ChapterNumber)
+            .ThenByDescending(c => c.Id)
+            .Select(c => c.Content)
+            .FirstOrDefault();
+    }
+
+    public bool CompleteStateDrivenStory(long storyId, string storyRaw, out string error)
+    {
+        error = string.Empty;
+        using var wrapper = CreateDbContextWrapper();
+        var ctx = wrapper.Context;
+        using var tx = ctx.Database.BeginTransaction();
+
+        var story = ctx.Stories.FirstOrDefault(s => s.Id == storyId);
+        if (story == null)
+        {
+            error = $"Story {storyId} not found";
+            return false;
+        }
+
+        // Update story raw and mark completed.
+        story.StoryRaw = storyRaw ?? string.Empty;
+        story.CharCount = (story.StoryRaw ?? string.Empty).Length;
+        story.NarrativeEngineStatus = "completed";
+
+        StoryRuntimeState? runtime = null;
+        if (story.RuntimeStateId.HasValue)
+        {
+            runtime = ctx.StoryRuntimeStates.FirstOrDefault(r => r.Id == story.RuntimeStateId.Value);
+        }
+        runtime ??= ctx.StoryRuntimeStates.FirstOrDefault(r => r.StoryId == storyId);
+        if (runtime != null)
+        {
+            runtime.IsActive = false;
         }
 
         ctx.SaveChanges();
@@ -1313,6 +1413,20 @@ public sealed class DatabaseService
             context.Series.Remove(serie);
             context.SaveChanges();
         }
+    }
+
+    public PlannerMethod? GetPlannerMethodById(int id)
+    {
+        if (id <= 0) return null;
+        using var context = CreateDbContext();
+        return context.PlannerMethods.Find(id);
+    }
+
+    public TipoPlanning? GetTipoPlanningById(int id)
+    {
+        if (id <= 0) return null;
+        using var context = CreateDbContext();
+        return context.TipoPlannings.Find(id);
     }
 
     public int EnsureSeriesFoldersOnDisk(string contentRootPath)

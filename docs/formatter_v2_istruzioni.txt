@@ -1,0 +1,145 @@
+FORMATTER V2 – ISTRUZIONI OPERATIVE
+
+OBIETTIVO
+Implementare un algoritmo deterministico per l’assegnazione dei tag:
+[NARRATORE]
+[PERSONAGGIO: Nome] [SENTIMENTO: sentimento]
+garantendo che il testo originale NON venga mai modificato.
+
+--------------------------------------------------
+1. PRE-PROCESSING – SEGMENTAZIONE TESTO
+--------------------------------------------------
+
+1.1 Regola fondamentale
+Il testo non deve essere alterato semanticamente.
+La segmentazione serve solo a creare unità minime taggabili.
+
+1.2 Regole di divisione in righe
+Il testo va spezzato in nuove righe quando incontra:
+- Punto (.) se non già seguito da a capo
+- Virgola (,)
+- Punto e virgola (;)
+- Due punti (:)
+- Virgolette doppie (" ")
+- Virgolette caporali (« »)
+- Apostrofi di dialogo ('), solo se indicano parlato
+- Inizio o fine di dialogo implicito
+
+La punteggiatura resta nella riga.
+Non rimuovere né aggiungere caratteri.
+
+--------------------------------------------------
+2. NUMERAZIONE DELLE RIGHE
+--------------------------------------------------
+
+Ogni riga ottiene un ID progressivo a 3 cifre:
+001, 002, 003 ...
+
+Formato passato all’agente:
+
+001 Con un ultimo sguardo all'ennesimo documento,
+002 Luca premette il pulsante di invio.
+003 «Non voglio più vederti»
+004 disse a bassa voce.
+
+L’ID NON fa parte del testo originale.
+
+--------------------------------------------------
+3. COMPITO DELL’AGENTE FORMATTER
+--------------------------------------------------
+
+L’agente deve:
+- Analizzare ogni riga singolarmente
+- Stabilire se è:
+  * Narratore
+  * Personaggio (con nome e sentimento)
+- Restituire SOLO mapping ID → TAG
+
+L’agente NON deve:
+- Riscrivere il testo
+- Restituire il testo
+- Commentare
+- Spiegare
+- Aggiungere contenuti
+
+--------------------------------------------------
+4. FORMATO DI RISPOSTA DELL’AGENTE
+--------------------------------------------------
+
+Esempio:
+
+001 [NARRATORE]
+002 [NARRATORE]
+003 [PERSONAGGIO: Luca] [SENTIMENTO: rabbia]
+004 [NARRATORE]
+
+Una riga per ID.
+Ordine libero.
+Solo ID + tag.
+
+--------------------------------------------------
+5. POST-PROCESSING (CODICE)
+--------------------------------------------------
+
+Per ogni riga originale:
+- Recuperare i tag associati all’ID
+- Pre-pendere i tag alla riga
+- NON modificare il testo
+
+Poi:
+- Rimuovere gli ID
+- Ricostruire il testo continuo con i tag inseriti
+
+--------------------------------------------------
+6. PROMPT AGENTE FORMATTER (COPIABILE)
+--------------------------------------------------
+
+Sei un agente di classificazione.
+
+Ti verranno fornite righe numerate.
+Ogni riga è una porzione di testo originale.
+
+COMPITO:
+Per ogni riga, indica SOLO i tag da applicare.
+
+TAG POSSIBILI:
+[NARRATORE]
+[PERSONAGGIO: Nome] [SENTIMENTO: sentimento]
+
+REGOLE OBBLIGATORIE:
+- NON riscrivere il testo
+- NON restituire il testo
+- NON spiegare
+- NON commentare
+- NON aggiungere contenuti
+- Restituisci SOLO righe nel formato:
+  ID TAG
+
+Esempio:
+001 [NARRATORE]
+004 [PERSONAGGIO: Luca] [SENTIMENTO: paura]
+
+--------------------------------------------------
+7. TEST DI VERIFICA CONSIGLIATI
+--------------------------------------------------
+
+Test 1 – Integrità:
+- Rimuovere i tag
+- Il testo risultante deve essere IDENTICO all’originale
+
+Test 2 – Dialogo misto:
+"disse Luca: «Non torno indietro»"
+Deve produrre almeno due righe con tag diversi.
+
+Test 3 – Stabilità:
+Eseguire il formatter 2 volte:
+il risultato deve essere identico.
+
+Test 4 – Edge cases:
+- Frasi senza verbo
+- Pensieri indiretti
+- Dialoghi senza virgolette
+- Virgole multiple
+
+--------------------------------------------------
+FINE FILE

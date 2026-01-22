@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Services
@@ -24,17 +25,20 @@ namespace TinyGenerator.Services
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly ICustomLogger? _customLogger;
         private readonly ILogger<AutoFormatOnHighEvaluationService>? _logger;
+        private readonly CommandTuningOptions _tuning;
 
         public AutoFormatOnHighEvaluationService(
             ICommandDispatcher dispatcher,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
+            IOptions<CommandTuningOptions> tuningOptions,
             ICustomLogger? customLogger = null,
             ILogger<AutoFormatOnHighEvaluationService>? logger = null)
         {
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+            _tuning = tuningOptions.Value ?? new CommandTuningOptions();
             _customLogger = customLogger;
             _logger = logger;
         }
@@ -95,7 +99,8 @@ namespace TinyGenerator.Services
                                 _kernelFactory,
                                 storiesService: null,
                                 logger: _customLogger,
-                                commandDispatcher: _dispatcher);
+                                commandDispatcher: _dispatcher,
+                                tuning: _tuning);
 
                             return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                         }

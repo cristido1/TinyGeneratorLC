@@ -1,4 +1,5 @@
 using TinyGenerator.Models;
+using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands
 {
@@ -12,6 +13,8 @@ namespace TinyGenerator.Services.Commands
     /// </summary>
     public class FullStoryPipelineCommand
     {
+        private readonly CommandTuningOptions _tuning;
+
         private readonly string _theme;
         private readonly Guid _generationId;
         private readonly DatabaseService _database;
@@ -27,7 +30,8 @@ namespace TinyGenerator.Services.Commands
             MultiStepOrchestrationService orchestrator,
             StoriesService storiesService,
             ICommandDispatcher dispatcher,
-            ICustomLogger logger)
+            ICustomLogger logger,
+            CommandTuningOptions? tuning = null)
         {
             _theme = theme;
             _generationId = generationId;
@@ -36,6 +40,7 @@ namespace TinyGenerator.Services.Commands
             _storiesService = storiesService;
             _dispatcher = dispatcher;
             _logger = logger;
+            _tuning = tuning ?? new CommandTuningOptions();
         }
 
         public async Task ExecuteAsync(CancellationToken ct = default)
@@ -341,7 +346,7 @@ namespace TinyGenerator.Services.Commands
             var storyFolderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", storyFolderName);
             Directory.CreateDirectory(storyFolderPath);
 
-            const int audioPipelineTotalSteps = 9;
+            var audioPipelineTotalSteps = Math.Max(1, _tuning.FullStoryPipeline.AudioPipelineTotalSteps);
 
             // ═══════════════════════════════════════════════════════════════
             // STEP 1: Genera TTS Schema

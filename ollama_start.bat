@@ -3,7 +3,7 @@ REM ollama_start.bat
 REM Avvia il server Ollama su Windows impostando la variabile d'ambiente OLLAMA_CONTEXT_LENGTH
 
 SETLOCAL
-set "OLLAMA_CONTEXT_LENGTH=16384"
+set "OLLAMA_CONTEXT_LENGTH=8192"
 set "OLLAMA_NUM_PARALLEL_DEFAULT=1"
 
 REM Controlla che ollama sia disponibile nel PATH

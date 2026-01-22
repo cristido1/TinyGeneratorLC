@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using TinyGenerator.Data;
@@ -42,5 +43,26 @@ public class IndexModel : PageModel
         Items = query
             .OrderBy(p => p.Name)
             .ToList();
+    }
+
+    public async Task<IActionResult> OnGetDetailAsync(int id)
+    {
+        var profile = await _context.NarrativeProfiles
+            .AsNoTracking()
+            .Include(p => p.Resources)
+            .Include(p => p.MicroObjectives)
+            .FirstOrDefaultAsync(p => p.Id == id);
+
+        if (profile is null)
+            return NotFound();
+
+        var result = new {
+            title = profile.Name,
+            description = profile.Description,
+            resources = profile.Resources.Select(r => new { r.Id, r.Name, initial = r.InitialValue, min = r.MinValue, max = r.MaxValue }),
+            microObjectives = profile.MicroObjectives.Select(m => new { m.Id, m.Code, m.Description })
+        };
+
+        return new JsonResult(result);
     }
 }

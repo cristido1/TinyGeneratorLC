@@ -1,0 +1,297 @@
+@page
+@model TinyGenerator.Pages.TipoPlanningModel
+@{
+    ViewData["Title"] = "Tipi Planning";
+    ViewData["PageDescription"] = "Pianificazione tattica: grammatica degli stati AZIONE/STASI/ERRORE/EFFETTO";
+}
+
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="mb-0">@ViewData["Title"]</h2>
+        <button type="button" class="btn btn-primary btn-sm" onclick="showCreateModal()">
+            <i class="bi bi-plus-circle me-1"></i>Nuovo
+        </button>
+    </div>
+
+    <div class="table-container">
+        <table id="myTable" class="table table-hover table-sm mb-0" style="width:100%">
+            <thead class="table-light">
+                <tr>
+                    <th data-col="id" style="width:80px;">Id</th>
+                    <th data-col="codice" style="width:160px;">Codice</th>
+                    <th data-col="nome">Nome</th>
+                    <th data-col="successione" style="width:260px;">Successione stati</th>
+                    <th data-col="attivo" style="width:110px;">Attivo</th>
+                    <th data-col="azioni" style="width:160px;">Azioni</th>
+                </tr>
+            </thead>
+        </table>
+    </div>
+</div>
+
+<!-- Modal Crea/Modifica -->
+<div class="modal fade" id="tipoPlanningModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="tipoPlanningModalTitle">Nuovo Tipo Planning</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Chiudi"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger d-none" id="tipoPlanningError"></div>
+
+                <form id="tipoPlanningForm">
+                    <input type="hidden" id="tpId" />
+
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label">Codice *</label>
+                            <input type="text" class="form-control" id="tpCodice" maxlength="100" required />
+                            <div class="form-text">Univoco (es. ritmo_classico)</div>
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label">Nome *</label>
+                            <input type="text" class="form-control" id="tpNome" maxlength="200" required />
+                        </div>
+
+                        <div class="col-md-12">
+                            <label class="form-label">Descrizione</label>
+                            <textarea class="form-control" id="tpDescrizione" rows="2"></textarea>
+                        </div>
+
+                        <div class="col-md-8">
+                            <label class="form-label">Successione stati (CSV) *</label>
+                            <input type="text" class="form-control font-monospace" id="tpSuccessione" maxlength="500" required />
+                            <div class="form-text">Esempio: STASI,AZIONE,ERRORE,EFFETTO</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label d-block">Opzioni</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="tpIsActive" checked />
+                                <label class="form-check-label" for="tpIsActive">Attivo</label>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
+                <button type="button" class="btn btn-primary" onclick="saveTipoPlanning()">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+#myTable { font-size: 0.95rem; }
+#myTable thead th { font-weight:600; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.5px; padding:0.75rem; border-bottom:2px solid #dee2e6; }
+#myTable tbody td { padding:0.65rem; vertical-align:middle; }
+#myTable tbody tr:hover { background-color:#f8f9fa; }
+.table-container { border:1px solid #dee2e6; border-radius:0.375rem; padding:1rem; background:white; }
+.dt-buttons .btn { font-size:0.875rem; padding:0.375rem 0.75rem; }
+.dataTables_filter input { margin-left:0.5rem; border-radius:0.25rem; }
+.dataTables_info { font-size:0.875rem; color:#6c757d; }
+</style>
+
+<script>
+(function initDataTable() {
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initDataTable, 50);
+        return;
+    }
+
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var current = 0;
+    function loadScript(url, cb) {
+        var s = document.createElement('script');
+        s.src = url;
+        s.onload = cb;
+        s.onerror = cb;
+        document.head.appendChild(s);
+    }
+    function next() {
+        if (current < scripts.length) {
+            loadScript(scripts[current++], next);
+        } else {
+            initialize();
+        }
+    }
+    next();
+
+    function initialize() {
+        jQuery(document).ready(function($) {
+            window._tipoPlanningTable = $('#myTable').DataTable({
+                ajax: { url: '/api/tipo-planning', dataSrc: '' },
+                columns: [
+                    { data: 'id' },
+                    { data: 'codice' },
+                    { data: 'nome' },
+                    {
+                        data: 'successioneStati',
+                        render: function(data) {
+                            return data ? '<span class="font-monospace">' + data + '</span>' : '-';
+                        }
+                    },
+                    {
+                        data: 'isActive',
+                        render: function(data) {
+                            return data ? '<span class="badge bg-success">Attivo</span>' : '<span class="badge bg-secondary">Inattivo</span>';
+                        }
+                    },
+                    {
+                        data: null,
+                        orderable: false,
+                        render: function(data, type, row) {
+                            return `
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <button class="btn btn-outline-primary" onclick="editTipoPlanning(${row.id})" title="Modifica"><i class="bi bi-pencil"></i></button>
+                                    <button class="btn btn-outline-danger" onclick="deleteTipoPlanning(${row.id}, '${(row.nome || '').replace(/'/g, "\\'")}')" title="Elimina"><i class="bi bi-trash"></i></button>
+                                    <button class="btn btn-outline-secondary" onclick="toggleActive(${row.id})" title="Attiva/Disattiva"><i class="bi bi-toggle-on"></i></button>
+                                </div>`;
+                        }
+                    }
+                ],
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+                buttons: [
+                    {
+                        extend: 'colvis',
+                        text: 'Colonne',
+                        className: 'btn btn-sm btn-secondary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' }
+                    }
+                ],
+                stateSave: true,
+                paging: true,
+                pageLength: 25,
+                ordering: true,
+                order: [[2, 'asc']],
+                language: {
+                    search: 'Cerca:',
+                    lengthMenu: 'Mostra _MENU_ record',
+                    info: 'Showing _START_ to _END_ of _TOTAL_ entries',
+                    paginate: { first: 'Prima', last: 'Ultima', next: 'Succ', previous: 'Prec' }
+                }
+            });
+        });
+    }
+})();
+
+let currentId = null;
+
+function showCreateModal() {
+    currentId = null;
+    setError(null);
+    document.getElementById('tipoPlanningModalTitle').textContent = 'Nuovo Tipo Planning';
+    document.getElementById('tipoPlanningForm').reset();
+    document.getElementById('tpId').value = '';
+    document.getElementById('tpIsActive').checked = true;
+    new bootstrap.Modal(document.getElementById('tipoPlanningModal')).show();
+}
+
+function editTipoPlanning(id) {
+    currentId = id;
+    setError(null);
+    fetch('/api/tipo-planning/' + encodeURIComponent(id))
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(tp => {
+            document.getElementById('tipoPlanningModalTitle').textContent = 'Modifica Tipo Planning';
+            document.getElementById('tpId').value = tp.id;
+            document.getElementById('tpCodice').value = tp.codice || '';
+            document.getElementById('tpNome').value = tp.nome || '';
+            document.getElementById('tpDescrizione').value = tp.descrizione || '';
+            document.getElementById('tpSuccessione').value = tp.successioneStati || '';
+            document.getElementById('tpIsActive').checked = !!tp.isActive;
+            new bootstrap.Modal(document.getElementById('tipoPlanningModal')).show();
+        })
+        .catch(() => setError('Errore nel caricamento del tipo planning'));
+}
+
+function saveTipoPlanning() {
+    setError(null);
+
+    const payload = {
+        codice: (document.getElementById('tpCodice').value || '').trim(),
+        nome: (document.getElementById('tpNome').value || '').trim(),
+        descrizione: (document.getElementById('tpDescrizione').value || '').trim() || null,
+        successioneStati: (document.getElementById('tpSuccessione').value || '').trim(),
+        isActive: document.getElementById('tpIsActive').checked
+    };
+
+    if (!payload.codice || !payload.nome || !payload.successioneStati) {
+        setError('Compila i campi obbligatori: codice, nome, successione stati');
+        return;
+    }
+
+    const isEdit = !!currentId;
+    const url = isEdit ? '/api/tipo-planning/' + encodeURIComponent(currentId) : '/api/tipo-planning';
+    const method = isEdit ? 'PUT' : 'POST';
+
+    fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(async r => {
+        const data = await r.json().catch(() => null);
+        if (!r.ok) {
+            const msg = (data && data.error) ? data.error : 'Errore durante il salvataggio';
+            throw new Error(msg);
+        }
+        return data;
+    })
+    .then(() => {
+        bootstrap.Modal.getInstance(document.getElementById('tipoPlanningModal'))?.hide();
+        window._tipoPlanningTable?.ajax?.reload(null, false);
+    })
+    .catch(err => setError(err.message || 'Errore durante il salvataggio'));
+}
+
+function deleteTipoPlanning(id, name) {
+    if (!confirm(`Eliminare '${name}'?`)) return;
+
+    fetch('/api/tipo-planning/' + encodeURIComponent(id), { method: 'DELETE' })
+        .then(async r => {
+            const data = await r.json().catch(() => null);
+            if (!r.ok) {
+                const msg = (data && data.error) ? data.error : 'Errore durante eliminazione';
+                throw new Error(msg);
+            }
+        })
+        .then(() => window._tipoPlanningTable?.ajax?.reload(null, false))
+        .catch(err => alert(err.message || 'Errore durante eliminazione'));
+}
+
+function toggleActive(id) {
+    fetch('/api/tipo-planning/' + encodeURIComponent(id) + '/toggle-active', { method: 'POST' })
+        .then(async r => {
+            const data = await r.json().catch(() => null);
+            if (!r.ok) {
+                const msg = (data && data.error) ? data.error : 'Errore durante il cambio di stato';
+                throw new Error(msg);
+            }
+        })
+        .then(() => window._tipoPlanningTable?.ajax?.reload(null, false))
+        .catch(err => alert(err.message || 'Errore durante il cambio di stato'));
+}
+
+function setError(msg) {
+    const el = document.getElementById('tipoPlanningError');
+    if (!el) return;
+    if (!msg) {
+        el.classList.add('d-none');
+        el.textContent = '';
+        return;
+    }
+    el.textContent = msg;
+    el.classList.remove('d-none');
+}
+</script>

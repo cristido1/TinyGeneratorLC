@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
+using Microsoft.Extensions.Configuration;
 
 namespace TinyGenerator.Services
 {
@@ -41,6 +42,15 @@ namespace TinyGenerator.Services
         // This avoids forcing an unsafe default such as 8000. Set when required.
         public int? MaxResponseTokens { get; set; } = null;
 
+        private readonly HashSet<string> _noTemperatureModels;
+        private readonly HashSet<string> _noRepeatPenaltyModels;
+        private readonly HashSet<string> _noTopPModels;
+        private readonly HashSet<string> _noFrequencyPenaltyModels;
+        private readonly HashSet<string> _noMaxTokensModels;
+        private readonly HashSet<string> _noTopKModels;
+        private readonly HashSet<string> _noRepeatLastNModels;
+        private readonly HashSet<string> _noNumPredictModels;
+
         public LangChainChatBridge(
             string modelEndpoint,
             string modelId,
@@ -50,7 +60,15 @@ namespace TinyGenerator.Services
             bool? forceOllama = null,
             Func<CancellationToken, Task>? beforeCallAsync = null,
             Func<CancellationToken, Task>? afterCallAsync = null,
-            bool logRequestsAsLlama = false)
+            bool logRequestsAsLlama = false,
+            IEnumerable<string>? noTemperatureModels = null,
+            IEnumerable<string>? noRepeatPenaltyModels = null,
+            IEnumerable<string>? noTopPModels = null,
+            IEnumerable<string>? noFrequencyPenaltyModels = null,
+            IEnumerable<string>? noMaxTokensModels = null,
+            IEnumerable<string>? noTopKModels = null,
+            IEnumerable<string>? noRepeatLastNModels = null,
+            IEnumerable<string>? noNumPredictModels = null)
         {
             // Normalize endpoint - don't add /v1 suffix, just use endpoint as-is
             _modelEndpoint = new Uri(modelEndpoint.TrimEnd('/'));
@@ -62,6 +80,14 @@ namespace TinyGenerator.Services
             _beforeCallAsync = beforeCallAsync;
             _afterCallAsync = afterCallAsync;
             _logRequestsAsLlama = logRequestsAsLlama;
+            _noTemperatureModels = noTemperatureModels != null ? new HashSet<string>(noTemperatureModels, StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+            _noRepeatPenaltyModels = noRepeatPenaltyModels != null ? new HashSet<string>(noRepeatPenaltyModels, StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+            _noTopPModels = noTopPModels != null ? new HashSet<string>(noTopPModels, StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+            _noFrequencyPenaltyModels = noFrequencyPenaltyModels != null ? new HashSet<string>(noFrequencyPenaltyModels, StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+            _noMaxTokensModels = noMaxTokensModels != null ? new HashSet<string>(noMaxTokensModels, StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+            _noTopKModels = noTopKModels != null ? new HashSet<string>(noTopKModels, StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+            _noRepeatLastNModels = noRepeatLastNModels != null ? new HashSet<string>(noRepeatLastNModels, StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
+            _noNumPredictModels = noNumPredictModels != null ? new HashSet<string>(noNumPredictModels, StringComparer.OrdinalIgnoreCase) : new HashSet<string>();
         }
 
         /// <summary>
@@ -123,10 +149,10 @@ namespace TinyGenerator.Services
                         { "temperature", Temperature },
                         { "top_p", TopP }
                     };
-                    if (RepeatPenalty.HasValue) requestBody["repeat_penalty"] = RepeatPenalty.Value;
-                    if (TopK.HasValue) requestBody["top_k"] = TopK.Value;
-                    if (RepeatLastN.HasValue) requestBody["repeat_last_n"] = RepeatLastN.Value;
-                    if (NumPredict.HasValue) requestBody["num_predict"] = NumPredict.Value;
+                    if (!_noRepeatPenaltyModels.Contains(_modelId) && RepeatPenalty.HasValue) requestBody["repeat_penalty"] = RepeatPenalty.Value;
+                    if (!_noTopKModels.Contains(_modelId) && TopK.HasValue) requestBody["top_k"] = TopK.Value;
+                    if (!_noRepeatLastNModels.Contains(_modelId) && RepeatLastN.HasValue) requestBody["repeat_last_n"] = RepeatLastN.Value;
+                    if (!_noNumPredictModels.Contains(_modelId) && NumPredict.HasValue) requestBody["num_predict"] = NumPredict.Value;
 
                     // If we have tools, pass them
                     if (tools.Any())
@@ -187,30 +213,30 @@ namespace TinyGenerator.Services
                     {
                         { "model", _modelId },
                         { "messages", serializedMessages },
-                        { "tools", tools },
-                        { "temperature", Temperature },
-                        { "top_p", TopP }
+                        { "tools", tools }
                     };
-                    if (RepeatPenalty.HasValue) requestDict["repeat_penalty"] = RepeatPenalty.Value;
-                    if (TopK.HasValue) requestDict["top_k"] = TopK.Value;
-                    if (RepeatLastN.HasValue) requestDict["repeat_last_n"] = RepeatLastN.Value;
-                    if (NumPredict.HasValue) requestDict["num_predict"] = NumPredict.Value;
-
+                    if (!_noTemperatureModels.Contains(_modelId))
+                        requestDict["temperature"] = Temperature;
+                    if (!_noTopPModels.Contains(_modelId))
+                        requestDict["top_p"] = TopP;
+                    if (!_noRepeatPenaltyModels.Contains(_modelId) && RepeatPenalty.HasValue)
+                        requestDict["repeat_penalty"] = RepeatPenalty.Value;
+                    if (!_noTopKModels.Contains(_modelId) && TopK.HasValue) requestDict["top_k"] = TopK.Value;
+                    if (!_noRepeatLastNModels.Contains(_modelId) && RepeatLastN.HasValue) requestDict["repeat_last_n"] = RepeatLastN.Value;
+                    if (!_noNumPredictModels.Contains(_modelId) && NumPredict.HasValue) requestDict["num_predict"] = NumPredict.Value;
+                    if (!_noFrequencyPenaltyModels.Contains(_modelId))
+                        requestDict["frequency_penalty"] = 0.0; // Replace with actual value if used
                     if (tools.Any())
-                    {
                         requestDict["tools"] = tools;
-                    }
-                    
                     // Add correct token limit parameter based on model
                     if (MaxResponseTokens.HasValue)
                     {
-                        if (usesNewTokenParam)
+                        if (!_noMaxTokensModels.Contains(_modelId))
                         {
-                            requestDict["max_completion_tokens"] = MaxResponseTokens.Value;
-                        }
-                        else
-                        {
-                            requestDict["max_tokens"] = MaxResponseTokens.Value;
+                            if (usesNewTokenParam)
+                                requestDict["max_completion_tokens"] = MaxResponseTokens.Value;
+                            else
+                                requestDict["max_tokens"] = MaxResponseTokens.Value;
                         }
                     }
                     
@@ -218,6 +244,14 @@ namespace TinyGenerator.Services
                     fullUrl = new Uri(_modelEndpoint, "/v1/chat/completions").ToString();
                     requestUrlForLlama = fullUrl;
                 }
+
+                // Diagnostic: log which model-specific exclusions are active for this model id
+                    try
+                    {
+                        _logger?.Log("Debug", "LangChainBridge",
+                            $"Model={_modelId} ExcludeFlags: noTemperature={_noTemperatureModels.Contains(_modelId)}, noTopP={_noTopPModels.Contains(_modelId)}, noTopK={_noTopKModels.Contains(_modelId)}, noRepeatPenalty={_noRepeatPenaltyModels.Contains(_modelId)}, noFrequencyPenalty={_noFrequencyPenaltyModels.Contains(_modelId)}, noMaxTokens={_noMaxTokensModels.Contains(_modelId)}, noRepeatLastN={_noRepeatLastNModels.Contains(_modelId)}, noNumPredict={_noNumPredictModels.Contains(_modelId)}");
+                    }
+                    catch { }
 
                 var requestJson = JsonSerializer.Serialize(request, new JsonSerializerOptions { WriteIndented = false });
                 
@@ -653,7 +687,30 @@ namespace TinyGenerator.Services
         {
             _logger = logger;
             _tools = tools;
-            _modelBridge = new LangChainChatBridge(modelEndpoint, modelId, apiKey, httpClient, logger);
+            // Read OpenAI model exclusion lists from appsettings.json to ensure consistent behaviour
+            try
+            {
+                var config = new ConfigurationBuilder()
+                    .SetBasePath(AppContext.BaseDirectory)
+                    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+                    .Build();
+
+                var noTempModels = config.GetSection("OpenAI:NoTemperatureModels").Get<string[]>() ?? Array.Empty<string>();
+                var noRepeatPenaltyModels = config.GetSection("OpenAI:NoRepeatPenaltyModels").Get<string[]>() ?? Array.Empty<string>();
+                var noTopPModels = config.GetSection("OpenAI:NoTopPModels").Get<string[]>() ?? Array.Empty<string>();
+                var noFrequencyPenaltyModels = config.GetSection("OpenAI:NoFrequencyPenaltyModels").Get<string[]>() ?? Array.Empty<string>();
+                var noMaxTokensModels = config.GetSection("OpenAI:NoMaxTokensModels").Get<string[]>() ?? Array.Empty<string>();
+                var noTopKModels = config.GetSection("OpenAI:NoTopKModels").Get<string[]>() ?? Array.Empty<string>();
+                var noRepeatLastNModels = config.GetSection("OpenAI:NoRepeatLastNModels").Get<string[]>() ?? Array.Empty<string>();
+                var noNumPredictModels = config.GetSection("OpenAI:NoNumPredictModels").Get<string[]>() ?? Array.Empty<string>();
+
+                _modelBridge = new LangChainChatBridge(modelEndpoint, modelId, apiKey, httpClient, logger, null, null, null, false, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "StoryOrchestrator", $"Failed to initialize LangChainChatBridge with OpenAI exclusion lists: {ex.Message}", ex.ToString());
+                throw;
+            }
             if (maxTokens.HasValue && maxTokens.Value > 0)
             {
                 if (!_modelBridge.MaxResponseTokens.HasValue)

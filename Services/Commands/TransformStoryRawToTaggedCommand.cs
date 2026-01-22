@@ -14,12 +14,7 @@ namespace TinyGenerator.Services.Commands
 {
     public sealed class TransformStoryRawToTaggedCommand
     {
-        private const int MinTokensPerChunk = 1000;
-        private const int MaxTokensPerChunk = 2000;
-        private const int TargetTokensPerChunk = 1500;
-        private const int OverlapTokens = 150;
-        private const int MaxAttemptsPerChunk = 3;
-        private const int MaxOverlapChars = 8000;
+        private readonly CommandTuningOptions _tuning;
 
         private readonly long _storyId;
         private readonly DatabaseService _database;
@@ -34,7 +29,8 @@ namespace TinyGenerator.Services.Commands
             ILangChainKernelFactory kernelFactory,
             StoriesService? storiesService = null,
             ICustomLogger? logger = null,
-            ICommandDispatcher? commandDispatcher = null)
+            ICommandDispatcher? commandDispatcher = null,
+            CommandTuningOptions? tuning = null)
         {
             _storyId = storyId;
             _database = database ?? throw new ArgumentNullException(nameof(database));
@@ -42,6 +38,7 @@ namespace TinyGenerator.Services.Commands
             _storiesService = storiesService;
             _logger = logger;
             _commandDispatcher = commandDispatcher;
+            _tuning = tuning ?? new CommandTuningOptions();
         }
 
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
@@ -221,7 +218,7 @@ namespace TinyGenerator.Services.Commands
                     {
                         try
                         {
-                            var cmd = new AmbientExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher);
+                            var cmd = new AmbientExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher, _tuning);
                             return await cmd.ExecuteAsync(ctx.CancellationToken, ambientRunId);
                         }
                         catch (Exception ex)
@@ -267,10 +264,13 @@ namespace TinyGenerator.Services.Commands
             var inputLength = chunkText.Length;
             string? lastError = null;
 
-            for (int attempt = 1; attempt <= MaxAttemptsPerChunk; attempt++)
+            var maxAttempts = Math.Max(1, _tuning.TransformStoryRawToTagged.MaxAttemptsPerChunk);
+            var minTagsRequired = Math.Max(0, _tuning.TransformStoryRawToTagged.MinTagsPerChunkRequirement);
+
+            for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
-                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Formatting attempt {attempt}/{MaxAttemptsPerChunk}");
+                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Formatting attempt {attempt}/{maxAttempts}");
 
                 try
                 {
@@ -286,7 +286,7 @@ namespace TinyGenerator.Services.Commands
                         messages.Add(new ConversationMessage 
                         { 
                             Role = "system", 
-                            Content = $"{lastError} Questo è il tentativo {attempt} di {MaxAttemptsPerChunk}." 
+                            Content = $"{lastError} Questo è il tentativo {attempt} di {maxAttempts}." 
                         });
                     }
                     
@@ -311,12 +311,12 @@ namespace TinyGenerator.Services.Commands
                         continue;
                     }
 
-                    // Validation 2: Check for minimum tag count (at least 3 tags)
+                    // Validation 2: Check for minimum tag count
                     var tagCount = System.Text.RegularExpressions.Regex.Matches(cleaned, @"\[(?:PERSONAGGIO|EMOZIONE|VOCE|RITMO|PAUSA|VOLUME|MUSICA|FX|AMBIENTE|NOISE):", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
-                    if (tagCount < 3)
+                    if (tagCount < minTagsRequired)
                     {
-                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough tags: {tagCount} found, minimum 3 required", "warn");
-                        lastError = $"Hai inserito solo {tagCount} tag. Devi inserire ALMENO 3 tag nel testo per arricchirlo adeguatamente.";
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough tags: {tagCount} found, minimum {minTagsRequired} required", "warn");
+                        lastError = $"Hai inserito solo {tagCount} tag. Devi inserire ALMENO {minTagsRequired} tag nel testo per arricchirlo adeguatamente.";
                         continue;
                     }
 
@@ -331,7 +331,7 @@ namespace TinyGenerator.Services.Commands
                 }
             }
 
-            _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Failed after {MaxAttemptsPerChunk} attempts. Last error: {lastError}", "error");
+            _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Failed after {maxAttempts} attempts. Last error: {lastError}", "error");
             return string.Empty;
         }
 
@@ -471,13 +471,18 @@ namespace TinyGenerator.Services.Commands
         private sealed record Chunk(int Index, string Text);
         private sealed record Segment(int Start, int End, int TokenCount);
 
-        private static List<Chunk> SplitStoryIntoChunks(string storyText)
+        private List<Chunk> SplitStoryIntoChunks(string storyText)
         {
             var chunks = new List<Chunk>();
             if (string.IsNullOrWhiteSpace(storyText))
             {
                 return chunks;
             }
+
+            var minTokensPerChunk = Math.Max(0, _tuning.TransformStoryRawToTagged.MinTokensPerChunk);
+            var maxTokensPerChunk = Math.Max(1, _tuning.TransformStoryRawToTagged.MaxTokensPerChunk);
+            var targetTokensPerChunk = Math.Max(1, _tuning.TransformStoryRawToTagged.TargetTokensPerChunk);
+            var overlapTokens = Math.Max(0, _tuning.TransformStoryRawToTagged.OverlapTokens);
 
             var segments = SplitIntoSegments(storyText);
             if (segments.Count == 0)
@@ -497,7 +502,7 @@ namespace TinyGenerator.Services.Commands
                 while (endSeg < segments.Count)
                 {
                     var segTokens = segments[endSeg].TokenCount;
-                    if (tokenCount + segTokens > MaxTokensPerChunk && tokenCount >= MinTokensPerChunk)
+                    if (tokenCount + segTokens > maxTokensPerChunk && tokenCount >= minTokensPerChunk)
                     {
                         break;
                     }
@@ -505,7 +510,7 @@ namespace TinyGenerator.Services.Commands
                     tokenCount += segTokens;
                     endSeg++;
 
-                    if (tokenCount >= TargetTokensPerChunk && tokenCount >= MinTokensPerChunk)
+                    if (tokenCount >= targetTokensPerChunk && tokenCount >= minTokensPerChunk)
                     {
                         break;
                     }
@@ -531,7 +536,7 @@ namespace TinyGenerator.Services.Commands
                 for (int i = endSeg - 1; i >= startSeg; i--)
                 {
                     overlapCount += segments[i].TokenCount;
-                    if (overlapCount >= OverlapTokens)
+                    if (overlapCount >= overlapTokens)
                     {
                         nextStartSeg = i;
                         break;
@@ -622,7 +627,7 @@ namespace TinyGenerator.Services.Commands
             return count;
         }
 
-        private static string MergeTaggedChunks(IReadOnlyList<string> chunks)
+        private string MergeTaggedChunks(IReadOnlyList<string> chunks)
         {
             if (chunks.Count == 0)
             {
@@ -643,15 +648,17 @@ namespace TinyGenerator.Services.Commands
             return builder.ToString();
         }
 
-        private static int FindOverlapLength(string previous, string current)
+        private int FindOverlapLength(string previous, string current)
         {
             if (string.IsNullOrEmpty(previous) || string.IsNullOrEmpty(current))
             {
                 return 0;
             }
 
+            var maxOverlapChars = Math.Max(0, _tuning.TransformStoryRawToTagged.MaxOverlapChars);
+
             int max = Math.Min(previous.Length, current.Length);
-            int maxSearch = Math.Min(max, MaxOverlapChars);
+            int maxSearch = Math.Min(max, maxOverlapChars);
 
             for (int len = maxSearch; len > 0; len--)
             {

@@ -79,7 +79,8 @@ namespace TinyGenerator.Services
             // NOTE: Ambience now stores environment description for future image generation, NOT for audio
             string? pendingAmbience = null;
             
-            // Track pending ambient sounds (from [RUMORI: ...] tag) - these are used for AudioCraft generation
+            // Track pending ambient sounds (from [RUMORI: ...] tag) - these are used for AudioCraft generation.
+            // Requirement: background ambient sounds persist from when they're signaled until the next ambient tag (covering the whole story).
             string? pendingAmbientSounds = null;
             
             // Track pending FX for the next phrase
@@ -185,7 +186,7 @@ namespace TinyGenerator.Services
                         };
 
                         pendingAmbience = null;
-                        pendingAmbientSounds = null;
+                        // NOTE: do NOT reset pendingAmbientSounds here: it must persist until the next [RUMORI] tag.
                         pendingFxDescription = null;
                         pendingFxDuration = null;
                         pendingMusicDescription = null;
@@ -215,7 +216,7 @@ namespace TinyGenerator.Services
                     continue;
                 }
 
-                // Handle RUMORI tags - extract ambient sounds description for AudioCraft generation
+                // Handle RUMORI tag - extract ambient sounds description for AudioCraft generation
                 if (tagContent.StartsWith("RUMORI", StringComparison.OrdinalIgnoreCase))
                 {
                     // Extract ambient sounds description from tag content (after colon) or from the following text
@@ -224,6 +225,17 @@ namespace TinyGenerator.Services
                     if (string.IsNullOrWhiteSpace(desc))
                     {
                         desc = text ?? string.Empty;
+                    }
+                    // Allow explicit clearing of ambient sounds
+                    if (!string.IsNullOrWhiteSpace(desc) &&
+                        (desc.Equals("off", StringComparison.OrdinalIgnoreCase) ||
+                         desc.Equals("none", StringComparison.OrdinalIgnoreCase) ||
+                         desc.Equals("nessuno", StringComparison.OrdinalIgnoreCase) ||
+                         desc.Equals("silenzio", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        pendingAmbientSounds = null;
+                        _logger?.Log("Debug", "TtsSchemaGenerator", "Cleared ambient sounds (OFF/NONE)");
+                        continue;
                     }
                     if (!string.IsNullOrWhiteSpace(desc))
                     {
@@ -558,9 +570,9 @@ namespace TinyGenerator.Services
                     ["music_file"] = null
                 };
 
-                // Reset pending ambience, ambient sounds, FX, and music after applying to phrase (applied only once)
+                // Reset pending ambience, FX, and music after applying to phrase (applied only once).
+                // Do NOT reset pendingAmbientSounds: it persists until the next ambient tag.
                 pendingAmbience = null;
-                pendingAmbientSounds = null;
                 pendingFxDescription = null;
                 pendingFxDuration = null;
                 pendingMusicDescription = null;

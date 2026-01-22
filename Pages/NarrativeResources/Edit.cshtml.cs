@@ -76,6 +76,38 @@ public class EditModel : PageModel
         return RedirectToPage("./Index");
     }
 
+    public async Task<IActionResult> OnPostAjaxAsync()
+    {
+        // Handles AJAX inline updates from modal
+        if (!ModelState.IsValid)
+        {
+            return new JsonResult(new { success = false, errors = ModelState.Where(kv => kv.Value.Errors.Count > 0).ToDictionary(kv => kv.Key, kv => kv.Value.Errors.Select(e => e.ErrorMessage).ToArray()) });
+        }
+
+        if (Item.Id == 0)
+        {
+            _context.NarrativeResources.Add(Item);
+        }
+        else
+        {
+            var existing = await _context.NarrativeResources.FirstOrDefaultAsync(r => r.Id == Item.Id);
+            if (existing is null)
+            {
+                return new JsonResult(new { success = false, message = "NotFound" });
+            }
+
+            existing.NarrativeProfileId = Item.NarrativeProfileId;
+            existing.Name = Item.Name;
+            existing.InitialValue = Item.InitialValue;
+            existing.MinValue = Item.MinValue;
+            existing.MaxValue = Item.MaxValue;
+        }
+
+        await _context.SaveChangesAsync();
+
+        return new JsonResult(new { success = true, item = new { Item.Id, Item.Name, initial = Item.InitialValue, min = Item.MinValue, max = Item.MaxValue } });
+    }
+
     private async Task LoadSelectsAsync()
     {
         var profiles = await _context.NarrativeProfiles.AsNoTracking().OrderBy(p => p.Name).ToListAsync();

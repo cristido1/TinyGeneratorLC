@@ -6,33 +6,29 @@
 }
 
 <div class="d-flex mb-2 align-items-center toolbar-row">
-    <form method="get" class="d-flex" style="gap:.5rem;">
-        <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:260px;" placeholder="Cerca..." />
-        <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
-    </form>
-
-    <div class="ms-auto d-flex gap-1">
-        <a class="btn btn-sm btn-primary" asp-page="./Edit">Nuovo</a>
-    </div>
+    <h3 class="mb-0">@ViewData["Title"]</h3>
+    <div class="ms-auto text-muted small">Usa i controlli della tabella per ricerca e nuove voci</div>
 </div>
 
-<div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
-    <table class="table table-sm table-striped mb-0">
+<div class="table-container">
+    <table id="myTable" class="table table-hover table-sm mb-0">
         <thead class="table-light">
             <tr>
-                <th style="width: 70px;">Id</th>
-                <th>Nome</th>
-                <th style="width:120px;" class="text-end">Risorse</th>
-                <th style="width:140px;" class="text-end">Micro-Obiettivi</th>
-                <th style="width:120px;" class="text-end">Failure rules</th>
-                <th style="width:160px;" class="text-end">Consequence rules</th>
-                <th style="width: 180px;">Azioni</th>
+                <th data-col="detail"></th>
+                <th data-col="id" style="width:70px;">Id</th>
+                <th data-col="name">Nome</th>
+                <th data-col="resources" style="width:120px;" class="text-end">Risorse</th>
+                <th data-col="microobjectives" style="width:140px;" class="text-end">Micro-Obiettivi</th>
+                <th data-col="failurerules" style="width:120px;" class="text-end">Failure rules</th>
+                <th data-col="consequences" style="width:160px;" class="text-end">Consequence rules</th>
+                <th data-col="actions" style="width:180px;">Azioni</th>
             </tr>
         </thead>
         <tbody>
             @foreach (var item in Model.Items)
             {
-                <tr>
+                <tr data-id="@item.Id">
+                    <td></td>
                     <td>@item.Id</td>
                     <td>
                         <div class="fw-semibold">@item.Name</div>
@@ -46,11 +42,218 @@
                     <td class="text-end">@item.FailureRules.Count</td>
                     <td class="text-end">@item.ConsequenceRules.Count</td>
                     <td>
-                        <a class="btn btn-sm btn-outline-secondary" asp-page="./Edit" asp-route-id="@item.Id">Edit</a>
-                        <a class="btn btn-sm btn-outline-danger" asp-page="./Delete" asp-route-id="@item.Id">Delete</a>
+                        <div class="btn-group">
+                            <a class="btn btn-sm btn-outline-secondary" asp-page="./Edit" asp-route-id="@item.Id">Modifica</a>
+                            <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li><a class="dropdown-item" asp-page="./Edit" asp-route-id="@item.Id">Apri</a></li>
+                                <li><a class="dropdown-item" href="/NarrativeResources?profileId=@item.Id">Risorse</a></li>
+                                <li><a class="dropdown-item" href="/MicroObjectives?profileId=@item.Id">Micro-Obiettivi</a></li>
+                                <li><hr class="dropdown-divider"/></li>
+                                <li>
+                                    <form method="post" asp-page="./Delete" asp-route-id="@item.Id" onsubmit="return confirm('Eliminare il profilo?');">
+                                        <button type="submit" class="dropdown-item text-danger">Elimina</button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </div>
                     </td>
                 </tr>
             }
         </tbody>
     </table>
 </div>
+
+<style>
+/* Custom table styles from usage_index_standard */
+#myTable { font-size: 0.95rem; }
+#myTable thead th { font-weight:600; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.5px; padding:0.75rem; border-bottom:2px solid #dee2e6; }
+#myTable tbody td { padding:0.65rem; vertical-align:middle; }
+#myTable tbody tr:hover { background-color:#f8f9fa; }
+.table-container { border:1px solid #dee2e6; border-radius:0.375rem; padding:1rem; background:white; }
+.dt-buttons .btn { font-size:0.875rem; padding:0.375rem 0.75rem; }
+.dataTables_filter input { margin-left:0.5rem; border-radius:0.25rem; }
+.dataTables_info { font-size:0.875rem; color:#6c757d; }
+
+/* Child detail compact styling */
+.child-detail .card-body { padding: 0.5rem; }
+.child-detail table th, .child-detail table td { padding: 0.35rem; font-size: 0.9rem; }
+.child-detail h6 { margin-top: 0.5rem; margin-bottom: 0.25rem; font-size: 0.95rem; }
+</style>
+
+@section Scripts {
+<script>
+$(function () {
+    if (!$.fn || !$.fn.DataTable) {
+        console.error('DataTables non disponibile: controllare include in _Layout');
+        return;
+    }
+
+    var table = $('#myTable').DataTable({
+        dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+             "rt" +
+             "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+        stateSave: true,
+        paging: true,
+        pageLength: 25,
+        lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+        ordering: true,
+        order: [[2, 'asc']],
+        searching: true,
+        buttons: [
+            {
+                text: '<i class="bi bi-plus-circle me-1"></i>Nuovo',
+                className: 'btn btn-sm btn-primary',
+                attr: { style: 'width: auto; flex: 0 0 auto;' },
+                action: function () { window.location.href = './Edit'; }
+            },
+            {
+                extend: 'colvis',
+                text: 'Colonne',
+                className: 'btn btn-sm btn-secondary',
+                attr: { style: 'width: auto; flex: 0 0 auto;' },
+                columns: [1, 2, 3, 4, 5, 6]
+            }
+        ],
+        columnDefs: [
+            {
+                targets: 0,
+                className: 'dt-control',
+                orderable: false,
+                searchable: false,
+                width: '28px',
+                defaultContent: '<i class="bi bi-plus-square"></i>'
+            },
+            { targets: 7, orderable: false, searchable: false }
+        ],
+        responsive: false,
+        stateLoadParams: function (settings, data) {
+            try {
+                if (data && data.columns) {
+                    if (data.columns[0]) data.columns[0].visible = true;
+                    if (data.columns[7]) data.columns[7].visible = true;
+                }
+            } catch (e) { }
+        },
+        language: {
+            search: 'Cerca:',
+            lengthMenu: 'Mostra _MENU_ record',
+            info: 'Showing _START_ to _END_ of _TOTAL_ entries',
+            paginate: { first: 'Prima', last: 'Ultima', next: 'Succ', previous: 'Prec' }
+        }
+    });
+
+    $('#myTable tbody').on('click', 'td.dt-control', function () {
+        var tr = $(this).closest('tr');
+        var row = table.row(tr);
+        var id = tr.data('id');
+
+        if (row.child.isShown()) {
+            row.child.hide();
+            tr.removeClass('shown');
+            $(this).find('i').removeClass('bi-dash-square').addClass('bi-plus-square');
+            return;
+        }
+
+        fetch(window.location.pathname + '?handler=Detail&id=' + encodeURIComponent(id))
+            .then(function (r) { if (!r.ok) throw new Error('Network response not ok'); return r.json(); })
+            .then(function (data) {
+                var html = '<div class="card child-detail"><div class="card-body p-1">';
+                html += '<h5 class="card-title" style="margin-bottom:.25rem;">' + (data.title || '') + '</h5>';
+                html += '<p class="card-text mb-2" style="white-space: pre-wrap; margin-bottom:.25rem;">' + (data.description || '') + '</p>';
+
+                html += '<h6 class="mt-2">Risorse</h6>';
+                if (data.resources && data.resources.length > 0) {
+                    html += '<table class="table table-sm mb-2"><thead><tr><th>Nome</th><th style="width:85px;">Initial</th><th style="width:85px;">Min</th><th style="width:85px;">Max</th><th style="width:90px;">Azioni</th></tr></thead><tbody>';
+                    data.resources.forEach(function (r) {
+                        html += '<tr data-resource-id="' + r.id + '"><td>' + (r.name || '') + '</td><td class="text-end">' + (r.initial ?? '') + '</td><td class="text-end">' + (r.min ?? '') + '</td><td class="text-end">' + (r.max ?? '') + '</td><td class="text-end"><button class="btn btn-sm btn-outline-primary btn-edit-resource" data-id="' + r.id + '">Modifica</button></td></tr>';
+                    });
+                    html += '</tbody></table>';
+                } else {
+                    html += '<div class="text-muted small">Nessuna risorsa</div>';
+                }
+
+                html += '<h6 class="mt-2">Micro-Obiettivi</h6>';
+                if (data.microObjectives && data.microObjectives.length > 0) {
+                    html += '<table class="table table-sm mb-0"><thead><tr><th>Codice</th><th>Descrizione</th></tr></thead><tbody>';
+                    data.microObjectives.forEach(function (m) {
+                        html += '<tr><td>' + (m.code || '') + '</td><td>' + (m.description || '') + '</td></tr>';
+                    });
+                    html += '</tbody></table>';
+                } else {
+                    html += '<div class="text-muted small">Nessun micro-obiettivo</div>';
+                }
+
+                html += '</div></div>';
+                row.child(html).show();
+                tr.addClass('shown');
+                $(tr).find('td.dt-control i').removeClass('bi-plus-square').addClass('bi-dash-square');
+            })
+            .catch(function () {
+                row.child('<div class="p-2 text-danger">Dettaglio non disponibile</div>').show();
+            });
+    });
+
+    // Modal edit for resources inside child rows
+    if (!document.getElementById('resourceEditModal')) {
+        var modalHtml = '\n<div class="modal fade" id="resourceEditModal" tabindex="-1" aria-hidden="true">\n  <div class="modal-dialog modal-sm">\n    <div class="modal-content">\n      <div class="modal-header">\n        <h5 class="modal-title">Modifica Risorsa</h5>\n        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>\n      </div>\n      <div class="modal-body">\n      </div>\n    </div>\n  </div>\n</div>\n';
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    var resourceModal = new bootstrap.Modal(document.getElementById('resourceEditModal'));
+
+    function openResourceModal(id) {
+        var url = '/NarrativeResources/Edit?id=' + encodeURIComponent(id) + '&partial=1';
+        fetch(url)
+            .then(function (r) { return r.text(); })
+            .then(function (html) {
+                var body = document.querySelector('#resourceEditModal .modal-body');
+                body.innerHTML = html;
+
+                var form = body.querySelector('form');
+                if (form) {
+                    form.addEventListener('submit', function (ev) {
+                        ev.preventDefault();
+                        var formData = new FormData(form);
+                        var tokenEl = form.querySelector('input[name=__RequestVerificationToken]');
+                        var token = tokenEl ? tokenEl.value : null;
+
+                        fetch('/NarrativeResources/Edit?handler=Ajax', {
+                            method: 'POST',
+                            headers: token ? { 'RequestVerificationToken': token } : {},
+                            body: formData
+                        })
+                            .then(function (r) { return r.json(); })
+                            .then(function (json) {
+                                if (json && json.success) {
+                                    var row = document.querySelector('tr[data-resource-id="' + (json.item.Id ?? json.item.id) + '"]');
+                                    if (row) {
+                                        var cells = row.querySelectorAll('td');
+                                        if (cells.length >= 4) {
+                                            cells[0].textContent = json.item.Name || json.item.name || '';
+                                            cells[1].textContent = (json.item.initial ?? '');
+                                            cells[2].textContent = (json.item.min ?? '');
+                                            cells[3].textContent = (json.item.max ?? '');
+                                        }
+                                    }
+                                    resourceModal.hide();
+                                } else {
+                                    alert('Errore durante il salvataggio');
+                                }
+                            })
+                            .catch(function () { alert('Errore di rete'); });
+                    });
+                }
+
+                resourceModal.show();
+            })
+            .catch(function () { alert('Impossibile caricare il form di modifica'); });
+    }
+
+    $(document).on('click', '.btn-edit-resource', function (e) {
+        e.preventDefault();
+        openResourceModal($(this).data('id'));
+    });
+});
+</script>
+}

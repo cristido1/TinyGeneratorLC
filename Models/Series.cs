@@ -82,6 +82,9 @@ public sealed class Series
     [Column("regole_narrative")]
     public string? RegoleNarrative { get; set; }
 
+    [Column("serie_final_goal")]
+    public string? SerieFinalGoal { get; set; }
+
     // Narrative Engine extensions
     [Column("default_narrative_profile_id")]
     public int? DefaultNarrativeProfileId { get; set; }
@@ -98,6 +101,22 @@ public sealed class Series
     
     [Column("note_ai")]
     public string? NoteAI { get; set; }
+
+    // ==========================================
+    // PLANNING (Strategico/Tattico)
+    // ==========================================
+
+    /// <summary>
+    /// Strategic planning framework for the whole series (planner_methods.id)
+    /// </summary>
+    [Column("planner_method_id")]
+    public int? PlannerMethodId { get; set; }
+
+    /// <summary>
+    /// Default tactical planning grammar for episodes in this series (tipo_planning.id_tipo_planning)
+    /// </summary>
+    [Column("default_tipo_planning_id")]
+    public int? DefaultTipoPlanningId { get; set; }
     
     // ==========================================
     // METADATI

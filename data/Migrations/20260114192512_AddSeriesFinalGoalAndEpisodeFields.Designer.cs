@@ -2,17 +2,20 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TinyGenerator.Data;
 
 #nullable disable
 
-namespace TinyGenerator.Data.Migrations
+namespace TinyGenerator.data.Migrations
 {
     [DbContext(typeof(TinyGeneratorDbContext))]
-    partial class TinyGeneratorDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260114192512_AddSeriesFinalGoalAndEpisodeFields")]
+    partial class AddSeriesFinalGoalAndEpisodeFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -993,6 +996,15 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("id");
 
+                    b.Property<int?>("BeatCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("beat_count");
+
+                    b.Property<string>("Category")
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("category");
+
                     b.Property<string>("Code")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -1007,9 +1019,23 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("is_active");
 
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("name");
+
                     b.Property<string>("Notes")
                         .HasColumnType("TEXT")
                         .HasColumnName("notes");
+
+                    b.Property<string>("PlannerPrompt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("planner_prompt");
+
+                    b.Property<string>("RecommendedGenres")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("recommended_genres");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -1017,10 +1043,27 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("BLOB")
                         .HasColumnName("RowVersion");
 
-                    b.HasKey("Id");
+                    b.Property<string>("Strengths")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("strengths");
 
-                    b.HasIndex("Code")
-                        .IsUnique();
+                    b.Property<string>("StructureSchema")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("structure_schema");
+
+                    b.Property<bool>("SupportsSeries")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("supports_series");
+
+                    b.Property<string>("ValidationRules")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("validation_rules");
+
+                    b.Property<string>("Weaknesses")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("weaknesses");
+
+                    b.HasKey("Id");
 
                     b.ToTable("planner_methods");
                 });

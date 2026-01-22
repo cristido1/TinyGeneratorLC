@@ -12,6 +12,7 @@ using System.Text.Encodings.Web;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 using TinyGenerator.Skills;
 using TinyGenerator.Services.Commands;
@@ -36,6 +37,7 @@ public sealed class StoriesService
     private readonly MultiStepOrchestrationService? _multiStepOrchestrator;
     private readonly SentimentMappingService? _sentimentMappingService;
     private readonly ResponseCheckerService? _responseChecker;
+    private readonly CommandTuningOptions _tuning;
     private readonly ConcurrentDictionary<long, StatusChainState> _statusChains = new();
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
     {
@@ -57,7 +59,8 @@ public sealed class StoriesService
         ICommandDispatcher? commandDispatcher = null,
         MultiStepOrchestrationService? multiStepOrchestrator = null,
         SentimentMappingService? sentimentMappingService = null,
-        ResponseCheckerService? responseChecker = null)
+        ResponseCheckerService? responseChecker = null,
+        IOptions<CommandTuningOptions>? tuningOptions = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _ttsService = ttsService ?? throw new ArgumentNullException(nameof(ttsService));
@@ -68,6 +71,7 @@ public sealed class StoriesService
         _multiStepOrchestrator = multiStepOrchestrator;
         _sentimentMappingService = sentimentMappingService;
         _responseChecker = responseChecker;
+        _tuning = tuningOptions?.Value ?? new CommandTuningOptions();
     }
 
     public long SaveGeneration(string prompt, StoryGenerationResult r, string? memoryKey = null)
@@ -816,7 +820,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                             _kernelFactory,
                             storiesService: this,
                             logger: _customLogger,
-                            commandDispatcher: _commandDispatcher);
+                            commandDispatcher: _commandDispatcher,
+                            tuning: _tuning);
 
                         return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                     }
@@ -4260,7 +4265,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 _service._kernelFactory,
                 _service,
                 _service._customLogger,
-                _service._commandDispatcher);
+                _service._commandDispatcher,
+                _service._tuning);
 
             var result = await cmd.ExecuteAsync();
             return (result.Success, result.Message);
@@ -5103,12 +5109,13 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     continue;
                 }
 
-                // Update tts_schema.json: add ambientSoundsFile to each phrase in this segment
+                // Update tts_schema.json: add ambient sound file reference to each phrase in this segment
                 foreach (var entryIndex in segment.EntryIndices)
                 {
                     if (entryIndex >= 0 && entryIndex < phraseEntries.Count)
                     {
-                        phraseEntries[entryIndex]["ambientSoundsFile"] = localFileName;
+                        phraseEntries[entryIndex]["ambient_sound_file"] = localFileName;
+                        phraseEntries[entryIndex]["ambientSoundsFile"] = localFileName; // backward compat
                     }
                 }
             }
@@ -5159,8 +5166,14 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         for (int i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            // Read from ambientSounds property
-            var ambientSounds = ReadString(entry, "ambientSounds") ?? ReadString(entry, "AmbientSounds") ?? ReadString(entry, "ambient_sounds");
+            // Read from standardized snake_case first, then legacy/camelCase
+            var ambientSounds =
+                ReadString(entry, "ambient_sound_description") ??
+                ReadString(entry, "ambientSoundDescription") ??
+                ReadString(entry, "AmbientSoundDescription") ??
+                ReadString(entry, "ambientSounds") ??
+                ReadString(entry, "AmbientSounds") ??
+                ReadString(entry, "ambient_sounds");
             
             // Read startMs and endMs using TryReadNumber
             int startMs = 0;
@@ -6073,24 +6086,42 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             return (false, err);
         }
 
-        // Step 3: Check for missing ambient sound files (from ambientSounds property)
-        var ambientSoundsNeeded = phraseEntries.Any(e => 
-            !string.IsNullOrWhiteSpace(ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds") ?? ReadString(e, "ambient_sounds")));
-        
+        // Step 3: Check for missing ambient sound files (from ambient sound description/file fields)
+        var ambientSoundsNeeded = phraseEntries.Any(e =>
+            !string.IsNullOrWhiteSpace(
+                ReadString(e, "ambient_sound_description") ??
+                ReadString(e, "AmbientSoundDescription") ??
+                ReadString(e, "ambientSoundDescription") ??
+                ReadString(e, "ambientSounds") ??
+                ReadString(e, "AmbientSounds") ??
+                ReadString(e, "ambient_sounds")));
+
         if (ambientSoundsNeeded)
         {
             var missingAmbientSounds = phraseEntries.Where(e =>
             {
-                var ambientSounds = ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds") ?? ReadString(e, "ambient_sounds");
+                var ambientSounds =
+                    ReadString(e, "ambient_sound_description") ??
+                    ReadString(e, "AmbientSoundDescription") ??
+                    ReadString(e, "ambientSoundDescription") ??
+                    ReadString(e, "ambientSounds") ??
+                    ReadString(e, "AmbientSounds") ??
+                    ReadString(e, "ambient_sounds");
                 if (string.IsNullOrWhiteSpace(ambientSounds)) return false;
-                var ambientSoundFile = ReadString(e, "ambientSoundsFile") ?? ReadString(e, "AmbientSoundsFile") ?? ReadString(e, "ambient_sounds_file");
+
+                var ambientSoundFile =
+                    ReadString(e, "ambient_sound_file") ??
+                    ReadString(e, "AmbientSoundFile") ??
+                    ReadString(e, "ambientSoundFile") ??
+                    ReadString(e, "ambientSoundsFile") ??
+                    ReadString(e, "AmbientSoundsFile") ??
+                    ReadString(e, "ambient_sounds_file");
                 if (string.IsNullOrWhiteSpace(ambientSoundFile)) return true;
                 return !File.Exists(Path.Combine(folderPath, ambientSoundFile));
             }).ToList();
 
             if (missingAmbientSounds.Count > 0)
             {
-                var missingList = missingAmbientSounds.Select(e => ReadString(e, "ambientSounds") ?? ReadString(e, "AmbientSounds") ?? ReadString(e, "ambient_sounds")).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
                 var err = $"File ambient sound mancanti per alcune frasi; genere necessario prima del mix. Missing count: {missingAmbientSounds.Count}";
                 _customLogger?.Append(runId, $"[{story.Id}] {err}");
                 return (false, err);
@@ -6258,25 +6289,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 }
             }
 
-            // Ambient sound file (from ambientSounds property, stored in ambientSoundsFile)
-            var ambientSoundFile = ReadString(entry, "ambientSoundsFile") ?? ReadString(entry, "AmbientSoundsFile") ?? ReadString(entry, "ambient_sounds_file");
-            if (!string.IsNullOrWhiteSpace(ambientSoundFile))
-            {
-                var ambientSoundFilePath = Path.Combine(folderPath, ambientSoundFile);
-                if (File.Exists(ambientSoundFilePath))
-                {
-                    int startMs = introShiftMs;
-                    if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
-                        startMs = (int)s + introShiftMs;
-                    int durationMs = 30000; // default 30s for ambient sounds
-                    ambienceTrackFiles.Add((ambientSoundFilePath, startMs, durationMs));
-                    _customLogger?.Append(runId, $"[{story.Id}] Ambient sound aggiunto: {ambientSoundFile} @ {startMs}ms");
-                }
-                else
-                {
-                    _customLogger?.Append(runId, $"[{story.Id}] [WARN] File ambient sound NON TROVATO: {ambientSoundFilePath}");
-                }
-            }
+            // Ambient sounds are handled as continuous segments (from one [RUMORI] tag until the next)
 
             // FX file - starts at middle of phrase duration
             var fxFile = ReadString(entry, "fxFile") ?? ReadString(entry, "FxFile");
@@ -6317,6 +6330,82 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     musicTrackFiles.Add((musicFilePath, musicStartMs, durationMs));
                 }
             }
+        }
+
+        // Build ambience segments based on ambient_sound_file changes and phrase timing
+        try
+        {
+            string? currentAmbientFile = null;
+            int segmentStartMs = 0;
+            int segmentEndMs = 0;
+
+            void FlushAmbienceSegmentIfAny()
+            {
+                if (string.IsNullOrWhiteSpace(currentAmbientFile)) return;
+                var durationMs = segmentEndMs - segmentStartMs;
+                if (durationMs <= 0) return;
+
+                var fullPath = Path.Combine(folderPath, currentAmbientFile);
+                if (!File.Exists(fullPath))
+                {
+                    _customLogger?.Append(runId, $"[{story.Id}] [WARN] File ambient sound NON TROVATO: {fullPath}");
+                    return;
+                }
+
+                ambienceTrackFiles.Add((fullPath, segmentStartMs + introShiftMs, durationMs));
+                _customLogger?.Append(runId, $"[{story.Id}] Ambient segment: {currentAmbientFile} @ {segmentStartMs + introShiftMs}ms for {durationMs}ms");
+            }
+
+            for (int i = 0; i < phraseEntries.Count; i++)
+            {
+                var e = phraseEntries[i];
+                var ambientFile =
+                    ReadString(e, "ambient_sound_file") ??
+                    ReadString(e, "AmbientSoundFile") ??
+                    ReadString(e, "ambientSoundFile") ??
+                    ReadString(e, "ambientSoundsFile") ??
+                    ReadString(e, "AmbientSoundsFile") ??
+                    ReadString(e, "ambient_sounds_file");
+
+                int startMs = 0;
+                int durationMs = 0;
+                if (TryReadNumber(e, "startMs", out var s) || TryReadNumber(e, "StartMs", out s) || TryReadNumber(e, "start_ms", out s))
+                    startMs = (int)s;
+                if (TryReadNumber(e, "durationMs", out var d) || TryReadNumber(e, "DurationMs", out d) || TryReadNumber(e, "duration_ms", out d))
+                    durationMs = (int)d;
+                if (durationMs <= 0) durationMs = 2000;
+                var endMs = startMs + durationMs;
+
+                // If the ambient file changes (or becomes empty), flush previous segment.
+                if (!string.IsNullOrWhiteSpace(currentAmbientFile) &&
+                    (!string.Equals(ambientFile, currentAmbientFile, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(ambientFile)))
+                {
+                    FlushAmbienceSegmentIfAny();
+                    currentAmbientFile = null;
+                }
+
+                if (!string.IsNullOrWhiteSpace(ambientFile))
+                {
+                    if (currentAmbientFile == null)
+                    {
+                        currentAmbientFile = ambientFile;
+                        segmentStartMs = startMs;
+                        segmentEndMs = endMs;
+                    }
+                    else
+                    {
+                        // extend
+                        segmentEndMs = Math.Max(segmentEndMs, endMs);
+                    }
+                }
+            }
+
+            // flush last
+            FlushAmbienceSegmentIfAny();
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Errore costruendo segmenti ambience: {ex.Message}");
         }
 
         // === ENDING OUTRO (handled ONLY in mix, not in tts_schema.json) ===
@@ -6483,7 +6572,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             if (ambienceFiles.Count > 0 || fxFiles.Count > 0)
             {
                 _customLogger?.Append(runId, $"[{storyId}] Generazione traccia ambience+FX...");
-                var ambienceFxResult = await CreateAmbienceFxTrackAsync(folderPath, ambienceFiles, fxFiles, ambienceFxTrackFile, runId, storyId);
+                var ambienceFxResult = await CreateAmbienceFxTrackAsync(folderPath, ambienceFiles, fxFiles, ambienceFxTrackFile, runId, storyId, lowerAmbienceBecauseMusic: musicFiles.Count > 0);
                 if (!ambienceFxResult.success)
                 {
                     TryDeleteFile(ttsTrackFile);
@@ -6654,20 +6743,25 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         List<(string FilePath, int StartMs)> fxFiles,
         string outputFile,
         string runId,
-        long storyId)
+        long storyId,
+        bool lowerAmbienceBecauseMusic)
     {
         var inputArgs = new StringBuilder();
         var filterArgs = new StringBuilder();
         var labels = new List<string>();
         int idx = 0;
+
+        // If there's music in the final mix, keep ambience (rumori) lower so it doesn't fight the music bed.
+        var ambienceVolume = lowerAmbienceBecauseMusic ? 0.18 : 0.30;
         
-        // Add ambience with timing and volume
+        // Add ambience with timing and volume. Ambience is looped so it can cover long durations.
         foreach (var (filePath, startMs, durationMs) in ambienceFiles)
         {
-            inputArgs.Append($" -i \"{filePath}\"");
+            // Loop this input indefinitely, then atrim to requested duration.
+            inputArgs.Append($" -stream_loop -1 -i \"{filePath}\"");
             var label = $"amb{idx}";
             var endSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            filterArgs.Append($"[{idx}]atrim=start=0:end={endSeconds},adelay={startMs}|{startMs},volume=0.30[{label}];");
+            filterArgs.Append($"[{idx}]atrim=start=0:end={endSeconds},adelay={startMs}|{startMs},volume={ambienceVolume.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}[{label}];");
             labels.Add($"[{label}]");
             idx++;
         }

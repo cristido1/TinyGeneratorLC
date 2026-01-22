@@ -95,6 +95,84 @@
     </form>
 </div>
 
+<div class="note-card" style="max-width:900px; margin-bottom:18px">
+    <form id="stateSeriesEpisodeForm">
+        @Html.AntiForgeryToken()
+        <h5 class="note-title" style="margin-bottom:10px">Genera episodio (Narrative Engine / state-driven)</h5>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+            <div style="min-width:260px; flex:1;">
+                <label for="StateSeriesId" class="note-title">Serie</label>
+                <select id="StateSeriesId" name="StateSeriesId" class="keep-input" style="width:100%; padding:8px" required>
+                    @foreach (var s in Model.SeriesList)
+                    {
+                        <option value="@s.Id" selected="@(Model.StateSeriesId == s.Id ? "selected" : null)">@s.Titolo</option>
+                    }
+                </select>
+            </div>
+            <div style="min-width:220px; flex:1;">
+                <label for="StateEpisodeId" class="note-title">Episodio</label>
+                <select id="StateEpisodeId" name="StateEpisodeId" class="keep-input" style="width:100%; padding:8px" required></select>
+            </div>
+            <div style="min-width:260px; flex:1;">
+                <label for="StateWriterAgentId" class="note-title">Writer agent</label>
+                <select id="StateWriterAgentId" name="StateWriterAgentId" class="keep-input" style="width:100%; padding:8px" required>
+                    @foreach (var agent in Model.StateWriterAgents)
+                    {
+                        <option value="@agent.Id" selected="@(Model.StateWriterAgentId == agent.Id ? "selected" : null)">
+                            @agent.Name
+                            @if (!string.IsNullOrEmpty(agent.MultiStepTemplateName))
+                            {
+                                <text> [Template: @agent.MultiStepTemplateName]</text>
+                            }
+                        </option>
+                    }
+                </select>
+            </div>
+            <div style="min-width:160px; flex:0 0 160px;">
+                <label for="StateTargetMinutes" class="note-title">Minuti TTS</label>
+                <input id="StateTargetMinutes" name="StateTargetMinutes" class="keep-input" style="width:100%; padding:8px" value="@Model.StateTargetMinutes" type="number" min="1" max="120" />
+            </div>
+        </div>
+        <div style="font-size:0.9em; color:#666; margin-bottom:8px">
+            Crea una storia state-driven collegata a serie/episodio e accoda il primo chunk. Il profilo narrativo viene preso dalla serie (se impostato) oppure usa il profilo default (id=1).
+        </div>
+        <div id="stateSeriesEpisodeError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
+        <div style="display:flex; gap:8px;">
+            <button type="button" id="startStateSeriesEpisodeBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia episodio (state-driven)</button>
+            <button type="button" id="startStateSeriesEpisodeAutoBtn" class="action-btn" style="font-weight:600; padding:8px 14px">Avvia episodio completo (~minuti TTS)</button>
+        </div>
+    </form>
+</div>
+
+<div class="note-card" style="max-width:900px; margin-bottom:18px">
+    <form id="stateNextChunkForm">
+        @Html.AntiForgeryToken()
+        <h5 class="note-title" style="margin-bottom:10px">Continua storia (state-driven)</h5>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+            <div style="min-width:220px; flex:0 0 220px;">
+                <label for="StateStoryId" class="note-title">StoryId</label>
+                <input id="StateStoryId" name="StateStoryId" class="keep-input font-monospace" style="width:100%; padding:8px" value="@Model.StateStoryId" placeholder="es. 123" required />
+            </div>
+            <div style="min-width:260px; flex:1;">
+                <label for="StateNextChunkWriterAgentId" class="note-title">Writer agent</label>
+                <select id="StateNextChunkWriterAgentId" name="StateNextChunkWriterAgentId" class="keep-input" style="width:100%; padding:8px" required>
+                    @foreach (var agent in Model.StateWriterAgents)
+                    {
+                        <option value="@agent.Id" selected="@(Model.StateNextChunkWriterAgentId == agent.Id ? "selected" : null)">@agent.Name</option>
+                    }
+                </select>
+            </div>
+        </div>
+        <div style="font-size:0.9em; color:#666; margin-bottom:8px">
+            Usa lo StoryId creato dallo start state-driven e genera il chunk successivo.
+        </div>
+        <div id="stateNextChunkError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
+        <div style="display:flex; gap:8px;">
+            <button type="button" id="startStateNextChunkBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Genera chunk successivo</button>
+        </div>
+    </form>
+</div>
+
 <hr />
 <h2>Stato generazione (live):</h2>
 <div id="statusArea">
@@ -110,6 +188,16 @@
     const episodeIdSelect = document.getElementById('EpisodeId');
     const startSeriesEpisodeBtn = document.getElementById('startSeriesEpisodeBtn');
     const seriesEpisodeError = document.getElementById('seriesEpisodeError');
+
+    const stateSeriesIdSelect = document.getElementById('StateSeriesId');
+    const stateEpisodeIdSelect = document.getElementById('StateEpisodeId');
+    const startStateSeriesEpisodeBtn = document.getElementById('startStateSeriesEpisodeBtn');
+    const startStateSeriesEpisodeAutoBtn = document.getElementById('startStateSeriesEpisodeAutoBtn');
+    const stateSeriesEpisodeError = document.getElementById('stateSeriesEpisodeError');
+
+    const stateStoryIdInput = document.getElementById('StateStoryId');
+    const startStateNextChunkBtn = document.getElementById('startStateNextChunkBtn');
+    const stateNextChunkError = document.getElementById('stateNextChunkError');
     let pollInterval = null;
     let connection = null;
 
@@ -274,9 +362,36 @@
         });
     }
 
+    function renderStateEpisodeOptions() {
+        if (!stateSeriesIdSelect || !stateEpisodeIdSelect) return;
+        const serieId = parseInt(stateSeriesIdSelect.value || '0', 10);
+        stateEpisodeIdSelect.innerHTML = '';
+        const items = seriesEpisodes.filter(e => e.SerieId === serieId);
+        if (items.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Nessun episodio';
+            stateEpisodeIdSelect.appendChild(opt);
+            return;
+        }
+        items.forEach(ep => {
+            const opt = document.createElement('option');
+            opt.value = ep.Id;
+            const title = ep.Title ? ` - ${ep.Title}` : '';
+            opt.textContent = `Ep ${ep.Number}${title}`;
+            if (ep.Id === @Model.StateEpisodeId) opt.selected = true;
+            stateEpisodeIdSelect.appendChild(opt);
+        });
+    }
+
     if (seriesIdSelect) {
         seriesIdSelect.addEventListener('change', renderEpisodeOptions);
         renderEpisodeOptions();
+    }
+
+    if (stateSeriesIdSelect) {
+        stateSeriesIdSelect.addEventListener('change', renderStateEpisodeOptions);
+        renderStateEpisodeOptions();
     }
 
     if (startSeriesEpisodeBtn) {
@@ -304,6 +419,109 @@
             const id = data.id;
             try { localStorage.setItem('lastGenId', id); } catch { }
             appendMessage('Generazione episodio avviata. id: ' + id);
+            await loadHistory(id);
+            await connectSignalRAndJoin(id);
+        });
+    }
+
+    if (startStateSeriesEpisodeBtn) {
+        startStateSeriesEpisodeBtn.addEventListener('click', async () => {
+            if (stateSeriesEpisodeError) {
+                stateSeriesEpisodeError.textContent = '';
+                stateSeriesEpisodeError.style.display = 'none';
+            }
+            clearMessages();
+            appendMessage('Avvio episodio state-driven...');
+
+            const form = document.getElementById('stateSeriesEpisodeForm');
+            const fd = new FormData(form);
+            const res = await fetch('?handler=StartStateSeriesEpisode', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const text = await res.text();
+                if (stateSeriesEpisodeError) {
+                    stateSeriesEpisodeError.textContent = text;
+                    stateSeriesEpisodeError.style.display = 'block';
+                }
+                appendMessage('Errore avvio: ' + text, 'error');
+                return;
+            }
+            const data = await res.json();
+            const id = data.id;
+            const storyId = data.storyId;
+            try { localStorage.setItem('lastGenId', id); } catch { }
+            if (storyId) {
+                try { localStorage.setItem('lastStateStoryId', storyId.toString()); } catch { }
+                if (stateStoryIdInput) stateStoryIdInput.value = storyId;
+                appendMessage('StoryId: ' + storyId);
+            }
+            appendMessage('Generazione episodio state-driven avviata. id: ' + id);
+            await loadHistory(id);
+            await connectSignalRAndJoin(id);
+        });
+    }
+
+    if (startStateSeriesEpisodeAutoBtn) {
+        startStateSeriesEpisodeAutoBtn.addEventListener('click', async () => {
+            if (stateSeriesEpisodeError) {
+                stateSeriesEpisodeError.textContent = '';
+                stateSeriesEpisodeError.style.display = 'none';
+            }
+            clearMessages();
+            appendMessage('Avvio episodio completo state-driven...');
+
+            const form = document.getElementById('stateSeriesEpisodeForm');
+            const fd = new FormData(form);
+            const res = await fetch('?handler=StartStateSeriesEpisodeAuto', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const text = await res.text();
+                if (stateSeriesEpisodeError) {
+                    stateSeriesEpisodeError.textContent = text;
+                    stateSeriesEpisodeError.style.display = 'block';
+                }
+                appendMessage('Errore avvio: ' + text, 'error');
+                return;
+            }
+            const data = await res.json();
+            const id = data.id;
+            const storyId = data.storyId;
+            try { localStorage.setItem('lastGenId', id); } catch { }
+            if (storyId) {
+                try { localStorage.setItem('lastStateStoryId', storyId.toString()); } catch { }
+                if (stateStoryIdInput) stateStoryIdInput.value = storyId;
+                appendMessage('StoryId: ' + storyId);
+            }
+            appendMessage('Generazione episodio completo accodata. id: ' + id);
+            await loadHistory(id);
+            await connectSignalRAndJoin(id);
+        });
+    }
+
+    if (startStateNextChunkBtn) {
+        startStateNextChunkBtn.addEventListener('click', async () => {
+            if (stateNextChunkError) {
+                stateNextChunkError.textContent = '';
+                stateNextChunkError.style.display = 'none';
+            }
+            clearMessages();
+            appendMessage('Generazione chunk successivo...');
+
+            const form = document.getElementById('stateNextChunkForm');
+            const fd = new FormData(form);
+            const res = await fetch('?handler=StateNextChunk', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const text = await res.text();
+                if (stateNextChunkError) {
+                    stateNextChunkError.textContent = text;
+                    stateNextChunkError.style.display = 'block';
+                }
+                appendMessage('Errore: ' + text, 'error');
+                return;
+            }
+
+            const data = await res.json();
+            const id = data.id;
+            try { localStorage.setItem('lastGenId', id); } catch { }
+            appendMessage('Chunk accodato. id: ' + id);
             await loadHistory(id);
             await connectSignalRAndJoin(id);
         });
@@ -364,6 +582,11 @@
                 appendMessage('🔄 Ricollegamento alla generazione ' + existing + '...');
                 await loadHistory(existing);
                 await connectSignalRAndJoin(existing);
+            }
+
+            const lastStateStoryId = localStorage.getItem('lastStateStoryId');
+            if (lastStateStoryId && stateStoryIdInput && (!stateStoryIdInput.value || stateStoryIdInput.value.trim().length === 0)) {
+                stateStoryIdInput.value = lastStateStoryId;
             }
         } catch (e) { console.error(e); }
     })();

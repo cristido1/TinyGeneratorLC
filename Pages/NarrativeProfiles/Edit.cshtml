@@ -1,47 +1,834 @@
 @page
 @model TinyGenerator.Pages.NarrativeProfiles.EditModel
 @{
-    ViewData["Title"] = Model.IsNew ? "Nuovo Narrative Profile" : "Edit Narrative Profile";
-    ViewData["PageDescription"] = "Configura prompt base/stile del profilo";
+    ViewData["Title"] = Model!.IsNew ? "New Narrative Profile" : "Edit Narrative Profile";
 }
 
-<form method="post" class="mt-2">
-    <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+<div class="container mt-4">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <h1 class="mb-0">@ViewData["Title"]</h1>
+        <a class="btn btn-outline-secondary" href="./Index"><i class="bi bi-arrow-left me-1"></i>Back</a>
+    </div>
 
-    <input type="hidden" asp-for="Item.Id" />
-
-    <div class="row g-3">
-        <div class="col-12 col-lg-6">
-            <label class="form-label" asp-for="Item.Name"></label>
-            <input class="form-control" asp-for="Item.Name" />
-            <span class="text-danger" asp-validation-for="Item.Name"></span>
+    <div class="card mb-4">
+        <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-semibold">Profile</span>
+            @if (!Model!.IsNew)
+            {
+                <span class="text-muted">ID: @Model!.Item.Id</span>
+            }
         </div>
+        <div class="card-body">
+            <form method="post" asp-page-handler="SaveProfile">
+                @Html.AntiForgeryToken()
+                <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+                <input type="hidden" asp-for="Item.Id" id="profileId" />
 
-        <div class="col-12">
-            <label class="form-label" asp-for="Item.Description"></label>
-            <textarea class="form-control" asp-for="Item.Description" rows="3"></textarea>
-            <span class="text-danger" asp-validation-for="Item.Description"></span>
-        </div>
+                <div class="row g-3">
+                    <div class="col-12 col-lg-6">
+                        <label asp-for="Item.Name" class="form-label">Name</label>
+                        <input asp-for="Item.Name" class="form-control" />
+                        <span asp-validation-for="Item.Name" class="text-danger"></span>
+                    </div>
 
-        <div class="col-12">
-            <label class="form-label" asp-for="Item.BaseSystemPrompt">Base system prompt</label>
-            <textarea class="form-control" asp-for="Item.BaseSystemPrompt" rows="8"></textarea>
-            <span class="text-danger" asp-validation-for="Item.BaseSystemPrompt"></span>
-        </div>
+                    <div class="col-12 col-lg-6">
+                        <label asp-for="Item.Description" class="form-label">Description</label>
+                        <input asp-for="Item.Description" class="form-control" />
+                        <span asp-validation-for="Item.Description" class="text-danger"></span>
+                    </div>
 
-        <div class="col-12">
-            <label class="form-label" asp-for="Item.StylePrompt">Style prompt</label>
-            <textarea class="form-control" asp-for="Item.StylePrompt" rows="6"></textarea>
-            <span class="text-danger" asp-validation-for="Item.StylePrompt"></span>
+                    <div class="col-12">
+                        <label asp-for="Item.BaseSystemPrompt" class="form-label">Base system prompt</label>
+                        <textarea asp-for="Item.BaseSystemPrompt" class="form-control" rows="8"></textarea>
+                        <span asp-validation-for="Item.BaseSystemPrompt" class="text-danger"></span>
+                    </div>
+
+                    <div class="col-12">
+                        <label asp-for="Item.StylePrompt" class="form-label">Style prompt</label>
+                        <textarea asp-for="Item.StylePrompt" class="form-control" rows="6"></textarea>
+                        <span asp-validation-for="Item.StylePrompt" class="text-danger"></span>
+                    </div>
+
+                    <div class="col-12">
+                        <label asp-for="Item.PovListJson" class="form-label">POV list (JSON)</label>
+                        <textarea asp-for="Item.PovListJson" class="form-control font-monospace" rows="3" placeholder='["ThirdPersonLimited","FirstPerson"]'></textarea>
+                        <span asp-validation-for="Item.PovListJson" class="text-danger"></span>
+                        <div class="form-text">Optional. JSON array of POV strings used by the Narrative Engine.</div>
+                    </div>
+                </div>
+
+                <div class="mt-3 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary"><i class="bi bi-save me-1"></i>Save profile</button>
+                    @if (Model!.IsNew)
+                    {
+                        <span class="text-muted align-self-center">Save first to enable details.</span>
+                    }
+                </div>
+            </form>
         </div>
     </div>
 
-    <div class="d-flex gap-2 mt-3">
-        <button class="btn btn-primary" type="submit">Salva</button>
-        <a class="btn btn-outline-secondary" asp-page="./Index">Annulla</a>
+    <div class="row g-4">
+        <div class="col-12 col-xl-6">
+            <div class="card">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <span class="fw-semibold">Narrative resources</span>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="openResourceModal()" @(Model!.IsNew ? "disabled" : "")>
+                        <i class="bi bi-plus-circle me-1"></i>Add
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table id="resourcesTable" class="table table-striped table-hover w-100">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th class="text-end">Initial</th>
+                                    <th class="text-end">Min</th>
+                                    <th class="text-end">Max</th>
+                                    <th style="width:110px">Actions</th>
+                                </tr>
+                            </thead>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-6">
+            <div class="card">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <span class="fw-semibold">Micro objectives</span>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="openMicroModal()" @(Model!.IsNew ? "disabled" : "")>
+                        <i class="bi bi-plus-circle me-1"></i>Add
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table id="microTable" class="table table-striped table-hover w-100">
+                            <thead>
+                                <tr>
+                                    <th>Code</th>
+                                    <th>Description</th>
+                                    <th class="text-end">Difficulty</th>
+                                    <th style="width:110px">Actions</th>
+                                </tr>
+                            </thead>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-</form>
+
+    <div class="row g-4 mt-0">
+        <div class="col-12 col-xl-6">
+            <div class="card">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <span class="fw-semibold">Failure rules</span>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="openFailureRuleModal()" @(Model!.IsNew ? "disabled" : "")>
+                        <i class="bi bi-plus-circle me-1"></i>Add
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table id="failureRulesTable" class="table table-striped table-hover w-100">
+                            <thead>
+                                <tr>
+                                    <th>Trigger</th>
+                                    <th>Description</th>
+                                    <th style="width:110px">Actions</th>
+                                </tr>
+                            </thead>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-6">
+            <div class="card">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <span class="fw-semibold">Consequence rules</span>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="openConsequenceRuleModal()" @(Model!.IsNew ? "disabled" : "")>
+                        <i class="bi bi-plus-circle me-1"></i>Add
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive mb-3">
+                        <table id="consequenceRulesTable" class="table table-striped table-hover w-100">
+                            <thead>
+                                <tr>
+                                    <th>Description</th>
+                                    <th class="text-end" style="width:90px">Impacts</th>
+                                    <th style="width:110px">Actions</th>
+                                </tr>
+                            </thead>
+                        </table>
+                    </div>
+
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <div>
+                            <span class="fw-semibold">Impacts</span>
+                            <span class="text-muted ms-2" id="impactsHint">Select a consequence rule to edit impacts.</span>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="addImpactBtn" onclick="openImpactModal()" disabled>
+                            <i class="bi bi-plus-circle me-1"></i>Add impact
+                        </button>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table id="impactsTable" class="table table-sm table-striped table-hover w-100">
+                            <thead>
+                                <tr>
+                                    <th>Resource</th>
+                                    <th class="text-end">Delta</th>
+                                    <th style="width:110px">Actions</th>
+                                </tr>
+                            </thead>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Resource Modal *@
+<div class="modal fade" id="resourceModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="resourceModalTitle">Resource</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="resourceId" value="0" />
+                <div class="row g-3">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">Name</label>
+                        <input class="form-control" id="resourceName" />
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <label class="form-label">Initial</label>
+                        <input type="number" class="form-control" id="resourceInitial" value="0" />
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <label class="form-label">Min</label>
+                        <input type="number" class="form-control" id="resourceMin" value="0" />
+                    </div>
+                    <div class="col-6 col-md-2">
+                        <label class="form-label">Max</label>
+                        <input type="number" class="form-control" id="resourceMax" value="10" />
+                    </div>
+                </div>
+                <div class="text-danger mt-2 d-none" id="resourceError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveResource()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Micro Objective Modal *@
+<div class="modal fade" id="microModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="microModalTitle">Micro objective</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="microId" value="0" />
+                <div class="row g-3">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Code</label>
+                        <input class="form-control" id="microCode" />
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label">Description</label>
+                        <input class="form-control" id="microDescription" />
+                    </div>
+                    <div class="col-12 col-md-2">
+                        <label class="form-label">Difficulty</label>
+                        <input type="number" class="form-control" id="microDifficulty" value="1" min="0" max="10" />
+                    </div>
+                </div>
+                <div class="text-danger mt-2 d-none" id="microError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveMicro()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Failure Rule Modal *@
+<div class="modal fade" id="failureRuleModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="failureRuleModalTitle">Failure rule</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="failureRuleId" value="0" />
+                <div class="row g-3">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Trigger type</label>
+                        <input class="form-control" id="failureTriggerType" placeholder="e.g. ResourceDepleted" />
+                    </div>
+                    <div class="col-12 col-md-8">
+                        <label class="form-label">Description</label>
+                        <input class="form-control" id="failureDescription" />
+                    </div>
+                </div>
+                <div class="text-danger mt-2 d-none" id="failureError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveFailureRule()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Consequence Rule Modal *@
+<div class="modal fade" id="consequenceRuleModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="consequenceRuleModalTitle">Consequence rule</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="consequenceRuleId" value="0" />
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">Description</label>
+                        <input class="form-control" id="consequenceDescription" />
+                    </div>
+                </div>
+                <div class="text-danger mt-2 d-none" id="consequenceError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveConsequenceRule()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Impact Modal *@
+<div class="modal fade" id="impactModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="impactModalTitle">Impact</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="impactId" value="0" />
+                <div class="row g-3">
+                    <div class="col-12 col-md-8">
+                        <label class="form-label">Resource name</label>
+                        <input class="form-control" id="impactResourceName" placeholder="e.g. Tension" />
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">Delta</label>
+                        <input type="number" class="form-control" id="impactDelta" value="0" />
+                    </div>
+                </div>
+                <div class="text-danger mt-2 d-none" id="impactError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveImpact()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+
+    <script>
+        (function initNarrativeProfileEditor() {
+            var profileIdEl = document.getElementById('profileId');
+            var profileId = profileIdEl ? parseInt(profileIdEl.value || '0', 10) : 0;
+            var tokenEl = document.querySelector('input[name="__RequestVerificationToken"]');
+            var antiforgeryToken = tokenEl ? tokenEl.value : '';
+
+            function getHeaders() {
+                var headers = { 'Content-Type': 'application/json' };
+                if (antiforgeryToken) {
+                    headers['RequestVerificationToken'] = antiforgeryToken;
+                }
+                return headers;
+            }
+
+            function initTables() {
+                if (typeof jQuery === 'undefined' || typeof jQuery.fn.DataTable === 'undefined') {
+                    console.error('DataTables not loaded');
+                    return;
+                }
+
+                var $ = jQuery;
+                var resourcesUrl = '?handler=Resources&profileId=' + profileId;
+                var microUrl = '?handler=MicroObjectives&profileId=' + profileId;
+
+                window._resourcesTable = $('#resourcesTable').DataTable({
+                    ajax: profileId > 0 ? { url: resourcesUrl, dataSrc: '' } : { dataSrc: function(){ return []; } },
+                    paging: true,
+                    pageLength: 25,
+                    stateSave: true,
+                    order: [[0, 'asc']],
+                    columns: [
+                        { data: 'name' },
+                        { data: 'initialValue', className: 'text-end' },
+                        { data: 'minValue', className: 'text-end' },
+                        { data: 'maxValue', className: 'text-end' },
+                        {
+                            data: null,
+                            orderable: false,
+                            render: function (data, type, row) {
+                                return `
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" title="Edit" onclick="editResource(${row.id})"><i class="bi bi-pencil"></i></button>
+                                        <button class="btn btn-outline-danger" title="Delete" onclick="deleteResource(${row.id})"><i class="bi bi-trash"></i></button>
+                                    </div>`;
+                            }
+                        }
+                    ],
+                    dom: "<'row mb-2'<'col-sm-6'<'dt-actions-res'>><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>"
+                });
+
+                window._microTable = $('#microTable').DataTable({
+                    ajax: profileId > 0 ? { url: microUrl, dataSrc: '' } : { dataSrc: function(){ return []; } },
+                    paging: true,
+                    pageLength: 25,
+                    stateSave: true,
+                    order: [[0, 'asc']],
+                    columns: [
+                        { data: 'code', render: function (d) { return d ? '<span class="font-monospace">' + d + '</span>' : ''; } },
+                        { data: 'description', render: function (d) { return d || ''; } },
+                        { data: 'difficulty', className: 'text-end' },
+                        {
+                            data: null,
+                            orderable: false,
+                            render: function (data, type, row) {
+                                return `
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" title="Edit" onclick="editMicro(${row.id})"><i class="bi bi-pencil"></i></button>
+                                        <button class="btn btn-outline-danger" title="Delete" onclick="deleteMicro(${row.id})"><i class="bi bi-trash"></i></button>
+                                    </div>`;
+                            }
+                        }
+                    ],
+                    dom: "<'row mb-2'<'col-sm-6'<'dt-actions-micro'>><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>"
+                });
+
+                window._failureRulesTable = $('#failureRulesTable').DataTable({
+                    ajax: profileId > 0 ? { url: '?handler=FailureRules&profileId=' + profileId, dataSrc: '' } : { dataSrc: function(){ return []; } },
+                    paging: true,
+                    pageLength: 25,
+                    stateSave: true,
+                    order: [[0, 'asc']],
+                    columns: [
+                        { data: 'triggerType', render: function (d) { return d ? '<span class="font-monospace">' + d + '</span>' : ''; } },
+                        { data: 'description', render: function (d) { return d || ''; } },
+                        {
+                            data: null,
+                            orderable: false,
+                            render: function (data, type, row) {
+                                return `
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" title="Edit" onclick="editFailureRule(${row.id})"><i class="bi bi-pencil"></i></button>
+                                        <button class="btn btn-outline-danger" title="Delete" onclick="deleteFailureRule(${row.id})"><i class="bi bi-trash"></i></button>
+                                    </div>`;
+                            }
+                        }
+                    ],
+                    dom: "<'row mb-2'<'col-sm-6'<'dt-actions-failure'>><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>"
+                });
+
+                window._selectedConsequenceRuleId = 0;
+
+                window._consequenceRulesTable = $('#consequenceRulesTable').DataTable({
+                    ajax: profileId > 0 ? { url: '?handler=ConsequenceRules&profileId=' + profileId, dataSrc: '' } : { dataSrc: function(){ return []; } },
+                    paging: true,
+                    pageLength: 25,
+                    stateSave: true,
+                    order: [[0, 'asc']],
+                    columns: [
+                        { data: 'description', render: function (d) { return d || ''; } },
+                        { data: 'impactsCount', className: 'text-end' },
+                        {
+                            data: null,
+                            orderable: false,
+                            render: function (data, type, row) {
+                                return `
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" title="Edit" onclick="editConsequenceRule(${row.id})"><i class="bi bi-pencil"></i></button>
+                                        <button class="btn btn-outline-danger" title="Delete" onclick="deleteConsequenceRule(${row.id})"><i class="bi bi-trash"></i></button>
+                                    </div>`;
+                            }
+                        }
+                    ],
+                    rowCallback: function (row, data) {
+                        var selectedId = window._selectedConsequenceRuleId || 0;
+                        if (data && data.id === selectedId) {
+                            row.classList.add('table-primary');
+                        } else {
+                            row.classList.remove('table-primary');
+                        }
+                    },
+                    dom: "<'row mb-2'<'col-sm-6'<'dt-actions-cons'>><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>"
+                });
+
+                $('#consequenceRulesTable tbody').on('click', 'tr', function (ev) {
+                    var target = ev.target;
+                    if (target && (target.closest('button') || target.closest('a') || target.closest('input') || target.closest('select') || target.closest('textarea'))) {
+                        return;
+                    }
+                    var data = window._consequenceRulesTable.row(this).data();
+                    if (!data || !data.id) return;
+                    selectConsequenceRule(data.id);
+                    window._consequenceRulesTable.rows().invalidate('data').draw(false);
+                });
+
+                window._impactsTable = $('#impactsTable').DataTable({
+                    ajax: { url: '?handler=ConsequenceImpacts&consequenceRuleId=0', dataSrc: '' },
+                    paging: true,
+                    pageLength: 10,
+                    stateSave: true,
+                    order: [[0, 'asc']],
+                    columns: [
+                        { data: 'resourceName' },
+                        { data: 'deltaValue', className: 'text-end' },
+                        {
+                            data: null,
+                            orderable: false,
+                            render: function (data, type, row) {
+                                return `
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        <button class="btn btn-outline-primary" title="Edit" onclick="editImpact(${row.id})"><i class="bi bi-pencil"></i></button>
+                                        <button class="btn btn-outline-danger" title="Delete" onclick="deleteImpact(${row.id})"><i class="bi bi-trash"></i></button>
+                                    </div>`;
+                            }
+                        }
+                    ],
+                    dom: "rt<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>"
+                });
+            }
+
+            window.openResourceModal = function () {
+                document.getElementById('resourceModalTitle').textContent = 'Add resource';
+                document.getElementById('resourceId').value = '0';
+                document.getElementById('resourceName').value = '';
+                document.getElementById('resourceInitial').value = '0';
+                document.getElementById('resourceMin').value = '0';
+                document.getElementById('resourceMax').value = '10';
+                hideError('resourceError');
+                new bootstrap.Modal(document.getElementById('resourceModal')).show();
+            };
+
+            window.editResource = function (id) {
+                var row = (window._resourcesTable ? window._resourcesTable.rows().data().toArray().find(r => r.id === id) : null);
+                if (!row) return;
+                document.getElementById('resourceModalTitle').textContent = 'Edit resource';
+                document.getElementById('resourceId').value = String(row.id);
+                document.getElementById('resourceName').value = row.name || '';
+                document.getElementById('resourceInitial').value = String(row.initialValue ?? 0);
+                document.getElementById('resourceMin').value = String(row.minValue ?? 0);
+                document.getElementById('resourceMax').value = String(row.maxValue ?? 0);
+                hideError('resourceError');
+                new bootstrap.Modal(document.getElementById('resourceModal')).show();
+            };
+
+            window.saveResource = async function () {
+                if (profileId <= 0) return;
+                var payload = {
+                    id: parseInt(document.getElementById('resourceId').value || '0', 10),
+                    narrativeProfileId: profileId,
+                    name: document.getElementById('resourceName').value || '',
+                    initialValue: parseInt(document.getElementById('resourceInitial').value || '0', 10),
+                    minValue: parseInt(document.getElementById('resourceMin').value || '0', 10),
+                    maxValue: parseInt(document.getElementById('resourceMax').value || '0', 10)
+                };
+                var resp = await fetch('?handler=UpsertResource', { method: 'POST', headers: getHeaders(), body: JSON.stringify(payload) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    showError('resourceError', (data && data.error) ? data.error : 'Save failed');
+                    return;
+                }
+                bootstrap.Modal.getInstance(document.getElementById('resourceModal')).hide();
+                window._resourcesTable.ajax.reload(null, false);
+            };
+
+            window.deleteResource = async function (id) {
+                if (profileId <= 0) return;
+                if (!confirm('Delete this resource?')) return;
+                var resp = await fetch('?handler=DeleteResource', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ id: id, narrativeProfileId: profileId }) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    alert((data && data.error) ? data.error : 'Delete failed');
+                    return;
+                }
+                window._resourcesTable.ajax.reload(null, false);
+            };
+
+            window.openMicroModal = function () {
+                document.getElementById('microModalTitle').textContent = 'Add micro objective';
+                document.getElementById('microId').value = '0';
+                document.getElementById('microCode').value = '';
+                document.getElementById('microDescription').value = '';
+                document.getElementById('microDifficulty').value = '1';
+                hideError('microError');
+                new bootstrap.Modal(document.getElementById('microModal')).show();
+            };
+
+            window.editMicro = function (id) {
+                var row = (window._microTable ? window._microTable.rows().data().toArray().find(r => r.id === id) : null);
+                if (!row) return;
+                document.getElementById('microModalTitle').textContent = 'Edit micro objective';
+                document.getElementById('microId').value = String(row.id);
+                document.getElementById('microCode').value = row.code || '';
+                document.getElementById('microDescription').value = row.description || '';
+                document.getElementById('microDifficulty').value = String(row.difficulty ?? 1);
+                hideError('microError');
+                new bootstrap.Modal(document.getElementById('microModal')).show();
+            };
+
+            window.saveMicro = async function () {
+                if (profileId <= 0) return;
+                var payload = {
+                    id: parseInt(document.getElementById('microId').value || '0', 10),
+                    narrativeProfileId: profileId,
+                    code: document.getElementById('microCode').value || '',
+                    description: document.getElementById('microDescription').value || null,
+                    difficulty: parseInt(document.getElementById('microDifficulty').value || '1', 10)
+                };
+                var resp = await fetch('?handler=UpsertMicroObjective', { method: 'POST', headers: getHeaders(), body: JSON.stringify(payload) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    showError('microError', (data && data.error) ? data.error : 'Save failed');
+                    return;
+                }
+                bootstrap.Modal.getInstance(document.getElementById('microModal')).hide();
+                window._microTable.ajax.reload(null, false);
+            };
+
+            window.deleteMicro = async function (id) {
+                if (profileId <= 0) return;
+                if (!confirm('Delete this micro objective?')) return;
+                var resp = await fetch('?handler=DeleteMicroObjective', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ id: id, narrativeProfileId: profileId }) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    alert((data && data.error) ? data.error : 'Delete failed');
+                    return;
+                }
+                window._microTable.ajax.reload(null, false);
+            };
+
+            window.openFailureRuleModal = function () {
+                document.getElementById('failureRuleModalTitle').textContent = 'Add failure rule';
+                document.getElementById('failureRuleId').value = '0';
+                document.getElementById('failureTriggerType').value = '';
+                document.getElementById('failureDescription').value = '';
+                hideError('failureError');
+                new bootstrap.Modal(document.getElementById('failureRuleModal')).show();
+            };
+
+            window.editFailureRule = function (id) {
+                var row = (window._failureRulesTable ? window._failureRulesTable.rows().data().toArray().find(r => r.id === id) : null);
+                if (!row) return;
+                document.getElementById('failureRuleModalTitle').textContent = 'Edit failure rule';
+                document.getElementById('failureRuleId').value = String(row.id);
+                document.getElementById('failureTriggerType').value = row.triggerType || '';
+                document.getElementById('failureDescription').value = row.description || '';
+                hideError('failureError');
+                new bootstrap.Modal(document.getElementById('failureRuleModal')).show();
+            };
+
+            window.saveFailureRule = async function () {
+                if (profileId <= 0) return;
+                var payload = {
+                    id: parseInt(document.getElementById('failureRuleId').value || '0', 10),
+                    narrativeProfileId: profileId,
+                    triggerType: document.getElementById('failureTriggerType').value || '',
+                    description: document.getElementById('failureDescription').value || null
+                };
+                var resp = await fetch('?handler=UpsertFailureRule', { method: 'POST', headers: getHeaders(), body: JSON.stringify(payload) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    showError('failureError', (data && data.error) ? data.error : 'Save failed');
+                    return;
+                }
+                bootstrap.Modal.getInstance(document.getElementById('failureRuleModal')).hide();
+                window._failureRulesTable.ajax.reload(null, false);
+            };
+
+            window.deleteFailureRule = async function (id) {
+                if (profileId <= 0) return;
+                if (!confirm('Delete this failure rule?')) return;
+                var resp = await fetch('?handler=DeleteFailureRule', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ id: id, narrativeProfileId: profileId }) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    alert((data && data.error) ? data.error : 'Delete failed');
+                    return;
+                }
+                window._failureRulesTable.ajax.reload(null, false);
+            };
+
+            window.openConsequenceRuleModal = function () {
+                document.getElementById('consequenceRuleModalTitle').textContent = 'Add consequence rule';
+                document.getElementById('consequenceRuleId').value = '0';
+                document.getElementById('consequenceDescription').value = '';
+                hideError('consequenceError');
+                new bootstrap.Modal(document.getElementById('consequenceRuleModal')).show();
+            };
+
+            window.editConsequenceRule = function (id) {
+                var row = (window._consequenceRulesTable ? window._consequenceRulesTable.rows().data().toArray().find(r => r.id === id) : null);
+                if (!row) return;
+                document.getElementById('consequenceRuleModalTitle').textContent = 'Edit consequence rule';
+                document.getElementById('consequenceRuleId').value = String(row.id);
+                document.getElementById('consequenceDescription').value = row.description || '';
+                hideError('consequenceError');
+                new bootstrap.Modal(document.getElementById('consequenceRuleModal')).show();
+            };
+
+            window.saveConsequenceRule = async function () {
+                if (profileId <= 0) return;
+                var payload = {
+                    id: parseInt(document.getElementById('consequenceRuleId').value || '0', 10),
+                    narrativeProfileId: profileId,
+                    description: document.getElementById('consequenceDescription').value || null
+                };
+                var resp = await fetch('?handler=UpsertConsequenceRule', { method: 'POST', headers: getHeaders(), body: JSON.stringify(payload) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    showError('consequenceError', (data && data.error) ? data.error : 'Save failed');
+                    return;
+                }
+                bootstrap.Modal.getInstance(document.getElementById('consequenceRuleModal')).hide();
+                window._consequenceRulesTable.ajax.reload(null, false);
+            };
+
+            window.deleteConsequenceRule = async function (id) {
+                if (profileId <= 0) return;
+                if (!confirm('Delete this consequence rule and its impacts?')) return;
+                var resp = await fetch('?handler=DeleteConsequenceRule', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ id: id, narrativeProfileId: profileId }) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    alert((data && data.error) ? data.error : 'Delete failed');
+                    return;
+                }
+                if (window._selectedConsequenceRuleId === id) {
+                    selectConsequenceRule(0);
+                }
+                window._consequenceRulesTable.ajax.reload(null, false);
+            };
+
+            window.selectConsequenceRule = function (id) {
+                window._selectedConsequenceRuleId = id || 0;
+                var addBtn = document.getElementById('addImpactBtn');
+                var hint = document.getElementById('impactsHint');
+                if (window._selectedConsequenceRuleId > 0) {
+                    addBtn.disabled = false;
+                    hint.textContent = 'Editing impacts for consequence rule ID ' + window._selectedConsequenceRuleId;
+                } else {
+                    addBtn.disabled = true;
+                    hint.textContent = 'Select a consequence rule to edit impacts.';
+                }
+
+                if (window._impactsTable) {
+                    var url = '?handler=ConsequenceImpacts&consequenceRuleId=' + window._selectedConsequenceRuleId;
+                    window._impactsTable.ajax.url(url).load();
+                }
+
+                if (window._consequenceRulesTable) {
+                    window._consequenceRulesTable.rows().invalidate('data').draw(false);
+                }
+            };
+
+            window.openImpactModal = function () {
+                if (!window._selectedConsequenceRuleId) return;
+                document.getElementById('impactModalTitle').textContent = 'Add impact';
+                document.getElementById('impactId').value = '0';
+                document.getElementById('impactResourceName').value = '';
+                document.getElementById('impactDelta').value = '0';
+                hideError('impactError');
+                new bootstrap.Modal(document.getElementById('impactModal')).show();
+            };
+
+            window.editImpact = function (id) {
+                var row = (window._impactsTable ? window._impactsTable.rows().data().toArray().find(r => r.id === id) : null);
+                if (!row) return;
+                document.getElementById('impactModalTitle').textContent = 'Edit impact';
+                document.getElementById('impactId').value = String(row.id);
+                document.getElementById('impactResourceName').value = row.resourceName || '';
+                document.getElementById('impactDelta').value = String(row.deltaValue ?? 0);
+                hideError('impactError');
+                new bootstrap.Modal(document.getElementById('impactModal')).show();
+            };
+
+            window.saveImpact = async function () {
+                if (!window._selectedConsequenceRuleId) return;
+                var payload = {
+                    id: parseInt(document.getElementById('impactId').value || '0', 10),
+                    consequenceRuleId: window._selectedConsequenceRuleId,
+                    resourceName: document.getElementById('impactResourceName').value || '',
+                    deltaValue: parseInt(document.getElementById('impactDelta').value || '0', 10)
+                };
+                var resp = await fetch('?handler=UpsertConsequenceImpact', { method: 'POST', headers: getHeaders(), body: JSON.stringify(payload) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    showError('impactError', (data && data.error) ? data.error : 'Save failed');
+                    return;
+                }
+                bootstrap.Modal.getInstance(document.getElementById('impactModal')).hide();
+                window._impactsTable.ajax.reload(null, false);
+                window._consequenceRulesTable.ajax.reload(null, false);
+            };
+
+            window.deleteImpact = async function (id) {
+                if (!window._selectedConsequenceRuleId) return;
+                if (!confirm('Delete this impact?')) return;
+                var resp = await fetch('?handler=DeleteConsequenceImpact', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ id: id, consequenceRuleId: window._selectedConsequenceRuleId }) });
+                var data = await resp.json().catch(() => null);
+                if (!resp.ok || !data || data.ok !== true) {
+                    alert((data && data.error) ? data.error : 'Delete failed');
+                    return;
+                }
+                window._impactsTable.ajax.reload(null, false);
+                window._consequenceRulesTable.ajax.reload(null, false);
+            };
+
+            function showError(id, msg) {
+                var el = document.getElementById(id);
+                if (!el) return;
+                el.textContent = msg;
+                el.classList.remove('d-none');
+            }
+            function hideError(id) {
+                var el = document.getElementById(id);
+                if (!el) return;
+                el.textContent = '';
+                el.classList.add('d-none');
+            }
+
+            if (profileId > 0) {
+                if (typeof jQuery !== 'undefined') {
+                    jQuery(function () { initTables(); });
+                } else {
+                    initTables();
+                }
+            }
+        })();
+    </script>
 }

@@ -59,6 +59,10 @@ publish/
 # Logs
 *.log
 
+# Audio assets (keep large binaries out of git)
+*.wav
+*.WAV
+
 # Secrets and credentials (any file with "secret" or "secrets" in the name)
 *secret*
 *secrets*

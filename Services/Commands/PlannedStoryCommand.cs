@@ -1,5 +1,6 @@
 using TinyGenerator.Models;
 using System.Text.Json;
+using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands
 {
@@ -16,6 +17,8 @@ namespace TinyGenerator.Services.Commands
     /// </summary>
     public class PlannedStoryCommand
     {
+        private readonly CommandTuningOptions _tuning;
+
         private readonly int _plannerAgentId;
         private readonly int _writerAgentId;
         private readonly string _theme;
@@ -41,7 +44,8 @@ namespace TinyGenerator.Services.Commands
             MultiStepOrchestrationService orchestrator,
             StoriesService storiesService,
             ICommandDispatcher dispatcher,
-            ICustomLogger logger)
+            ICustomLogger logger,
+            CommandTuningOptions? tuning = null)
         {
             _plannerAgentId = plannerAgentId;
             _writerAgentId = writerAgentId;
@@ -55,6 +59,7 @@ namespace TinyGenerator.Services.Commands
             _storiesService = storiesService;
             _dispatcher = dispatcher;
             _logger = logger;
+            _tuning = tuning ?? new CommandTuningOptions();
         }
 
         public async Task ExecuteAsync(CancellationToken ct = default)
@@ -147,7 +152,7 @@ namespace TinyGenerator.Services.Commands
 
                     if (string.IsNullOrWhiteSpace(beatText))
                     {
-                        await LogAndNotifyAsync($"❌ Beat {currentBeat} fallito dopo 3 tentativi", "error");
+                        await LogAndNotifyAsync($"❌ Beat {currentBeat} fallito dopo {_tuning.PlannedStory.BeatMaxRetries} tentativi", "error");
                         return;
                     }
 
@@ -329,8 +334,9 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
             int threadId,
             CancellationToken ct)
         {
-            const int maxRetries = 3;
-            const int minBeatLength = 500; // Minimo 500 caratteri per beat
+            var maxRetries = Math.Max(1, _tuning.PlannedStory.BeatMaxRetries);
+            var minBeatLength = Math.Max(0, _tuning.PlannedStory.MinBeatLengthChars);
+            var retryDelayMs = Math.Max(0, _tuning.PlannedStory.RetryDelayMilliseconds);
 
             string? lastError = null;
 
@@ -375,7 +381,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
 
                 if (attempt < maxRetries)
                 {
-                    await Task.Delay(1000, ct); // Brief delay before retry
+                    await Task.Delay(retryDelayMs, ct);
                 }
             }
 
@@ -405,7 +411,7 @@ REGOLE FONDAMENTALI:
 1. Scrivi SOLO il contenuto di questo beat, NON anticipare eventi futuri
 2. NON risolvere conflitti che non sono previsti in questo beat
 3. Mantieni il livello di tensione richiesto ({beat.TensionLevel}/10)
-4. Scrivi ALMENO 500 caratteri per sviluppare adeguatamente la scena
+4. Scrivi ALMENO {_tuning.PlannedStory.MinBeatLengthChars} caratteri per sviluppare adeguatamente la scena
 5. Mantieni coerenza con i beat precedenti";
 
             if (previousBeats.Count > 0)
@@ -415,7 +421,7 @@ REGOLE FONDAMENTALI:
 
             if (!string.IsNullOrWhiteSpace(errorFeedback) && attemptNumber > 1)
             {
-                prompt += $"\n\n⚠️ CORREZIONE RICHIESTA (tentativo {attemptNumber}/{3}):\n{errorFeedback}";
+                prompt += $"\n\n⚠️ CORREZIONE RICHIESTA (tentativo {attemptNumber}/{_tuning.PlannedStory.BeatMaxRetries}):\n{errorFeedback}";
             }
 
             prompt += "\n\nScrivi il testo del beat:";
@@ -557,7 +563,8 @@ REGOLE FONDAMENTALI:
                             _kernelFactory,
                             _storiesService,
                             _logger,
-                            _dispatcher
+                            _dispatcher,
+                            _tuning
                         );
                         await cmd.ExecuteAsync(ctx.CancellationToken, transformRunId);
                         return new CommandResult(true, "Transform command completed");

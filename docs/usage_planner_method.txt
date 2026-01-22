@@ -1,0 +1,117 @@
+OBIETTIVO GENERALE
+Integrare nel sistema narrativo due livelli distinti di pianificazione:
+
+1) planner_method  → STRATEGICO (forma globale della storia)
+2) tipo_planning   → TATTICO (ritmo e successione degli stati narrativi)
+
+Il Planner è UNICO.
+Non devono esistere agenti Planner diversi per metodo o tipo.
+
+================================================
+LIVELLO 1 — PLANNER_METHOD (STRATEGICO)
+================================================
+
+planner_method definisce il FRAMEWORK narrativo globale.
+Risponde alla domanda:
+"Che tipo di storia sto raccontando?"
+
+Esempi di planner_method:
+- save_the_cat
+- hero_journey
+- story_grid
+- yorke_five_act
+
+Caratteristiche:
+- Stabilisce macro-vincoli narrativi
+- Definisce quali eventi DEVONO esistere prima o poi
+- NON decide il ritmo locale
+- NON gestisce la successione degli stati
+
+Assegnazione:
+- planner_method è associato ESCLUSIVAMENTE alla SERIE
+
+================================================
+LIVELLO 2 — TIPO_PLANNING (TATTICO)
+================================================
+
+tipo_planning definisce la GRAMMATICA TEMPORALE della storia.
+Risponde alla domanda:
+"Come scorre la storia, momento per momento?"
+
+Il tipo_planning influenza:
+- l’ordine
+- la frequenza
+- l’alternanza
+degli stati narrativi fondamentali.
+
+STATI NARRATIVI AMMESSI (ENUM LOGICO):
+- AZIONE
+- STASI
+- ERRORE
+- EFFETTO
+
+Il tipo_planning NON decide il contenuto.
+Decide SOLO la successione degli stati.
+
+Assegnazione:
+- La SERIE ha un tipo_planning di default
+- Ogni EPISODIO può opzionalmente sovrascriverlo
+
+================================================
+STRUTTURA TABELLA: tipo_planning
+================================================
+
+Creare una tabella chiamata: tipo_planning
+
+Campi minimi:
+- id_tipo_planning (PK)
+- codice (stringa univoca)
+- nome
+- descrizione
+- successione_stati (stringa CSV, es: "STASI,AZIONE,ERRORE,EFFETTO")
+- is_active (boolean)
+
+La colonna successione_stati rappresenta:
+- l’ordine ammesso degli stati
+- la loro possibile ripetizione
+- la grammatica narrativa del planning
+
+================================================
+INTEGRAZIONE NEL FLUSSO
+================================================
+
+1) Il Planner:
+   - legge planner_method della serie (vincoli globali)
+   - legge tipo_planning (serie o episodio)
+   - determina quale STATO NARRATIVO è ammesso come prossimo
+
+2) Il Planner NON:
+   - inventa stati
+   - viola la successione definita
+   - ignora i vincoli del planner_method
+
+3) Il Writer:
+   - riceve lo STATO NARRATIVO corrente
+   - produce SOLO contenuto coerente con quello stato
+
+4) Il Revisor:
+   - verifica che il testo rispetti lo stato assegnato
+
+================================================
+PRINCIPI ARCHITETTURALI (OBBLIGATORI)
+================================================
+
+- planner_method e tipo_planning NON vanno fusi
+- planner_method è STABILE
+- tipo_planning è VARIABILE
+- tipo_planning può cambiare tra episodi
+- planner_method NO
+
+Il sistema deve permettere in futuro:
+- scelta automatica del tipo_planning
+- validazione della coerenza narrativa
+- rigenerazione selettiva di sezioni
+
+================================================
+FINE DOCUMENTAZIONE
+================================================

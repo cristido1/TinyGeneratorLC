@@ -84,10 +84,18 @@ namespace TinyGenerator.Services.Commands
 
                 _logger.Log("Information", "SeriesEpisode", $"Using template: {template.Name} for series '{serie.Titolo}'");
 
+                var plannerMethod = serie.PlannerMethodId.HasValue
+                    ? _database.GetPlannerMethodById(serie.PlannerMethodId.Value)
+                    : null;
+
+                var defaultTipoPlanning = serie.DefaultTipoPlanningId.HasValue
+                    ? _database.GetTipoPlanningById(serie.DefaultTipoPlanningId.Value)
+                    : null;
+
                 // ╔══════════════════════════════════════════════════════════════╗
                 // ║ FASE 3: Costruisci prompt con i dati della serie            ║
                 // ╚══════════════════════════════════════════════════════════════╝
-                var seriesContext = BuildSeriesContext(serie);
+                var seriesContext = BuildSeriesContext(serie, plannerMethod, defaultTipoPlanning);
 
                 // Calcola numero episodio (ultimo + 1)
                 var episodeNumber = serie.EpisodiGenerati + 1;
@@ -107,6 +115,19 @@ namespace TinyGenerator.Services.Commands
                         ["serie_episode"] = episodeNumber,
                         ["title"] = episodeTitle
                     };
+
+                    if (plannerMethod != null)
+                    {
+                        cfg["planner_method_id"] = plannerMethod.Id;
+                        cfg["planner_method_code"] = plannerMethod.Code;
+                    }
+
+                    if (defaultTipoPlanning != null)
+                    {
+                        cfg["tipo_planning_id"] = defaultTipoPlanning.Id;
+                        cfg["tipo_planning_code"] = defaultTipoPlanning.Codice;
+                        cfg["tipo_planning_successione_stati"] = defaultTipoPlanning.SuccessioneStati;
+                    }
 
                     if (template.CharactersStep.HasValue)
                     {
@@ -186,7 +207,7 @@ namespace TinyGenerator.Services.Commands
         /// <summary>
         /// Costruisce un prompt completo con tutti i dati della serie
         /// </summary>
-        private string BuildSeriesContext(Series serie)
+        private string BuildSeriesContext(Series serie, PlannerMethod? plannerMethod, TipoPlanning? tipoPlanning)
         {
             var sb = new StringBuilder();
 
@@ -279,11 +300,41 @@ namespace TinyGenerator.Services.Commands
                 sb.AppendLine("(Non specificate)");
             }
 
+            if (!string.IsNullOrWhiteSpace(serie.SerieFinalGoal))
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Final Goal della Serie");
+                sb.AppendLine(serie.SerieFinalGoal);
+            }
+
             if (!string.IsNullOrWhiteSpace(serie.NoteAI))
             {
                 sb.AppendLine();
                 sb.AppendLine("## Note per l'AI");
                 sb.AppendLine(serie.NoteAI);
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("## Pianificazione");
+            if (plannerMethod != null)
+            {
+                var descr = string.IsNullOrWhiteSpace(plannerMethod.Description) ? string.Empty : $" - {plannerMethod.Description}";
+                sb.AppendLine($"**Planner method (strategico):** {plannerMethod.Code}{descr}");
+            }
+            else
+            {
+                sb.AppendLine("**Planner method (strategico):** (Non assegnato)");
+            }
+
+            if (tipoPlanning != null)
+            {
+                sb.AppendLine($"**Tipo planning (tattico):** {tipoPlanning.Nome} ({tipoPlanning.Codice})");
+                sb.AppendLine($"**Successione stati:** {tipoPlanning.SuccessioneStati}");
+                sb.AppendLine("**Stati ammessi:** AZIONE, STASI, ERRORE, EFFETTO");
+            }
+            else
+            {
+                sb.AppendLine("**Tipo planning (tattico):** (Non assegnato)");
             }
 
             // Numero episodio

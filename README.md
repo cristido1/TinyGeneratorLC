@@ -55,6 +55,32 @@ Apri http://localhost:5077.
 4. Gli evaluator assegnano un punteggio; la storia migliore sopra soglia viene salvata (stato "production").
 5. SignalR aggiorna la UI in tempo reale.
 
+### Narrative Engine (state-driven, chunk continuo)
+Il progetto include una modalita' **state-driven** per generare una storia a chunk continui guidata da uno stato runtime e da un profilo narrativo (genere/regole).
+
+- **Profili e regole (DB)**: `narrative_profiles`, `narrative_resources`, `micro_objectives`, `failure_rules`, `consequence_rules`, `consequence_impacts`.
+- **Stato runtime (DB)**: `story_runtime_states` + `story_resource_states`.
+- **Persistenza chunk**: ogni chunk viene salvato come riga in `chapters` (numero 1-based).
+- **Single active runtime**: all'avvio di una nuova storia state-driven, tutti i runtime precedenti vengono disattivati.
+
+**API essenziali**
+
+- `POST /api/commands/state-story/start`
+  - Body: `{ "theme": "...", "title": "...", "narrativeProfileId": 1, "seriesId": null, "episodeId": null, "plannerMode": "Off|Assist|Auto" }`
+  - Risposta: `storyId`
+- `POST /api/commands/state-story/next-chunk`
+  - Body: `{ "storyId": 123, "writerAgentId": 5 }`
+  - Risposta: `runId` (CommandDispatcher), `storyId`
+
+**Comportamento attuale (codice)**
+
+- **Phase**: ciclo base su 5 chunk (`Action`, `Action`, `Action`, `Stall`, `Error`) con override numerici a `Consequence` quando `FailureCount >= 3` o quando una risorsa arriva al minimo.
+- **POV**: ruota su `NarrativeProfile.pov_list_json` (array JSON) se valorizzato; altrimenti usa `ThirdPersonLimited` o mantiene il POV corrente.
+- **Risorse**: drain deterministico per fase (`Stall/Error = -1`, `Consequence = -2`). In fase `Consequence` applica anche un set di impatti selezionato in modo deterministico.
+- **Validator cliffhanger**: il chunk deve terminare con tensione aperta (es. `...`, `?`, `!`, `—`, `:`). Se fallisce, retry fino a 3 tentativi; se fallisce comunque incrementa `FailureCount` e salva comunque il chunk.
+
+Nota: `base_system_prompt` e `style_prompt` sono persistiti nel profilo (e seedati), ma l'attuale `PromptBuilder` del comando usa soprattutto **tema** + **coda contesto**; POV/risorse/conseguenze sono invece gia' attive.
+
 ### Pipeline TTS
 - Lo schema TTS viene prodotto chunk-by-chunk con `MultiStepOrchestrationService`.
 - La copertura testuale viene validata prima di procedere al chunk successivo.
@@ -99,6 +125,7 @@ Variabili ambiente utili: `TTS_HOST`, `TTS_PORT`, `TTS_TIMEOUT_SECONDS`.
 ### Database
 - File: `data/storage.db` (EF Core + Dapper). Si crea/aggiorna all'avvio se mancano tabelle.
 - Tabelle principali: `agents`, `models`, `stories`, `calls`, `logs`, `log_analysis`, `test_definitions`, `tts_voices`, memoria vettoriale.
+- Tabelle Narrative Engine: `narrative_profiles`, `narrative_resources`, `micro_objectives`, `failure_rules`, `consequence_rules`, `consequence_impacts`, `story_runtime_states`, `story_resource_states`, `chapters`.
 - Script di popolamento in `populate_*.sql`; usa `sqlite3 data/storage.db < populate_agents.sql` per caricarli.
 
 ## Uso dell'app

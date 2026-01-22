@@ -16,6 +16,14 @@ namespace TinyGenerator.Pages.Series
 {
     public class EditModel : PageModel
     {
+        private static readonly HashSet<string> AllowedInitialPhases = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "AZIONE",
+            "STASI",
+            "ERRORE",
+            "EFFETTO"
+        };
+
         private readonly TinyGeneratorDbContext _context;
         private readonly ICommandDispatcher? _dispatcher;
         private readonly DatabaseService? _database;
@@ -50,6 +58,12 @@ namespace TinyGenerator.Pages.Series
         public List<SeriesCharacter> SeriesCharacters { get; set; } = new();
 
         public List<SeriesEpisode> SeriesEpisodes { get; set; } = new();
+
+        public List<PlannerMethod> PlannerMethods { get; set; } = new();
+
+        public List<TipoPlanning> TipoPlannings { get; set; } = new();
+
+        public List<NarrativeProfile> NarrativeProfiles { get; set; } = new();
 
         public List<TtsVoice> Voices { get; set; } = new();
 
@@ -102,12 +116,12 @@ namespace TinyGenerator.Pages.Series
 
             if (SeriesItem.Id > 0)
             {
-                // Update
                 var existing = _context.Series.FirstOrDefault(s => s.Id == SeriesItem.Id);
                 if (existing == null)
                 {
                     return NotFound();
                 }
+
                 existing.Titolo = SeriesItem.Titolo;
                 existing.Genere = SeriesItem.Genere;
                 existing.Sottogenere = SeriesItem.Sottogenere;
@@ -116,16 +130,19 @@ namespace TinyGenerator.Pages.Series
                 existing.Target = SeriesItem.Target;
                 existing.Lingua = SeriesItem.Lingua;
                 existing.AmbientazioneBase = SeriesItem.AmbientazioneBase;
+                existing.DefaultNarrativeProfileId = SeriesItem.DefaultNarrativeProfileId;
                 existing.PremessaSerie = SeriesItem.PremessaSerie;
                 existing.ArcoNarrativoSerie = SeriesItem.ArcoNarrativoSerie;
                 existing.StileScrittura = SeriesItem.StileScrittura;
                 existing.RegoleNarrative = SeriesItem.RegoleNarrative;
+                existing.SerieFinalGoal = SeriesItem.SerieFinalGoal;
                 existing.NoteAI = SeriesItem.NoteAI;
                 existing.ImagesStyle = SeriesItem.ImagesStyle;
+                existing.PlannerMethodId = SeriesItem.PlannerMethodId;
+                existing.DefaultTipoPlanningId = SeriesItem.DefaultTipoPlanningId;
                 existing.EpisodiGenerati = SeriesItem.EpisodiGenerati;
                 existing.DataInserimento = SeriesItem.DataInserimento;
 
-                // Force overwrite: bypass optimistic concurrency and update the row directly.
                 try
                 {
                     var affected = _context.Database.ExecuteSqlInterpolated($@"
@@ -142,8 +159,12 @@ UPDATE series SET
     arco_narrativo_serie = {existing.ArcoNarrativoSerie},
     stile_scrittura = {existing.StileScrittura},
     regole_narrative = {existing.RegoleNarrative},
+    serie_final_goal = {existing.SerieFinalGoal},
     note_ai = {existing.NoteAI},
     images_style = {existing.ImagesStyle},
+    planner_method_id = {existing.PlannerMethodId},
+    default_tipo_planning_id = {existing.DefaultTipoPlanningId},
+    default_narrative_profile_id = {existing.DefaultNarrativeProfileId},
     episodi_generati = {existing.EpisodiGenerati},
     data_inserimento = {existing.DataInserimento}
 WHERE id = {existing.Id};");
@@ -164,7 +185,6 @@ WHERE id = {existing.Id};");
             }
             else
             {
-                // Insert
                 SeriesItem.DataInserimento = DateTime.UtcNow;
                 _context.Series.Add(SeriesItem);
                 _context.SaveChanges();
@@ -736,6 +756,12 @@ WHERE id = {existing.Id};");
                 ModelState.AddModelError("EpisodeInput.Number", "Numero episodio non valido.");
             }
 
+            var normalizedPhase = NormalizeInitialPhase(EpisodeInput.InitialPhase);
+            if (!string.IsNullOrWhiteSpace(normalizedPhase) && !AllowedInitialPhases.Contains(normalizedPhase))
+            {
+                ModelState.AddModelError("EpisodeInput.InitialPhase", "Initial phase non valida. Valori ammessi: azione, stasi, errore, effetto.");
+            }
+
             if (!ModelState.IsValid)
             {
                 LoadPageData(seriesId);
@@ -750,7 +776,11 @@ WHERE id = {existing.Id};");
                 SerieId = seriesId,
                 Number = EpisodeInput.Number,
                 Title = EpisodeInput.Title?.Trim(),
-                Trama = EpisodeInput.Trama?.Trim()
+                Trama = EpisodeInput.Trama?.Trim(),
+                EpisodeGoal = EpisodeInput.EpisodeGoal?.Trim(),
+                StartSituation = EpisodeInput.StartSituation?.Trim(),
+                InitialPhase = string.IsNullOrWhiteSpace(normalizedPhase) ? null : normalizedPhase.ToUpperInvariant(),
+                TipoPlanningId = EpisodeInput.TipoPlanningId
             };
 
             try
@@ -781,6 +811,12 @@ WHERE id = {existing.Id};");
                 ModelState.AddModelError("EpisodeInput.Number", "Numero episodio non valido.");
             }
 
+            var normalizedPhase = NormalizeInitialPhase(EpisodeInput.InitialPhase);
+            if (!string.IsNullOrWhiteSpace(normalizedPhase) && !AllowedInitialPhases.Contains(normalizedPhase))
+            {
+                ModelState.AddModelError("EpisodeInput.InitialPhase", "Initial phase non valida. Valori ammessi: azione, stasi, errore, effetto.");
+            }
+
             if (!ModelState.IsValid)
             {
                 LoadPageData(seriesId);
@@ -794,6 +830,10 @@ WHERE id = {existing.Id};");
             existing.Number = EpisodeInput.Number;
             existing.Title = EpisodeInput.Title?.Trim();
             existing.Trama = EpisodeInput.Trama?.Trim();
+            existing.EpisodeGoal = EpisodeInput.EpisodeGoal?.Trim();
+            existing.StartSituation = EpisodeInput.StartSituation?.Trim();
+            existing.InitialPhase = string.IsNullOrWhiteSpace(normalizedPhase) ? null : normalizedPhase.ToUpperInvariant();
+            existing.TipoPlanningId = EpisodeInput.TipoPlanningId;
 
             try
             {
@@ -837,6 +877,19 @@ WHERE id = {existing.Id};");
         private void LoadPageData(int seriesId)
         {
             Voices = _context.TtsVoices.OrderBy(v => v.Name).ToList();
+
+            NarrativeProfiles = _context.NarrativeProfiles
+                .OrderBy(p => p.Name)
+                .ToList();
+
+            PlannerMethods = _context.PlannerMethods
+                .OrderBy(m => m.Code)
+                .ToList();
+
+            TipoPlannings = _context.TipoPlannings
+                .OrderBy(t => t.Nome)
+                .ToList();
+
             if (seriesId > 0)
             {
                 SeriesCharacters = _context.SeriesCharacters
@@ -894,6 +947,14 @@ WHERE id = {existing.Id};");
                 if (tags.Contains("narrator") || tags.Contains("narratore")) return true;
             }
             return false;
+        }
+
+        private static string? NormalizeInitialPhase(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            var v = value.Trim();
+            if (string.IsNullOrWhiteSpace(v)) return null;
+            return v.ToUpperInvariant();
         }
 
         private void SetActiveTab(string? tab)
@@ -976,6 +1037,10 @@ WHERE id = {existing.Id};");
             public int Number { get; set; }
             public string? Title { get; set; }
             public string? Trama { get; set; }
+            public string? EpisodeGoal { get; set; }
+            public string? StartSituation { get; set; }
+            public string? InitialPhase { get; set; }
+            public int? TipoPlanningId { get; set; }
         }
     }
 }

@@ -104,6 +104,8 @@ builder.Services.AddSingleton<IMemoryEmbeddingBackfillScheduler>(sp => sp.GetReq
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MemoryEmbeddingBackfillService>());
 // Command dispatcher (background command queue with configurable parallelism)
 builder.Services.Configure<CommandDispatcherOptions>(builder.Configuration.GetSection("CommandDispatcher"));
+// Command tuning (attempts, chunking sizes, thresholds)
+builder.Services.Configure<CommandTuningOptions>(builder.Configuration.GetSection("CommandTuning"));
 builder.Services.AddSingleton<CommandDispatcher>(sp =>
     new CommandDispatcher(
         sp.GetService<IOptions<CommandDispatcherOptions>>(),

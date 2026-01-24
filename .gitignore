@@ -72,6 +72,6 @@ appsettings.secrets.json
 *.secrets.json
 
 # Ignore generated or user-uploaded samples and story exports
-wwwroot/data_voicess_samples/
+wwwroot/data_voices_samples/
 stories_folder/
 series_folder/

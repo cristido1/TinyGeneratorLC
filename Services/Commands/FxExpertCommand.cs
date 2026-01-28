@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
 
@@ -33,6 +34,7 @@ namespace TinyGenerator.Services.Commands
         private readonly StoriesService? _storiesService;
         private readonly ICustomLogger? _logger;
         private readonly ICommandDispatcher? _commandDispatcher;
+        private readonly IServiceScopeFactory? _scopeFactory;
 
         public FxExpertCommand(
             long storyId,
@@ -41,7 +43,8 @@ namespace TinyGenerator.Services.Commands
             StoriesService? storiesService = null,
             ICustomLogger? logger = null,
             ICommandDispatcher? commandDispatcher = null,
-            CommandTuningOptions? tuning = null)
+            CommandTuningOptions? tuning = null,
+            IServiceScopeFactory? scopeFactory = null)
         {
             _storyId = storyId;
             _database = database ?? throw new ArgumentNullException(nameof(database));
@@ -50,6 +53,7 @@ namespace TinyGenerator.Services.Commands
             _logger = logger;
             _commandDispatcher = commandDispatcher;
             _tuning = tuning ?? new CommandTuningOptions();
+            _scopeFactory = scopeFactory;
         }
 
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
@@ -69,10 +73,12 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"Story {_storyId} not found");
                 }
 
-                var sourceText = story.StoryTagged;
+                var sourceText = !string.IsNullOrWhiteSpace(story.StoryRevised)
+                    ? story.StoryRevised
+                    : story.StoryRaw;
                 if (string.IsNullOrWhiteSpace(sourceText))
                 {
-                    return Fail(effectiveRunId, $"Story {_storyId} has no story_tagged text");
+                    return Fail(effectiveRunId, $"Story {_storyId} has no revised text");
                 }
 
                 var fxAgent = _database.ListAgents()
@@ -88,23 +94,55 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"FX expert agent {fxAgent.Name} has no model configured");
                 }
 
+                var currentModelId = fxAgent.ModelId.Value;
+
                 var modelInfo = _database.GetModelInfoById(fxAgent.ModelId.Value);
                 if (string.IsNullOrWhiteSpace(modelInfo?.Name))
                 {
                     return Fail(effectiveRunId, $"Model not found for fx expert agent {fxAgent.Name}");
                 }
 
-                var systemPrompt = BuildSystemPrompt(fxAgent);
-                var chunks = SplitStoryIntoChunks(sourceText, fxAgent.NumPredict);
-                if (chunks.Count == 0)
+                var triedModelNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    return Fail(effectiveRunId, "No chunks produced from story_tagged");
+                    modelInfo.Name
+                };
+
+                var currentModelName = modelInfo.Name;
+
+                var systemPrompt = BuildSystemPrompt(fxAgent);
+                var rowsBuild = StoryTaggingService.BuildStoryRows(sourceText);
+                var storyRows = string.IsNullOrWhiteSpace(story.StoryRows) ? rowsBuild.StoryRows : story.StoryRows;
+                if (string.IsNullOrWhiteSpace(storyRows))
+                {
+                    storyRows = rowsBuild.StoryRows;
                 }
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {chunks.Count} chunks");
+                var rows = StoryTaggingService.ParseStoryRows(storyRows);
+                if (rows.Count == 0)
+                {
+                    return Fail(effectiveRunId, "No rows produced from story text");
+                }
+
+                _database.UpdateStoryRowsAndTags(story.Id, storyRows, story.StoryTags);
+
+                var fxTargetTokens = Math.Max(1, _tuning.FxExpert.DefaultTargetTokensPerChunk);
+                var fxMaxTokens = Math.Max(1, _tuning.FxExpert.DefaultMaxTokensPerChunk);
+                var fxMinTokens = Math.Max(0, Math.Min(fxTargetTokens, fxMaxTokens / 2));
+
+                var chunks = StoryTaggingService.SplitRowsIntoChunks(
+                    rows,
+                    fxMinTokens,
+                    fxMaxTokens,
+                    fxTargetTokens);
+                if (chunks.Count == 0)
+                {
+                    return Fail(effectiveRunId, "No chunks produced from story rows");
+                }
+
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {chunks.Count} chunks (rows)");
 
                 var bridge = _kernelFactory.CreateChatBridge(
-                    modelInfo.Name,
+                    currentModelName,
                     fxAgent.Temperature,
                     fxAgent.TopP,
                     fxAgent.RepeatPenalty,
@@ -112,7 +150,7 @@ namespace TinyGenerator.Services.Commands
                     fxAgent.RepeatLastN,
                     fxAgent.NumPredict);
 
-                var taggedChunks = new List<string>();
+                var fxTags = new List<StoryTaggingService.StoryTagEntry>();
                 for (int i = 0; i < chunks.Count; i++)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -127,46 +165,85 @@ namespace TinyGenerator.Services.Commands
                         // best-effort
                     }
 
-                    var tagged = await ProcessChunkWithRetriesAsync(
-                        bridge,
-                        systemPrompt,
-                        chunk.Text,
-                        i + 1,
-                        chunks.Count,
-                        effectiveRunId,
-                        ct);
+                    string mappingText;
+                    try
+                    {
+                        mappingText = await ProcessChunkWithRetriesAsync(
+                            bridge,
+                            systemPrompt,
+                            chunk.Text,
+                            i + 1,
+                            chunks.Count,
+                            effectiveRunId,
+                            ct);
+                    }
+                    catch (Exception ex) when (_scopeFactory != null)
+                    {
+                        _logger?.Append(effectiveRunId,
+                            $"[chunk {i + 1}/{chunks.Count}] Primary fx_expert model '{currentModelName}' failed: {ex.Message}. Attempting fallback models...",
+                            "warn");
 
-                    if (string.IsNullOrWhiteSpace(tagged))
+                        var fallback = await TryChunkWithFallbackAsync(
+                            roleCode: "fx_expert",
+                            failingModelId: currentModelId,
+                            systemPrompt: systemPrompt,
+                            chunkText: chunk.Text,
+                            chunkIndex: i + 1,
+                            chunkCount: chunks.Count,
+                            runId: effectiveRunId,
+                            agent: fxAgent,
+                            triedModelNames: triedModelNames,
+                            ct: ct);
+
+                        if (fallback == null)
+                        {
+                            throw;
+                        }
+
+                        mappingText = fallback.Value.Tagged;
+
+                        // Switch "in-place" for subsequent chunks.
+                        currentModelId = fallback.Value.ModelId;
+                        currentModelName = fallback.Value.ModelName;
+                        bridge = _kernelFactory.CreateChatBridge(
+                            currentModelName,
+                            fxAgent.Temperature,
+                            fxAgent.TopP,
+                            fxAgent.RepeatPenalty,
+                            fxAgent.TopK,
+                            fxAgent.RepeatLastN,
+                            fxAgent.NumPredict);
+                    }
+
+                    if (string.IsNullOrWhiteSpace(mappingText))
                     {
                         return Fail(effectiveRunId, $"FX expert returned empty text for chunk {i + 1}/{chunks.Count}");
                     }
 
-                    taggedChunks.Add(tagged);
+                    var parsed = StoryTaggingService.ParseFxMapping(mappingText);
+                    fxTags.AddRange(parsed);
                 }
 
-                var mergedTagged = MergeTaggedChunks(taggedChunks);
-                if (string.IsNullOrWhiteSpace(mergedTagged))
+                var existingTags = StoryTaggingService.LoadStoryTags(story.StoryTags);
+                existingTags.RemoveAll(t => t.Type == StoryTaggingService.TagTypeFx);
+                existingTags.AddRange(fxTags);
+                var storyTagsJson = StoryTaggingService.SerializeStoryTags(existingTags);
+                _database.UpdateStoryRowsAndTags(story.Id, storyRows, storyTagsJson);
+
+                var rebuiltTagged = StoryTaggingService.BuildStoryTagged(sourceText, existingTags);
+                if (string.IsNullOrWhiteSpace(rebuiltTagged))
                 {
-                    return Fail(effectiveRunId, "Merged tagged story is empty");
+                    return Fail(effectiveRunId, "Rebuilt tagged story is empty");
                 }
 
-                var nextVersion = story.StoryTaggedVersion.HasValue
-                    ? story.StoryTaggedVersion.Value + 1
-                    : 1;
-
-                var saved = _database.UpdateStoryTagged(
-                    story.Id,
-                    mergedTagged,
-                    fxAgent.ModelId,
-                    null, // promptHash not critical for expert agents
-                    nextVersion);
+                var saved = _database.UpdateStoryTaggedContent(story.Id, rebuiltTagged);
 
                 if (!saved)
                 {
                     return Fail(effectiveRunId, $"Failed to persist tagged story for {_storyId}");
                 }
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] FX tags added (version {nextVersion})");
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] FX tags rebuilt from story_tags");
 
                 // Enqueue next stage: music_expert
                 TryEnqueueMusicExpert(story, effectiveRunId);
@@ -202,7 +279,7 @@ namespace TinyGenerator.Services.Commands
                     {
                         try
                         {
-                            var cmd = new MusicExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher, _tuning);
+                            var cmd = new MusicExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher, _tuning, _scopeFactory);
                             return await cmd.ExecuteAsync(ctx.CancellationToken, musicRunId);
                         }
                         catch (Exception ex)
@@ -226,6 +303,78 @@ namespace TinyGenerator.Services.Commands
             {
                 _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue music_expert: {ex.Message}", "warn");
             }
+        }
+
+        private readonly record struct FallbackChunkResult(string Tagged, int ModelId, string ModelName);
+
+        private async Task<FallbackChunkResult?> TryChunkWithFallbackAsync(
+            string roleCode,
+            int failingModelId,
+            string? systemPrompt,
+            string chunkText,
+            int chunkIndex,
+            int chunkCount,
+            string runId,
+            Agent agent,
+            HashSet<string> triedModelNames,
+            CancellationToken ct)
+        {
+            if (_scopeFactory == null)
+            {
+                return null;
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
+            if (fallbackService == null)
+            {
+                _logger?.Append(runId, "ModelFallbackService not available in DI scope; cannot fallback.", "warn");
+                return null;
+            }
+
+            var (result, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync(
+                roleCode,
+                failingModelId,
+                async modelRole =>
+                {
+                    var modelName = modelRole.Model?.Name;
+                    if (string.IsNullOrWhiteSpace(modelName))
+                    {
+                        throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
+                    }
+
+                    var candidateBridge = _kernelFactory.CreateChatBridge(
+                        modelName,
+                        agent.Temperature,
+                        agent.TopP,
+                        agent.RepeatPenalty,
+                        agent.TopK,
+                        agent.RepeatLastN,
+                        agent.NumPredict);
+
+                    return await ProcessChunkWithRetriesAsync(
+                        candidateBridge,
+                        systemPrompt,
+                        chunkText,
+                        chunkIndex,
+                        chunkCount,
+                        runId,
+                        ct);
+                },
+                validateResult: s => !string.IsNullOrWhiteSpace(s),
+                shouldTryModelRole: mr =>
+                {
+                    var name = mr.Model?.Name;
+                    return !string.IsNullOrWhiteSpace(name) && triedModelNames.Add(name);
+                });
+
+            if (string.IsNullOrWhiteSpace(result) || successfulModelRole?.Model == null || string.IsNullOrWhiteSpace(successfulModelRole.Model.Name))
+            {
+                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Fallback models exhausted for role '{roleCode}'.", "error");
+                return null;
+            }
+
+            return new FallbackChunkResult(result, successfulModelRole.ModelId, successfulModelRole.Model.Name);
         }
 
         private CommandResult Fail(string runId, string message)
@@ -252,7 +401,6 @@ namespace TinyGenerator.Services.Commands
             var minFxTags = Math.Max(0, _tuning.FxExpert.MinFxTagsPerChunk);
             var retryDelayBaseSeconds = Math.Max(0, _tuning.FxExpert.RetryDelayBaseSeconds);
             var diagnoseOnFinalFailure = _tuning.FxExpert.DiagnoseOnFinalFailure;
-            var finalRetryAfterDiagnosis = _tuning.FxExpert.FinalRetryAfterDiagnosis;
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -266,6 +414,18 @@ namespace TinyGenerator.Services.Commands
                     {
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
+
+                    messages.Add(new ConversationMessage
+                    {
+                        Role = "system",
+                        Content =
+                            "FORMATO RISPOSTA OBBLIGATORIO:\n" +
+                            "- Restituisci SOLO righe nel formato: ID descrizione [secondi]\n" +
+                            "- Non usare tag [FX] o parentesi diverse dalle [secondi]\n" +
+                            "- Non riscrivere il testo, non aggiungere spiegazioni\n" +
+                            "- Gli ID sono quelli del testo numerato fornito\n" +
+                            "- Se non c'è un FX per una riga, non restituire quella riga\n"
+                    });
 
                     // Add error feedback for retry attempts
                     if (attempt > 1 && !string.IsNullOrWhiteSpace(lastError))
@@ -294,27 +454,17 @@ namespace TinyGenerator.Services.Commands
                         continue;
                     }
 
-                    // Validation: Check for minimum tag count (at least 1 FX tag)
-                    var tagCount = FxTagRegex.Matches(cleaned).Count;
+                    var tags = StoryTaggingService.ParseFxMapping(cleaned);
+                    var tagCount = tags.Count;
                     if (tagCount < minFxTags)
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough FX tags: {tagCount} found, minimum {minFxTags} required", "warn");
-                        lastError = $"Hai inserito {tagCount} tag [FX:]. Devi inserire ALMENO {minFxTags} effetto sonoro [FX:] (se non trovi eventi evidenti, ricava un effetto dai rumori/contesto).";
+                        lastError = $"Hai inserito {tagCount} righe valide. Devi inserire ALMENO {minFxTags} effetti sonori (formato: ID descrizione [secondi]).";
                         continue;
                     }
 
-                    // Merge FX blocks back into the ORIGINAL chunk, using surrounding tag anchors.
-                    var merged = MergeFxIntoOriginalChunk(chunkText, cleaned, out var insertedFxBlocks);
-                    if (insertedFxBlocks < minFxTags)
-                    {
-                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Could not merge FX blocks into original chunk (inserted={insertedFxBlocks}, modelTags={tagCount})", "warn");
-                        lastError = "Ho trovato tag [FX:] nella tua risposta ma non riesco a reinserirli nel chunk originale: assicurati che ogni [FX:] sia posizionato tra due tag di sezione (es. [NARRATORE], [PERSONAGGIO: ...]) e che i tag vicini siano riportati in modo chiaro.";
-                        continue;
-                    }
-
-                    // All validations passed
-                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated+merged: modelLen={cleaned.Length} chars, modelFX={tagCount}, insertedFX={insertedFxBlocks}");
-                    return merged;
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalFx={tagCount}");
+                    return cleaned;
                 }
                 catch (Exception ex)
                 {
@@ -349,26 +499,6 @@ namespace TinyGenerator.Services.Commands
                     if (!string.IsNullOrWhiteSpace(diagnosis))
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] fx_expert self-diagnosis: {diagnosis}", "warn");
-
-                        if (finalRetryAfterDiagnosis)
-                        {
-                            var finalAttempt = await FinalRetryWithDiagnosisAsync(
-                                bridge,
-                                systemPrompt,
-                                chunkText,
-                                diagnosis,
-                                lastError,
-                                chunkIndex,
-                                chunkCount,
-                                runId,
-                                ct).ConfigureAwait(false);
-
-                            if (!string.IsNullOrWhiteSpace(finalAttempt))
-                            {
-                                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Final retry after diagnosis succeeded.", "info");
-                                return finalAttempt;
-                            }
-                        }
                     }
                 }
                 catch (Exception ex)

@@ -1,10 +1,14 @@
 FORMATTER V2 – ISTRUZIONI OPERATIVE
 
 OBIETTIVO
-Implementare un algoritmo deterministico per l’assegnazione dei tag:
-[NARRATORE]
-[PERSONAGGIO: Nome] [SENTIMENTO: sentimento]
+Implementare un algoritmo deterministico per l’assegnazione dei tag di parlato:
+[PERSONAGGIO: Nome] [EMOZIONE: emozione]
 garantendo che il testo originale NON venga mai modificato.
+
+NOTA CHIAVE
+- L’agente Formatter NON deve conoscere né produrre il tag [NARRATORE].
+- Tutto ciò che non è parlato viene assegnato automaticamente a [NARRATORE] dal codice.
+- Il codice inserisce [NARRATORE] nelle sezioni non-parlate e lo “riapre” quando un personaggio ha finito di parlare.
 
 --------------------------------------------------
 1. PRE-PROCESSING – SEGMENTAZIONE TESTO
@@ -50,10 +54,9 @@ L’ID NON fa parte del testo originale.
 
 L’agente deve:
 - Analizzare ogni riga singolarmente
-- Stabilire se è:
-  * Narratore
-  * Personaggio (con nome e sentimento)
-- Restituire SOLO mapping ID → TAG
+- Stabilire se è parlato (qualcuno sta parlando) oppure no
+- Quando è parlato: estrarre Nome del personaggio + emozione
+- Restituire SOLO mapping ID → TAG per le righe di parlato
 
 L’agente NON deve:
 - Riscrivere il testo
@@ -68,10 +71,9 @@ L’agente NON deve:
 
 Esempio:
 
-001 [NARRATORE]
-002 [NARRATORE]
 003 [PERSONAGGIO: Luca] [SENTIMENTO: rabbia]
-004 [NARRATORE]
+
+003 [PERSONAGGIO: Luca] [EMOZIONE: rabbia]
 
 Una riga per ID.
 Ordine libero.
@@ -82,9 +84,10 @@ Solo ID + tag.
 --------------------------------------------------
 
 Per ogni riga originale:
-- Recuperare i tag associati all’ID
-- Pre-pendere i tag alla riga
-- NON modificare il testo
+- Se l’ID è presente nel mapping: usare il tag [PERSONAGGIO: ...] [EMOZIONE: ...]
+- Se l’ID NON è presente nel mapping: assegnare automaticamente [NARRATORE]
+- Inserire i tag solo quando cambia il “parlante” (tag a sezioni), e riaprire [NARRATORE] dopo i dialoghi
+- NON modificare il testo originale (oltre all’aggiunta dei tag)
 
 Poi:
 - Rimuovere gli ID
@@ -100,11 +103,11 @@ Ti verranno fornite righe numerate.
 Ogni riga è una porzione di testo originale.
 
 COMPITO:
-Per ogni riga, indica SOLO i tag da applicare.
+Indica SOLO le righe dove parla qualcuno (dialogo).
+Per quelle righe, indica il personaggio e la sua emozione.
 
 TAG POSSIBILI:
-[NARRATORE]
-[PERSONAGGIO: Nome] [SENTIMENTO: sentimento]
+[PERSONAGGIO: Nome] [EMOZIONE: emozione]
 
 REGOLE OBBLIGATORIE:
 - NON riscrivere il testo
@@ -114,32 +117,10 @@ REGOLE OBBLIGATORIE:
 - NON aggiungere contenuti
 - Restituisci SOLO righe nel formato:
   ID TAG
+- Restituisci SOLO le righe dove parla qualcuno (non tutte le righe)
+- NON includere alcun altro tag oltre a PERSONAGGIO ed EMOZIONE
 
 Esempio:
-001 [NARRATORE]
-004 [PERSONAGGIO: Luca] [SENTIMENTO: paura]
+004 [PERSONAGGIO: Luca] [EMOZIONE: paura]
 
---------------------------------------------------
-7. TEST DI VERIFICA CONSIGLIATI
---------------------------------------------------
-
-Test 1 – Integrità:
-- Rimuovere i tag
-- Il testo risultante deve essere IDENTICO all’originale
-
-Test 2 – Dialogo misto:
-"disse Luca: «Non torno indietro»"
-Deve produrre almeno due righe con tag diversi.
-
-Test 3 – Stabilità:
-Eseguire il formatter 2 volte:
-il risultato deve essere identico.
-
-Test 4 – Edge cases:
-- Frasi senza verbo
-- Pensieri indiretti
-- Dialoghi senza virgolette
-- Virgole multiple
-
---------------------------------------------------
 FINE FILE

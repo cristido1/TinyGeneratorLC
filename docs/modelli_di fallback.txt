@@ -1,0 +1,8 @@
+SERVE UNA TABELLA RUOLI AGENTE: roles
+1) con i campi id, ruolo (writer, formatter, fx_expert, music_expert...), comando collegato. (ricordati che usiamo le migrazioni EF)
+2) poi bisogna fare una pagina con il crud e metterla a menu
+3) serve una tabella model_roles con i seguenti campi:
+   id, model_id, role_id, enabled, use_count int, use_successed int, use_failed int, last_use datetime, instructions text, top_p, top_k
+4) crea il crud di questa tabella, integrato con il crud dell'agente   
+5) quando una operazione fallisce con l'agente selezionato, cambia temporaneaneamente il modello tra quelli abilitati nella tabella model_roles ordinati per percentuale di successo, e se serve passateli tutti.
+   usandoli aggiorna i conteggi nella tabella model_roles.

@@ -15,6 +15,7 @@ namespace TinyGenerator.Controllers
         private readonly StoriesService _storiesService;
         private readonly ICustomLogger _logger;
         private readonly CommandTuningOptions _tuning;
+        private readonly IServiceProvider _serviceProvider;
 
         public CommandsApiController(
             ICommandDispatcher dispatcher,
@@ -22,7 +23,8 @@ namespace TinyGenerator.Controllers
             ILangChainKernelFactory kernelFactory,
             StoriesService storiesService,
             ICustomLogger logger,
-            IOptions<CommandTuningOptions> tuningOptions)
+            IOptions<CommandTuningOptions> tuningOptions,
+            IServiceProvider serviceProvider)
         {
             _dispatcher = dispatcher;
             _database = database;
@@ -30,6 +32,7 @@ namespace TinyGenerator.Controllers
             _storiesService = storiesService;
             _logger = logger;
             _tuning = tuningOptions.Value ?? new CommandTuningOptions();
+            _serviceProvider = serviceProvider;
         }
 
         [HttpGet]
@@ -119,6 +122,10 @@ namespace TinyGenerator.Controllers
             }
 
             var runId = Guid.NewGuid().ToString();
+
+                // IMPORTANT: do not capture scoped DbContext-backed services for a background command.
+                // Pass the scope factory instead and resolve ModelFallbackService inside the command when needed.
+                var scopeFactory = _serviceProvider.GetService<IServiceScopeFactory>();
             var cmd = new TransformStoryRawToTaggedCommand(
                 storyId,
                 _database,
@@ -126,7 +133,8 @@ namespace TinyGenerator.Controllers
                 _storiesService,
                 _logger,
                 _dispatcher,
-                _tuning);
+                    _tuning,
+                    scopeFactory);
 
             _dispatcher.Enqueue(
                 "TransformStoryRawToTagged",

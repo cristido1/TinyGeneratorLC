@@ -17,19 +17,20 @@ namespace TinyGenerator.Pages.Models
         [BindProperty]
         public ModelInfo Model { get; set; } = new ModelInfo();
 
-        public IActionResult OnGet(string? name)
+        public IActionResult OnGet(int? id)
         {
-            if (!string.IsNullOrWhiteSpace(name))
+            if (id.HasValue)
             {
-                var existing = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+                var existing = _database.ListModels().FirstOrDefault(m => m.Id.HasValue && m.Id.Value == id.Value);
                 if (existing != null)
                 {
                     Model = existing;
                 }
                 else
                 {
-                    // prefill provider default
-                    Model = new ModelInfo { Name = name, Provider = "ollama", Enabled = true };
+                    // if id provided but not found, redirect to Index with error
+                    TempData["ErrorMessage"] = $"Model id {id.Value} not found.";
+                    return RedirectToPage("Index");
                 }
             }
             else
@@ -53,8 +54,17 @@ namespace TinyGenerator.Pages.Models
                 return Page();
             }
 
-            // Preserve any existing data not present in the edit form
-            var existing = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, Model.Name, StringComparison.OrdinalIgnoreCase));
+            // Preserve any existing data not present in the edit form.
+            // Prefer lookup by Id when available, fall back to name-based lookup to support older links.
+            ModelInfo? existing = null;
+            if (Model.Id.HasValue)
+            {
+                existing = _database.ListModels().FirstOrDefault(m => m.Id.HasValue && m.Id.Value == Model.Id.Value);
+            }
+            if (existing == null)
+            {
+                existing = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, Model.Name, StringComparison.OrdinalIgnoreCase));
+            }
             if (existing == null)
             {
                 existing = new ModelInfo();

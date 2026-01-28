@@ -1,0 +1,452 @@
+@page
+@model TinyGenerator.Pages.Agents.FallbackModelsModel
+@{
+    ViewData["Title"] = "Fallback models";
+    ViewData["PageDescription"] = "Gestione modelli di fallback per i ruoli";
+}
+
+<style>
+    .btn-group-vertical>.btn, .btn-group>.btn {
+        flex: none;
+    }
+
+    #fallbackTable {
+        font-size: 0.9rem;
+    }
+
+    #fallbackTable thead th {
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 0.75rem;
+        border-bottom: 2px solid #dee2e6;
+    }
+
+    #fallbackTable tbody td {
+        padding: 0.75rem;
+        vertical-align: middle;
+    }
+
+    #fallbackTable tbody tr:hover {
+        background-color: #f8f9fa;
+    }
+
+    #fallbackTable tbody tr.odd,
+    #fallbackTable tbody tr.even {
+        background-color: transparent;
+    }
+
+    .dt-buttons .btn {
+        font-size: 0.875rem;
+        padding: 0.375rem 0.75rem;
+    }
+
+    .dataTables_filter input {
+        margin-left: 0.5rem;
+        border-radius: 0.25rem;
+    }
+
+    .dataTables_paginate .pagination {
+        margin-bottom: 0;
+    }
+
+    .dataTables_info {
+        font-size: 0.875rem;
+        color: #6c757d;
+    }
+
+    .table-container {
+        border: 1px solid #dee2e6;
+        border-radius: 0.375rem;
+        padding: 1rem;
+        background: white;
+    }
+</style>
+
+<div class="mb-3">
+    <p class="text-muted">Configura modelli di fallback. Se un agente fallisce dopo tutti i retry, il sistema prova modelli alternativi ordinati per percentuale di successo.</p>
+</div>
+
+<div id="fallbackMessage" class="alert d-none" role="alert"></div>
+
+<form id="fallbackAddForm" class="mb-3 border p-3 rounded bg-light">
+    @Html.AntiForgeryToken()
+    <h6 class="mb-3">Add fallback model role</h6>
+    <div class="row g-2">
+        <div class="col-md-3">
+            <label class="form-label small">Model</label>
+            <select name="modelId" class="form-select form-select-sm" required>
+                <option value="">-- Select --</option>
+                @foreach (var m in Model.Models)
+                {
+                    <option value="@m.Id">@m.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small">Role</label>
+            <select name="roleId" class="form-select form-select-sm" required>
+                <option value="">-- Select --</option>
+                @foreach (var r in Model.AllRoles)
+                {
+                    <option value="@r.Id">@r.Ruolo</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small">Instructions</label>
+            <input type="text" name="instructions" class="form-control form-control-sm" placeholder="Optional" />
+        </div>
+        <div class="col-md-1">
+            <label class="form-label small">Top-P</label>
+            <input type="number" name="topP" class="form-control form-control-sm" step="0.01" min="0" max="1" placeholder="0.9" />
+        </div>
+        <div class="col-md-1">
+            <label class="form-label small">Top-K</label>
+            <input type="number" name="topK" class="form-control form-control-sm" step="1" min="0" placeholder="40" />
+        </div>
+        <div class="col-md-1 d-flex align-items-center">
+            <div class="form-check mt-4">
+                <input type="checkbox" name="enabled" class="form-check-input" checked />
+                <label class="form-check-label small">Enabled</label>
+            </div>
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-sm btn-success w-100">Add</button>
+        </div>
+    </div>
+</form>
+
+<div class="table-container">
+    <table class="table table-sm table-hover mb-0" id="fallbackTable">
+        <thead>
+            <tr>
+                <th></th>
+                <th data-col="model">Model</th>
+                <th data-col="role">Role</th>
+                <th data-col="use">Use</th>
+                <th data-col="success">Success</th>
+                <th data-col="failed">Failed</th>
+                <th data-col="rate">%</th>
+                <th data-col="lastuse">Last Use</th>
+                <th data-col="enabled">Enabled</th>
+                <th data-col="actions">Azioni</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var mr in Model.ModelRoles)
+            {
+                <tr data-id="@mr.Id">
+                    <td class="dt-control"></td>
+                    <td data-col="model"><strong>@mr.Model?.Name</strong></td>
+                    <td data-col="role"><span class="badge bg-secondary">@mr.Role?.Ruolo</span></td>
+                    <td data-col="use">@mr.UseCount</td>
+                    <td data-col="success" class="text-success">@mr.UseSuccessed</td>
+                    <td data-col="failed" class="text-danger">@mr.UseFailed</td>
+                    <td data-col="rate">@((mr.SuccessRate * 100).ToString("0.0"))%</td>
+                    <td data-col="lastuse">@Model.FormatLastUse(mr.LastUse)</td>
+                    <td data-col="enabled">@(mr.Enabled ? "Yes" : "No")</td>
+                    <td data-col="actions">
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                @foreach (var action in Model.GetActionsForModelRole(mr))
+                                {
+                                    if (action.Method == "GET")
+                                    {
+                                        <li>
+                                            <a class="dropdown-item js-nav" href="@action.Url" data-url="@action.Url">@action.Title</a>
+                                        </li>
+                                    }
+                                    else if (action.Method == "POST")
+                                    {
+                                        <li>
+                                            <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Confermi eliminazione?')" : "true")">
+                                                @Html.AntiForgeryToken()
+                                                <button type="submit" class="dropdown-item">@action.Title</button>
+                                            </form>
+                                        </li>
+                                    }
+                                    else if (action.Method == "CLIENT")
+                                    {
+                                        <li>
+                                            <button type="button" class="dropdown-item" data-action="@action.Id">@action.Title</button>
+                                        </li>
+                                    }
+                                }
+                            </ul>
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+<script>
+(function initDataTable() {
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initDataTable, 50);
+        return;
+    }
+
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var currentScriptIndex = 0;
+
+    function loadScript(url, callback) {
+        var script = document.createElement('script');
+        script.src = url;
+        script.onload = callback;
+        script.onerror = function() {
+            console.error('Failed to load script:', url);
+            callback();
+        };
+        document.head.appendChild(script);
+    }
+
+    function loadNextScript() {
+        if (currentScriptIndex < scripts.length) {
+            loadScript(scripts[currentScriptIndex], function() {
+                currentScriptIndex++;
+                loadNextScript();
+            });
+        } else {
+            initializeDataTable();
+        }
+    }
+
+    loadNextScript();
+
+    function initializeDataTable() {
+        jQuery(document).ready(function($) {
+            if (typeof $.fn.DataTable === 'undefined') {
+                console.error('DataTables non caricato');
+                return;
+            }
+
+            var table = $('#fallbackTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                paging: true,
+                pageLength: 25,
+                lengthChange: true,
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                order: [[6, 'desc']],
+                ordering: true,
+                searching: true,
+                columnDefs: [
+                    { className: 'dt-control', orderable: false, targets: 0 },
+                    { orderable: false, targets: -1 }
+                ],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo fallback',
+                        className: 'btn btn-sm btn-primary',
+                        attr: {
+                            style: 'width: auto; flex: 0 0 auto;'
+                        },
+                        action: function() {
+                            var form = document.getElementById('fallbackAddForm');
+                            if (form) {
+                                form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                var firstSelect = form.querySelector('select[name="modelId"]');
+                                if (firstSelect) firstSelect.focus();
+                            }
+                        }
+                    },
+                    {
+                        extend: 'colvis',
+                        text: 'Colonne',
+                        className: 'btn btn-sm btn-secondary'
+                    }
+                ],
+                language: {
+                    search: "Cerca:",
+                    lengthMenu: "Mostra _MENU_ record",
+                    info: "Showing _START_ to _END_ of _TOTAL_ entries",
+                    infoEmpty: "Nessun record disponibile",
+                    infoFiltered: "(filtrati da _MAX_ record totali)",
+                    zeroRecords: "Nessun record trovato",
+                    paginate: {
+                        first: "Prima",
+                        last: "Ultima",
+                        next: "Succ",
+                        previous: "Prec"
+                    }
+                }
+            });
+
+            var form = document.getElementById('fallbackAddForm');
+            var messageBox = document.getElementById('fallbackMessage');
+            var tokenEl = document.querySelector('input[name="__RequestVerificationToken"]');
+            var antiforgeryToken = tokenEl ? tokenEl.value : '';
+
+            function getHeaders() {
+                var headers = { 'Content-Type': 'application/json' };
+                if (antiforgeryToken) {
+                    headers['RequestVerificationToken'] = antiforgeryToken;
+                }
+                return headers;
+            }
+
+            function escapeHtml(value) {
+                return String(value || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function showMessage(type, text) {
+                if (!messageBox) return;
+                messageBox.className = 'alert alert-' + type;
+                messageBox.textContent = text;
+                messageBox.classList.remove('d-none');
+            }
+
+            function clearMessage() {
+                if (!messageBox) return;
+                messageBox.classList.add('d-none');
+                messageBox.textContent = '';
+            }
+
+            function buildRowHtml(row) {
+                return '<tr data-id="' + row.id + '">' +
+                    '<td class="dt-control"></td>' +
+                    '<td data-col="model"><strong>' + escapeHtml(row.modelName) + '</strong></td>' +
+                    '<td data-col="role"><span class="badge bg-secondary">' + escapeHtml(row.roleName) + '</span></td>' +
+                    '<td data-col="use">' + escapeHtml(row.useCount) + '</td>' +
+                    '<td data-col="success" class="text-success">' + escapeHtml(row.useSuccessed) + '</td>' +
+                    '<td data-col="failed" class="text-danger">' + escapeHtml(row.useFailed) + '</td>' +
+                    '<td data-col="rate">' + escapeHtml(row.successRate) + '%</td>' +
+                    '<td data-col="lastuse">' + escapeHtml(row.lastUse) + '</td>' +
+                    '<td data-col="enabled">' + (row.enabled ? 'Yes' : 'No') + '</td>' +
+                    '<td data-col="actions">' +
+                        '<div class="dropdown">' +
+                            '<button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>' +
+                            '<ul class="dropdown-menu dropdown-menu-end">' +
+                                '<li><button type="button" class="dropdown-item" data-action="delete">Elimina</button></li>' +
+                            '</ul>' +
+                        '</div>' +
+                    '</td>' +
+                '</tr>';
+            }
+
+            if (form) {
+                form.addEventListener('submit', async function (ev) {
+                    ev.preventDefault();
+                    clearMessage();
+
+                    var payload = {
+                        modelId: parseInt(form.modelId.value || '0', 10),
+                        roleId: parseInt(form.roleId.value || '0', 10),
+                        instructions: form.instructions.value || null,
+                        topP: form.topP.value ? parseFloat(form.topP.value) : null,
+                        topK: form.topK.value ? parseInt(form.topK.value, 10) : null,
+                        enabled: !!form.enabled.checked
+                    };
+
+                    try {
+                        var resp = await fetch('?handler=Add', {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            body: JSON.stringify(payload),
+                            credentials: 'same-origin'
+                        });
+
+                        if (!resp.ok) {
+                            var errText = await resp.text();
+                            throw new Error(errText || 'Errore inserimento');
+                        }
+
+                        var result = await resp.json();
+                        if (!result.ok) throw new Error(result.error || 'Errore inserimento');
+
+                        if (result.row) {
+                            var newRow = $(buildRowHtml(result.row));
+                            table.row.add(newRow).draw(false);
+                        }
+
+                        form.reset();
+                        form.enabled.checked = true;
+                        showMessage('success', 'Fallback model aggiunto.');
+                    } catch (err) {
+                        showMessage('danger', err.message || 'Errore inserimento');
+                    }
+                });
+            }
+
+            var tableElement = document.getElementById('fallbackTable');
+            if (tableElement && tableElement.tBodies.length > 0) {
+                tableElement.tBodies[0].addEventListener('click', async function (ev) {
+                    var target = ev.target;
+                    if (!target || target.getAttribute('data-action') !== 'delete') return;
+                    var rowEl = target.closest('tr');
+                    if (!rowEl) return;
+                    var id = parseInt(rowEl.getAttribute('data-id') || '0', 10);
+                    if (!id) return;
+                    if (!confirm('Confermi eliminazione?')) return;
+                    clearMessage();
+
+                    try {
+                        var resp = await fetch('?handler=Delete', {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            body: JSON.stringify({ id: id }),
+                            credentials: 'same-origin'
+                        });
+                        if (!resp.ok) {
+                            var errText = await resp.text();
+                            throw new Error(errText || 'Errore eliminazione');
+                        }
+                        var result = await resp.json();
+                        if (!result.ok) throw new Error(result.error || 'Errore eliminazione');
+
+                        table.row(rowEl).remove().draw(false);
+                        showMessage('success', 'Fallback model eliminato.');
+                    } catch (err) {
+                        showMessage('danger', err.message || 'Errore eliminazione');
+                    }
+                });
+            }
+
+            table.on('click', 'td.dt-control', function () {
+                var $tr = $(this).closest('tr');
+                var row = table.row($tr);
+
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $tr.removeClass('shown');
+                    return;
+                }
+
+                var id = $tr.data('id');
+                if (!id) return;
+
+                fetch('?handler=Detail&id=' + encodeURIComponent(id))
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var html = '<div class="card"><div class="card-body">' +
+                            '<h5 class="card-title">' + (data.title || '') + '</h5>' +
+                            '<p class="card-text" style="white-space: pre-wrap;">' + (data.description || '') + '</p>' +
+                            '</div></div>';
+                        row.child(html).show();
+                        $tr.addClass('shown');
+                    });
+            });
+
+        });
+    }
+})();
+</script>

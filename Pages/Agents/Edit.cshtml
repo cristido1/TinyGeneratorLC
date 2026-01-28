@@ -2,7 +2,10 @@
 @model TinyGenerator.Pages.Agents.EditModel
 
 
-<h2>Edit Agent</h2>
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <h2 class="mb-0">Edit Agent</h2>
+    <a class="btn btn-outline-secondary" asp-page="/Agents/FallbackModels"><i class="bi bi-diagram-3 me-1"></i>Fallback models</a>
+</div>
 
 <form method="post">
     <input type="hidden" asp-for="Agent.Id" />
@@ -151,6 +154,9 @@
     <button class="btn btn-primary">Save</button>
     <a class="btn btn-secondary" asp-page="/Agents/Index">Cancel</a>
 </form>
+
+    </div>
+    
 
 @section Scripts {
     <link href="/lib/chosen/chosen.min.css" rel="stylesheet" />

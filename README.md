@@ -128,6 +128,42 @@ Variabili ambiente utili: `TTS_HOST`, `TTS_PORT`, `TTS_TIMEOUT_SECONDS`.
 - Tabelle Narrative Engine: `narrative_profiles`, `narrative_resources`, `micro_objectives`, `failure_rules`, `consequence_rules`, `consequence_impacts`, `story_runtime_states`, `story_resource_states`, `chapters`.
 - Script di popolamento in `populate_*.sql`; usa `sqlite3 data/storage.db < populate_agents.sql` per caricarli.
 
+## AGENTI DI FALLBACK
+
+Questa sezione definisce lo **standard desiderato** per la gestione dei **modelli di fallback** per ruolo.
+Nota: alcune parti possono essere in evoluzione; questa sezione va considerata come riferimento funzionale per l'implementazione.
+
+### Contesto
+1. Ogni agente ha un **modello principale** configurato (campo `agents.model_id`).
+2. Le tabelle `roles` e `model_roles` permettono di associare a ogni **ruolo** (es. `formatter`, `fx_expert`) uno o piu' **modelli di fallback**.
+3. Ogni riga `model_roles` traccia un punteggio basato sull'esito storico tramite i campi `use_count`, `use_successed`, `use_failed`.
+  - Punteggio operativo: `success_rate = use_successed / use_count` (se `use_count > 0`, altrimenti 0).
+
+### Comportamento (fallback “in-place”)
+Quando un agente fallisce una operazione con il **modello principale** (prima N retry, poi richiesta di spiegazioni), il sistema:
+- legge il **ruolo** dell'agente corrente;
+- cerca in `model_roles` i modelli di fallback per quel ruolo;
+- seleziona il modello con **punteggio migliore**;
+- sostituisce **al volo** il modello usato dall'agente corrente con quello selezionato;
+- resetta il numero di retry;
+- prosegue **nello stesso comando** e **allo stesso step** in cui era (es. se eravamo allo step 3, si continua dallo step 3).
+
+Non devono essere lanciati nuovi comandi: il fallback e' una prosecuzione della stessa esecuzione.
+
+### Vincoli
+4. All'interno di uno **stesso comando** non va provato **piu' di una volta lo stesso modello** (primario o fallback).
+5. Il punteggio (contatori in `model_roles`) va aggiornato **step per step**:
+  - prima si fanno i retry previsti per quello step;
+  - poi si registra l'esito (success/fail) aggiornando `use_count` e `use_successed`/`use_failed`.
+6. Se tutti i modelli di fallback disponibili per quel ruolo falliscono, il comando fallisce definitivamente.
+
+### Ruoli abilitati (fase attuale)
+Per ora questo comportamento e' richiesto per i ruoli/comandi:
+- `formatter`
+- `ambient_expert`
+- `fx_expert`
+- `music_expert`
+
 ## Uso dell'app
 
 - **Genera una storia**: pagina `Genera`, tema + modalita' (tutti gli agenti o singolo writer).

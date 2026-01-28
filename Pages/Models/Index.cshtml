@@ -8,6 +8,30 @@
 @section Styles {
     <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
     <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
+    <style>
+        .btn-group-vertical>.btn, .btn-group>.btn { flex: none;}
+        div.dt-buttons { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+        div.dt-buttons .btn { 
+            height: 31px !important; 
+            line-height: 1.5 !important; 
+            padding: 0.25rem 0.5rem !important;
+            font-size: 0.875rem !important;
+        }
+        div.dt-buttons .btn-primary {
+            background-color: #0d6efd !important;
+            border-color: #0d6efd !important;
+            color: #fff !important;
+        }
+        div.dt-buttons .btn-outline-secondary {
+            background-color: transparent !important;
+            border-color: #6c757d !important;
+            color: #6c757d !important;
+        }
+        div.dt-buttons .btn-outline-secondary:hover {
+            background-color: #6c757d !important;
+            color: #fff !important;
+        }
+    </style>
 }
 
 @if (TempData["TestResultMessage"] != null)
@@ -20,54 +44,24 @@
 }
 
 <div class="page-wrapper">
-    <div class="d-flex mb-2 align-items-center toolbar-row">
-        <form method="get" class="d-flex" style="gap:.5rem;">
-            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:220px;" placeholder="Cerca..." />
-            <select name="pageSize" class="form-select form-select-sm" style="width:90px;">
-                @{ var sizes = new[] { 10, 25, 50 }; }
-                @foreach (var s in sizes)
-                {
-                    if (s == Model.PageSize)
-                    {
-                        <option value="@s" selected>@s</option>
-                    }
-                    else
-                    {
-                        <option value="@s">@s</option>
-                    }
-                }
-            </select>
-            <label class="form-check form-check-inline mb-0 ms-2">
-                <input name="showDisabled" class="form-check-input" type="checkbox" value="true" @(Model.ShowDisabled ? "checked" : "") />
-                <span class="form-check-label small">Mostra disabilitati</span>
-            </label>
-            <input type="hidden" name="orderBy" value="@Model.OrderBy" />
-            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
-        </form>
-        <div class="ms-auto d-flex gap-1 flex-wrap">
-            <form method="post" class="d-flex gap-1">
-                @Html.AntiForgeryToken()
-                <select name="Group" class="form-select form-select-sm" style="max-width:180px;">
-                    @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
-                    {
-                        <option value="@g">@g</option>
-                    }
-                </select>
-                <button class="btn btn-sm btn-outline-success" type="submit" formaction="?handler=RunAll" title="Run Group"><i class="bi bi-play-fill"></i> Group</button>
-                <button class="btn btn-sm btn-outline-primary" type="submit" formaction="?handler=RunAll" title="Run All"><i class="bi bi-collection-play"></i> All</button>
-                <button class="btn btn-sm btn-outline-warning" type="submit" formaction="?handler=PurgeDisabledOllama" title="Purge Disabled"><i class="bi bi-trash3"></i> Purge</button>
-                <button class="btn btn-sm btn-outline-secondary" type="submit" formaction="?handler=RefreshContexts" title="Refresh Contexts"><i class="bi bi-arrow-repeat"></i> Ctx</button>
-                <button class="btn btn-sm btn-outline-info" type="submit" formaction="?handler=AddOllamaModels" title="Discover Ollama"><i class="bi bi-search"></i> Discover</button>
-                <button class="btn btn-sm btn-outline-secondary" type="submit" formaction="?handler=RecalculateScores" title="Recalc Scores"><i class="bi bi-calculator"></i> Recalc</button>
-            </form>
-            <div class="dropdown">
-                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
-                    <i class="bi bi-layout-three-columns"></i>
-                </button>
-                <ul class="dropdown-menu dropdown-menu-end" id="colVisMenu" style="min-width: 180px;"></ul>
-            </div>
-            <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
-            <a class="btn btn-sm btn-primary" href="/Models/Edit">Nuovo</a>
+    <!-- Hidden actions form: submitted by DataTables buttons -->
+    <form method="post" id="modelsActionsForm" style="display:none;">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="Group" id="modelsActions_Group" />
+        <input type="hidden" name="ShowDisabled" id="modelsActions_ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
+    </form>
+
+    <!-- Group select will be moved into DataTables buttons area by JS -->
+    <select id="modelsGroupSelect" class="form-select form-select-sm" style="max-width:180px; display:none;">
+        @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
+        {
+            <option value="@g">@g</option>
+        }
+    </select>
+    <div id="modelsShowDisabledWrap" style="display:none;">
+        <div class="form-check form-switch d-inline-block align-middle me-2">
+            <input class="form-check-input" type="checkbox" id="modelsShowDisabledCheckbox" @(Model.ShowDisabled ? "checked" : "") />
+            <label class="form-check-label small" for="modelsShowDisabledCheckbox">Mostra disabilitati</label>
         </div>
     </div>
 
@@ -75,9 +69,10 @@
         <table class="table table-sm table-striped mb-0" id="modelsTable">
             <thead class="table-light">
                 <tr>
-                    <th data-col="name"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "name", showDisabled = Model.ShowDisabled })">Name</a></th>
-                    <th data-col="provider"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "provider", showDisabled = Model.ShowDisabled })">Provider</a></th>
+                    <th data-col="name">Name</th>
+                    <th data-col="provider">Provider</th>
                     <th data-col="note">Note</th>
+                    <th data-col="enabled">Enabled</th>
                     <th data-col="local">Local</th>
                     <th data-col="maxctx">MaxCtx</th>
                     <th data-col="ctxtouse">CtxToUse</th>
@@ -93,7 +88,7 @@
                     <th data-col="duration">Duration</th>
                     <th data-col="costin">Cost In</th>
                     <th data-col="costout">Cost Out</th>
-                    <th data-col="createdat"><a href="@Url.Page(null, null, new { page = 1, pageSize = Model.PageSize, search = Model.Search, orderBy = "createdat", showDisabled = Model.ShowDisabled })">Created</a></th>
+                    <th data-col="createdat">Created</th>
                     <th data-col="actions">Actions</th>
                 </tr>
             </thead>
@@ -118,6 +113,7 @@
                             }
                         </td>
                         <td data-col="note">@m.Note</td>
+                        <td data-col="enabled">@if (m.Enabled) { <span class="badge bg-success">Yes</span>; } else { <span class="badge bg-danger">No</span>; }</td>
                         <td data-col="local">@(m.IsLocal ? "Yes" : "No")</td>
                         <td data-col="maxctx">@m.MaxContext</td>
                         <td data-col="ctxtouse">@m.ContextToUse</td>
@@ -138,7 +134,7 @@
                             <div class="dropdown">
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="/Models/Edit?name=@Uri.EscapeDataString(m.Name)">Edit</a></li>
+                                    <li><a class="dropdown-item" href="/Models/Edit?id=@m.Id">Edit</a></li>
                                     <li><a class="dropdown-item" href="/Chat?model=@Uri.EscapeDataString(m.Name)">💬 Chat</a></li>
                                     <li><hr class="dropdown-divider"></li>
                                     <li>
@@ -146,6 +142,7 @@
                                             @Html.AntiForgeryToken()
                                             <input type="hidden" name="ModelId" value="@m.Id" />
                                             <input type="hidden" name="Model" value="@m.Name" />
+                                            <input type="hidden" name="ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
                                             <button type="submit" class="dropdown-item text-danger">🗑️ Elimina</button>
                                         </form>
                                     </li>
@@ -159,6 +156,7 @@
                                                 <input type="hidden" name="ModelId" value="@m.Id" />
                                                 <input type="hidden" name="Model" value="@m.Name" />
                                                 <input type="hidden" name="Group" value="@g" />
+                                                <input type="hidden" name="ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
                                                 <button type="submit" class="dropdown-item">▶️ @g</button>
                                             </form>
                                         </li>
@@ -171,8 +169,6 @@
             </tbody>
         </table>
     </div>
-
-    <div id="pager" class="mt-2" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" data-show-disabled="@(Model.ShowDisabled ? "true" : "")"></div>
 </div>
 
 <script>
@@ -202,9 +198,10 @@
             if (typeof $.fn.DataTable === 'undefined') { console.error('DataTables not loaded'); return; }
 
             var table = $('#modelsTable').DataTable({
-                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                dom: "<'row mb-2'<'col-sm-12'B>>" +
+                     "<'row mb-2'<'col-sm-6'l><'col-sm-6 text-end'f>>" +
                      "rt" +
-                     "<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>",
+                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
                 stateSave: true,
                 paging: true,
                 pageLength: 25,
@@ -216,12 +213,65 @@
                 columnDefs: [ { orderable: false, targets: -1 } ],
                 buttons: [
                     {
-                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Model',
-                        className: 'btn btn-sm btn-primary',
-                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo',
+                        className: 'btn btn-sm btn-primary me-1',
                         action: function() { window.location.href = '/Models/Edit'; }
                     },
-                    { extend: 'colvis', text: 'Colonne', className: 'btn btn-sm btn-secondary' }
+                    {
+                        text: '<i class="bi bi-play-fill me-1"></i>Group',
+                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        action: function() {
+                            var group = $('#modelsGroupSelect').val() || '';
+                            $('#modelsActions_Group').val(group);
+                            var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false';
+                            $('#modelsActions_ShowDisabled').val(show);
+                            var f = $('#modelsActionsForm');
+                            f.attr('action', '?handler=RunAll');
+                            f.submit();
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-collection-play me-1"></i>All',
+                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        action: function() {
+                            $('#modelsActions_Group').val('');
+                            var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false';
+                            $('#modelsActions_ShowDisabled').val(show);
+                            var f = $('#modelsActionsForm');
+                            f.attr('action', '?handler=RunAll');
+                            f.submit();
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-trash3 me-1"></i>Purge',
+                        className: 'btn btn-sm btn-warning me-1',
+                        action: function() { var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false'; $('#modelsActions_ShowDisabled').val(show); var f = $('#modelsActionsForm'); f.attr('action', '?handler=PurgeDisabledOllama'); f.submit(); }
+                    },
+                    {
+                        text: '<i class="bi bi-arrow-repeat me-1"></i>Ctx',
+                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        action: function() { var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false'; $('#modelsActions_ShowDisabled').val(show); var f = $('#modelsActionsForm'); f.attr('action', '?handler=RefreshContexts'); f.submit(); }
+                    },
+                    {
+                        text: '<i class="bi bi-search me-1"></i>Discover',
+                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        action: function() { var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false'; $('#modelsActions_ShowDisabled').val(show); var f = $('#modelsActionsForm'); f.attr('action', '?handler=AddOllamaModels'); f.submit(); }
+                    },
+                    {
+                        text: '<i class="bi bi-calculator me-1"></i>Recalc',
+                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        action: function() { var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false'; $('#modelsActions_ShowDisabled').val(show); var f = $('#modelsActionsForm'); f.attr('action', '?handler=RecalculateScores'); f.submit(); }
+                    },
+                    {
+                        text: '<i class="bi bi-arrow-clockwise me-1"></i>Refresh',
+                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        action: function() { location.reload(); }
+                    },
+                    { 
+                        extend: 'colvis', 
+                        text: '<i class="bi bi-layout-three-columns me-1"></i>Colonne', 
+                        className: 'btn btn-sm btn-outline-secondary' 
+                    }
                 ],
                 language: {
                     search: "Cerca:",
@@ -240,6 +290,34 @@
                     // populate the existing colVisMenu with toggle items
                     var btn = table.button('.buttons-colvis');
                     if (btn.length) { /* keep built-in button visible; no extra handling needed */ }
+                }
+            } catch (e) { console.warn(e); }
+            // Move the Group select and ShowDisabled toggle into the DataTables buttons area for convenient access
+            try {
+                var $btnContainer = $('.dt-buttons').first();
+                if ($btnContainer.length) {
+                    var $select = $('#modelsGroupSelect');
+                    if ($select.length) {
+                        $select.show();
+                        var $wrap = $('<div class="d-inline-block me-1 align-middle"></div>');
+                        $wrap.append($select);
+                        $btnContainer.prepend($wrap);
+                    }
+                    var $showWrap = $('#modelsShowDisabledWrap');
+                    if ($showWrap.length) {
+                        $showWrap.show();
+                        $btnContainer.prepend($showWrap);
+                        // attach change handler to reload with ShowDisabled in query string
+                        $('#modelsShowDisabledCheckbox').on('change', function() {
+                            try {
+                                var checked = this.checked ? 'true' : 'false';
+                                var url = new URL(window.location.href);
+                                url.searchParams.set('ShowDisabled', checked);
+                                // preserve page and search params if present
+                                window.location.href = url.toString();
+                            } catch (e) { console.warn(e); window.location.reload(); }
+                        });
+                    }
                 }
             } catch (e) { console.warn(e); }
         });

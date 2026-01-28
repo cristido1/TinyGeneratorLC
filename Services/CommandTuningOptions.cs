@@ -18,6 +18,7 @@ public sealed class CommandTuningOptions
         public int OverlapTokens { get; set; } = 150;
         public int MaxAttemptsPerChunk { get; set; } = 3;
         public int MinAmbientTagsPerChunkRequirement { get; set; } = 2;
+        public bool DiagnoseOnFinalFailure { get; set; } = true;
         public int RetryDelayBaseSeconds { get; set; } = 2;
     }
 
@@ -28,7 +29,6 @@ public sealed class CommandTuningOptions
         public int MaxAttemptsPerChunk { get; set; } = 3;
         public int MinFxTagsPerChunk { get; set; } = 1;
         public bool DiagnoseOnFinalFailure { get; set; } = true;
-        public bool FinalRetryAfterDiagnosis { get; set; } = true;
         public int RetryDelayBaseSeconds { get; set; } = 2;
     }
 
@@ -41,6 +41,7 @@ public sealed class CommandTuningOptions
         public int MaxAttemptsPerChunk { get; set; } = 3;
         public int MaxMusicTagsPerChunkRequirement { get; set; } = 3;
         public int MinMusicTagsPerChunkRequirement { get; set; } = 1;
+        public bool DiagnoseOnFinalFailure { get; set; } = true;
         public int RetryDelayBaseSeconds { get; set; } = 2;
     }
 
@@ -51,6 +52,8 @@ public sealed class CommandTuningOptions
         public int TargetTokensPerChunk { get; set; } = 1500;
         public int OverlapTokens { get; set; } = 150;
         public int MaxAttemptsPerChunk { get; set; } = 3;
+        // Formatter V2: number of correction retries after the first attempt.
+        public int FormatterV2CorrectionRetries { get; set; } = 3;
         public int MaxOverlapChars { get; set; } = 8000;
         public int MinTagsPerChunkRequirement { get; set; } = 3;
         public int RetryDelayBaseSeconds { get; set; } = 2;

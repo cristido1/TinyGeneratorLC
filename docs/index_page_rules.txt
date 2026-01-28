@@ -1,0 +1,518 @@
+OBIETTIVO
+Definire uno standard per una pagina Razor Pages di tipo "lista/griglia"
+con rendering server-side, usando DataTables.net con Bootstrap 5.
+
+PRINCIPI FONDAMENTALI
+- Razor Pages è il controller della pagina
+- DataTables.net per la gestione della griglia
+- Bootstrap 5 per lo stile (NO Bootstrap 3/4)
+- Layout moderno stile admin dashboard (CoreUI/AdminLTE)
+- Aspetto pulito, minimale, enterprise
+
+TECNOLOGIE OBBLIGATORIE
+- DataTables.net con integrazione Bootstrap 5 (`datatables.net-bs5`)
+- Estensione Buttons (`datatables.net-buttons-bs5`)
+- JavaScript ES6
+- jQuery consentito esclusivamente per DataTables
+- NO stili legacy DataTables
+- NO classi CSS obsolete (display, stripe, dataTable)
+
+CARICAMENTO SCRIPT DATATABLES (CRITICO!)
+- NON usare `@section Scripts` per DataTables - causa problemi di timing con jQuery
+- Caricare gli script DataTables INLINE alla fine della pagina DOPO il markup HTML
+- jQuery DEVE essere disponibile PRIMA di caricare DataTables
+- Script DataTables DEVONO essere caricati in SEQUENZA (non parallelo!)
+- Ordine obbligatorio: jquery.dataTables.min.js → dataTables.bootstrap5.min.js → buttons → colvis
+
+ESEMPIO CARICAMENTO CORRETTO (obbligatorio):
+```javascript
+<script>
+(function initDataTable() {
+    // 1. Aspetta che jQuery del layout sia disponibile
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initDataTable, 50);
+        return;
+    }
+
+    // 2. Carica script DataTables in SEQUENZA (uno alla volta!)
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var currentScriptIndex = 0;
+
+    function loadScript(url, callback) {
+        var script = document.createElement('script');
+        script.src = url;
+        script.onload = callback;
+        script.onerror = function() {
+            console.error('Failed to load script:', url);
+            callback();
+        };
+        document.head.appendChild(script);
+    }
+
+    function loadNextScript() {
+        if (currentScriptIndex < scripts.length) {
+            loadScript(scripts[currentScriptIndex], function() {
+                currentScriptIndex++;
+                loadNextScript();
+            });
+        } else {
+            // 3. Inizializza DataTable solo dopo che tutti gli script sono caricati
+            initializeDataTable();
+        }
+    }
+
+    loadNextScript();
+
+    function initializeDataTable() {
+        jQuery(document).ready(function($) {
+            // Configurazione DataTable qui...
+        });
+    }
+})();
+</script>
+```
+
+ERRORI COMUNI DA EVITARE:
+1. ❌ Usare `@section Scripts` - causa "jQuery is not defined"
+2. ❌ Caricare script DataTables in parallelo - causa "Cannot read properties of undefined"
+3. ❌ Tag `<script src="...">` statici inline - vengono eseguiti prima di jQuery
+4. ❌ Assumere che jQuery sia disponibile immediatamente
+5. ✅ Caricare dinamicamente in sequenza aspettando jQuery
+
+STRUTTURA GENERALE DELLA PAGINA
+
+1) BACKEND (PageModel)
+- Esporre SEMPRE:
+  - IReadOnlyList<T> Items (tutti i dati per client-side processing)
+  - Oppure endpoint JSON per server-side processing
+
+- PageModel di riferimento per client-side:
+  class ItemsResult<T> {
+    IReadOnlyList<T> Items
+  }
+
+- Per server-side processing:
+  - Endpoint JSON che risponde a parametri DataTables
+  - Filtro, ordinamento e paginazione DEVONO avvenire nel DB
+  
+- La Razor Page NON deve contenere logica dati
+
+2) RAZOR PAGE (HTML)
+- Usare <table> HTML standard con struttura DataTables
+- Ogni colonna DEVE avere attributo data-col per identificazione
+- NESSUN JS inline complesso
+- Markup minimalista
+
+ESEMPIO STRUTTURA:
+<table id="myTable" class="table table-hover">
+  <thead>
+    <tr>
+      <th data-col="name">Nome</th>
+      <th data-col="date">Data</th>
+    </tr>
+  </thead>
+  <tbody>
+    @foreach(var item in Model.Items) {
+      <tr>
+        <td data-col="name">@item.Name</td>
+        <td data-col="date">@item.Date</td>
+      </tr>
+    }
+  </tbody>
+</table>
+
+3) LAYOUT VISIVO OBBLIGATORIO (STILE ADMIN DASHBOARD MODERNO)
+
+BARRA SUPERIORE:
+- Pulsanti DataTables (Colonne, etc.) → in alto a sinistra
+- Campo di filtro ricerca → in alto a destra
+
+CORPO:
+- Tabella compatta ma leggibile
+- Hover leggero sulle righe
+- Nessuna zebra classica (stripe)
+- Bordo grigio sottile con angoli arrotondati opzionale
+
+BARRA INFERIORE:
+- Conteggio record ("Showing X to Y of Z entries") → in basso a sinistra
+- Selettore numero record per pagina → in basso a sinistra
+- Paginazione → in basso a destra
+
+4) DOM LAYOUT DATATABLES (OBBLIGATORIO)
+
+Usare ESATTAMENTE questo layout senza modifiche:
+
+```javascript
+dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+     "rt" +
+     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>"
+```
+
+Spiegazione:
+- B = Buttons (in alto a sinistra)
+- f = Filter/search (in alto a destra)
+- r = pRocessing
+- t = Table
+- i = Information (conteggio, in basso a sinistra)
+- p = Pagination (in basso a destra)
+
+5) PAGINAZIONE E FILTRO
+- Paginazione client-side (dati già caricati)
+- Filtro client-side (ricerca istantanea)
+- Ordinamento colonne client-side
+- Selettore numero record per pagina
+- Conteggio record visibili
+
+Per dataset molto grandi (>10k record):
+- Considerare server-side processing con endpoint JSON
+- Backend gestisce filtro/sort/paging via SQL
+
+6) PULSANTI DATATABLES (ESTENSIONE BUTTONS)
+
+OBBLIGATORI:
+- Pulsante **Colonne** (ColVis) per selezione colonne visibili
+- Pulsante **Nuovo** : per la creazione di un nuovo record
+- Posizione: in alto a sinistra
+- Stile: coerente con Bootstrap 5
+- Css: "btn btn-sm btn-outline-secondary me-1"
+- Style : per fare in modo che i pulsanti siano larghissimi va aggiunto alla pagina questo style .btn-group-vertical>.btn, .btn-group>.btn { flex: none; }
+
+OPZIONALI (solo se richiesti):
+- Export (Excel, CSV, PDF)
+- Copy
+- Print
+
+ESEMPIO CONFIGURAZIONE:
+```javascript
+buttons: [
+  {
+    text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Record',
+    className: 'btn btn-sm btn-primary',
+    attr: {
+      style: 'width: auto; flex: 0 0 auto;' // Impedisce allargamento
+    },
+    action: function() {
+      window.location.href = '/Path/Create';
+    }
+  },
+  {
+    extend: 'colvis',
+    text: 'Colonne',
+    className: 'btn btn-sm btn-secondary' // NON outline per migliore visibilità
+  }
+]
+```
+
+NOTA SUI PULSANTI:
+- DataTables applica `flex: 1 1 auto` ai pulsanti di default, causando allargamento
+- Usare `attr: { style: 'width: auto; flex: 0 0 auto;' }` per dimensione contenuto
+- Evitare `btn-outline-*` per pulsante Colonne (testo poco leggibile su grigio)
+
+7) PERSISTENZA STATO (STATE SAVE)
+
+Abilitare SEMPRE:
+```javascript
+stateSave: true
+```
+
+Persistenza automatica di:
+- Colonne visibili (tramite ColVis)
+- Filtro di ricerca
+- Pagina corrente
+- Numero di record per pagina
+- Ordinamento colonne
+
+Stato salvato in localStorage con chiave automatica basata su table ID.
+
+8) RIGA DI DETTAGLIO ESPANDIBILE (CHILD ROW)
+
+IMPLEMENTAZIONE OBBLIGATORIA:
+- Riga espandibile con icona +/- nella prima colonna
+- Caricamento lazy via AJAX quando viene espansa
+- Rendering come Bootstrap 5 card
+- NO markup legacy o `<tr>` grezzi per il dettaglio
+
+ESEMPIO STRUTTURA:
+```javascript
+// Colonna dettaglio
+{
+  className: 'dt-control',
+  orderable: false,
+  data: null,
+  defaultContent: ''
+}
+
+// Event handler
+table.on('click', 'td.dt-control', function(e) {
+  let tr = e.target.closest('tr');
+  let row = table.row(tr);
+  
+  if (row.child.isShown()) {
+    row.child.hide();
+  } else {
+    // Lazy load via AJAX
+    fetch(`/api/details/${row.data().id}`)
+      .then(r => r.json())
+      .then(data => {
+        row.child(formatDetail(data)).show();
+      });
+  }
+});
+
+function formatDetail(data) {
+  return `
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">${data.title}</h5>
+        <p class="card-text" style="white-space: pre-wrap;">${data.description}</p>
+      </div>
+    </div>
+  `;
+}
+```
+
+NOTA CHILD ROW:
+- Usare `white-space: pre-wrap;` per preservare ritorni a capo del testo originale
+- Lazy loading via fetch/AJAX per performance
+- Gestire stato shown/hidden per evitare reload multipli
+
+9) AZIONI DI RIGA
+
+Usare UN SOLO dropdown per riga (bottone "Azioni"):
+- Renderizzato server-side nel markup HTML
+- All'interno del dropdown:
+  - Azioni GET: link `<a href="...">` (possono aprire in nuova scheda)
+  - Azioni POST: `<form method="post">` con `@Html.AntiForgeryToken()`
+  - Azioni distruttive: usare conferma JavaScript (SweetAlert2 opzionale)
+
+I metadati delle azioni DEVONO essere centralizzati nel PageModel:
+```csharp
+public record RowAction(string Id, string Title, string Method, 
+                        string Url, bool Confirm = false);
+
+public List<RowAction> GetActionsForItem(Item item) { ... }
+```
+
+DataTables passa il dato della riga, il rendering mantiene il dropdown HTML.
+
+10) CSS CUSTOM OBBLIGATORIO
+
+Applicare CSS minimale per modernizzare DataTables:
+
+```css
+/* Tabella compatta */
+#myTable {
+  font-size: 0.9rem;
+}
+
+#myTable thead th {
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0.75rem;
+  border-bottom: 2px solid #dee2e6;
+}
+
+#myTable tbody td {
+  padding: 0.75rem;
+  vertical-align: middle;
+}
+
+/* Hover leggero */
+#myTable tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+/* Rimuovi zebra */
+#myTable tbody tr.odd,
+#myTable tbody tr.even {
+  background-color: transparent;
+}
+
+/* Pulsanti piccoli e moderni */
+.dt-buttons .btn {
+  font-size: 0.875rem;
+  padding: 0.375rem 0.75rem;
+}
+
+/* Search box allineato */
+.dataTables_filter input {
+  margin-left: 0.5rem;
+  border-radius: 0.25rem;
+}
+
+/* Paginazione moderna */
+.dataTables_paginate .pagination {
+  margin-bottom: 0;
+}
+
+/* Info text discreto */
+.dataTables_info {
+  font-size: 0.875rem;
+  color: #6c757d;
+}
+
+/* Bordo tabella opzionale */
+.table-container {
+  border: 1px solid #dee2e6;
+  border-radius: 0.375rem;
+  padding: 1rem;
+  background: white;
+}
+```
+
+11) INIZIALIZZAZIONE DATATABLES (ESEMPIO COMPLETO)
+
+```javascript
+document.addEventListener('DOMContentLoaded', function() {
+  const table = $('#myTable').DataTable({
+    // Layout obbligatorio
+    dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+         "rt" +
+         "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+    
+    // Persistenza stato
+    stateSave: true,
+    
+    // Paginazione
+    paging: true,
+    pageLength: 25,
+    lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+    
+    // Ordinamento
+    ordering: true,
+    order: [[1, 'asc']], // Colonna di default
+    
+    // Filtro
+    searching: true,
+    
+    // Pulsanti
+    buttons: [
+      {
+        extend: 'colvis',
+        text: 'Colonne',
+        className: 'btn btn-sm btn-outline-secondary'
+      }
+    ],
+    
+    // Colonne (includi colonna dettaglio se necessaria)
+    columns: [
+      {
+        className: 'dt-control',
+        orderable: false,
+        data: null,
+        defaultContent: ''
+      },
+      { data: 'name' },
+      { data: 'date' },
+      { data: 'status' }
+    ],
+    
+    // Responsive (opzionale)
+    responsive: false,
+    
+    // Lingua italiana (opzionale)
+    language: {
+      search: "Cerca:",
+      lengthMenu: "Mostra _MENU_ record",
+      info: "Showing _START_ to _END_ of _TOTAL_ entries",
+      paginate: {
+        first: "Prima",
+        last: "Ultima",
+        next: "Succ",
+        previous: "Prec"
+      }
+    }
+  });
+  
+  // Event handler per dettaglio (se implementato)
+  table.on('click', 'td.dt-control', function(e) {
+    // Implementazione lazy load dettaglio
+  });
+});
+```
+
+12) COSA È VIETATO
+- Bootstrap 3 o 4
+- Stili CSS legacy DataTables (display, stripe, dataTable come classe)
+- Esempi vecchi di DataTables
+- CSS inline legacy
+- Virtual scroll custom
+- Decisioni di business nel JS
+- Hack CSS su overflow / z-index
+- SPA mascherate
+
+13) COSA È CONSENTITO
+- DataTables.net con Bootstrap 5
+- Estensione Buttons per ColVis
+- JavaScript ES6 moderno
+- jQuery esclusivamente per DataTables
+- SweetAlert2 per conferme
+- Bootstrap 5 puro per UI
+- localStorage per persistenza via stateSave
+
+14) TIMESTAMP
+- I timestamp devono essere formattati server-side fino al minuto (es. `dd/MM/yyyy HH:mm`) per uniformità.
+- DataTables può ordinare correttamente date in formato ISO o timestamp.
+
+15) FLAG ASSET GENERATI
+- Quando viene generato `tts_schema.json`, il server deve aggiornare il flag `generated_tts_json` nella tabella `stories` (best-effort, update SQL diretto) in modo che l'icona/flag nella UI appaia.
+- DataTables può re-renderizzare la riga con `table.row().invalidate().draw()`.
+
+16) NOTE SUL BACKEND
+- Azioni e permessi devono essere calcolati dal backend. La view riceve le azioni pronte per il rendering.
+- Per dataset grandi (>10k record), implementare server-side processing con endpoint JSON che risponde ai parametri DataTables standard:
+  - `draw`, `start`, `length`, `search[value]`, `order[0][column]`, `order[0][dir]`
+- Filtri/ordinamento/paginazione nel DB (EF/SQL), non in-memory.
+
+CHANGELOG
+- 2026-01-10: Aggiornate best practices per risoluzione problemi comuni
+  - Aggiunta sezione CARICAMENTO SCRIPT DATATABLES con pattern obbligatorio
+  - Documentati errori comuni: jQuery undefined, script caricati in parallelo
+  - Soluzione: caricamento dinamico in sequenza con wait per jQuery
+  - Aggiunto attr style per pulsanti (evitare allargamento flex)
+  - Cambiato pulsante Colonne da outline a secondary per leggibilità
+  - Aggiunto white-space: pre-wrap per child row text formatting
+  - Integrazione pulsanti azione (es. Nuovo Record) nei buttons DataTables
+- 2026-01-08: Aggiornato standard per usare DataTables.net con Bootstrap 5
+  - Rimosso AG Grid come requisito
+  - Aggiunto DOM layout obbligatorio per stile dashboard moderno
+  - Aggiunto pulsante ColVis per selezione colonne
+  - Aggiunto stateSave per persistenza automatica
+  - Aggiunto supporto child row per dettagli espandibili
+  - Aggiunto CSS custom per look moderno e minimale
+  - Mantiene principi: rendering server-side, logica backend, UI minimale
+- 2025-12-20: Standard precedente con paginazione custom e column visibility manual
+
+CONTATTI
+- Per modifiche UI, aggiornare le Razor Pages seguendo questo standard DataTables.
+
+RISULTATO ATTESO
+- Razor Page leggibile con DataTables.net
+- Layout moderno stile admin dashboard
+- Persistenza automatica delle preferenze utente
+- Colonne visibili selezionabili tramite pulsante
+- Dettagli espandibili con lazy loading
+- CSS pulito e minimale
+- Backend chiaro e testabile
+- UX enterprise e professionale
+- Standard riutilizzabile in tutto il progetto
+
+ISTRUZIONI PER L'ASSISTENTE AI
+- Seguire ESATTAMENTE questo standard
+- Usare DataTables.net con Bootstrap 5
+- Rispettare il DOM layout obbligatorio
+- Implementare stateSave per persistenza
+- Includere pulsante ColVis
+- Applicare CSS custom per modernizzare
+- Non semplificare eliminando funzionalità
+- Non convertire in SPA
+- Fornire codice concreto, non teoria

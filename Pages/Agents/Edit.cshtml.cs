@@ -10,6 +10,7 @@ namespace TinyGenerator.Pages.Agents
     public class EditModel : PageModel
     {
         private readonly DatabaseService _database;
+
         [BindProperty]
         public Agent Agent { get; set; } = new();
         public List<TinyGenerator.Models.TtsVoice> Voices { get; set; } = new();
@@ -28,34 +29,45 @@ namespace TinyGenerator.Pages.Agents
 
         public IActionResult OnGet(int id)
         {
-            try
+            var a = _database.GetAgentById(id);
+            if (a == null)
             {
-                var a = _database.GetAgentById(id);
-                if (a == null) return RedirectToPage("/Agents/Index");
-                Agent = a;
-                Voices = _database.ListTtsVoices();
-                StepTemplates = _database.ListStepTemplates();
-                // Show enabled models, but keep agent's assigned model visible even if it's currently disabled
-                Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
-                // Resolve selected model id from numeric ModelId (bind directly)
-                SelectedModelId = Agent.ModelId;
-                // Load selected skills from JSON array stored in Agent.Skills
-                try {
-                    if (!string.IsNullOrWhiteSpace(Agent.Skills)) {
-                        using var doc = System.Text.Json.JsonDocument.Parse(Agent.Skills);
-                        if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array) {
-                            var list = new System.Collections.Generic.List<string>();
-                            foreach (var el in doc.RootElement.EnumerateArray()) { if (el.ValueKind == System.Text.Json.JsonValueKind.String) list.Add(el.GetString() ?? string.Empty); }
-                            SelectedSkills = list.ToArray();
-                        }
-                    }
-                } catch { }
-                return Page();
-            }
-            catch
-            {
+                TempData["Error"] = $"Agente non trovato (id={id})";
                 return RedirectToPage("/Agents/Index");
             }
+
+            Agent = a;
+            Voices = _database.ListTtsVoices();
+            StepTemplates = _database.ListStepTemplates();
+
+            // Show enabled models, but keep agent's assigned model visible even if it's currently disabled
+            Models = _database.ListModels()
+                .Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value))
+                .ToList();
+
+            SelectedModelId = Agent.ModelId;
+
+            // Load selected skills from JSON array stored in Agent.Skills
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(Agent.Skills))
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(Agent.Skills);
+                    if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        var list = new System.Collections.Generic.List<string>();
+                        foreach (var el in doc.RootElement.EnumerateArray())
+                        {
+                            if (el.ValueKind == System.Text.Json.JsonValueKind.String)
+                                list.Add(el.GetString() ?? string.Empty);
+                        }
+                        SelectedSkills = list.ToArray();
+                    }
+                }
+            }
+            catch { }
+
+            return Page();
         }
 
         public IActionResult OnPost()

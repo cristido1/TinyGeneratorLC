@@ -73,9 +73,10 @@ namespace TinyGenerator.Pages.Agents
 
         public IEnumerable<RowAction> GetActionsForAgent(Agent agent)
         {
+            var editUrl = Url?.Page("/Agents/Edit", null, new { id = agent.Id }, null) ?? $"/Agents/Edit?id={agent.Id}";
             var actions = new List<RowAction>
             {
-                new RowAction { Id = "edit", Title = "Edit", Method = "GET", Url = $"/Agents/Edit?id={agent.Id}" },
+                new RowAction { Id = "edit", Title = "Edit", Method = "GET", Url = editUrl },
                 new RowAction
                 {
                     Id = "clone",

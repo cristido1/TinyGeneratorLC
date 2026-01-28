@@ -11,6 +11,7 @@ using System.Text.RegularExpressions;
 using System.Text.Encodings.Web;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
@@ -38,6 +39,7 @@ public sealed class StoriesService
     private readonly SentimentMappingService? _sentimentMappingService;
     private readonly ResponseCheckerService? _responseChecker;
     private readonly CommandTuningOptions _tuning;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private readonly ConcurrentDictionary<long, StatusChainState> _statusChains = new();
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
     {
@@ -60,7 +62,8 @@ public sealed class StoriesService
         MultiStepOrchestrationService? multiStepOrchestrator = null,
         SentimentMappingService? sentimentMappingService = null,
         ResponseCheckerService? responseChecker = null,
-        IOptions<CommandTuningOptions>? tuningOptions = null)
+        IOptions<CommandTuningOptions>? tuningOptions = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _ttsService = ttsService ?? throw new ArgumentNullException(nameof(ttsService));
@@ -72,6 +75,7 @@ public sealed class StoriesService
         _sentimentMappingService = sentimentMappingService;
         _responseChecker = responseChecker;
         _tuning = tuningOptions?.Value ?? new CommandTuningOptions();
+        _scopeFactory = scopeFactory;
     }
 
     public long SaveGeneration(string prompt, StoryGenerationResult r, string? memoryKey = null)
@@ -821,7 +825,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                             storiesService: this,
                             logger: _customLogger,
                             commandDispatcher: _commandDispatcher,
-                            tuning: _tuning);
+                            tuning: _tuning,
+                            scopeFactory: _scopeFactory);
 
                         return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                     }
@@ -4266,7 +4271,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 _service,
                 _service._customLogger,
                 _service._commandDispatcher,
-                _service._tuning);
+                _service._tuning,
+                _service._scopeFactory);
 
             var result = await cmd.ExecuteAsync();
             return (result.Success, result.Message);

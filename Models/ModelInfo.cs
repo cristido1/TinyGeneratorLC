@@ -27,6 +27,7 @@ public class ModelInfo
     public double? TestDurationSeconds { get; set; }
     // Indicates the model does NOT support tools/function-calling (true = no tools supported)
     public bool NoTools { get; set; } = false;
+
     public double WriterScore { get; set; }
     public double BaseScore { get; set; }
     public double TextEvalScore { get; set; }

@@ -1,0 +1,294 @@
+@page
+@model TinyGenerator.Pages.Roles.IndexModel
+@{
+    ViewData["Title"] = "Roles";
+    ViewData["PageDescription"] = "Gestione ruoli agenti";
+}
+
+<style>
+    .btn-group-vertical>.btn, .btn-group>.btn {
+        flex: none;
+    }
+
+    #rolesTable {
+        font-size: 0.9rem;
+    }
+
+    #rolesTable thead th {
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 0.75rem;
+        border-bottom: 2px solid #dee2e6;
+    }
+
+    #rolesTable tbody td {
+        padding: 0.75rem;
+        vertical-align: middle;
+    }
+
+    #rolesTable tbody tr:hover {
+        background-color: #f8f9fa;
+    }
+
+    #rolesTable tbody tr.odd,
+    #rolesTable tbody tr.even {
+        background-color: transparent;
+    }
+
+    .dt-buttons .btn {
+        font-size: 0.875rem;
+        padding: 0.375rem 0.75rem;
+    }
+
+    .dataTables_filter input {
+        margin-left: 0.5rem;
+        border-radius: 0.25rem;
+    }
+
+    .dataTables_paginate .pagination {
+        margin-bottom: 0;
+    }
+
+    .dataTables_info {
+        font-size: 0.875rem;
+        color: #6c757d;
+    }
+
+    .table-container {
+        border: 1px solid #dee2e6;
+        border-radius: 0.375rem;
+        padding: 1rem;
+        background: white;
+    }
+</style>
+
+@if (TempData["Message"] != null)
+{
+    <div class="alert alert-success">@TempData["Message"]</div>
+}
+@if (TempData["ErrorMessage"] != null)
+{
+    <div class="alert alert-danger">@TempData["ErrorMessage"]</div>
+}
+
+<div class="table-container">
+    <table class="table table-sm table-hover mb-0" id="rolesTable">
+        <thead>
+            <tr>
+                <th></th>
+                <th data-col="id">ID</th>
+                <th data-col="role">Ruolo</th>
+                <th data-col="command">Comando Collegato</th>
+                <th data-col="created">Creato</th>
+                <th data-col="updated">Aggiornato</th>
+                <th data-col="actions">Azioni</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var role in Model.Items)
+            {
+                <tr data-id="@role.Id" data-name="@role.Ruolo">
+                    <td class="dt-control"></td>
+                    <td data-col="id">@role.Id</td>
+                    <td data-col="role"><strong>@role.Ruolo</strong></td>
+                    <td data-col="command"><code class="small">@(role.ComandoCollegato ?? "-")</code></td>
+                    <td data-col="created">@TinyGenerator.Pages.Roles.IndexModel.FormatTimestamp(role.CreatedAt)</td>
+                    <td data-col="updated">@TinyGenerator.Pages.Roles.IndexModel.FormatTimestamp(role.UpdatedAt)</td>
+                    <td data-col="actions">
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                @foreach (var action in Model.GetActionsForRole(role))
+                                {
+                                    if (action.Method == "GET")
+                                    {
+                                        <li>
+                                            <a class="dropdown-item js-nav" href="@action.Url" data-url="@action.Url">@action.Title</a>
+                                        </li>
+                                    }
+                                    else if (action.Method == "POST")
+                                    {
+                                        <li>
+                                            <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Confermi eliminazione del ruolo?')" : "true")">
+                                                @Html.AntiForgeryToken()
+                                                <button type="submit" class="dropdown-item">@action.Title</button>
+                                            </form>
+                                        </li>
+                                    }
+                                }
+                            </ul>
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+<script>
+(function initDataTable() {
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initDataTable, 50);
+        return;
+    }
+
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var currentScriptIndex = 0;
+
+    function loadScript(url, callback) {
+        var script = document.createElement('script');
+        script.src = url;
+        script.onload = callback;
+        script.onerror = function() {
+            console.error('Failed to load script:', url);
+            callback();
+        };
+        document.head.appendChild(script);
+    }
+
+    function loadNextScript() {
+        if (currentScriptIndex < scripts.length) {
+            loadScript(scripts[currentScriptIndex], function() {
+                currentScriptIndex++;
+                loadNextScript();
+            });
+        } else {
+            initializeDataTable();
+        }
+    }
+
+    loadNextScript();
+
+    function initializeDataTable() {
+        jQuery(document).ready(function($) {
+            if (typeof $.fn.DataTable === 'undefined') {
+                console.error('DataTables non caricato');
+                return;
+            }
+
+            var table = $('#rolesTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                paging: true,
+                pageLength: 25,
+                lengthChange: true,
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                order: [[2, 'asc']],
+                ordering: true,
+                searching: true,
+                columnDefs: [
+                    { className: 'dt-control', orderable: false, targets: 0 },
+                    { orderable: false, targets: -1 }
+                ],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Ruolo',
+                        className: 'btn btn-sm btn-primary',
+                        attr: {
+                            style: 'width: auto; flex: 0 0 auto;'
+                        },
+                        action: function() {
+                            window.location.href = '/Roles/Edit';
+                        }
+                    },
+                    {
+                        extend: 'colvis',
+                        text: 'Colonne',
+                        className: 'btn btn-sm btn-secondary'
+                    }
+                ],
+                language: {
+                    search: "Cerca:",
+                    lengthMenu: "Mostra _MENU_ record",
+                    info: "Showing _START_ to _END_ of _TOTAL_ entries",
+                    infoEmpty: "Nessun record disponibile",
+                    infoFiltered: "(filtrati da _MAX_ record totali)",
+                    zeroRecords: "Nessun record trovato",
+                    paginate: {
+                        first: "Prima",
+                        last: "Ultima",
+                        next: "Succ",
+                        previous: "Prec"
+                    }
+                }
+            });
+
+            table.on('click', 'td.dt-control', function () {
+                var $tr = $(this).closest('tr');
+                var row = table.row($tr);
+
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $tr.removeClass('shown');
+                    return;
+                }
+
+                var id = $tr.data('id');
+                if (!id) return;
+
+                fetch('?handler=Detail&id=' + encodeURIComponent(id))
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var fallbackRows = '';
+                        if (data.fallbackModels && data.fallbackModels.length) {
+                            fallbackRows = data.fallbackModels.map(function(item) {
+                                return '<tr>' +
+                                    '<td>' + (item.modelName || '') + '</td>' +
+                                    '<td class="text-end">' + item.success + '/' + item.useCount + '</td>' +
+                                    '<td class="text-end text-danger">' + item.failed + '</td>' +
+                                    '<td class="text-end">' + item.rate + '%</td>' +
+                                    '<td class="text-center">' + (item.enabled ? 'Yes' : 'No') + '</td>' +
+                                '</tr>';
+                            }).join('');
+                        } else {
+                            fallbackRows = '<tr><td colspan="5" class="text-muted text-center">Nessun fallback configurato</td></tr>';
+                        }
+
+                        var fallbackTable = '<div class="table-responsive mt-2">' +
+                            '<table class="table table-sm table-bordered mb-0">' +
+                                '<thead>' +
+                                    '<tr>' +
+                                        '<th>Modello</th>' +
+                                        '<th class="text-end">Successi</th>' +
+                                        '<th class="text-end">Falliti</th>' +
+                                        '<th class="text-end">%</th>' +
+                                        '<th class="text-center">Enabled</th>' +
+                                    '</tr>' +
+                                '</thead>' +
+                                '<tbody>' + fallbackRows + '</tbody>' +
+                            '</table>' +
+                        '</div>';
+
+                        var html = '<div class="card"><div class="card-body">' +
+                            '<h5 class="card-title">' + (data.title || '') + '</h5>' +
+                            '<p class="card-text" style="white-space: pre-wrap;">' + (data.description || '') + '</p>' +
+                            '<h6 class="mt-3 mb-2">Fallback models</h6>' +
+                            fallbackTable +
+                            '</div></div>';
+                        row.child(html).show();
+                        $tr.addClass('shown');
+                    });
+            });
+
+            $(document).on('click', 'a.dropdown-item.js-nav', function(e) {
+                var url = $(this).data('url') || $(this).attr('href');
+                if (!url) return;
+                e.preventDefault();
+                e.stopPropagation();
+                window.location.assign(url);
+            });
+        });
+    }
+})();
+</script>

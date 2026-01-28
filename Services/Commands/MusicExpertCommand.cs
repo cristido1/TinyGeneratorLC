@@ -6,6 +6,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
 
@@ -30,6 +32,7 @@ namespace TinyGenerator.Services.Commands
         private readonly StoriesService? _storiesService;
         private readonly ICustomLogger? _logger;
         private readonly ICommandDispatcher? _commandDispatcher;
+        private readonly IServiceScopeFactory? _scopeFactory;
 
         public MusicExpertCommand(
             long storyId,
@@ -38,7 +41,8 @@ namespace TinyGenerator.Services.Commands
             StoriesService? storiesService = null,
             ICustomLogger? logger = null,
             ICommandDispatcher? commandDispatcher = null,
-            CommandTuningOptions? tuning = null)
+            CommandTuningOptions? tuning = null,
+            IServiceScopeFactory? scopeFactory = null)
         {
             _storyId = storyId;
             _database = database ?? throw new ArgumentNullException(nameof(database));
@@ -47,6 +51,7 @@ namespace TinyGenerator.Services.Commands
             _logger = logger;
             _commandDispatcher = commandDispatcher;
             _tuning = tuning ?? new CommandTuningOptions();
+            _scopeFactory = scopeFactory;
         }
 
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
@@ -66,10 +71,12 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"Story {_storyId} not found");
                 }
 
-                var sourceText = story.StoryTagged;
+                var sourceText = !string.IsNullOrWhiteSpace(story.StoryRevised)
+                    ? story.StoryRevised
+                    : story.StoryRaw;
                 if (string.IsNullOrWhiteSpace(sourceText))
                 {
-                    return Fail(effectiveRunId, $"Story {_storyId} has no story_tagged text");
+                    return Fail(effectiveRunId, $"Story {_storyId} has no revised text");
                 }
 
                 var musicAgent = _database.ListAgents()
@@ -85,23 +92,51 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"Music expert agent {musicAgent.Name} has no model configured");
                 }
 
+                var currentModelId = musicAgent.ModelId.Value;
+
                 var modelInfo = _database.GetModelInfoById(musicAgent.ModelId.Value);
                 if (string.IsNullOrWhiteSpace(modelInfo?.Name))
                 {
                     return Fail(effectiveRunId, $"Model not found for music expert agent {musicAgent.Name}");
                 }
 
-                var systemPrompt = BuildSystemPrompt(musicAgent);
-                var chunks = SplitStoryIntoChunks(sourceText);
-                if (chunks.Count == 0)
+                var triedModelNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    return Fail(effectiveRunId, "No chunks produced from story_tagged");
+                    modelInfo.Name
+                };
+
+                var currentModelName = modelInfo.Name;
+
+                var systemPrompt = BuildSystemPrompt(musicAgent);
+                var rowsBuild = StoryTaggingService.BuildStoryRows(sourceText);
+                var storyRows = string.IsNullOrWhiteSpace(story.StoryRows) ? rowsBuild.StoryRows : story.StoryRows;
+                if (string.IsNullOrWhiteSpace(storyRows))
+                {
+                    storyRows = rowsBuild.StoryRows;
                 }
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {chunks.Count} chunks");
+                var rows = StoryTaggingService.ParseStoryRows(storyRows);
+                if (rows.Count == 0)
+                {
+                    return Fail(effectiveRunId, "No rows produced from story text");
+                }
+
+                _database.UpdateStoryRowsAndTags(story.Id, storyRows, story.StoryTags);
+
+                var chunks = StoryTaggingService.SplitRowsIntoChunks(
+                    rows,
+                    _tuning.MusicExpert.MinTokensPerChunk,
+                    _tuning.MusicExpert.MaxTokensPerChunk,
+                    _tuning.MusicExpert.TargetTokensPerChunk);
+                if (chunks.Count == 0)
+                {
+                    return Fail(effectiveRunId, "No chunks produced from story rows");
+                }
+
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {chunks.Count} chunks (rows)");
 
                 var bridge = _kernelFactory.CreateChatBridge(
-                    modelInfo.Name,
+                    currentModelName,
                     musicAgent.Temperature,
                     musicAgent.TopP,
                     musicAgent.RepeatPenalty,
@@ -109,7 +144,7 @@ namespace TinyGenerator.Services.Commands
                     musicAgent.RepeatLastN,
                     musicAgent.NumPredict);
 
-                var taggedChunks = new List<string>();
+                var musicTags = new List<StoryTaggingService.StoryTagEntry>();
                 for (int i = 0; i < chunks.Count; i++)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -124,46 +159,85 @@ namespace TinyGenerator.Services.Commands
                         // best-effort
                     }
 
-                    var tagged = await ProcessChunkWithRetriesAsync(
-                        bridge,
-                        systemPrompt,
-                        chunk.Text,
-                        i + 1,
-                        chunks.Count,
-                        effectiveRunId,
-                        ct);
+                    string mappingText;
+                    try
+                    {
+                        mappingText = await ProcessChunkWithRetriesAsync(
+                            bridge,
+                            systemPrompt,
+                            chunk.Text,
+                            i + 1,
+                            chunks.Count,
+                            effectiveRunId,
+                            ct);
+                    }
+                    catch (Exception ex) when (_scopeFactory != null)
+                    {
+                        _logger?.Append(effectiveRunId,
+                            $"[chunk {i + 1}/{chunks.Count}] Primary music_expert model '{currentModelName}' failed: {ex.Message}. Attempting fallback models...",
+                            "warn");
 
-                    if (string.IsNullOrWhiteSpace(tagged))
+                        var fallback = await TryChunkWithFallbackAsync(
+                            roleCode: "music_expert",
+                            failingModelId: currentModelId,
+                            systemPrompt: systemPrompt,
+                            chunkText: chunk.Text,
+                            chunkIndex: i + 1,
+                            chunkCount: chunks.Count,
+                            runId: effectiveRunId,
+                            agent: musicAgent,
+                            triedModelNames: triedModelNames,
+                            ct: ct);
+
+                        if (fallback == null)
+                        {
+                            throw;
+                        }
+
+                        mappingText = fallback.Value.Tagged;
+
+                        // Switch "in-place" for subsequent chunks.
+                        currentModelId = fallback.Value.ModelId;
+                        currentModelName = fallback.Value.ModelName;
+                        bridge = _kernelFactory.CreateChatBridge(
+                            currentModelName,
+                            musicAgent.Temperature,
+                            musicAgent.TopP,
+                            musicAgent.RepeatPenalty,
+                            musicAgent.TopK,
+                            musicAgent.RepeatLastN,
+                            musicAgent.NumPredict);
+                    }
+
+                    if (string.IsNullOrWhiteSpace(mappingText))
                     {
                         return Fail(effectiveRunId, $"Music expert returned empty text for chunk {i + 1}/{chunks.Count}");
                     }
 
-                    taggedChunks.Add(tagged);
+                    var parsed = StoryTaggingService.ParseMusicMapping(mappingText);
+                    musicTags.AddRange(parsed);
                 }
 
-                var mergedTagged = MergeTaggedChunks(taggedChunks);
-                if (string.IsNullOrWhiteSpace(mergedTagged))
+                var existingTags = StoryTaggingService.LoadStoryTags(story.StoryTags);
+                existingTags.RemoveAll(t => t.Type == StoryTaggingService.TagTypeMusic);
+                existingTags.AddRange(musicTags);
+                var storyTagsJson = StoryTaggingService.SerializeStoryTags(existingTags);
+                _database.UpdateStoryRowsAndTags(story.Id, storyRows, storyTagsJson);
+
+                var rebuiltTagged = StoryTaggingService.BuildStoryTagged(sourceText, existingTags);
+                if (string.IsNullOrWhiteSpace(rebuiltTagged))
                 {
-                    return Fail(effectiveRunId, "Merged tagged story is empty");
+                    return Fail(effectiveRunId, "Rebuilt tagged story is empty");
                 }
 
-                var nextVersion = story.StoryTaggedVersion.HasValue
-                    ? story.StoryTaggedVersion.Value + 1
-                    : 1;
-
-                var saved = _database.UpdateStoryTagged(
-                    story.Id,
-                    mergedTagged,
-                    musicAgent.ModelId,
-                    null, // promptHash not critical for expert agents
-                    nextVersion);
+                var saved = _database.UpdateStoryTaggedContent(story.Id, rebuiltTagged);
 
                 if (!saved)
                 {
                     return Fail(effectiveRunId, $"Failed to persist tagged story for {_storyId}");
                 }
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] Music tags added (version {nextVersion})");
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] Music tags rebuilt from story_tags");
 
                 // Final step: enqueue TTS schema generation (was previously triggered by formatter)
                 TryEnqueueTtsSchemaGeneration(story, effectiveRunId);
@@ -179,6 +253,78 @@ namespace TinyGenerator.Services.Commands
             {
                 return Fail(effectiveRunId, ex.Message);
             }
+        }
+
+        private readonly record struct FallbackChunkResult(string Tagged, int ModelId, string ModelName);
+
+        private async Task<FallbackChunkResult?> TryChunkWithFallbackAsync(
+            string roleCode,
+            int failingModelId,
+            string? systemPrompt,
+            string chunkText,
+            int chunkIndex,
+            int chunkCount,
+            string runId,
+            Agent agent,
+            HashSet<string> triedModelNames,
+            CancellationToken ct)
+        {
+            if (_scopeFactory == null)
+            {
+                return null;
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
+            if (fallbackService == null)
+            {
+                _logger?.Append(runId, "ModelFallbackService not available in DI scope; cannot fallback.", "warn");
+                return null;
+            }
+
+            var (result, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync(
+                roleCode,
+                failingModelId,
+                async modelRole =>
+                {
+                    var modelName = modelRole.Model?.Name;
+                    if (string.IsNullOrWhiteSpace(modelName))
+                    {
+                        throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
+                    }
+
+                    var candidateBridge = _kernelFactory.CreateChatBridge(
+                        modelName,
+                        agent.Temperature,
+                        agent.TopP,
+                        agent.RepeatPenalty,
+                        agent.TopK,
+                        agent.RepeatLastN,
+                        agent.NumPredict);
+
+                    return await ProcessChunkWithRetriesAsync(
+                        candidateBridge,
+                        systemPrompt,
+                        chunkText,
+                        chunkIndex,
+                        chunkCount,
+                        runId,
+                        ct);
+                },
+                validateResult: s => !string.IsNullOrWhiteSpace(s),
+                shouldTryModelRole: mr =>
+                {
+                    var name = mr.Model?.Name;
+                    return !string.IsNullOrWhiteSpace(name) && triedModelNames.Add(name);
+                });
+
+            if (string.IsNullOrWhiteSpace(result) || successfulModelRole?.Model == null || string.IsNullOrWhiteSpace(successfulModelRole.Model.Name))
+            {
+                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Fallback models exhausted for role '{roleCode}'.", "error");
+                return null;
+            }
+
+            return new FallbackChunkResult(result, successfulModelRole.ModelId, successfulModelRole.Model.Name);
         }
 
         private void TryEnqueueTtsSchemaGeneration(StoryRecord story, string runId)
@@ -273,9 +419,12 @@ namespace TinyGenerator.Services.Commands
             CancellationToken ct)
         {
             string? lastError = null;
+            string? lastAssistantText = null;
+            List<ConversationMessage>? lastRequestMessages = null;
             var maxAttempts = Math.Max(1, _tuning.MusicExpert.MaxAttemptsPerChunk);
             var retryDelayBaseSeconds = Math.Max(0, _tuning.MusicExpert.RetryDelayBaseSeconds);
             var requiredTags = ComputeRequiredMusicTagsForChunk(chunkText);
+            var diagnoseOnFinalFailure = _tuning.MusicExpert.DiagnoseOnFinalFailure;
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -290,6 +439,18 @@ namespace TinyGenerator.Services.Commands
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
 
+                    messages.Add(new ConversationMessage
+                    {
+                        Role = "system",
+                        Content =
+                            "FORMATO RISPOSTA OBBLIGATORIO:\n" +
+                            "- Restituisci SOLO righe nel formato: ID emozione [secondi]\n" +
+                            "- Non usare tag [MUSIC] o parentesi diverse dalle [secondi]\n" +
+                            "- Non riscrivere il testo, non aggiungere spiegazioni\n" +
+                            "- Gli ID sono quelli del testo numerato fornito\n" +
+                            "- Se non c'è musica per una riga, non restituire quella riga\n"
+                    });
+
                     // Add error feedback for retry attempts
                     if (attempt > 1 && !string.IsNullOrWhiteSpace(lastError))
                     {
@@ -302,9 +463,13 @@ namespace TinyGenerator.Services.Commands
 
                     messages.Add(new ConversationMessage { Role = "user", Content = chunkText });
 
+                    // Keep the last request/response around for diagnostics.
+                    lastRequestMessages = messages;
+
                     var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
                     var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
                     var cleaned = textContent?.Trim() ?? string.Empty;
+                    lastAssistantText = cleaned;
 
                     if (string.IsNullOrWhiteSpace(cleaned))
                     {
@@ -313,27 +478,17 @@ namespace TinyGenerator.Services.Commands
                         continue;
                     }
 
-                    // Validation: Check for minimum tag count
-                    var tagCount = MusicTagRegex.Matches(cleaned).Count;
+                    var tags = StoryTaggingService.ParseMusicMapping(cleaned);
+                    var tagCount = tags.Count;
                     if (tagCount < requiredTags)
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough music tags: {tagCount} found, minimum {requiredTags} required", "warn");
-                        lastError = $"Hai inserito solo {tagCount} tag [MUSICA:/MUSIC:]. Devi inserire ALMENO {requiredTags} indicazioni musicali per arricchire l'esperienza sonora della narrazione.";
+                        lastError = $"Hai inserito solo {tagCount} righe valide. Devi inserire ALMENO {requiredTags} indicazioni musicali (formato: ID emozione [secondi]).";
                         continue;
                     }
 
-                    // Merge music blocks back into the ORIGINAL chunk, using surrounding tag anchors.
-                    var merged = MergeMusicIntoOriginalChunk(chunkText, cleaned, out var insertedMusicBlocks);
-                    if (insertedMusicBlocks < requiredTags)
-                    {
-                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Could not merge music blocks into original chunk (inserted={insertedMusicBlocks}, modelTags={tagCount})", "warn");
-                        lastError = "Ho trovato tag musicali nella tua risposta ma non riesco a reinserirli nel chunk originale: assicurati che ogni tag [MUSICA:]/[MUSIC:] sia posizionato tra due tag di sezione (es. [NARRATORE], [PERSONAGGIO: ...]) e che i tag vicini siano riportati in modo chiaro.";
-                        continue;
-                    }
-
-                    // All validations passed
-                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated+merged: modelLen={cleaned.Length} chars, modelMusic={tagCount}, insertedMusic={insertedMusicBlocks}");
-                    return merged;
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalMusic={tagCount}");
+                    return cleaned;
                 }
                 catch (Exception ex)
                 {
@@ -349,7 +504,98 @@ namespace TinyGenerator.Services.Commands
                 }
             }
 
+            // If we reached here, all attempts failed for THIS chunk.
+            if (diagnoseOnFinalFailure)
+            {
+                try
+                {
+                    var diagnosis = await DiagnoseFailureAsync(
+                        bridge,
+                        systemPrompt,
+                        lastRequestMessages,
+                        chunkText,
+                        lastAssistantText,
+                        lastError,
+                        chunkIndex,
+                        chunkCount,
+                        ct).ConfigureAwait(false);
+
+                    if (!string.IsNullOrWhiteSpace(diagnosis))
+                    {
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] music_expert self-diagnosis: {diagnosis}", "warn");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Failed to collect music_expert self-diagnosis: {ex.Message}", "warn");
+                }
+            }
+
             throw new InvalidOperationException($"Failed to process chunk {chunkIndex}/{chunkCount} after {maxAttempts} attempts. Last error: {lastError}");
+        }
+
+        private async Task<string?> DiagnoseFailureAsync(
+            LangChainChatBridge bridge,
+            string? originalSystemPrompt,
+            List<ConversationMessage>? lastRequestMessages,
+            string chunkText,
+            string? lastAssistantText,
+            string? lastFailureReason,
+            int chunkIndex,
+            int chunkCount,
+            CancellationToken ct)
+        {
+            var auditSystem =
+                "Sei un auditor tecnico per l'agente music_expert. " +
+                "Devi spiegare in modo conciso perché l'output non ha superato la validazione o perché è fallito. " +
+                "Non inventare contenuti; basati sui dati forniti.";
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"DIAGNOSI music_expert - chunk {chunkIndex}/{chunkCount}");
+            sb.AppendLine();
+
+            if (!string.IsNullOrWhiteSpace(lastFailureReason))
+            {
+                sb.AppendLine("=== MOTIVO FALLIMENTO (validazione/errore) ===");
+                sb.AppendLine(ClipForPrompt(lastFailureReason, 2000));
+                sb.AppendLine();
+            }
+
+            if (!string.IsNullOrWhiteSpace(lastAssistantText))
+            {
+                sb.AppendLine("=== ULTIMO OUTPUT MODELLO (estratto) ===");
+                sb.AppendLine(ClipForPrompt(lastAssistantText, 2000));
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("=== INPUT (chunk) ===");
+            sb.AppendLine(ClipForPrompt(chunkText, 2500));
+            sb.AppendLine();
+
+            if (lastRequestMessages != null && lastRequestMessages.Count > 0)
+            {
+                sb.AppendLine("=== ULTIMA CONVERSAZIONE (ruoli) ===");
+                foreach (var m in lastRequestMessages)
+                {
+                    sb.AppendLine($"- {m.Role}: {ClipForPrompt(m.Content, 250)}");
+                }
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("Output richiesto: 5-10 righe, punti elenco se utile, senza proporre un 'nuovo tentativo'.");
+
+            var diagMessages = new List<ConversationMessage>();
+            if (!string.IsNullOrWhiteSpace(originalSystemPrompt))
+            {
+                diagMessages.Add(new ConversationMessage { Role = "system", Content = originalSystemPrompt });
+            }
+
+            diagMessages.Add(new ConversationMessage { Role = "system", Content = auditSystem });
+            diagMessages.Add(new ConversationMessage { Role = "user", Content = sb.ToString() });
+
+            var responseJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct).ConfigureAwait(false);
+            var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
+            return string.IsNullOrWhiteSpace(textContent) ? null : textContent.Trim();
         }
 
         private int ComputeRequiredMusicTagsForChunk(string chunkText)
@@ -712,6 +958,8 @@ namespace TinyGenerator.Services.Commands
             return sb.Length > 0 ? sb.ToString() : null;
         }
 
+        private sealed record Segment(int Start, int End, int TokenCount);
+
         private List<(string Text, int StartIndex, int EndIndex)> SplitStoryIntoChunks(string text)
         {
             var chunks = new List<(string Text, int StartIndex, int EndIndex)>();
@@ -720,32 +968,158 @@ namespace TinyGenerator.Services.Commands
                 return chunks;
             }
 
+            var minTokensPerChunk = Math.Max(0, _tuning.MusicExpert.MinTokensPerChunk);
             var maxTokensPerChunk = Math.Max(1, _tuning.MusicExpert.MaxTokensPerChunk);
+            var targetTokensPerChunk = Math.Max(1, _tuning.MusicExpert.TargetTokensPerChunk);
+            // NOTE: These expert commands merge and then concatenate chunks. Overlap would duplicate content.
+            var overlapTokens = 0;
 
-            // Simple chunking by approximate tokens (4 chars ≈ 1 token)
-            int pos = 0;
-            while (pos < text.Length)
+            var segments = SplitIntoSegments(text);
+            if (segments.Count == 0)
             {
-                int chunkSize = Math.Min(maxTokensPerChunk * 4, text.Length - pos);
-                var chunkEnd = pos + chunkSize;
+                chunks.Add((text, 0, text.Length));
+                return chunks;
+            }
 
-                // Try to break on paragraph boundary
-                if (chunkEnd < text.Length)
+            int segmentIndex = 0;
+            while (segmentIndex < segments.Count)
+            {
+                int startSeg = segmentIndex;
+                int endSeg = startSeg;
+                int tokenCount = 0;
+
+                while (endSeg < segments.Count)
                 {
-                    var lastNewline = text.LastIndexOf("\n\n", chunkEnd, Math.Min(chunkSize / 2, chunkEnd - pos));
-                    if (lastNewline > pos)
+                    var segTokens = segments[endSeg].TokenCount;
+                    if (tokenCount + segTokens > maxTokensPerChunk && tokenCount >= minTokensPerChunk)
                     {
-                        chunkEnd = lastNewline + 2;
+                        break;
+                    }
+
+                    tokenCount += segTokens;
+                    endSeg++;
+
+                    if (tokenCount >= targetTokensPerChunk && tokenCount >= minTokensPerChunk)
+                    {
+                        break;
                     }
                 }
 
-                var chunkText = text.Substring(pos, chunkEnd - pos);
-                chunks.Add((chunkText, pos, chunkEnd));
+                if (endSeg == startSeg)
+                {
+                    endSeg = Math.Min(startSeg + 1, segments.Count);
+                }
 
-                pos = chunkEnd;
+                var startChar = segments[startSeg].Start;
+                var endChar = segments[endSeg - 1].End;
+                chunks.Add((text.Substring(startChar, endChar - startChar), startChar, endChar));
+
+                if (endSeg >= segments.Count)
+                {
+                    break;
+                }
+
+                int overlapCount = 0;
+                int nextStartSeg = endSeg;
+                for (int i = endSeg - 1; i >= startSeg; i--)
+                {
+                    overlapCount += segments[i].TokenCount;
+                    if (overlapCount >= overlapTokens)
+                    {
+                        nextStartSeg = i;
+                        break;
+                    }
+                }
+
+                if (nextStartSeg <= startSeg)
+                {
+                    nextStartSeg = endSeg;
+                }
+
+                segmentIndex = nextStartSeg;
             }
 
             return chunks;
+        }
+
+        private static List<Segment> SplitIntoSegments(string text)
+        {
+            var segments = new List<Segment>();
+            int start = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+                bool boundary = false;
+                int end = i + 1;
+
+                if (c == '\r')
+                {
+                    if (i + 1 < text.Length && text[i + 1] == '\n')
+                    {
+                        end = i + 2;
+                        i++;
+                    }
+                    boundary = true;
+                }
+                else if (c == '\n' || c == '.' || c == '!' || c == '?')
+                {
+                    boundary = true;
+                }
+
+                if (boundary)
+                {
+                    var segmentText = text.Substring(start, end - start);
+                    segments.Add(new Segment(start, end, CountTokens(segmentText)));
+                    start = end;
+                }
+            }
+
+            if (start < text.Length)
+            {
+                var tail = text.Substring(start);
+                segments.Add(new Segment(start, text.Length, CountTokens(tail)));
+            }
+
+            return segments;
+        }
+
+        private static int CountTokens(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return 0;
+            }
+
+            int count = 0;
+            bool inToken = false;
+            foreach (var c in text)
+            {
+                if (char.IsWhiteSpace(c))
+                {
+                    if (inToken)
+                    {
+                        inToken = false;
+                    }
+                }
+                else
+                {
+                    if (!inToken)
+                    {
+                        count++;
+                        inToken = true;
+                    }
+                }
+            }
+
+            return count;
+        }
+
+        private static string ClipForPrompt(string? text, int maxChars)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+            var t = text.Trim();
+            if (t.Length <= maxChars) return t;
+            return t.Substring(0, maxChars) + "...";
         }
 
         private string MergeTaggedChunks(List<string> chunks)

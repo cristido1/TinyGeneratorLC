@@ -55,6 +55,8 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<ConsequenceImpact> ConsequenceImpacts => Set<ConsequenceImpact>();
     public DbSet<StoryRuntimeState> StoryRuntimeStates => Set<StoryRuntimeState>();
     public DbSet<StoryResourceState> StoryResourceStates => Set<StoryResourceState>();
+    public DbSet<Role> Roles => Set<Role>();
+    public DbSet<ModelRole> ModelRoles => Set<ModelRole>();
     // Note: Memory table excluded - using Dapper for embedding queries
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -173,6 +175,31 @@ public class TinyGeneratorDbContext : DbContext
         modelBuilder.Entity<ConsequenceImpact>().HasData(
             new ConsequenceImpact { Id = 1, ConsequenceRuleId = 1, ResourceName = "Uomini", DeltaValue = -10 },
             new ConsequenceImpact { Id = 2, ConsequenceRuleId = 2, ResourceName = "Integrità", DeltaValue = -15 }
+        );
+
+        // Roles and ModelRoles relationships
+        modelBuilder.Entity<ModelRole>()
+            .HasOne(mr => mr.Model)
+            .WithMany()
+            .HasForeignKey(mr => mr.ModelId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ModelRole>()
+            .HasOne(mr => mr.Role)
+            .WithMany()
+            .HasForeignKey(mr => mr.RoleId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Seed default roles
+        var now = DateTime.UtcNow.ToString("o");
+        modelBuilder.Entity<Role>().HasData(
+            new Role { Id = 1, Ruolo = "writer", ComandoCollegato = "FullStoryPipelineCommand", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 2, Ruolo = "formatter", ComandoCollegato = "TransformStoryRawToTaggedCommand", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 3, Ruolo = "evaluator", ComandoCollegato = "StoryEvaluation", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 4, Ruolo = "tts_expert", ComandoCollegato = "TtsGeneration", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 5, Ruolo = "music_expert", ComandoCollegato = "MusicGeneration", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 6, Ruolo = "fx_expert", ComandoCollegato = "FxGeneration", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 7, Ruolo = "summarizer", ComandoCollegato = "SummarizeStory", CreatedAt = now, UpdatedAt = now }
         );
     }
 }

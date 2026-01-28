@@ -39,7 +39,8 @@ MODEL_MAPPINGS = {
         'TotalScore', 'Note', 'LastTestResults', 'LastMusicTestFile', 'LastSoundTestFile',
         'LastTtsTestFile', 'LastScore_Base', 'LastScore_Tts', 'LastScore_Music',
         'LastScore_Write', 'LastResults_BaseJson', 'LastResults_TtsJson',
-        'LastResults_MusicJson', 'LastResults_WriteJson', 'RowVersion', 'speed'
+        'LastResults_MusicJson', 'LastResults_WriteJson', 'RowVersion', 'speed',
+
     ],
     'tts_voices': [
         'id', 'voice_id', 'name', 'model', 'language', 'gender', 'age', 'confidence',

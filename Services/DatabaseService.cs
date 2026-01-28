@@ -3186,6 +3186,55 @@ WHERE agent_id IS NOT NULL
     }
 
     /// <summary>
+    /// Updates only the story_tagged field (no formatter metadata changes).
+    /// </summary>
+    public bool UpdateStoryTaggedContent(long storyId, string storyTagged)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.StoryTagged = SanitizeStoryTagged(storyTagged ?? string.Empty);
+
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save tagged story for {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update tagged story {storyId}: {fullMessage}", ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Updates story_rows and story_tags fields.
+    /// </summary>
+    public bool UpdateStoryRowsAndTags(long storyId, string? storyRows, string? storyTags)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.StoryRows = storyRows;
+        storyRecord.StoryTags = storyTags;
+
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save story rows/tags for {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update story rows/tags {storyId}: {fullMessage}", ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Clears tagged story fields and formatter metadata.
     /// </summary>
     public bool ClearStoryTagged(long storyId)
@@ -3197,6 +3246,7 @@ WHERE agent_id IS NOT NULL
         storyRecord.StoryTaggedVersion = null;
         storyRecord.FormatterModelId = null;
         storyRecord.FormatterPromptHash = null;
+        storyRecord.StoryTags = null;
         
         try
         {

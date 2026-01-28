@@ -7,6 +7,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
 
@@ -14,6 +16,22 @@ namespace TinyGenerator.Services.Commands
 {
     public sealed class TransformStoryRawToTaggedCommand
     {
+        private const string FormatterV2SystemPrompt =
+            "Sei un agente di classificazione.\n\n" +
+            "Ti verranno fornite righe numerate. Ogni riga è una porzione di testo originale.\n\n" +
+            "COMPITO:\nIndica SOLO le righe dove parla qualcuno (dialogo).\nPer quelle righe, restituisci il tag del personaggio e la sua emozione.\n\n" +
+            "TAG POSSIBILI:\n[PERSONAGGIO: Nome] [EMOZIONE: emozione]\n\n" +
+            "REGOLE OBBLIGATORIE:\n" +
+            "- NON riscrivere il testo\n" +
+            "- NON restituire il testo\n" +
+            "- NON spiegare\n" +
+            "- NON commentare\n" +
+            "- NON aggiungere contenuti\n" +
+            "- Restituisci un mapping ID → TAG nel formato: ID TAG\n" +
+            "- Restituisci SOLO le righe dove parla qualcuno (non tutte le righe)\n" +
+            "- Non includere alcun altro tag oltre a PERSONAGGIO ed EMOZIONE\n\n" +
+            "Esempio:\n004 [PERSONAGGIO: Luca] [EMOZIONE: paura]";
+
         private readonly CommandTuningOptions _tuning;
 
         private readonly long _storyId;
@@ -22,6 +40,9 @@ namespace TinyGenerator.Services.Commands
         private readonly StoriesService? _storiesService;
         private readonly ICustomLogger? _logger;
         private readonly ICommandDispatcher? _commandDispatcher;
+        private readonly IServiceScopeFactory? _scopeFactory;
+
+        private sealed record FormatChunkResult(string TaggedText, string? LastError);
 
         public TransformStoryRawToTaggedCommand(
             long storyId,
@@ -30,7 +51,8 @@ namespace TinyGenerator.Services.Commands
             StoriesService? storiesService = null,
             ICustomLogger? logger = null,
             ICommandDispatcher? commandDispatcher = null,
-            CommandTuningOptions? tuning = null)
+            CommandTuningOptions? tuning = null,
+            IServiceScopeFactory? scopeFactory = null)
         {
             _storyId = storyId;
             _database = database ?? throw new ArgumentNullException(nameof(database));
@@ -39,6 +61,7 @@ namespace TinyGenerator.Services.Commands
             _logger = logger;
             _commandDispatcher = commandDispatcher;
             _tuning = tuning ?? new CommandTuningOptions();
+            _scopeFactory = scopeFactory;
         }
 
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
@@ -67,14 +90,7 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"Story {_storyId} has no text");
                 }
 
-                if (_storiesService != null)
-                {
-                    var (ok, msg) = await _storiesService.DeleteStoryTaggedAsync(story.Id);
-                    if (!ok)
-                    {
-                        return Fail(effectiveRunId, msg ?? "Failed to clear story tagged data");
-                    }
-                }
+                // Formatter runs do not clear other tag types; tags are managed per-type in story_tags.
 
                 var formatterAgent = _database.ListAgents()
                     .FirstOrDefault(a => a.IsActive && string.Equals(a.Role, "formatter", StringComparison.OrdinalIgnoreCase));
@@ -100,19 +116,28 @@ namespace TinyGenerator.Services.Commands
                     ? null
                     : ComputeSha256(systemPrompt);
 
-                var normalizedForFormatter = PreNormalizeForFormatter(sourceText);
-                if (string.IsNullOrWhiteSpace(normalizedForFormatter))
+                // Formatter V2 requirement: NEVER modify the original text. We keep sourceText as-is.
+                var rowsBuild = StoryTaggingService.BuildStoryRows(sourceText);
+                var storyRows = rowsBuild.StoryRows;
+                var rows = StoryTaggingService.ParseStoryRows(storyRows);
+                if (rows.Count == 0)
                 {
-                    return Fail(effectiveRunId, "Story text became empty after pre-normalization for formatter");
+                    return Fail(effectiveRunId, "No rows produced from story text");
                 }
 
-                var chunks = SplitStoryIntoChunks(normalizedForFormatter);
+                _database.UpdateStoryRowsAndTags(story.Id, storyRows, story.StoryTags);
+
+                var chunks = StoryTaggingService.SplitRowsIntoChunks(
+                    rows,
+                    _tuning.TransformStoryRawToTagged.MinTokensPerChunk,
+                    _tuning.TransformStoryRawToTagged.MaxTokensPerChunk,
+                    _tuning.TransformStoryRawToTagged.TargetTokensPerChunk);
                 if (chunks.Count == 0)
                 {
-                    return Fail(effectiveRunId, "No chunks produced from story text");
+                    return Fail(effectiveRunId, "No chunks produced from story rows");
                 }
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {chunks.Count} chunks");
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {chunks.Count} chunks (rows)");
 
                 var bridge = _kernelFactory.CreateChatBridge(
                     modelInfo.Name,
@@ -123,7 +148,7 @@ namespace TinyGenerator.Services.Commands
                     formatterAgent.RepeatLastN,
                     formatterAgent.NumPredict);
 
-                var taggedChunks = new List<string>();
+                var formatterTags = new List<StoryTaggingService.StoryTagEntry>();
                 for (int i = 0; i < chunks.Count; i++)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -137,46 +162,136 @@ namespace TinyGenerator.Services.Commands
                     {
                         // best-effort: do not fail the command if update fails
                     }
-                    var tagged = await FormatChunkWithRetriesAsync(
+                    var result = await FormatChunkWithRetriesAsync(
                         bridge,
                         systemPrompt,
                         chunk.Text,
+                        chunk.Rows,
                         i + 1,
                         chunks.Count,
                         effectiveRunId,
+                        formatterAgent.Name,
+                        modelInfo.Name,
                         ct);
 
-                    if (string.IsNullOrWhiteSpace(tagged))
+                    if (string.IsNullOrWhiteSpace(result.TaggedText))
                     {
-                        return Fail(effectiveRunId, $"Formatter returned empty text for chunk {i + 1}/{chunks.Count}");
+                        // Primary formatter failed - try fallback models if available
+                        _logger?.Append(effectiveRunId, $"[chunk {i+1}/{chunks.Count}] Primary formatter failed, attempting fallback models...", "warn");
+                        
+                        if (_scopeFactory != null)
+                        {
+                            using var scope = _scopeFactory.CreateScope();
+                            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
+
+                            if (fallbackService == null)
+                            {
+                                _logger?.Append(effectiveRunId, "ModelFallbackService not available in DI scope; skipping fallback.", "warn");
+                            }
+                            else
+                            {
+                            var fallbackAttempted = false;
+                            var (fallbackResult, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync(
+                                roleCode: "formatter",
+                                primaryModelId: formatterAgent.ModelId,
+                                operationAsync: async (modelRole) =>
+                                {
+                                    fallbackAttempted = true;
+                                    var fallbackModel = modelRole.Model;
+                                    if (fallbackModel == null || string.IsNullOrWhiteSpace(fallbackModel.Name))
+                                    {
+                                        throw new InvalidOperationException($"ModelRole {modelRole.Id} has no valid model.");
+                                    }
+
+                                    _logger?.Append(effectiveRunId, $"[chunk {i+1}/{chunks.Count}] Trying fallback model: {fallbackModel.Name}", "info");
+
+                                    // Override systemPrompt with modelRole instructions if provided
+                                    var fallbackSystemPrompt = !string.IsNullOrWhiteSpace(modelRole.Instructions)
+                                        ? modelRole.Instructions
+                                        : systemPrompt;
+
+                                    var fallbackBridge = _kernelFactory.CreateChatBridge(
+                                        fallbackModel.Name,
+                                        formatterAgent.Temperature,
+                                        modelRole.TopP ?? formatterAgent.TopP,
+                                        formatterAgent.RepeatPenalty,
+                                        modelRole.TopK ?? formatterAgent.TopK,
+                                        formatterAgent.RepeatLastN,
+                                        formatterAgent.NumPredict);
+
+                                    var fallbackChunkResult = await FormatChunkWithRetriesAsync(
+                                        fallbackBridge,
+                                        fallbackSystemPrompt,
+                                        chunk.Text,
+                                        chunk.Rows,
+                                        i + 1,
+                                        chunks.Count,
+                                        effectiveRunId,
+                                        formatterAgent.Name,
+                                        fallbackModel.Name,
+                                        ct);
+
+                                    if (string.IsNullOrWhiteSpace(fallbackChunkResult.TaggedText))
+                                    {
+                                        throw new InvalidOperationException($"Fallback model {fallbackModel.Name} also failed: {fallbackChunkResult.LastError}");
+                                    }
+
+                                    return fallbackChunkResult;
+                                },
+                                validateResult: (chunkResult) => !string.IsNullOrWhiteSpace(chunkResult.TaggedText)
+                            );
+
+                            if (fallbackResult != null && !string.IsNullOrWhiteSpace(fallbackResult.TaggedText))
+                            {
+                                _logger?.Append(effectiveRunId, $"[chunk {i+1}/{chunks.Count}] Fallback model {successfulModelRole?.Model?.Name} succeeded!", "info");
+                                result = fallbackResult;
+                            }
+                            else if (fallbackAttempted)
+                            {
+                                var msg = $"Formatter failed for chunk {i + 1}/{chunks.Count} after trying all fallback models. Last error: {result.LastError ?? "(none)"}";
+                                return Fail(effectiveRunId, msg);
+                            }
+                            }
+                        }
+
+                        // Still failed after fallback attempts
+                        if (string.IsNullOrWhiteSpace(result.TaggedText))
+                        {
+                            var msg = $"Formatter failed for chunk {i + 1}/{chunks.Count}. Last error: {result.LastError ?? "(none)"}";
+                            return Fail(effectiveRunId, msg);
+                        }
                     }
 
-                    taggedChunks.Add(tagged);
+                    var parsedTags = StoryTaggingService.ParseFormatterMapping(chunk.Rows, result.TaggedText);
+                    formatterTags.AddRange(parsedTags);
                 }
 
-                var mergedTagged = MergeTaggedChunks(taggedChunks);
-                if (string.IsNullOrWhiteSpace(mergedTagged))
+                var existingTags = StoryTaggingService.LoadStoryTags(story.StoryTags);
+                existingTags.RemoveAll(t => t.Type == StoryTaggingService.TagTypeFormatter);
+                existingTags.AddRange(formatterTags);
+
+                var storyTagsJson = StoryTaggingService.SerializeStoryTags(existingTags);
+                _database.UpdateStoryRowsAndTags(story.Id, storyRows, storyTagsJson);
+
+                var rebuiltTagged = StoryTaggingService.BuildStoryTagged(sourceText, existingTags);
+                if (string.IsNullOrWhiteSpace(rebuiltTagged))
                 {
-                    return Fail(effectiveRunId, "Merged tagged story is empty");
+                    return Fail(effectiveRunId, "Rebuilt tagged story is empty");
                 }
-
-                var nextVersion = story.StoryTaggedVersion.HasValue
-                    ? story.StoryTaggedVersion.Value + 1
-                    : 1;
 
                 var saved = _database.UpdateStoryTagged(
                     story.Id,
-                    mergedTagged,
+                    rebuiltTagged,
                     formatterAgent.ModelId,
                     promptHash,
-                    nextVersion);
+                    null);
 
                 if (!saved)
                 {
                     return Fail(effectiveRunId, $"Failed to persist tagged story for {_storyId}");
                 }
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] Tagged story saved (version {nextVersion})");
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] Tagged story rebuilt from story_tags");
 
                 // Requirement: if tagging succeeds, enqueue ambient_expert to add ambient tags
                 TryEnqueueAmbientExpert(story, effectiveRunId);
@@ -218,7 +333,7 @@ namespace TinyGenerator.Services.Commands
                     {
                         try
                         {
-                            var cmd = new AmbientExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher, _tuning);
+                            var cmd = new AmbientExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher, _tuning, _scopeFactory);
                             return await cmd.ExecuteAsync(ctx.CancellationToken, ambientRunId);
                         }
                         catch (Exception ex)
@@ -252,20 +367,53 @@ namespace TinyGenerator.Services.Commands
             return new CommandResult(false, message);
         }
 
-        private async Task<string> FormatChunkWithRetriesAsync(
+        private async Task<FormatChunkResult> FormatChunkWithRetriesAsync(
             LangChainChatBridge bridge,
             string? systemPrompt,
             string chunkText,
+            IReadOnlyList<StoryTaggingService.StoryRow> chunkRows,
             int chunkIndex,
             int chunkCount,
             string runId,
+            string formatterAgentName,
+            string modelName,
             CancellationToken ct)
         {
-            var inputLength = chunkText.Length;
             string? lastError = null;
+            string? lastRequestText = null;
+            string? lastMappingText = null;
 
-            var maxAttempts = Math.Max(1, _tuning.TransformStoryRawToTagged.MaxAttemptsPerChunk);
-            var minTagsRequired = Math.Max(0, _tuning.TransformStoryRawToTagged.MinTagsPerChunkRequirement);
+            var correctionRetries = Math.Max(0, _tuning.TransformStoryRawToTagged.FormatterV2CorrectionRetries);
+            var maxAttempts = correctionRetries > 0
+                ? 1 + correctionRetries
+                : Math.Max(1, _tuning.TransformStoryRawToTagged.MaxAttemptsPerChunk);
+
+            if (chunkRows == null || chunkRows.Count == 0)
+            {
+                return new FormatChunkResult(string.Empty, "Chunk without rows");
+            }
+
+            var quoteLineIds = new HashSet<int>();
+            foreach (var row in chunkRows)
+            {
+                if (StartsWithOpeningQuote(row.Text))
+                {
+                    quoteLineIds.Add(row.LineId);
+                }
+            }
+
+            // Provide the agent an explicit list of dialogue lines to tag.
+            var dialogueLines = new List<string>();
+            if (quoteLineIds.Count > 0)
+            {
+                foreach (var row in chunkRows)
+                {
+                    if (quoteLineIds.Contains(row.LineId))
+                    {
+                        dialogueLines.Add($"{row.LineId:000} {row.Text}".TrimEnd());
+                    }
+                }
+            }
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -279,50 +427,88 @@ namespace TinyGenerator.Services.Commands
                     {
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
-                    
-                    // Add error feedback for retry attempts
-                    if (attempt > 1 && !string.IsNullOrWhiteSpace(lastError))
-                    {
-                        messages.Add(new ConversationMessage 
-                        { 
-                            Role = "system", 
-                            Content = $"{lastError} Questo è il tentativo {attempt} di {maxAttempts}." 
-                        });
-                    }
-                    
-                    messages.Add(new ConversationMessage { Role = "user", Content = chunkText });
 
-                    var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
+                    // Always append strict formatter-v2 rules to prevent the model from rewriting text.
+                    messages.Add(new ConversationMessage { Role = "system", Content = FormatterV2SystemPrompt });
+
+                    // IMPORTANT: on retries we resend the original request, without echoing the model's previous answer.
+                    var userContent =
+                        (dialogueLines.Count > 0
+                            ? "RIGHE DI DIALOGO (tra virgolette) DA TAGGARE CON PERSONAGGIO+EMOZIONE:\n" + string.Join("\n", dialogueLines) + "\n\n"
+                            : "NESSUNA RIGA DI DIALOGO TRA VIRGOLETTE IN QUESTO TESTO.\n\n")
+                        + "TESTO COMPLETO (righe numerate):\n" + chunkText;
+
+                    lastRequestText = userContent;
+
+                    messages.Add(new ConversationMessage { Role = "user", Content = userContent });
+
+                    string responseJson;
+                    using (LogScope.Push("formatter", operationId: null, stepNumber: null, maxStep: null, agentName: formatterAgentName))
+                    {
+                        responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
+                    }
                     var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
-                    var cleaned = textContent?.Trim() ?? string.Empty;
 
-                    if (string.IsNullOrWhiteSpace(cleaned))
+                    var mappingText = textContent?.Trim() ?? string.Empty;
+                    lastMappingText = mappingText;
+                    if (string.IsNullOrWhiteSpace(mappingText))
                     {
-                        lastError = "Il testo ritornato è vuoto.";
+                        if (quoteLineIds.Count == 0)
+                        {
+                            return new FormatChunkResult(string.Empty, null);
+                        }
+
+                        if (quoteLineIds.Count == 1)
+                        {
+                            var onlyId = quoteLineIds.First();
+                            var fallback = $"{onlyId:000} [PERSONAGGIO: Sconosciuto] [EMOZIONE: neutra]";
+                            return new FormatChunkResult(fallback, null);
+                        }
+
+                        lastError = "La risposta è vuota ma ci sono righe di dialogo: devi restituire il mapping per le righe dove parla qualcuno.";
                         continue;
                     }
 
-                    // Validation 1: Check if text is shorter than input
-                    if (cleaned.Length < inputLength)
+                    var idToTags = FormatterV2.ParseIdToTagsMapping(mappingText);
+
+                    // Requested checks on agent return:
+                    // - It is allowed to return an empty mapping (meaning: no dialogue in this chunk).
+                    // - All lines that start with an opening quote must be tagged as PERSONAGGIO.
+
+                    // 2) Must have PERSONAGGIO tag on dialogue lines (those starting with an opening quote)
+                    if (quoteLineIds.Count > 0)
                     {
-                        var ratio = (double)cleaned.Length / inputLength;
-                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Output too short: {cleaned.Length} chars vs {inputLength} input ({ratio:P0})", "warn");
-                        lastError = "Il testo ritornato è più corto dell'originale. NON devi tagliare o rimuovere testo, devi solo aggiungere i tag richiesti mantenendo tutto il contenuto originale.";
-                        continue;
+                        var bad = new List<int>();
+                        foreach (var id in quoteLineIds.OrderBy(x => x))
+                        {
+                            if (!idToTags.TryGetValue(id, out var tags) ||
+                                tags.IndexOf("[PERSONAGGIO:", StringComparison.OrdinalIgnoreCase) < 0)
+                            {
+                                bad.Add(id);
+                                if (bad.Count >= 8) break;
+                            }
+                        }
+
+                        // Allow one unassigned dialogue line: default it to an unknown speaker with neutral emotion.
+                        if (bad.Count == 1)
+                        {
+                            var missingId = bad[0];
+                            idToTags[missingId] = "[PERSONAGGIO: Sconosciuto] [EMOZIONE: neutra]";
+                        }
+                        else if (bad.Count > 1)
+                        {
+                            lastError = $"Controllo fallito: sulle righe con doppi apici deve esserci un tag PERSONAGGIO. ID: {string.Join(", ", bad.Select(x => x.ToString("000")))}";
+                            continue;
+                        }
                     }
 
-                    // Validation 2: Check for minimum tag count
-                    var tagCount = System.Text.RegularExpressions.Regex.Matches(cleaned, @"\[(?:PERSONAGGIO|EMOZIONE|VOCE|RITMO|PAUSA|VOLUME|MUSICA|FX|AMBIENTE|NOISE):", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
-                    if (tagCount < minTagsRequired)
-                    {
-                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough tags: {tagCount} found, minimum {minTagsRequired} required", "warn");
-                        lastError = $"Hai inserito solo {tagCount} tag. Devi inserire ALMENO {minTagsRequired} tag nel testo per arricchirlo adeguatamente.";
-                        continue;
-                    }
+                    var mappingNormalized = string.Join("\n",
+                        idToTags
+                            .OrderBy(k => k.Key)
+                            .Select(k => $"{k.Key:000} {k.Value}".TrimEnd()));
 
-                    // All validations passed
-                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated: {cleaned.Length} chars, {tagCount} tags");
-                    return cleaned;
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: {idToTags.Count} lines");
+                    return new FormatChunkResult(mappingNormalized, null);
                 }
                 catch (Exception ex)
                 {
@@ -331,8 +517,59 @@ namespace TinyGenerator.Services.Commands
                 }
             }
 
+            // Hard failure: best-effort ask for a free-text explanation, and log it with source=explanation.
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(lastRequestText))
+                {
+                    var explanationRequest =
+                        "MODALITÀ DIAGNOSTICA (TESTO LIBERO).\n" +
+                        "Non rispondere con mapping.\n" +
+                        "Spiega in italiano perché non hai assegnato PERSONAGGIO+EMOZIONE alle righe di dialogo richieste.\n\n" +
+                        "RIGHE DI DIALOGO DA TAGGARE:\n" + (dialogueLines.Count > 0 ? string.Join("\n", dialogueLines) : "(nessuna)") + "\n\n" +
+                        "ULTIMA RICHIESTA CHE TI È STATA INVIATA:\n" + lastRequestText + "\n\n" +
+                        "TUA ULTIMA RISPOSTA:\n" + (string.IsNullOrWhiteSpace(lastMappingText) ? "(vuota)" : lastMappingText) + "\n\n" +
+                        "ULTIMO ERRORE RILEVATO DAL PROGRAMMA:\n" + (lastError ?? "(non specificato)") + "\n\n" +
+                        "Spiega cosa ti ha confuso (formato, ambiguità, limiti del modello, ecc.)." +
+                        "Proponi una modifica o aggiunta alle istruzioni system per evitare questo problema in futuro.";
+
+                    _logger?.Log("Information", "explanation", $"[formatter={formatterAgentName}] [model={modelName}] REQUEST\n{explanationRequest}");
+
+                    var diagMessages = new List<ConversationMessage>
+                    {
+                        new ConversationMessage { Role = "system", Content = "Sei in modalità diagnostica. Rispondi SOLO in testo libero." },
+                        new ConversationMessage { Role = "user", Content = explanationRequest }
+                    };
+
+                    string diagJson;
+                    using (LogScope.Push("formatter_explanation", operationId: null, stepNumber: null, maxStep: null, agentName: formatterAgentName))
+                    {
+                        diagJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct);
+                    }
+
+                    var (diagText, _) = LangChainChatBridge.ParseChatResponse(diagJson);
+                    var diagTextTrim = (diagText ?? string.Empty).Trim();
+                    _logger?.Log(
+                        string.IsNullOrWhiteSpace(diagTextTrim) ? "Warning" : "Information",
+                        "explanation",
+                        $"[formatter={formatterAgentName}] [model={modelName}] RESPONSE\n" + (string.IsNullOrWhiteSpace(diagTextTrim) ? "(empty)" : diagTextTrim));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Warning", "explanation", $"Failed to capture formatter explanation: {ex.Message}");
+            }
+
             _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Failed after {maxAttempts} attempts. Last error: {lastError}", "error");
-            return string.Empty;
+            return new FormatChunkResult(string.Empty, lastError);
+        }
+
+        private static bool StartsWithOpeningQuote(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            var trimmed = text.TrimStart();
+            if (trimmed.Length == 0) return false;
+            return trimmed[0] == '"' || trimmed[0] == '“' || trimmed[0] == '«';
         }
 
         private static string? BuildSystemPrompt(Agent agent)
@@ -482,7 +719,9 @@ namespace TinyGenerator.Services.Commands
             var minTokensPerChunk = Math.Max(0, _tuning.TransformStoryRawToTagged.MinTokensPerChunk);
             var maxTokensPerChunk = Math.Max(1, _tuning.TransformStoryRawToTagged.MaxTokensPerChunk);
             var targetTokensPerChunk = Math.Max(1, _tuning.TransformStoryRawToTagged.TargetTokensPerChunk);
-            var overlapTokens = Math.Max(0, _tuning.TransformStoryRawToTagged.OverlapTokens);
+            // Formatter V2 builds tags deterministically on the original text. Using overlap would
+            // duplicate content and complicate merging, so we force overlap to 0.
+            var overlapTokens = 0;
 
             var segments = SplitIntoSegments(storyText);
             if (segments.Count == 0)

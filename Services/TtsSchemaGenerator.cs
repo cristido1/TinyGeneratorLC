@@ -58,6 +58,9 @@ namespace TinyGenerator.Services
             // Remove <think>...</think> sections from the text
             storyText = Regex.Replace(storyText, @"<think>.*?</think>", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
             _logger?.Log("Debug", "TtsSchemaGenerator", "Removed <think> sections from story text");
+            
+            // Normalize tags that appear inline so they start on their own line.
+            storyText = NormalizeInlineTags(storyText);
 
             // Build character lookup from story characters if available
             var storyCharLookup = storyCharacters ?? new List<StoryCharacter>();
@@ -587,6 +590,17 @@ namespace TinyGenerator.Services
                 $"Generated TTS schema: {schema.Characters.Count} characters, {schema.Timeline.Count} phrases");
 
             return schema;
+        }
+
+        private static string NormalizeInlineTags(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return text ?? string.Empty;
+
+            return Regex.Replace(
+                text,
+                @"(?<!^)(?<!\r)(?<!\n)(\[(?:NARRATORE|PERSONAGGIO:|EMOZIONE:|SENTIMENTO:|RUMORI|RUMORE|AMBIENTE|FX|MUSIC)\b)",
+                "\n$1",
+                RegexOptions.IgnoreCase);
         }
 
         /// <summary>

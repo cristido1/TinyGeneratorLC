@@ -41,6 +41,12 @@ namespace TinyGenerator.Models
         [Column("story_tagged_version")]
         public int? StoryTaggedVersion { get; set; }
 
+        [Column("story_rows")]
+        public string? StoryRows { get; set; }
+
+        [Column("story_tags")]
+        public string? StoryTags { get; set; }
+
         [Column("formatter_model")]
         public int? FormatterModelId { get; set; }
 

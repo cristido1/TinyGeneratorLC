@@ -62,7 +62,9 @@
                                     {
                                         if (action.Method == "GET")
                                         {
-                                            <li><a class="dropdown-item" href="@action.Url">@action.Title</a></li>
+                                            <li>
+                                                <a class="dropdown-item js-nav" href="@action.Url" data-url="@action.Url">@action.Title</a>
+                                            </li>
                                         }
                                         else if (action.Method == "POST")
                                         {
@@ -257,6 +259,15 @@
                 $('#modalAgentId').val(agentId);
                 $('#storyModal .modal-title').text('Generate Story - ' + agentName);
                 new bootstrap.Modal(document.getElementById('storyModal')).show();
+            });
+
+            // Robust navigation for GET dropdown actions (prevents accidental postbacks)
+            $(document).on('click', 'a.dropdown-item.js-nav', function(e) {
+                var url = $(this).data('url') || $(this).attr('href');
+                if (!url) return;
+                e.preventDefault();
+                e.stopPropagation();
+                window.location.assign(url);
             });
         });
     }

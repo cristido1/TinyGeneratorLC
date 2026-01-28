@@ -90,6 +90,9 @@ builder.Services.AddScoped(typeof(TinyGenerator.Data.IRepository<>), typeof(Tiny
 // Register specific repositories
 builder.Services.AddScoped<TinyGenerator.Data.Repositories.IStoryRepository, TinyGenerator.Data.Repositories.StoryRepository>();
 
+// Model fallback service for agent resilience
+builder.Services.AddScoped<ModelFallbackService>();
+
 // Persistent memory service (sqlite) using consolidated storage DB
 builder.Services.AddSingleton<PersistentMemoryService>(sp =>
     new PersistentMemoryService(
@@ -135,7 +138,8 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetService<ILogger<StoriesService>>(),
     sp.GetService<ICommandDispatcher>(),
     sp.GetService<MultiStepOrchestrationService>(),
-    sp.GetService<SentimentMappingService>()));
+    sp.GetService<SentimentMappingService>(),
+    scopeFactory: sp.GetService<IServiceScopeFactory>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)

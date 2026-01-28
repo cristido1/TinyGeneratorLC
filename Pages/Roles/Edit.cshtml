@@ -1,0 +1,33 @@
+@page
+@model TinyGenerator.Pages.Roles.EditModel
+@{
+    ViewData["Title"] = Model.Role.Id > 0 ? "Modifica Ruolo" : "Nuovo Ruolo";
+}
+
+<h3>@ViewData["Title"]</h3>
+
+<form method="post">
+    <input type="hidden" asp-for="Role.Id" />
+
+    <div class="mb-3">
+        <label asp-for="Role.Ruolo" class="form-label">Ruolo</label>
+        <input asp-for="Role.Ruolo" class="form-control" required />
+        <span asp-validation-for="Role.Ruolo" class="text-danger"></span>
+    </div>
+
+    <div class="mb-3">
+        <label asp-for="Role.ComandoCollegato" class="form-label">Comando Collegato</label>
+        <input asp-for="Role.ComandoCollegato" class="form-control" placeholder="Es: TransformStoryRawToTaggedCommand" />
+        <span asp-validation-for="Role.ComandoCollegato" class="text-danger"></span>
+        <small class="form-text text-muted">Nome del comando o operazione associata a questo ruolo.</small>
+    </div>
+
+    <div class="mb-3">
+        <button type="submit" class="btn btn-primary">Salva</button>
+        <a asp-page="Index" class="btn btn-secondary">Annulla</a>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

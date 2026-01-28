@@ -2,17 +2,20 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TinyGenerator.Data;
 
 #nullable disable
 
-namespace TinyGenerator.Data.Migrations
+namespace TinyGenerator.data.Migrations
 {
     [DbContext(typeof(TinyGeneratorDbContext))]
-    partial class TinyGeneratorDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260123133140_AddRolesAndModelRoles")]
+    partial class AddRolesAndModelRoles
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -1124,57 +1127,57 @@ namespace TinyGenerator.Data.Migrations
                         {
                             Id = 1,
                             ComandoCollegato = "FullStoryPipelineCommand",
-                            CreatedAt = "2026-01-24T09:44:50.2180354Z",
+                            CreatedAt = "2026-01-23T13:31:40.2134749Z",
                             Ruolo = "writer",
-                            UpdatedAt = "2026-01-24T09:44:50.2180354Z"
+                            UpdatedAt = "2026-01-23T13:31:40.2134749Z"
                         },
                         new
                         {
                             Id = 2,
                             ComandoCollegato = "TransformStoryRawToTaggedCommand",
-                            CreatedAt = "2026-01-24T09:44:50.2180354Z",
+                            CreatedAt = "2026-01-23T13:31:40.2134749Z",
                             Ruolo = "formatter",
-                            UpdatedAt = "2026-01-24T09:44:50.2180354Z"
+                            UpdatedAt = "2026-01-23T13:31:40.2134749Z"
                         },
                         new
                         {
                             Id = 3,
                             ComandoCollegato = "StoryEvaluation",
-                            CreatedAt = "2026-01-24T09:44:50.2180354Z",
+                            CreatedAt = "2026-01-23T13:31:40.2134749Z",
                             Ruolo = "evaluator",
-                            UpdatedAt = "2026-01-24T09:44:50.2180354Z"
+                            UpdatedAt = "2026-01-23T13:31:40.2134749Z"
                         },
                         new
                         {
                             Id = 4,
                             ComandoCollegato = "TtsGeneration",
-                            CreatedAt = "2026-01-24T09:44:50.2180354Z",
+                            CreatedAt = "2026-01-23T13:31:40.2134749Z",
                             Ruolo = "tts_expert",
-                            UpdatedAt = "2026-01-24T09:44:50.2180354Z"
+                            UpdatedAt = "2026-01-23T13:31:40.2134749Z"
                         },
                         new
                         {
                             Id = 5,
                             ComandoCollegato = "MusicGeneration",
-                            CreatedAt = "2026-01-24T09:44:50.2180354Z",
+                            CreatedAt = "2026-01-23T13:31:40.2134749Z",
                             Ruolo = "music_expert",
-                            UpdatedAt = "2026-01-24T09:44:50.2180354Z"
+                            UpdatedAt = "2026-01-23T13:31:40.2134749Z"
                         },
                         new
                         {
                             Id = 6,
                             ComandoCollegato = "FxGeneration",
-                            CreatedAt = "2026-01-24T09:44:50.2180354Z",
+                            CreatedAt = "2026-01-23T13:31:40.2134749Z",
                             Ruolo = "fx_expert",
-                            UpdatedAt = "2026-01-24T09:44:50.2180354Z"
+                            UpdatedAt = "2026-01-23T13:31:40.2134749Z"
                         },
                         new
                         {
                             Id = 7,
                             ComandoCollegato = "SummarizeStory",
-                            CreatedAt = "2026-01-24T09:44:50.2180354Z",
+                            CreatedAt = "2026-01-23T13:31:40.2134749Z",
                             Ruolo = "summarizer",
-                            UpdatedAt = "2026-01-24T09:44:50.2180354Z"
+                            UpdatedAt = "2026-01-23T13:31:40.2134749Z"
                         });
                 });
 
@@ -1712,10 +1715,6 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("story_revised");
 
-                    b.Property<string>("StoryRows")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("story_rows");
-
                     b.Property<string>("StoryStructure")
                         .HasColumnType("TEXT")
                         .HasColumnName("story_structure");
@@ -1727,10 +1726,6 @@ namespace TinyGenerator.Data.Migrations
                     b.Property<int?>("StoryTaggedVersion")
                         .HasColumnType("INTEGER")
                         .HasColumnName("story_tagged_version");
-
-                    b.Property<string>("StoryTags")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("story_tags");
 
                     b.Property<string>("Summary")
                         .HasColumnType("TEXT")

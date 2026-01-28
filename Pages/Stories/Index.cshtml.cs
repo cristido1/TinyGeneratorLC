@@ -14,6 +14,7 @@ using TinyGenerator.Services;
 using TinyGenerator.Models;
 using TinyGenerator.Services.Commands;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace TinyGenerator.Pages.Stories
 {
@@ -22,6 +23,7 @@ namespace TinyGenerator.Pages.Stories
         private readonly StoriesService _stories;
         private readonly DatabaseService _database;
         private readonly ILangChainKernelFactory _kernelFactory;
+        private readonly IServiceScopeFactory? _scopeFactory;
         private readonly ICustomLogger? _customLogger;
         private readonly ILogger<IndexModel>? _logger;
         private readonly ICommandDispatcher _commandDispatcher;
@@ -32,6 +34,7 @@ namespace TinyGenerator.Pages.Stories
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
                         IOptions<CommandTuningOptions> tuningOptions,
+            IServiceScopeFactory? scopeFactory = null,
             ICustomLogger? customLogger = null,
             ICommandDispatcher? commandDispatcher = null,
             ILogger<IndexModel>? logger = null)
@@ -39,6 +42,7 @@ namespace TinyGenerator.Pages.Stories
             _stories = stories;
             _database = database;
             _kernelFactory = kernelFactory;
+            _scopeFactory = scopeFactory;
                         _tuning = tuningOptions.Value ?? new CommandTuningOptions();
             _customLogger = customLogger;
             _logger = logger;
@@ -780,7 +784,8 @@ namespace TinyGenerator.Pages.Stories
                         _stories,
                         _customLogger,
                         _commandDispatcher,
-                        _tuning);
+                        _tuning,
+                        _scopeFactory);
                     return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                 },
                 "Aggiunta tag avviata in background.");
@@ -836,7 +841,7 @@ namespace TinyGenerator.Pages.Stories
                         "ambient_expert",
                         async inner =>
                         {
-                            var cmd = new AmbientExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning);
+                            var cmd = new AmbientExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,
@@ -902,7 +907,7 @@ namespace TinyGenerator.Pages.Stories
                         "fx_expert",
                         async inner =>
                         {
-                            var cmd = new FxExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning);
+                            var cmd = new FxExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,
@@ -968,7 +973,7 @@ namespace TinyGenerator.Pages.Stories
                         "music_expert",
                         async inner =>
                         {
-                            var cmd = new MusicExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning);
+                            var cmd = new MusicExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,

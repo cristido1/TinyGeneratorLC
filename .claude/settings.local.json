@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"c:\\\\Users\\\\User\\\\Documents\\\\ai\\\\TinyGeneratorLC\\\\data\\\\Migrations\" /b)",
+      "Bash(dotnet ef migrations add:*)",
+      "Bash(dotnet build:*)",
+      "Bash(dotnet ef database update:*)",
+      "Bash(sqlite3:*)",
+      "Bash(dotnet ef migrations:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}

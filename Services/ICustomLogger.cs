@@ -39,6 +39,9 @@ namespace TinyGenerator.Services
         Task HideAgentActivityAsync(string agentId);
         void HideAgentActivity(string agentId);
 
+        // Update latest model response log for current thread (SUCCESS/FAILED + reason)
+        void MarkLatestModelResponseResult(string result, string? failReason = null, bool? examined = null);
+
         Task BroadcastLogsAsync(IEnumerable<LogEntry> entries);
 
         Task ModelRequestStartedAsync(string modelName);

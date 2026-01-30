@@ -28,7 +28,6 @@ public sealed class StoriesService
     }
     private const int TtsSchemaReadyStatusId = 3;
     private const int DefaultPhraseGapMs = 2000;
-    private const string NarratorFallbackVoiceName = "Dionisio Schuyler";
     private readonly DatabaseService _database;
     private readonly ILogger<StoriesService>? _logger;
     private readonly TtsService _ttsService;
@@ -39,6 +38,10 @@ public sealed class StoriesService
     private readonly SentimentMappingService? _sentimentMappingService;
     private readonly ResponseCheckerService? _responseChecker;
     private readonly CommandTuningOptions _tuning;
+    private readonly IOptionsMonitor<TtsSchemaGenerationOptions>? _ttsSchemaOptions;
+    private readonly IOptionsMonitor<AudioGenerationOptions>? _audioGenerationOptions;
+    private readonly IOptionsMonitor<NarratorVoiceOptions>? _narratorVoiceOptions;
+    private readonly IOptionsMonitor<AutomaticOperationsOptions>? _idleAutoOptions;
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly ConcurrentDictionary<long, StatusChainState> _statusChains = new();
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
@@ -63,6 +66,10 @@ public sealed class StoriesService
         SentimentMappingService? sentimentMappingService = null,
         ResponseCheckerService? responseChecker = null,
         IOptions<CommandTuningOptions>? tuningOptions = null,
+        IOptionsMonitor<TtsSchemaGenerationOptions>? ttsSchemaOptions = null,
+        IOptionsMonitor<AudioGenerationOptions>? audioGenerationOptions = null,
+        IOptionsMonitor<NarratorVoiceOptions>? narratorVoiceOptions = null,
+        IOptionsMonitor<AutomaticOperationsOptions>? idleAutoOptions = null,
         IServiceScopeFactory? scopeFactory = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
@@ -75,7 +82,11 @@ public sealed class StoriesService
         _sentimentMappingService = sentimentMappingService;
         _responseChecker = responseChecker;
         _tuning = tuningOptions?.Value ?? new CommandTuningOptions();
+        _ttsSchemaOptions = ttsSchemaOptions;
+        _audioGenerationOptions = audioGenerationOptions;
+        _narratorVoiceOptions = narratorVoiceOptions;
         _scopeFactory = scopeFactory;
+        _idleAutoOptions = idleAutoOptions;
     }
 
     public long SaveGeneration(string prompt, StoryGenerationResult r, string? memoryKey = null)
@@ -99,6 +110,53 @@ public sealed class StoriesService
     public void Delete(long id)
     {
         _database.DeleteStoryById(id);
+    }
+
+    public bool DeleteStoryCompletely(long storyId, out string? message)
+    {
+        message = null;
+        try
+        {
+            _database.DeleteStoryById(storyId);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+            return false;
+        }
+    }
+
+    public bool DeleteStoryCompletelySingle(long storyId, out string? message)
+    {
+        return DeleteStoryCompletelySingle(storyId, trigger: null, out message);
+    }
+
+    public bool DeleteStoryCompletelySingle(long storyId, string? trigger, out string? message)
+    {
+        message = null;
+        try
+        {
+            _database.DeleteStoryRowById(storyId);
+
+            if (string.Equals(trigger, "idle_auto_delete", StringComparison.OrdinalIgnoreCase))
+            {
+                _database.AddWriterFailureForStory(storyId);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+            return false;
+        }
+    }
+
+    public bool ApplyStatusTransitionAndCleanup(StoryRecord story, string statusCode, string? runId = null)
+    {
+        return ApplyStatusTransitionWithCleanup(story, statusCode, runId);
     }
 
     public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, long? storyId = null, int? serieId = null, int? serieEpisode = null)
@@ -507,169 +565,277 @@ public sealed class StoriesService
 
         try
         {
-            var orchestrator = _kernelFactory.CreateOrchestrator(modelName, allowedPlugins, agent.Id);
-            var evaluatorTool = orchestrator.GetTool<EvaluatorTool>("evaluate_full_story");
-            if (evaluatorTool != null)
+
+            async Task<(bool success, double score, string? error)> ExecuteEvaluationWithModelAsync(
+                string evaluationModelName,
+                int evaluationModelId,
+                string? instructionsOverride,
+                double? topPOverride,
+                int? topKOverride)
             {
-                evaluatorTool.CurrentStoryId = story.Id;
-            }
-            
-            // Set CurrentStoryId for coherence evaluation tools
-            var chunkFactsTool = orchestrator.GetTool<ChunkFactsExtractorTool>("extract_chunk_facts");
-            if (chunkFactsTool != null)
-            {
-                chunkFactsTool.CurrentStoryId = story.Id;
-            }
-            
-            var coherenceTool = orchestrator.GetTool<CoherenceCalculatorTool>("calculate_coherence");
-            if (coherenceTool != null)
-            {
-                coherenceTool.CurrentStoryId = story.Id;
-            }
-            
-            var chatBridge = _kernelFactory.CreateChatBridge(
-                modelName,
-                agent.Temperature,
-                agent.TopP,
-                agent.RepeatPenalty,
-                agent.RepeatLastN,
-                agent.NumPredict);
-
-            var isStoryEvaluatorTextProtocol = agent.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
-            var systemMessage = (isStoryEvaluatorTextProtocol
-                ? StoriesServiceDefaults.EvaluatorTextProtocolInstructions
-                : (!string.IsNullOrWhiteSpace(agent.Instructions) ? agent.Instructions : ComposeSystemMessage(agent)))
-                ?? string.Empty;
-
-            // Use different prompt based on agent role
-            bool isCoherenceEvaluation = agent.Role?.Equals("coherence_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
-            var prompt = BuildStoryEvaluationPrompt(story, isCoherenceEvaluation);
-
-            var beforeEvaluations = _database.GetStoryEvaluations(storyId)
-                .Select(e => e.Id)
-                .ToHashSet();
-
-            if (isStoryEvaluatorTextProtocol)
-            {
-                var protocolResult = await EvaluateStoryWithTextProtocolAsync(
-                    story,
-                    chatBridge,
-                    systemMessage,
-                    modelId: agent.ModelId,
-                    agentId: agent.Id).ConfigureAwait(false);
-
-                if (!protocolResult.success)
+                try
                 {
-                    var error = protocolResult.error ?? "Valutazione fallita";
-                    _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
-                    return (false, 0, error);
-                }
-            }
-            else
-            {
-                if (!allowedPlugins.Any())
-                    return (false, 0, "L'agente valutatore non ha strumenti abilitati");
-
-                var reactLoop = new ReActLoopOrchestrator(
-                    orchestrator,
-                    _customLogger,
-                    runId: runId,
-                    modelBridge: chatBridge,
-                    systemMessage: systemMessage,
-                    responseChecker: _responseChecker,
-                    agentRole: agent.Role);
-
-                var reactResult = await reactLoop.ExecuteAsync(prompt);
-                if (!reactResult.Success)
-                {
-                    var error = reactResult.Error ?? "Valutazione fallita";
-                    _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
-                    return (false, 0, error);
-                }
-            }
-
-            // Check results based on agent type
-            if (isCoherenceEvaluation)
-            {
-                // For coherence evaluation, check if global coherence was saved
-                var globalCoherence = _database.GetGlobalCoherence((int)storyId);
-                if (globalCoherence == null)
-                {
-                    var msg = "L'agente non ha salvato la coerenza globale.";
-                    _customLogger?.Append(runId, $"[{storyId}] {msg}", "Warn");
-                    TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
-                    return (false, 0, msg);
-                }
-
-                var score = globalCoherence.GlobalCoherenceValue * 10; // Convert 0-1 to 0-10 scale
-                _customLogger?.Append(runId, $"[{storyId}] Valutazione di coerenza completata. Score: {score:F2}");
-                TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione di coerenza completata. Score: {score:F2}");
-                return (true, score, null);
-            }
-            else
-            {
-                // For standard evaluation, check stories_evaluations table
-                var afterEvaluations = _database.GetStoryEvaluations(storyId)
-                    .Where(e => !beforeEvaluations.Contains(e.Id))
-                    .OrderBy(e => e.Id)
-                    .ToList();
-
-                if (afterEvaluations.Count == 0)
-                {
-                    var msg = "L'agente non ha salvato alcuna valutazione.";
-                    _customLogger?.Append(runId, $"[{storyId}] {msg}", "Warn");
-                    TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
-                    return (false, 0, msg);
-                }
-
-                var avgScore = afterEvaluations.Average(e => e.TotalScore);
-                _customLogger?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
-                TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
-                
-                // Se score > 60% (su scala 0-40), avvia riassunto automatico con priorit� bassa
-                if (avgScore > 24 && _commandDispatcher != null)
-                {
-                    try
+                    var orchestrator = _kernelFactory.CreateOrchestrator(evaluationModelName, allowedPlugins, agent.Id);
+                    var evaluatorTool = orchestrator.GetTool<EvaluatorTool>("evaluate_full_story");
+                    if (evaluatorTool != null)
                     {
-                        var summarizerAgent = _database.ListAgents()
-                            .FirstOrDefault(a => a.Role == "summarizer" && a.IsActive);
-                        
-                        if (summarizerAgent != null)
+                        evaluatorTool.CurrentStoryId = story.Id;
+                    }
+
+                    // Set CurrentStoryId for coherence evaluation tools
+                    var chunkFactsTool = orchestrator.GetTool<ChunkFactsExtractorTool>("extract_chunk_facts");
+                    if (chunkFactsTool != null)
+                    {
+                        chunkFactsTool.CurrentStoryId = story.Id;
+                    }
+
+                    var coherenceTool = orchestrator.GetTool<CoherenceCalculatorTool>("calculate_coherence");
+                    if (coherenceTool != null)
+                    {
+                        coherenceTool.CurrentStoryId = story.Id;
+                    }
+
+                    var chatBridge = _kernelFactory.CreateChatBridge(
+                        evaluationModelName,
+                        agent.Temperature,
+                        topPOverride ?? agent.TopP,
+                        agent.RepeatPenalty,
+                        topKOverride ?? agent.TopK,
+                        agent.RepeatLastN,
+                        agent.NumPredict);
+
+                    var isStoryEvaluatorTextProtocol = agent.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
+                    var baseSystemMessage = (isStoryEvaluatorTextProtocol
+                        ? StoriesServiceDefaults.EvaluatorTextProtocolInstructions
+                        : (!string.IsNullOrWhiteSpace(agent.Instructions) ? agent.Instructions : ComposeSystemMessage(agent)))
+                        ?? string.Empty;
+                    var systemMessage = !string.IsNullOrWhiteSpace(instructionsOverride)
+                        ? instructionsOverride!
+                        : baseSystemMessage;
+
+                    // Use different prompt based on agent role
+                    bool isCoherenceEvaluation = agent.Role?.Equals("coherence_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
+                    var prompt = BuildStoryEvaluationPrompt(story, isCoherenceEvaluation);
+
+                    var beforeEvaluations = _database.GetStoryEvaluations(storyId)
+                        .Select(e => e.Id)
+                        .ToHashSet();
+
+                    if (isStoryEvaluatorTextProtocol)
+                    {
+                        var protocolResult = await EvaluateStoryWithTextProtocolAsync(
+                            story,
+                            chatBridge,
+                            systemMessage,
+                            modelId: evaluationModelId,
+                            agentId: agent.Id).ConfigureAwait(false);
+
+                        if (!protocolResult.success)
                         {
-                            var summarizeRunId = Guid.NewGuid().ToString();
-                            var cmd = new Commands.SummarizeStoryCommand(
-                                storyId,
-                                _database,
-                                _kernelFactory!,
-                                _customLogger!);
-                            
-                            _commandDispatcher.Enqueue(
-                                "SummarizeStory",
-                                async ctx => {
-                                    bool success = await cmd.ExecuteAsync(ctx.CancellationToken);
-                                    return new CommandResult(success, success ? "Summary generated" : "Failed to generate summary");
-                                },
-                                runId: summarizeRunId,
-                                metadata: new Dictionary<string, string>
-                                {
-                                    ["storyId"] = storyId.ToString(),
-                                    ["storyTitle"] = story.Title ?? "Untitled",
-                                    ["triggeredBy"] = "auto_evaluation",
-                                    ["evaluationScore"] = avgScore.ToString("F2")
-                                },
-                                priority: 3);
-                            
-                            _customLogger?.Append(runId, $"[{storyId}] Auto-summarization enqueued (score: {avgScore:F2})");
+                            var error = protocolResult.error ?? "Valutazione fallita";
+                            _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
+                            return (false, 0, error);
                         }
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        _logger?.LogWarning(ex, "Failed to enqueue auto-summarization for story {StoryId}", storyId);
+                        if (!allowedPlugins.Any())
+                            return (false, 0, "L'agente valutatore non ha strumenti abilitati");
+
+                        var reactLoop = new ReActLoopOrchestrator(
+                            orchestrator,
+                            _customLogger,
+                            runId: runId,
+                            modelBridge: chatBridge,
+                            systemMessage: systemMessage,
+                            responseChecker: _responseChecker,
+                            agentRole: agent.Role);
+
+                        var reactResult = await reactLoop.ExecuteAsync(prompt);
+                        if (!reactResult.Success)
+                        {
+                            var error = reactResult.Error ?? "Valutazione fallita";
+                            _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
+                            return (false, 0, error);
+                        }
+                    }
+
+                    // Check results based on agent type
+                    if (isCoherenceEvaluation)
+                    {
+                        // For coherence evaluation, check if global coherence was saved
+                        var globalCoherence = _database.GetGlobalCoherence((int)storyId);
+                        if (globalCoherence == null)
+                        {
+                            var msg = "L'agente non ha salvato la coerenza globale.";
+                            _customLogger?.Append(runId, $"[{storyId}] {msg}", "Warn");
+                            TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
+                            return (false, 0, msg);
+                        }
+
+                        var score = globalCoherence.GlobalCoherenceValue * 10; // Convert 0-1 to 0-10 scale
+                        _customLogger?.Append(runId, $"[{storyId}] Valutazione di coerenza completata. Score: {score:F2}");
+                        TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione di coerenza completata. Score: {score:F2}");
+                        var allowNext = true;
+                        var (count, _) = _database.GetStoryEvaluationStats(storyId);
+                        if (count >= 2)
+                        {
+                            allowNext = ApplyStatusTransitionWithCleanup(story, "evaluated", runId);
+                        }
+                        if (allowNext)
+                        {
+                            TryEnqueueAutoFormatAfterEvaluation(storyId);
+                        }
+                        return (true, score, null);
+                    }
+                    else
+                    {
+                        // For standard evaluation, check stories_evaluations table
+                        var afterEvaluations = _database.GetStoryEvaluations(storyId)
+                            .Where(e => !beforeEvaluations.Contains(e.Id))
+                            .OrderBy(e => e.Id)
+                            .ToList();
+
+                        if (afterEvaluations.Count == 0)
+                        {
+                            var msg = "L'agente non ha salvato alcuna valutazione.";
+                            _customLogger?.Append(runId, $"[{storyId}] {msg}", "Warn");
+                            TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
+                            return (false, 0, msg);
+                        }
+
+                        var avgScore = afterEvaluations.Average(e => e.TotalScore);
+                        _customLogger?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
+                        TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
+
+                        // Se score > 60% (su scala 0-40), avvia riassunto automatico con priorita' bassa
+                        if (avgScore > 24 && _commandDispatcher != null)
+                        {
+                            try
+                            {
+                                var summarizerAgent = _database.ListAgents()
+                                    .FirstOrDefault(a => a.Role == "summarizer" && a.IsActive);
+
+                                if (summarizerAgent != null)
+                                {
+                                    var summarizeRunId = Guid.NewGuid().ToString();
+                                    var cmd = new Commands.SummarizeStoryCommand(
+                                        storyId,
+                                        _database,
+                                        _kernelFactory!,
+                                        _customLogger!);
+
+                                    _commandDispatcher.Enqueue(
+                                        "SummarizeStory",
+                                        async ctx =>
+                                        {
+                                            bool success = await cmd.ExecuteAsync(ctx.CancellationToken);
+                                            return new CommandResult(success, success ? "Summary generated" : "Failed to generate summary");
+                                        },
+                                        runId: summarizeRunId,
+                                        metadata: new Dictionary<string, string>
+                                        {
+                                            ["storyId"] = storyId.ToString(),
+                                            ["storyTitle"] = story.Title ?? "Untitled",
+                                            ["triggeredBy"] = "auto_evaluation",
+                                            ["evaluationScore"] = avgScore.ToString("F2")
+                                        },
+                                        priority: 3);
+
+                                    _customLogger?.Append(runId, $"[{storyId}] Auto-summarization enqueued (score: {avgScore:F2})");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger?.LogWarning(ex, "Failed to enqueue auto-summarization for story {StoryId}", storyId);
+                            }
+                        }
+
+                        var allowNext = true;
+                        var (count, _) = _database.GetStoryEvaluationStats(storyId);
+                        if (count >= 2)
+                        {
+                            allowNext = ApplyStatusTransitionWithCleanup(story, "evaluated", runId);
+                        }
+                        if (allowNext)
+                        {
+                            TryEnqueueAutoFormatAfterEvaluation(storyId);
+                        }
+
+                        return (true, avgScore, null);
                     }
                 }
-                
-                return (true, avgScore, null);
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Errore durante EvaluateStoryWithAgent per storia {StoryId} agente {AgentId}", storyId, agentId);
+                    TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, ex.Message);
+                    return (false, 0, ex.Message);
+                }
             }
+
+            var primaryResult = await ExecuteEvaluationWithModelAsync(
+                modelName,
+                agent.ModelId.Value,
+                agent.Instructions,
+                agent.TopP,
+                agent.TopK);
+
+            if (primaryResult.success)
+            {
+                return primaryResult;
+            }
+
+            if (_scopeFactory == null)
+            {
+                return primaryResult;
+            }
+
+            using var fallbackScope = _scopeFactory.CreateScope();
+            var fallbackService = fallbackScope.ServiceProvider.GetService<ModelFallbackService>();
+            if (fallbackService == null)
+            {
+                _customLogger?.Append(runId, "ModelFallbackService not available; cannot fallback.", "warn");
+                return primaryResult;
+            }
+
+            var roleCode = string.IsNullOrWhiteSpace(agent.Role) ? "story_evaluator" : agent.Role!;
+            var triedModelNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                modelName
+            };
+
+            var (fallbackResult, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync(
+                roleCode,
+                agent.ModelId,
+                async modelRole =>
+                {
+                    var fallbackModelName = modelRole.Model?.Name;
+                    if (string.IsNullOrWhiteSpace(fallbackModelName))
+                    {
+                        throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
+                    }
+
+                    return await ExecuteEvaluationWithModelAsync(
+                        fallbackModelName,
+                        modelRole.ModelId,
+                        string.IsNullOrWhiteSpace(modelRole.Instructions) ? agent.Instructions : modelRole.Instructions,
+                        modelRole.TopP ?? agent.TopP,
+                        modelRole.TopK ?? agent.TopK);
+                },
+                validateResult: r => r.success,
+                shouldTryModelRole: modelRole =>
+                {
+                    var name = modelRole.Model?.Name;
+                    return !string.IsNullOrWhiteSpace(name) && triedModelNames.Add(name);
+                });
+
+            if (fallbackResult.success && successfulModelRole?.Model != null)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] Fallback model succeeded: {successfulModelRole.Model.Name} (role={roleCode})");
+                return fallbackResult;
+            }
+
+            return primaryResult;
         }
         catch (Exception ex)
         {
@@ -723,11 +889,13 @@ public sealed class StoriesService
             var (evalResponseText, _) = LangChainChatBridge.ParseChatResponse(evalRawJson);
             evalText = NormalizeEvaluatorOutput((evalResponseText ?? string.Empty));
             messages.Add(new ConversationMessage { Role = "assistant", Content = evalText });
-if (TryParseEvaluationText(evalText, out parsed, out parseError))
-            {
-                evalOk = true;
-                break;
-            }
+                if (TryParseEvaluationText(evalText, out parsed, out parseError))
+                {
+                    _customLogger?.MarkLatestModelResponseResult("SUCCESS", null);
+                    evalOk = true;
+                    break;
+                }
+                _customLogger?.MarkLatestModelResponseResult("FAILED", parseError);
 
                 if (attempt < maxAttemptsFinalEvaluation)
                 {
@@ -760,10 +928,6 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 rawJson: evalText,
                 modelId: modelId,
                 agentId: agentId);
-
-            // Requirement: whenever an evaluation is performed (i.e., saved), optionally enqueue
-            // the formatter command if conditions are met. Non-blocking: we enqueue and return.
-            TryEnqueueAutoFormatAfterEvaluation(story.Id);
         }
         catch (Exception ex)
         {
@@ -1205,8 +1369,14 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     var (ok, err) = await GenerateTtsForStoryInternalAsync(storyId, folderName, ctx.RunId, targetStatusId);
                     if (ok)
                     {
+                        var story = GetStoryById(storyId);
+                        var allowNext = story == null || ApplyStatusTransitionWithCleanup(story, "tts_generated", ctx.RunId);
+
                         // Requirement: if TTS audio generation succeeds, enqueue music/ambience/fx individually with lower priority.
-                        EnqueuePostTtsAudioFollowups(storyId, trigger: "tts_audio_generated", priority: Math.Max(priority + 1, 4));
+                        if (allowNext)
+                        {
+                            EnqueuePostTtsAudioFollowups(storyId, trigger: "tts_audio_generated", priority: Math.Max(priority + 1, 4));
+                        }
                     }
 
                     return new CommandResult(ok, ok ? "Generazione audio TTS completata." : err);
@@ -1233,11 +1403,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         return new EnqueueResult(false, "Errore inatteso durante l'accodamento della generazione audio TTS (vedi log applicazione).");
     }
 
-    public void EnqueuePostTtsAudioFollowups(long storyId, string trigger, int priority = 4)
-    {
-        try
+        public void EnqueuePostTtsAudioFollowups(long storyId, string trigger, int priority = 4)
         {
-            if (storyId <= 0) return;
+            try
+            {
+                if (storyId <= 0) return;
             if (_commandDispatcher == null) return;
 
             var story = GetStoryById(storyId);
@@ -1290,23 +1460,31 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     return new CommandResult(ok, ok ? "Generazione musica completata." : err);
                 });
 
-            EnqueueIfNotQueued(
-                "generate_ambience_audio",
-                $"generate_ambience_audio_{storyId}_",
-                async ctx =>
-                {
-                    var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
-                    return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
-                });
+            var autoAmbience = _audioGenerationOptions?.CurrentValue?.Ambience?.AutolaunchNextCommand ?? true;
+            if (autoAmbience)
+            {
+                EnqueueIfNotQueued(
+                    "generate_ambience_audio",
+                    $"generate_ambience_audio_{storyId}_",
+                    async ctx =>
+                    {
+                        var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
+                        return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
+                    });
+            }
 
-            EnqueueIfNotQueued(
-                "generate_fx_audio",
-                $"generate_fx_audio_{storyId}_",
-                async ctx =>
-                {
-                    var (ok, err) = await GenerateFxForStoryAsync(storyId, folderName, ctx.RunId);
-                    return new CommandResult(ok, ok ? "Generazione effetti sonori completata." : err);
-                });
+            var autoFx = _audioGenerationOptions?.CurrentValue?.Fx?.AutolaunchNextCommand ?? true;
+            if (autoFx)
+            {
+                EnqueueIfNotQueued(
+                    "generate_fx_audio",
+                    $"generate_fx_audio_{storyId}_",
+                    async ctx =>
+                    {
+                        var (ok, err) = await GenerateFxForStoryAsync(storyId, folderName, ctx.RunId);
+                        return new CommandResult(ok, ok ? "Generazione effetti sonori completata." : err);
+                    });
+            }
         }
         catch (Exception ex)
         {
@@ -1408,6 +1586,8 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                             return new CommandResult(false, "Story raw is empty");
                         }
 
+                        var allowNext = true;
+
                         var revisor = _database.ListAgents()
                             .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
                                         a.Role.Equals("revisor", StringComparison.OrdinalIgnoreCase))
@@ -1418,23 +1598,41 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         if (revisor == null)
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
-                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped", priority: Math.Max(priority + 1, 3));
-                            return new CommandResult(true, "No revisor configured: copied raw to story_revised and enqueued evaluations.");
+                            allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
+                            if (allowNext)
+                            {
+                                EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped", priority: Math.Max(priority + 1, 3));
+                            }
+                            return new CommandResult(true, allowNext
+                                ? "No revisor configured: copied raw to story_revised and enqueued evaluations."
+                                : "No revisor configured: copied raw to story_revised.");
                         }
 
                         if (!revisor.ModelId.HasValue)
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
-                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model", priority: Math.Max(priority + 1, 3));
-                            return new CommandResult(true, "Revisor has no model: copied raw to story_revised and enqueued evaluations.");
+                            allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
+                            if (allowNext)
+                            {
+                                EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model", priority: Math.Max(priority + 1, 3));
+                            }
+                            return new CommandResult(true, allowNext
+                                ? "Revisor has no model: copied raw to story_revised and enqueued evaluations."
+                                : "Revisor has no model: copied raw to story_revised.");
                         }
 
                         var modelInfo = _database.GetModelInfoById(revisor.ModelId.Value);
                         if (string.IsNullOrWhiteSpace(modelInfo?.Name))
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
-                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model_name", priority: Math.Max(priority + 1, 3));
-                            return new CommandResult(true, "Revisor model not found: copied raw to story_revised and enqueued evaluations.");
+                            allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
+                            if (allowNext)
+                            {
+                                EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model_name", priority: Math.Max(priority + 1, 3));
+                            }
+                            return new CommandResult(true, allowNext
+                                ? "Revisor model not found: copied raw to story_revised and enqueued evaluations."
+                                : "Revisor model not found: copied raw to story_revised.");
                         }
 
                         if (_kernelFactory == null)
@@ -1446,8 +1644,14 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         if (string.IsNullOrWhiteSpace(systemPrompt))
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
-                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_empty_prompt", priority: Math.Max(priority + 1, 3));
-                            return new CommandResult(true, "Revisor prompt empty: copied raw to story_revised and enqueued evaluations.");
+                            allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
+                            if (allowNext)
+                            {
+                                EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_empty_prompt", priority: Math.Max(priority + 1, 3));
+                            }
+                            return new CommandResult(true, allowNext
+                                ? "Revisor prompt empty: copied raw to story_revised and enqueued evaluations."
+                                : "Revisor prompt empty: copied raw to story_revised.");
                         }
 
                         var bridge = _kernelFactory.CreateChatBridge(
@@ -1550,9 +1754,15 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         _database.UpdateStoryRevised(storyId, revised);
 
                         // After revision, enqueue evaluations.
-                        EnqueueAutomaticStoryEvaluations(storyId, trigger: "revised_saved", priority: Math.Max(priority + 1, 3));
+                        allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
+                        if (allowNext)
+                        {
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revised_saved", priority: Math.Max(priority + 1, 3));
+                        }
 
-                        return new CommandResult(true, "Story revised saved and evaluations enqueued.");
+                        return new CommandResult(true, allowNext
+                            ? "Story revised saved and evaluations enqueued."
+                            : "Story revised saved.");
                     }
                     catch (OperationCanceledException)
                     {
@@ -1578,6 +1788,132 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to enqueue revise_story for story {StoryId}", storyId);
+            return null;
+        }
+    }
+
+    public int EnqueueStoryEvaluations(long storyId, string trigger, int priority = 2, int maxEvaluators = 2)
+    {
+        try
+        {
+            if (storyId <= 0) return 0;
+            if (_commandDispatcher == null) return 0;
+
+            // De-dup: skip if any evaluation already queued/running for this story.
+            try
+            {
+                var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                    s.Metadata != null &&
+                    s.Metadata.TryGetValue("storyId", out var sid) &&
+                    string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(s.OperationName, "evaluate_story", StringComparison.OrdinalIgnoreCase));
+                if (alreadyQueued) return 0;
+            }
+            catch
+            {
+                // best-effort
+            }
+
+            var evaluators = _database.ListAgents()
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
+                     a.Role.Equals("evaluator", StringComparison.OrdinalIgnoreCase) ||
+                     a.Role.Equals("writer_evaluator", StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(a => a.Id)
+                .Take(Math.Max(1, maxEvaluators))
+                .ToList();
+
+            if (evaluators.Count == 0) return 0;
+
+            var enqueued = 0;
+            foreach (var evaluator in evaluators)
+            {
+                try
+                {
+                    var runId = $"evaluate_story_{storyId}_agent_{evaluator.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    var metadata = new Dictionary<string, string>
+                    {
+                        ["storyId"] = storyId.ToString(),
+                        ["agentId"] = evaluator.Id.ToString(),
+                        ["agentName"] = evaluator.Name ?? string.Empty,
+                        ["operation"] = "evaluate_story",
+                        ["trigger"] = trigger
+                    };
+
+                    _commandDispatcher.Enqueue(
+                        "evaluate_story",
+                        async ctx =>
+                        {
+                            var (success, score, error) = await EvaluateStoryWithAgentAsync(storyId, evaluator.Id);
+                            var msg = success ? $"Valutazione completata. Score: {score:F2}" : $"Valutazione fallita: {error}";
+                            return new CommandResult(success, msg);
+                        },
+                        runId: runId,
+                        threadScope: $"story/evaluate/agent_{evaluator.Id}",
+                        metadata: metadata,
+                        priority: priority);
+
+                    enqueued++;
+                }
+                catch
+                {
+                    // best-effort per evaluator
+                }
+            }
+
+            return enqueued;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public string? EnqueueDeleteStoryCommand(long storyId, string trigger, int priority = 2)
+    {
+        try
+        {
+            if (storyId <= 0) return null;
+            if (_commandDispatcher == null) return null;
+
+            // De-dup: skip if already queued/running.
+            try
+            {
+                var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                    s.Metadata != null &&
+                    s.Metadata.TryGetValue("storyId", out var sid) &&
+                    string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(s.OperationName, "delete_story", StringComparison.OrdinalIgnoreCase));
+                if (alreadyQueued) return null;
+            }
+            catch
+            {
+                // best-effort
+            }
+
+            var runId = $"delete_story_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            _commandDispatcher.Enqueue(
+                "delete_story",
+                ctx =>
+                {
+                    var ok = DeleteStoryCompletelySingle(storyId, trigger, out var msg);
+                    return Task.FromResult(new CommandResult(ok, ok ? "Story deleted" : $"Delete failed: {msg}"));
+                },
+                runId: runId,
+                threadScope: "story/delete",
+                metadata: new Dictionary<string, string>
+                {
+                    ["storyId"] = storyId.ToString(),
+                    ["operation"] = "delete_story",
+                    ["trigger"] = trigger
+                },
+                priority: priority);
+
+            return runId;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to enqueue delete_story for story {StoryId}", storyId);
             return null;
         }
     }
@@ -1776,6 +2112,218 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         return ExecuteStoryCommandAsync(
             storyId,
             new NormalizeCharacterNamesCommand(this));
+    }
+
+    private async Task<(bool success, List<StoryCharacter> characters, string? error)> TryAutoExtractCharactersAsync(
+        StoryRecord story,
+        int maxAttempts)
+    {
+        if (story == null) return (false, new List<StoryCharacter>(), "Storia non trovata");
+        if (_kernelFactory == null) return (false, new List<StoryCharacter>(), "Kernel factory non disponibile");
+        if (maxAttempts <= 0) return (false, new List<StoryCharacter>(), "Tentativi estrazione personaggi disabilitati");
+
+        var storyText = !string.IsNullOrWhiteSpace(story.StoryRevised)
+            ? story.StoryRevised
+            : story.StoryRaw;
+        if (string.IsNullOrWhiteSpace(storyText))
+            return (false, new List<StoryCharacter>(), "Testo storia non disponibile per estrazione personaggi");
+
+        int attempts = 0;
+        string? lastError = null;
+
+        Agent? author = null;
+        if (story.AgentId.HasValue)
+        {
+            author = _database.GetAgentById(story.AgentId.Value);
+            if (author != null && !author.IsActive)
+            {
+                author = null;
+            }
+        }
+
+        if (author?.ModelId.HasValue == true)
+        {
+            var modelInfo = _database.GetModelInfoById(author.ModelId.Value);
+            if (!string.IsNullOrWhiteSpace(modelInfo?.Name))
+            {
+                attempts++;
+                var result = await ExtractCharactersWithModelAsync(
+                    modelInfo.Name,
+                    storyText,
+                    author.Temperature,
+                    author.TopP,
+                    author.RepeatPenalty,
+                    author.TopK,
+                    author.RepeatLastN,
+                    author.NumPredict,
+                    null);
+                if (result.success)
+                {
+                    return result;
+                }
+                lastError = result.error;
+            }
+        }
+
+        if (attempts >= maxAttempts)
+        {
+            return (false, new List<StoryCharacter>(), lastError ?? "Estrazione personaggi fallita");
+        }
+
+        using var fallbackScope = _scopeFactory.CreateScope();
+        var fallbackService = fallbackScope.ServiceProvider.GetService<ModelFallbackService>();
+        if (fallbackService == null)
+        {
+            return (false, new List<StoryCharacter>(), lastError ?? "ModelFallbackService non disponibile");
+        }
+
+        var triedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (author?.ModelId.HasValue == true)
+        {
+            var modelInfo = _database.GetModelInfoById(author.ModelId.Value);
+            if (!string.IsNullOrWhiteSpace(modelInfo?.Name))
+            {
+                triedNames.Add(modelInfo.Name);
+            }
+        }
+
+        var remaining = Math.Max(0, maxAttempts - attempts);
+        int triedFallback = 0;
+
+        var (fallbackResult, _) = await fallbackService.ExecuteWithFallbackAsync(
+            "writer",
+            author?.ModelId,
+            async modelRole =>
+            {
+                var modelName = modelRole.Model?.Name;
+                if (string.IsNullOrWhiteSpace(modelName))
+                {
+                    throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
+                }
+
+                return await ExtractCharactersWithModelAsync(
+                    modelName,
+                    storyText,
+                    author?.Temperature,
+                    modelRole.TopP ?? author?.TopP,
+                    author?.RepeatPenalty,
+                    modelRole.TopK ?? author?.TopK,
+                    author?.RepeatLastN,
+                    author?.NumPredict,
+                    modelRole.Instructions);
+            },
+            validateResult: r => r.success,
+            shouldTryModelRole: modelRole =>
+            {
+                if (triedFallback >= remaining) return false;
+                var name = modelRole.Model?.Name;
+                if (string.IsNullOrWhiteSpace(name)) return false;
+                if (!triedNames.Add(name)) return false;
+                triedFallback++;
+                return true;
+            });
+
+        if (fallbackResult.success)
+        {
+            return fallbackResult;
+        }
+
+        return (false, new List<StoryCharacter>(), fallbackResult.error ?? lastError ?? "Estrazione personaggi fallita");
+    }
+
+    private async Task<(bool success, List<StoryCharacter> characters, string? error)> ExtractCharactersWithModelAsync(
+        string modelName,
+        string storyText,
+        double? temperature,
+        double? topP,
+        double? repeatPenalty,
+        int? topK,
+        int? repeatLastN,
+        int? numPredict,
+        string? instructionsOverride)
+    {
+        var systemPrompt = "Sei un assistente che estrae la lista personaggi da una storia. " +
+                           "Rispondi SOLO con un JSON array. Ogni elemento deve avere: " +
+                           "name, gender (male|female|robot|alien), age, title, role, aliases (array). " +
+                           "Non aggiungere testo extra.";
+        if (!string.IsNullOrWhiteSpace(instructionsOverride))
+        {
+            systemPrompt += "\n" + instructionsOverride.Trim();
+        }
+
+        var messages = new List<ConversationMessage>
+        {
+            new ConversationMessage { Role = "system", Content = systemPrompt },
+            new ConversationMessage
+            {
+                Role = "user",
+                Content = "TESTO:\n\n" + storyText + "\n\n" +
+                          "Restituisci solo il JSON array dei personaggi."
+            }
+        };
+
+        var bridge = _kernelFactory.CreateChatBridge(
+            modelName,
+            temperature,
+            topP,
+            repeatPenalty,
+            topK,
+            repeatLastN,
+            numPredict);
+
+        var raw = await bridge.CallModelWithToolsAsync(messages, tools: new List<Dictionary<string, object>>());
+        var (responseText, _) = LangChainChatBridge.ParseChatResponse(raw);
+        var json = ExtractJsonArray(responseText);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            _customLogger?.MarkLatestModelResponseResult("FAILED", "JSON personaggi non trovato");
+            return (false, new List<StoryCharacter>(), "JSON personaggi non trovato");
+        }
+
+        var (characters, parseError) = StoryCharacterParser.TryFromJson(json);
+        if (parseError != null || characters.Count == 0)
+        {
+            _customLogger?.MarkLatestModelResponseResult("FAILED", parseError ?? "Lista personaggi vuota");
+            return (false, new List<StoryCharacter>(), parseError ?? "Lista personaggi vuota");
+        }
+
+        EnsureNarratorCharacter(characters);
+        _customLogger?.MarkLatestModelResponseResult("SUCCESS", null);
+        return (true, characters, null);
+    }
+
+    private static string? ExtractJsonArray(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var start = text.IndexOf('[');
+        var end = text.LastIndexOf(']');
+        if (start < 0 || end <= start) return null;
+        var candidate = text.Substring(start, end - start + 1).Trim();
+        try
+        {
+            using var _ = JsonDocument.Parse(candidate);
+            return candidate;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void EnsureNarratorCharacter(List<StoryCharacter> characters)
+    {
+        if (characters.Any(c => string.Equals(c.Name, "Narratore", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(c.Name, "Narrator", StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        characters.Insert(0, new StoryCharacter
+        {
+            Name = "Narratore",
+            Gender = "male",
+            Role = "narrator"
+        });
     }
 
     /// <summary>
@@ -2304,6 +2852,157 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         }
     }
 
+    private string? ResolveStoryFolderPath(StoryRecord story)
+    {
+        if (story == null || string.IsNullOrWhiteSpace(story.Folder)) return null;
+        return Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
+    }
+
+    private bool ApplyStatusTransitionWithCleanup(StoryRecord story, string statusCode, string? runId = null)
+    {
+        if (story == null || string.IsNullOrWhiteSpace(statusCode)) return true;
+
+        var status = _database.GetStoryStatusByCode(statusCode);
+        if (status == null)
+        {
+            _logger?.LogWarning("Status code '{StatusCode}' not found in stories_status", statusCode);
+            return true;
+        }
+
+        try
+        {
+            _database.UpdateStoryById(story.Id, statusId: status.Id, updateStatus: true);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to update story {StoryId} to status {StatusCode}", story.Id, statusCode);
+        }
+
+        if (!status.DeleteNextItems)
+        {
+            return true;
+        }
+
+        var folderPath = ResolveStoryFolderPath(story);
+        try
+        {
+            CleanupNextItemsForStatus(story.Id, statusCode, folderPath);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Cleanup for status {StatusCode} failed for story {StoryId}", statusCode, story.Id);
+        }
+
+        return false;
+    }
+
+    private void CleanupNextItemsForStatus(long storyId, string statusCode, string? folderPath)
+    {
+        switch (statusCode)
+        {
+            case "revised":
+                _database.DeleteEvaluationsForStory(storyId);
+                _database.ClearStoryTagged(storyId);
+                ResetGeneratedFlagsForMissingFolder(storyId);
+                if (!string.IsNullOrWhiteSpace(folderPath))
+                {
+                    CleanAllGeneratedAssetsForTtsSchemaRegeneration(storyId, folderPath);
+                }
+                break;
+            case "evaluated":
+                _database.ClearStoryTagged(storyId);
+                ResetGeneratedFlagsForMissingFolder(storyId);
+                if (!string.IsNullOrWhiteSpace(folderPath))
+                {
+                    CleanAllGeneratedAssetsForTtsSchemaRegeneration(storyId, folderPath);
+                }
+                break;
+            case "tagged":
+                ResetGeneratedFlagsForMissingFolder(storyId);
+                if (!string.IsNullOrWhiteSpace(folderPath))
+                {
+                    CleanAllGeneratedAssetsForTtsSchemaRegeneration(storyId, folderPath);
+                }
+                break;
+            case "tts_schema_generated":
+                ResetGeneratedFlagsAfterTtsSchema(storyId);
+                if (!string.IsNullOrWhiteSpace(folderPath))
+                {
+                    CleanAudioAfterTtsSchemaGenerated(storyId, folderPath);
+                }
+                break;
+            case "tts_generated":
+                ResetGeneratedFlagsAfterTts(storyId);
+                if (!string.IsNullOrWhiteSpace(folderPath))
+                {
+                    CleanAmbienceForRegeneration(storyId, folderPath);
+                    CleanFxForRegeneration(storyId, folderPath);
+                    CleanMusicForRegeneration(storyId, folderPath);
+                    DeleteFinalMixAssets(storyId, folderPath);
+                }
+                break;
+            case "ambient_generated":
+                ResetGeneratedFlagsAfterAmbient(storyId);
+                if (!string.IsNullOrWhiteSpace(folderPath))
+                {
+                    CleanFxForRegeneration(storyId, folderPath);
+                    CleanMusicForRegeneration(storyId, folderPath);
+                    DeleteFinalMixAssets(storyId, folderPath);
+                }
+                break;
+            case "fx_generated":
+                ResetGeneratedFlagsAfterFx(storyId);
+                if (!string.IsNullOrWhiteSpace(folderPath))
+                {
+                    CleanMusicForRegeneration(storyId, folderPath);
+                    DeleteFinalMixAssets(storyId, folderPath);
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void ResetGeneratedFlagsForMissingFolder(long storyId)
+    {
+        try { _database.UpdateStoryGeneratedTtsJson(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedTts(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMusic(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedEffects(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedAmbient(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMixedAudio(storyId, false); } catch { }
+    }
+
+    private void ResetGeneratedFlagsAfterTtsSchema(long storyId)
+    {
+        try { _database.UpdateStoryGeneratedTts(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedAmbient(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedEffects(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMusic(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMixedAudio(storyId, false); } catch { }
+    }
+
+    private void ResetGeneratedFlagsAfterTts(long storyId)
+    {
+        try { _database.UpdateStoryGeneratedAmbient(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedEffects(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMusic(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMixedAudio(storyId, false); } catch { }
+    }
+
+    private void ResetGeneratedFlagsAfterAmbient(long storyId)
+    {
+        try { _database.UpdateStoryGeneratedEffects(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMusic(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMixedAudio(storyId, false); } catch { }
+    }
+
+    private void ResetGeneratedFlagsAfterFx(long storyId)
+    {
+        try { _database.UpdateStoryGeneratedMusic(storyId, false); } catch { }
+        try { _database.UpdateStoryGeneratedMixedAudio(storyId, false); } catch { }
+    }
+
     // Clean assets and flags before regenerating the TTS schema (full regeneration).
     // Deletes existing TTS/music/fx/ambience files and final mix, removes the old schema
     // and resets generated_* flags in the DB (best-effort).
@@ -2411,17 +3110,12 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         item.Remove("durationMs");
                         item.Remove("DurationMs");
 
-                        // also remove standardized snake_case ambience/fx/music references and their timing
-                        item.Remove("ambient_sound_file");
-                        item.Remove("ambient_sound_description");
+                        // keep ambient/fx/music descriptions and durations; clean only files + ambient durations
+                        item.Remove("ambientSoundsDuration");
+                        item.Remove("ambient_sounds_duration");
                         item.Remove("fxFile");
-                        item.Remove("fxDescription");
-                        item.Remove("fxDuration");
                         item.Remove("fx_file");
-                        item.Remove("fx_description");
-                        item.Remove("fx_duration");
                         item.Remove("music_file");
-                        item.Remove("music_duration");
                     }
                 }
             }
@@ -2463,6 +3157,103 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         }
     }
 
+    private void CleanAudioAfterTtsSchemaGenerated(long storyId, string folderPath)
+    {
+        try
+        {
+            var schemaPath = Path.Combine(folderPath, "tts_schema.json");
+            if (File.Exists(schemaPath))
+            {
+                try
+                {
+                    var json = File.ReadAllText(schemaPath);
+                    var root = JsonNode.Parse(json) as JsonObject;
+                    if (root != null && (root.TryGetPropertyValue("timeline", out var timelineNode) || root.TryGetPropertyValue("Timeline", out timelineNode)))
+                    {
+                        if (timelineNode is JsonArray arr)
+                        {
+                            foreach (var item in arr.OfType<JsonObject>())
+                            {
+                                var fn = item.TryGetPropertyValue("fileName", out var f1) ? f1?.ToString() : null;
+                                if (string.IsNullOrWhiteSpace(fn)) fn = item.TryGetPropertyValue("FileName", out var f2) ? f2?.ToString() : fn;
+                                if (!string.IsNullOrWhiteSpace(fn)) DeleteIfExists(Path.Combine(folderPath, fn));
+
+                                item.Remove("fileName");
+                                item.Remove("FileName");
+                                item.Remove("startMs");
+                                item.Remove("StartMs");
+                                item.Remove("durationMs");
+                                item.Remove("DurationMs");
+                                item.Remove("endMs");
+                                item.Remove("EndMs");
+
+                                var ambientFile =
+                                    ReadString(item, "ambient_sound_file") ??
+                                    ReadString(item, "AmbientSoundFile") ??
+                                    ReadString(item, "ambientSoundFile") ??
+                                    ReadString(item, "ambientSoundsFile") ??
+                                    ReadString(item, "AmbientSoundsFile") ??
+                                    ReadString(item, "ambienceFile") ??
+                                    ReadString(item, "ambience_file");
+                                if (!string.IsNullOrWhiteSpace(ambientFile))
+                                {
+                                    DeleteIfExists(Path.Combine(folderPath, ambientFile));
+                                }
+                                item.Remove("ambient_sound_file");
+                                item.Remove("AmbientSoundFile");
+                                item.Remove("ambientSoundFile");
+                                item.Remove("ambientSoundsFile");
+                                item.Remove("AmbientSoundsFile");
+                                item.Remove("ambienceFile");
+                                item.Remove("AmbienceFile");
+                                item.Remove("ambience_file");
+
+                                var fxFile = ReadString(item, "fx_file") ?? ReadString(item, "fxFile") ?? ReadString(item, "FxFile");
+                                if (!string.IsNullOrWhiteSpace(fxFile))
+                                {
+                                    DeleteIfExists(Path.Combine(folderPath, fxFile));
+                                }
+                                item.Remove("fxFile");
+                                item.Remove("FxFile");
+                                item.Remove("fx_file");
+
+                                var musicFile = ReadString(item, "music_file") ?? ReadString(item, "musicFile") ?? ReadString(item, "MusicFile");
+                                if (!string.IsNullOrWhiteSpace(musicFile))
+                                {
+                                    DeleteIfExists(Path.Combine(folderPath, musicFile));
+                                }
+                                item.Remove("musicFile");
+                                item.Remove("MusicFile");
+                                item.Remove("music_file");
+                            }
+                        }
+                    }
+
+                    if (root != null)
+                    {
+                        SanitizeTtsSchemaTextFields(root);
+                        File.WriteAllText(schemaPath, root.ToJsonString(SchemaJsonOptions));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Unable to update schema when cleaning audio after tts_schema generation for story {Id}", storyId);
+                }
+            }
+
+            // delete final mix
+            DeleteIfExists(Path.Combine(folderPath, "final_mix.mp3"));
+            DeleteIfExists(Path.Combine(folderPath, "final_mix.wav"));
+
+            // update flags
+            ResetGeneratedFlagsAfterTtsSchema(storyId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Error cleaning audio after tts_schema generation for story {Id}", storyId);
+        }
+    }
+
     private void CleanMusicForRegeneration(long storyId, string folderPath)
     {
         try
@@ -2487,6 +3278,9 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                                 item.Remove("musicStartMs");
                                 item.Remove("musicDuration");
                                 item.Remove("musicDurationMs");
+                                item.Remove("music_file");
+                                item.Remove("music_start_ms");
+                                item.Remove("music_duration");
                             }
                         }
                     }
@@ -2540,6 +3334,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
                                 item.Remove("fxFile");
                                 item.Remove("fx_file");
+                                item.Remove("fxDuration");
+                                item.Remove("FxDuration");
+                                item.Remove("fxDurationMs");
+                                item.Remove("fx_duration");
+                                item.Remove("fx_duration_ms");
                             }
                         }
                     }
@@ -3161,21 +3960,35 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
                 try { _service._database.UpdateStoryGeneratedTtsJson(story.Id, true); } catch { }
 
-                _service._database.UpdateStoryById(story.Id, statusId: TtsSchemaReadyStatusId, updateStatus: true);
+                var allowNext = _service.ApplyStatusTransitionWithCleanup(story, "tts_schema_generated", null);
 
                 _service._logger?.LogInformation(
                     "TTS schema generato per storia {StoryId}: {Characters} personaggi, {Phrases} frasi",
                     story.Id, schema.Characters.Count, schema.Timeline.Count);
 
-                // Requirement: if tts_schema.json generation succeeds, enqueue TTS audio generation with lower priority.
+                // Requirement: optionally enqueue TTS audio generation after tts_schema.json.
                 // This is best-effort and never blocks the schema command.
-                try
+                var autolaunchTtsAudio = _service._audioGenerationOptions?.CurrentValue?.Tts?.AutolaunchNextCommand
+                    ?? _service._ttsSchemaOptions?.CurrentValue?.AutolaunchNextCommand
+                    ?? true;
+                if (allowNext && autolaunchTtsAudio)
                 {
-                    _service.EnqueueGenerateTtsAudioCommand(story.Id, trigger: "tts_schema_generated", priority: 3);
+                    try
+                    {
+                        _service.EnqueueGenerateTtsAudioCommand(story.Id, trigger: "tts_schema_generated", priority: 3);
+                    }
+                    catch
+                    {
+                        // ignore
+                    }
                 }
-                catch
+                else if (!allowNext)
                 {
-                    // ignore
+                    _service._logger?.LogInformation("TTS schema autolaunch skipped due to delete_next_items for story {StoryId}", story.Id);
+                }
+                else
+                {
+                    _service._logger?.LogInformation("TTS schema autolaunch disabled for story {StoryId}", story.Id);
                 }
 
                 return (true, $"Schema TTS generato: {schema.Characters.Count} personaggi, {schema.Timeline.Count} frasi");
@@ -3288,7 +4101,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         public bool EnsureFolder => true;
         public bool HandlesStatusTransition => false;
 
-        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
             var story = context.Story;
             var folderPath = context.FolderPath;
@@ -3301,7 +4114,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var seriesChars = _service._database.ListSeriesCharacters(story.SerieId.Value);
                 if (!seriesChars.Any())
                 {
-                    return Task.FromResult<(bool, string?)>((false, $"La serie {story.SerieId.Value} non ha personaggi definiti nella tabella series_characters."));
+                    return (false, $"La serie {story.SerieId.Value} non ha personaggi definiti nella tabella series_characters.");
                 }
                 
                 storyCharacters = seriesChars.Select(sc => new StoryCharacter
@@ -3324,27 +4137,37 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 // Check if story has character data
                 if (string.IsNullOrWhiteSpace(story.Characters))
                 {
-                    return Task.FromResult<(bool, string?)>((false, "La storia non ha una lista di personaggi definita nel campo Characters. Inseriscila dalla pagina Modifica storia."));
+                    var maxAttempts = _service._ttsSchemaOptions?.CurrentValue?.CharacterExtractionMaxAttempts ?? 3;
+                    var extracted = await _service.TryAutoExtractCharactersAsync(story, maxAttempts);
+                    if (!extracted.success)
+                    {
+                        return (false, extracted.error ?? "La storia non ha una lista di personaggi definita nel campo Characters.");
+                    }
+                
+                    storyCharacters = extracted.characters;
+                    _service._database.UpdateStoryCharacters(story.Id, StoryCharacterParser.ToJson(storyCharacters));
                 }
-
-                // Load character list from story with detailed error
-                var (chars, parseError) = StoryCharacterParser.TryFromJson(story.Characters);
-                if (parseError != null)
+                else
                 {
-                    return Task.FromResult<(bool, string?)>((false, $"Errore nel parsing della lista personaggi: {parseError}"));
+                    // Load character list from story with detailed error
+                    var (chars, parseError) = StoryCharacterParser.TryFromJson(story.Characters);
+                    if (parseError != null)
+                    {
+                        return (false, $"Errore nel parsing della lista personaggi: {parseError}");
+                    }
+                    if (chars.Count == 0)
+                    {
+                        return (false, $"La lista personaggi della storia è vuota o non valida. JSON attuale: {story.Characters.Substring(0, Math.Min(200, story.Characters.Length))}...");
+                    }
+                    storyCharacters = chars;
                 }
-                if (chars.Count == 0)
-                {
-                    return Task.FromResult<(bool, string?)>((false, $"La lista personaggi della storia è vuota o non valida. JSON attuale: {story.Characters.Substring(0, Math.Min(200, story.Characters.Length))}..."));
-                }
-                storyCharacters = chars;
             }
 
             // Check if tts_schema.json exists
             var schemaPath = Path.Combine(folderPath, "tts_schema.json");
             if (!File.Exists(schemaPath))
             {
-                return Task.FromResult<(bool, string?)>((false, "File tts_schema.json non trovato. Genera prima lo schema TTS."));
+                return (false, "File tts_schema.json non trovato. Genera prima lo schema TTS.");
             }
 
             try
@@ -3360,7 +4183,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
                 if (schema == null)
                 {
-                    return Task.FromResult<(bool, string?)>((false, "Impossibile deserializzare tts_schema.json"));
+                    return (false, "Impossibile deserializzare tts_schema.json");
                 }
 
                 var normalizedCount = 0;
@@ -3380,7 +4203,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
                 if (characterMapping.Count == 0)
                 {
-                    return Task.FromResult<(bool, string?)>((true, "Nessuna normalizzazione necessaria: tutti i nomi sono già canonici."));
+                    return (true, "Nessuna normalizzazione necessaria: tutti i nomi sono già canonici.");
                 }
 
                 // Update character names in the Characters list
@@ -3482,13 +4305,13 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     "Normalized {Count} character names in tts_schema.json for story {StoryId}",
                     normalizedCount, story.Id);
 
-                return Task.FromResult<(bool, string?)>((true,
-                    $"Normalizzati {normalizedCount} nomi personaggi. Schema aggiornato con {schema.Characters.Count} personaggi."));
+                return (true,
+                    $"Normalizzati {normalizedCount} nomi personaggi. Schema aggiornato con {schema.Characters.Count} personaggi.");
             }
             catch (Exception ex)
             {
                 _service._logger?.LogError(ex, "Errore durante la normalizzazione dei nomi per la storia {Id}", story.Id);
-                return Task.FromResult<(bool, string?)>((false, ex.Message));
+                return (false, ex.Message);
             }
         }
     }
@@ -3614,38 +4437,76 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 var usedVoiceIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 int assignedCount = 0;
 
-                // 1. Assign narrator voice first (random from archetype "narratore")
+                // 1. Assign narrator voice first (series narrator -> appsettings default -> archetype fallback)
                 var narrator = schema.Characters.FirstOrDefault(c => 
                     string.Equals(c.Name, "Narratore", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(c.Name, "Narrator", StringComparison.OrdinalIgnoreCase));
                 
                 if (narrator != null)
                 {
-                    var narratorVoices = allVoices
-                        .Where(v => !string.IsNullOrWhiteSpace(v.Archetype) && 
-                                   v.Archetype.Equals("narratore", StringComparison.OrdinalIgnoreCase) &&
-                                   !string.IsNullOrWhiteSpace(v.VoiceId))
-                        .ToList();
-
-                    if (narratorVoices.Count > 0)
+                    if (!string.IsNullOrWhiteSpace(narrator.VoiceId))
                     {
-                        var selectedNarratorVoice = narratorVoices[Random.Shared.Next(narratorVoices.Count)];
-                        narrator.VoiceId = selectedNarratorVoice.VoiceId;
-                        narrator.Voice = selectedNarratorVoice.Name;
-                        narrator.Gender = selectedNarratorVoice.Gender ?? "";
-                        usedVoiceIds.Add(selectedNarratorVoice.VoiceId);
-                        assignedCount++;
+                        usedVoiceIds.Add(narrator.VoiceId);
                     }
                     else
                     {
-                        // Fallback: pick any male voice with highest score
-                        var fallbackVoice = PickBestAvailableVoice("male", null, allVoices, usedVoiceIds);
-                        if (fallbackVoice != null)
+                        TinyGenerator.Models.TtsVoice? selectedNarratorVoice = null;
+
+                        // Series narrator voice (if defined)
+                        if (story.SerieId.HasValue)
                         {
-                            narrator.VoiceId = fallbackVoice.VoiceId;
-                            narrator.Voice = fallbackVoice.Name;
-                            narrator.Gender = fallbackVoice.Gender ?? "";
-                            usedVoiceIds.Add(fallbackVoice.VoiceId);
+                            try
+                            {
+                                var seriesChars = _service._database.ListSeriesCharacters(story.SerieId.Value);
+                                var seriesNarrator = seriesChars.FirstOrDefault(c =>
+                                    string.Equals(c.Name, "Narratore", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(c.Name, "Narrator", StringComparison.OrdinalIgnoreCase));
+                                if (seriesNarrator?.VoiceId.HasValue == true)
+                                {
+                                    selectedNarratorVoice = _service._database.GetTtsVoiceById(seriesNarrator.VoiceId.Value);
+                                }
+                            }
+                            catch
+                            {
+                                // best-effort
+                            }
+                        }
+
+                        // Appsettings default narrator voice (by name or voiceId)
+                        if (selectedNarratorVoice == null)
+                        {
+                            var defaultVoiceId = _service.GetNarratorDefaultVoiceId();
+                            if (!string.IsNullOrWhiteSpace(defaultVoiceId))
+                            {
+                                selectedNarratorVoice = _service.FindVoiceByNameOrId(allVoices, defaultVoiceId);
+                            }
+                        }
+
+                        // Fallback: pick archetype narrator voice (if any), else best available male voice
+                        if (selectedNarratorVoice == null)
+                        {
+                            var narratorVoices = allVoices
+                                .Where(v => !string.IsNullOrWhiteSpace(v.Archetype) &&
+                                           v.Archetype.Equals("narratore", StringComparison.OrdinalIgnoreCase) &&
+                                           !string.IsNullOrWhiteSpace(v.VoiceId))
+                                .ToList();
+
+                            if (narratorVoices.Count > 0)
+                            {
+                                selectedNarratorVoice = narratorVoices[Random.Shared.Next(narratorVoices.Count)];
+                            }
+                            else
+                            {
+                                selectedNarratorVoice = PickBestAvailableVoice("male", null, allVoices, usedVoiceIds);
+                            }
+                        }
+
+                        if (selectedNarratorVoice != null)
+                        {
+                            narrator.VoiceId = selectedNarratorVoice.VoiceId;
+                            narrator.Voice = selectedNarratorVoice.Name;
+                            narrator.Gender = selectedNarratorVoice.Gender ?? "";
+                            usedVoiceIds.Add(selectedNarratorVoice.VoiceId);
                             assignedCount++;
                         }
                     }
@@ -3737,13 +4598,13 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     "Assigned {Count} voices to characters in story {StoryId}", 
                     assignedCount, story.Id);
 
-                return Task.FromResult<(bool, string?)>((true, 
+                return (true, 
                     $"Assegnate {assignedCount} voci a {schema.Characters.Count} personaggi."));
             }
             catch (Exception ex)
             {
                 _service._logger?.LogError(ex, "Errore durante l'assegnazione voci per la storia {Id}", context.Story.Id);
-                return Task.FromResult<(bool, string?)>((false, ex.Message));
+                return (false, ex.Message);
             }
         }
 
@@ -3859,7 +4720,10 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             var narrator = schema.Characters.FirstOrDefault(c => string.Equals(c.Name, "narratore", StringComparison.OrdinalIgnoreCase));
             if (narrator != null && string.IsNullOrWhiteSpace(narrator.VoiceId))
             {
-                var narratorVoice = FindVoiceByNameOrId(catalogVoices, NarratorFallbackVoiceName);
+                var defaultVoiceId = GetNarratorDefaultVoiceId();
+                var narratorVoice = !string.IsNullOrWhiteSpace(defaultVoiceId)
+                    ? FindVoiceByNameOrId(catalogVoices, defaultVoiceId)
+                    : null;
                 if (narratorVoice != null)
                 {
                     ApplyVoiceToCharacter(narrator, narratorVoice);
@@ -3868,7 +4732,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 }
                 else
                 {
-                    _logger?.LogWarning("Voce di fallback {VoiceName} non trovata nella tabella tts_voices", NarratorFallbackVoiceName);
+                    _logger?.LogWarning("Voce narratore di default non trovata nella tabella tts_voices");
                 }
             }
 
@@ -4367,6 +5231,12 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             v.VoiceId.IndexOf(preferredName, StringComparison.OrdinalIgnoreCase) >= 0);
     }
 
+    private string? GetNarratorDefaultVoiceId()
+    {
+        var value = _narratorVoiceOptions?.CurrentValue?.DefaultVoiceId;
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
     private TinyGenerator.Models.TtsVoice? PickVoiceForGender(string gender, List<TinyGenerator.Models.TtsVoice> voices, HashSet<string> usedVoiceIds)
     {
         if (string.IsNullOrWhiteSpace(gender) || voices == null || voices.Count == 0)
@@ -4437,12 +5307,19 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             {
                 var (success, message) = await GenerateTtsAudioInternalAsync(context, runId);
 
-                if (success && context.TargetStatus?.Id > 0)
+                if (success)
                 {
                     try
                     {
-                        _database.UpdateStoryById(storyId, statusId: context.TargetStatus.Id, updateStatus: true);
-                        _customLogger?.Append(runId, $"[{storyId}] Stato aggiornato a {context.TargetStatus.Code ?? context.TargetStatus.Id.ToString()}");
+                        var story = GetStoryById(storyId);
+                        if (story != null)
+                        {
+                            var allowNext = ApplyStatusTransitionWithCleanup(story, "tts_generated", runId);
+                            if (!allowNext)
+                            {
+                                _customLogger?.Append(runId, $"[{storyId}] delete_next_items attivo: cleanup dopo tts_generated applicato", "info");
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -4578,7 +5455,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
             byte[] audioBytes;
             int? durationFromResult;
-            string cleanText;
+            string cleanText = string.Empty;
             try
             {
                 cleanText = CleanTtsText(text);
@@ -4623,7 +5500,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             entry["startMs"] = startMs;
             entry["endMs"] = endMs;
 
-            currentMs = endMs + DefaultPhraseGapMs;
+            currentMs = endMs + GetPhraseGapMs(cleanText);
             _customLogger?.Append(runId, $"[{story.Id}] Frase completata: {fileName} ({durationMs} ms)");
         }
 
@@ -4775,9 +5652,10 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
             byte[] audioBytes;
             int? durationFromResult;
+            string cleanText = string.Empty;
             try
             {
-                var cleanText = CleanTtsText(text);
+                cleanText = CleanTtsText(text);
                 if (string.IsNullOrWhiteSpace(cleanText))
                 {
                     _customLogger?.Append(dispatcherRunId, $"[{story.Id}] Salto frase vuota dopo pulizia (character={characterName})");
@@ -4809,7 +5687,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             var durationMs = durationFromResult ?? TryGetWavDuration(audioBytes) ?? 0;
             var startMs = currentMs;
             var endMs = currentMs + durationMs;
-            currentMs = endMs + DefaultPhraseGapMs;
+            currentMs = endMs + GetPhraseGapMs(cleanText);
 
             entry["fileName"] = fileName;
             entry["durationMs"] = durationMs;
@@ -4884,12 +5762,19 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             {
                 var (success, message) = await GenerateAmbienceAudioInternalAsync(context, runId);
 
-                if (success && context.TargetStatus?.Id > 0)
+                if (success)
                 {
                     try
                     {
-                        _database.UpdateStoryById(storyId, statusId: context.TargetStatus.Id, updateStatus: true);
-                        _customLogger?.Append(runId, $"[{storyId}] Stato aggiornato a {context.TargetStatus.Code ?? context.TargetStatus.Id.ToString()}");
+                        var story = GetStoryById(storyId);
+                        if (story != null)
+                        {
+                            var allowNext = ApplyStatusTransitionWithCleanup(story, "ambient_generated", runId);
+                            if (!allowNext)
+                            {
+                                _customLogger?.Append(runId, $"[{storyId}] delete_next_items attivo: cleanup dopo ambient_generated applicato", "info");
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -4963,8 +5848,25 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             return (false, err);
         }
 
-        // Build list of ambient sound segments: group consecutive phrases with same ambient_sounds
+        // Build list of ambient sound segments: each ambient definition lasts until the next definition.
         var ambienceSegments = ExtractAmbienceSegments(phraseEntries);
+        var hasAmbientDefinitions = phraseEntries.Any(e => !string.IsNullOrWhiteSpace(ReadAmbientSoundsDescription(e)));
+
+        if (hasAmbientDefinitions)
+        {
+            // Persist ambientSoundsDuration before generating WAVs (best-effort).
+            try
+            {
+                SanitizeTtsSchemaTextFields(rootNode);
+                var updated = rootNode.ToJsonString(SchemaJsonOptions);
+                await File.WriteAllTextAsync(schemaPath, updated);
+            }
+            catch (Exception ex)
+            {
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Impossibile salvare ambientSoundsDuration: {ex.Message}");
+            }
+        }
+
         if (ambienceSegments.Count == 0)
         {
             var msg = "Nessun segmento ambient sounds trovato nella timeline (nessuna propriet� 'ambientSounds' presente)";
@@ -5115,14 +6017,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     continue;
                 }
 
-                // Update tts_schema.json: add ambient sound file reference to each phrase in this segment
-                foreach (var entryIndex in segment.EntryIndices)
+                // Update tts_schema.json: add ambient sound file reference only on the definition record
+                if (segment.DefinitionIndex >= 0 && segment.DefinitionIndex < phraseEntries.Count)
                 {
-                    if (entryIndex >= 0 && entryIndex < phraseEntries.Count)
-                    {
-                        phraseEntries[entryIndex]["ambient_sound_file"] = localFileName;
-                        phraseEntries[entryIndex]["ambientSoundsFile"] = localFileName; // backward compat
-                    }
+                    phraseEntries[segment.DefinitionIndex]["ambient_sound_file"] = localFileName;
+                    phraseEntries[segment.DefinitionIndex]["ambientSoundsFile"] = localFileName; // backward compat
                 }
             }
             catch (Exception ex)
@@ -5154,7 +6053,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         return (true, successMsg);
     }
 
-    private sealed record AmbienceSegment(string AmbiencePrompt, int StartMs, int DurationMs, List<int> EntryIndices);
+    private sealed record AmbienceSegment(string AmbiencePrompt, int StartMs, int DurationMs, int DefinitionIndex);
 
     /// <summary>
     /// Extracts ambient sound segments from timeline entries.
@@ -5164,69 +6063,91 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
     private static List<AmbienceSegment> ExtractAmbienceSegments(List<JsonObject> entries)
     {
         var segments = new List<AmbienceSegment>();
-        string? currentAmbientSounds = null;
-        int segmentStartMs = 0;
-        int currentEndMs = 0;
-        var currentEntryIndices = new List<int>();
+        if (entries.Count == 0) return segments;
 
+        // Collect ambient definition points (where ambient sounds are explicitly defined).
+        var definitionPoints = new List<(int Index, string Prompt, int StartMs)>();
         for (int i = 0; i < entries.Count; i++)
         {
-            var entry = entries[i];
-            // Read from standardized snake_case first, then legacy/camelCase
-            var ambientSounds =
-                ReadString(entry, "ambient_sound_description") ??
-                ReadString(entry, "ambientSoundDescription") ??
-                ReadString(entry, "AmbientSoundDescription") ??
-                ReadString(entry, "ambientSounds") ??
-                ReadString(entry, "AmbientSounds") ??
-                ReadString(entry, "ambient_sounds");
-            
-            // Read startMs and endMs using TryReadNumber
-            int startMs = 0;
-            int endMs = 0;
-            if (TryReadNumber(entry, "startMs", out var startVal) || TryReadNumber(entry, "StartMs", out startVal))
-                startMs = (int)startVal;
-            if (TryReadNumber(entry, "endMs", out var endVal) || TryReadNumber(entry, "EndMs", out endVal))
-                endMs = (int)endVal;
-            if (endMs == 0) endMs = startMs;
+            var ambientSounds = ReadAmbientSoundsDescription(entries[i]);
+            if (string.IsNullOrWhiteSpace(ambientSounds)) continue;
 
-            // If ambient sounds change, save the current segment
-            if (!string.IsNullOrWhiteSpace(currentAmbientSounds) && 
-                (ambientSounds != currentAmbientSounds || string.IsNullOrWhiteSpace(ambientSounds)))
-            {
-                var duration = currentEndMs - segmentStartMs;
-                if (duration > 0 && currentEntryIndices.Count > 0)
-                {
-                    segments.Add(new AmbienceSegment(currentAmbientSounds!, segmentStartMs, duration, new List<int>(currentEntryIndices)));
-                }
-                currentAmbientSounds = null;
-                currentEntryIndices.Clear();
-            }
-
-            // Start or continue a segment
-            if (!string.IsNullOrWhiteSpace(ambientSounds))
-            {
-                if (currentAmbientSounds == null)
-                {
-                    currentAmbientSounds = ambientSounds;
-                    segmentStartMs = startMs;
-                }
-                currentEndMs = endMs > 0 ? endMs : startMs;
-                currentEntryIndices.Add(i);
-            }
+            var startMs = ReadEntryStartMs(entries[i]);
+            definitionPoints.Add((i, ambientSounds!.Trim(), startMs));
         }
 
-        // Add final segment if any
-        if (!string.IsNullOrWhiteSpace(currentAmbientSounds) && currentEntryIndices.Count > 0)
+        if (definitionPoints.Count == 0) return segments;
+
+        for (int i = 0; i < definitionPoints.Count; i++)
         {
-            var duration = currentEndMs - segmentStartMs;
+            var current = definitionPoints[i];
+            var nextIndex = (i + 1 < definitionPoints.Count) ? definitionPoints[i + 1].Index : entries.Count;
+            var nextStartMs = (i + 1 < definitionPoints.Count) ? definitionPoints[i + 1].StartMs : (int?)null;
+
+            int segmentStartMs = current.StartMs;
+            int segmentEndMs = nextStartMs.HasValue && nextStartMs.Value > 0
+                ? nextStartMs.Value
+                : ReadEntryEndMs(entries[Math.Max(0, Math.Min(entries.Count - 1, nextIndex - 1))]);
+
+            var duration = segmentEndMs - segmentStartMs;
+            // Persist ambientSoundsDuration on the definition entry, even if duration can't be computed.
+            entries[current.Index]["ambientSoundsDuration"] = Math.Max(0, duration);
+
             if (duration > 0)
             {
-                segments.Add(new AmbienceSegment(currentAmbientSounds!, segmentStartMs, duration, new List<int>(currentEntryIndices)));
+                segments.Add(new AmbienceSegment(current.Prompt, segmentStartMs, duration, current.Index));
             }
         }
 
         return segments;
+    }
+
+    private static string? ReadAmbientSoundsDescription(JsonObject entry)
+    {
+        // Read from standardized snake_case first, then legacy/camelCase
+        return ReadString(entry, "ambient_sound_description") ??
+               ReadString(entry, "ambientSoundDescription") ??
+               ReadString(entry, "AmbientSoundDescription") ??
+               ReadString(entry, "ambientSounds") ??
+               ReadString(entry, "AmbientSounds") ??
+               ReadString(entry, "ambient_sounds");
+    }
+
+    private static int ReadEntryStartMs(JsonObject entry)
+    {
+        if (TryReadNumber(entry, "startMs", out var startVal) || TryReadNumber(entry, "StartMs", out startVal) || TryReadNumber(entry, "start_ms", out startVal))
+            return (int)startVal;
+        return 0;
+    }
+
+    private static int ReadEntryEndMs(JsonObject entry)
+    {
+        int startMs = ReadEntryStartMs(entry);
+        if (TryReadNumber(entry, "endMs", out var endVal) || TryReadNumber(entry, "EndMs", out endVal) || TryReadNumber(entry, "end_ms", out endVal))
+        {
+            var endMs = (int)endVal;
+            if (endMs > 0) return endMs;
+        }
+
+        if (TryReadNumber(entry, "durationMs", out var durVal) || TryReadNumber(entry, "DurationMs", out durVal) || TryReadNumber(entry, "duration_ms", out durVal))
+        {
+            var durationMs = (int)durVal;
+            if (durationMs > 0) return startMs + durationMs;
+        }
+
+        return startMs;
+    }
+
+    private static int ReadAmbientSoundsDurationMs(JsonObject entry)
+    {
+        if (TryReadNumber(entry, "ambientSoundsDuration", out var d) ||
+            TryReadNumber(entry, "AmbientSoundsDuration", out d) ||
+            TryReadNumber(entry, "ambient_sounds_duration", out d))
+        {
+            return (int)d;
+        }
+
+        return 0;
     }
 
     // =====================================================================
@@ -5269,12 +6190,19 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             {
                 var (success, message) = await GenerateFxAudioInternalAsync(context, runId);
 
-                if (success && context.TargetStatus?.Id > 0)
+                if (success)
                 {
                     try
                     {
-                        _database.UpdateStoryById(storyId, statusId: context.TargetStatus.Id, updateStatus: true);
-                        _customLogger?.Append(runId, $"[{storyId}] Stato aggiornato a {context.TargetStatus.Code ?? context.TargetStatus.Id.ToString()}");
+                        var story = GetStoryById(storyId);
+                        if (story != null)
+                        {
+                            var allowNext = ApplyStatusTransitionWithCleanup(story, "fx_generated", runId);
+                            if (!allowNext)
+                            {
+                                _customLogger?.Append(runId, $"[{storyId}] delete_next_items attivo: cleanup dopo fx_generated applicato", "info");
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -5353,11 +6281,11 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         for (int i = 0; i < phraseEntries.Count; i++)
         {
             var entry = phraseEntries[i];
-            var fxDesc = ReadString(entry, "fxDescription") ?? ReadString(entry, "FxDescription");
+            var fxDesc = ReadString(entry, "fxDescription") ?? ReadString(entry, "FxDescription") ?? ReadString(entry, "fx_description");
             if (!string.IsNullOrWhiteSpace(fxDesc))
             {
                 int fxDuration = 5; // default
-                if (TryReadNumber(entry, "fxDuration", out var dur) || TryReadNumber(entry, "FxDuration", out dur))
+                if (TryReadNumber(entry, "fxDuration", out var dur) || TryReadNumber(entry, "FxDuration", out dur) || TryReadNumber(entry, "fx_duration", out dur))
                     fxDuration = (int)dur;
                 fxEntries.Add((i, entry, fxDesc, fxDuration));
             }
@@ -5489,6 +6417,7 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
 
                 // Update tts_schema.json: add fxFile property
                 entry["fxFile"] = localFileName;
+                entry["fx_file"] = localFileName;
             }
             catch (Exception ex)
             {
@@ -5588,6 +6517,22 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             try
             {
                 var (success, message) = await GenerateMusicInternalAsync(context, runId);
+                if (success)
+                {
+                    try
+                    {
+                        var story = GetStoryById(storyId);
+                        if (story != null)
+                        {
+                            ApplyStatusTransitionWithCleanup(story, "music_generated", runId);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogError(ex, "Impossibile aggiornare lo stato della storia {Id}", storyId);
+                        _customLogger?.Append(runId, $"[{storyId}] Aggiornamento stato fallito: {ex.Message}");
+                    }
+                }
                 await (_customLogger?.MarkCompletedAsync(runId, message ?? (success ? "Generazione musica completata" : "Errore generazione musica"))
                     ?? Task.CompletedTask);
             }
@@ -6220,10 +7165,13 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                         ?? ReadString(rootNode, "narrator_voice")
                         ?? ReadString(rootNode, "narratorVoice")
                         ?? string.Empty).Trim();
-                    if (string.IsNullOrWhiteSpace(narratorVoice)) narratorVoice = NarratorFallbackVoiceName;
+                    if (string.IsNullOrWhiteSpace(narratorVoice))
+                    {
+                        narratorVoice = GetNarratorDefaultVoiceId() ?? string.Empty;
+                    }
 
                     var storyTitle = (story.Title ?? string.Empty).Trim();
-                    if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null)
+                    if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null && !string.IsNullOrWhiteSpace(narratorVoice))
                     {
                         string? seriesTitle = null;
                         if (story.SerieId.HasValue)
@@ -6338,30 +7286,9 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
             }
         }
 
-        // Build ambience segments based on ambient_sound_file changes and phrase timing
+        // Build ambience segments based on ambient_sound_file definitions and ambientSoundsDuration
         try
         {
-            string? currentAmbientFile = null;
-            int segmentStartMs = 0;
-            int segmentEndMs = 0;
-
-            void FlushAmbienceSegmentIfAny()
-            {
-                if (string.IsNullOrWhiteSpace(currentAmbientFile)) return;
-                var durationMs = segmentEndMs - segmentStartMs;
-                if (durationMs <= 0) return;
-
-                var fullPath = Path.Combine(folderPath, currentAmbientFile);
-                if (!File.Exists(fullPath))
-                {
-                    _customLogger?.Append(runId, $"[{story.Id}] [WARN] File ambient sound NON TROVATO: {fullPath}");
-                    return;
-                }
-
-                ambienceTrackFiles.Add((fullPath, segmentStartMs + introShiftMs, durationMs));
-                _customLogger?.Append(runId, $"[{story.Id}] Ambient segment: {currentAmbientFile} @ {segmentStartMs + introShiftMs}ms for {durationMs}ms");
-            }
-
             for (int i = 0; i < phraseEntries.Count; i++)
             {
                 var e = phraseEntries[i];
@@ -6373,41 +7300,24 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
                     ReadString(e, "AmbientSoundsFile") ??
                     ReadString(e, "ambient_sounds_file");
 
+                if (string.IsNullOrWhiteSpace(ambientFile)) continue;
+
                 int startMs = 0;
-                int durationMs = 0;
                 if (TryReadNumber(e, "startMs", out var s) || TryReadNumber(e, "StartMs", out s) || TryReadNumber(e, "start_ms", out s))
                     startMs = (int)s;
-                if (TryReadNumber(e, "durationMs", out var d) || TryReadNumber(e, "DurationMs", out d) || TryReadNumber(e, "duration_ms", out d))
-                    durationMs = (int)d;
-                if (durationMs <= 0) durationMs = 2000;
-                var endMs = startMs + durationMs;
+                var durationMs = ReadAmbientSoundsDurationMs(e);
+                if (durationMs <= 0) continue;
 
-                // If the ambient file changes (or becomes empty), flush previous segment.
-                if (!string.IsNullOrWhiteSpace(currentAmbientFile) &&
-                    (!string.Equals(ambientFile, currentAmbientFile, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(ambientFile)))
+                var fullPath = Path.Combine(folderPath, ambientFile);
+                if (!File.Exists(fullPath))
                 {
-                    FlushAmbienceSegmentIfAny();
-                    currentAmbientFile = null;
+                    _customLogger?.Append(runId, $"[{story.Id}] [WARN] File ambient sound NON TROVATO: {fullPath}");
+                    continue;
                 }
 
-                if (!string.IsNullOrWhiteSpace(ambientFile))
-                {
-                    if (currentAmbientFile == null)
-                    {
-                        currentAmbientFile = ambientFile;
-                        segmentStartMs = startMs;
-                        segmentEndMs = endMs;
-                    }
-                    else
-                    {
-                        // extend
-                        segmentEndMs = Math.Max(segmentEndMs, endMs);
-                    }
-                }
+                ambienceTrackFiles.Add((fullPath, startMs + introShiftMs, durationMs));
+                _customLogger?.Append(runId, $"[{story.Id}] Ambient segment: {ambientFile} @ {startMs + introShiftMs}ms for {durationMs}ms");
             }
-
-            // flush last
-            FlushAmbienceSegmentIfAny();
         }
         catch (Exception ex)
         {
@@ -6756,15 +7666,47 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         var filterArgs = new StringBuilder();
         var labels = new List<string>();
         int idx = 0;
+        var tempLoopedFiles = new List<string>();
 
         // If there's music in the final mix, keep ambience (rumori) lower so it doesn't fight the music bed.
         var ambienceVolume = lowerAmbienceBecauseMusic ? 0.18 : 0.30;
         
-        // Add ambience with timing and volume. Ambience is looped so it can cover long durations.
+        // Add ambience with timing and volume. If the file is shorter than needed, loop it and trim.
         foreach (var (filePath, startMs, durationMs) in ambienceFiles)
         {
-            // Loop this input indefinitely, then atrim to requested duration.
-            inputArgs.Append($" -stream_loop -1 -i \"{filePath}\"");
+            string inputFile = filePath;
+            if (durationMs > 0)
+            {
+                try
+                {
+                    var wavBytes = await File.ReadAllBytesAsync(filePath);
+                    var srcDurationMs = TryGetWavDuration(wavBytes) ?? 0;
+                    if (srcDurationMs > 0 && durationMs > srcDurationMs)
+                    {
+                        var loopedFile = Path.Combine(folderPath, $"ambience_loop_{storyId}_{idx:D3}.wav");
+                        var loopResult = await CreateLoopedAmbienceFileAsync(filePath, loopedFile, durationMs, runId, storyId);
+                        if (loopResult.success && File.Exists(loopedFile))
+                        {
+                            inputFile = loopedFile;
+                            tempLoopedFiles.Add(loopedFile);
+                        }
+                    }
+                }
+                catch
+                {
+                    // best-effort: if duration check fails, fall back to stream_loop
+                }
+            }
+
+            if (string.Equals(inputFile, filePath, StringComparison.OrdinalIgnoreCase))
+            {
+                // Loop this input indefinitely, then atrim to requested duration.
+                inputArgs.Append($" -stream_loop -1 -i \"{inputFile}\"");
+            }
+            else
+            {
+                inputArgs.Append($" -i \"{inputFile}\"");
+            }
             var label = $"amb{idx}";
             var endSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
             filterArgs.Append($"[{idx}]atrim=start=0:end={endSeconds},adelay={startMs}|{startMs},volume={ambienceVolume.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}[{label}];");
@@ -6795,7 +7737,57 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         
         var result = await RunFfmpegProcessAsync(inputArgs.ToString(), filterFile, outputFile, runId, storyId);
         TryDeleteFile(filterFile);
+        foreach (var tmp in tempLoopedFiles) TryDeleteFile(tmp);
         return result;
+    }
+
+    private async Task<(bool success, string? error)> CreateLoopedAmbienceFileAsync(
+        string inputFile,
+        string outputFile,
+        int durationMs,
+        string runId,
+        long storyId)
+    {
+        try
+        {
+            var durationSeconds = (durationMs / 1000.0).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+            var process = new Process();
+            process.StartInfo.FileName = "ffmpeg";
+            process.StartInfo.UseShellExecute = false;
+            process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.RedirectStandardError = true;
+            process.StartInfo.CreateNoWindow = true;
+
+            process.StartInfo.ArgumentList.Add("-y");
+            process.StartInfo.ArgumentList.Add("-stream_loop");
+            process.StartInfo.ArgumentList.Add("-1");
+            process.StartInfo.ArgumentList.Add("-i");
+            process.StartInfo.ArgumentList.Add(inputFile);
+            process.StartInfo.ArgumentList.Add("-t");
+            process.StartInfo.ArgumentList.Add(durationSeconds);
+            process.StartInfo.ArgumentList.Add("-ac");
+            process.StartInfo.ArgumentList.Add("2");
+            process.StartInfo.ArgumentList.Add("-ar");
+            process.StartInfo.ArgumentList.Add("44100");
+            process.StartInfo.ArgumentList.Add(outputFile);
+
+            process.Start();
+            var stdErr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] [WARN] ffmpeg loop ambience failed: {stdErr}");
+                return (false, stdErr);
+            }
+
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] [WARN] ffmpeg loop ambience exception: {ex.Message}");
+            return (false, ex.Message);
+        }
     }
     
     private async Task<(bool success, string? error)> CreateMusicTrackAsync(
@@ -7058,6 +8050,34 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
         if (entry.TryGetPropertyValue("character", out var charNode) && charNode != null)
             return true;
         return entry.TryGetPropertyValue("Character", out charNode) && charNode != null;
+    }
+
+    private int GetPhraseGapMs(string text)
+    {
+        var seconds = _ttsSchemaOptions?.CurrentValue?.PhraseGapSeconds ?? (DefaultPhraseGapMs / 1000.0);
+        var gapMs = (int)Math.Max(0, Math.Round(seconds * 1000.0));
+        if (gapMs <= 0) return 0;
+        return EndsWithSentence(text) ? gapMs : 0;
+    }
+
+    private static bool EndsWithSentence(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var t = text.TrimEnd();
+        while (t.Length > 0)
+        {
+            var last = t[^1];
+            if (last == '"' || last == '\'' || last == '”' || last == '»')
+            {
+                t = t.Substring(0, t.Length - 1).TrimEnd();
+                continue;
+            }
+            break;
+        }
+
+        if (t.EndsWith("...")) return true;
+        var end = t.Length > 0 ? t[^1] : '\0';
+        return end == '.' || end == '!' || end == '?' || end == '…';
     }
 
     private static bool IsPauseEntry(JsonObject entry, out int pauseMs)
@@ -7356,14 +8376,44 @@ if (TryParseEvaluationText(evalText, out parsed, out parseError))
     // TODO: Implement auto-advancement feature with idle detection
     public bool IsAutoAdvancementEnabled()
     {
-        // Placeholder: return false until persistence mechanism is implemented
-        return false;
+        try
+        {
+            return _idleAutoOptions?.CurrentValue?.Enabled ?? false;
+        }
+        catch
+        {
+            return false;
+        }
     }
     
     public void SetAutoAdvancementEnabled(bool enabled)
     {
-        // Placeholder: store in database or config file
-        // TODO: Implement persistence for auto-advancement switch state
+        try
+        {
+            var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+            if (!File.Exists(appSettingsPath))
+            {
+                return;
+            }
+
+            var json = File.ReadAllText(appSettingsPath);
+            var root = JsonNode.Parse(json) as JsonObject;
+            if (root == null)
+            {
+                return;
+            }
+
+            var autoNode = root["AutomaticOperations"] as JsonObject ?? new JsonObject();
+            autoNode["Enabled"] = enabled;
+            root["AutomaticOperations"] = autoNode;
+
+            var updated = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(appSettingsPath, updated);
+        }
+        catch
+        {
+            // best-effort
+        }
     }
 
     internal static class StoriesServiceDefaults

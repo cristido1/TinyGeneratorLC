@@ -1,0 +1,262 @@
+NARRATIVE ENGINE (STATE-DRIVEN) — VERSIONE PER STORIE LUNGHE
+Documento operativo per Codex (modifiche DB + flusso agenti + gestione episodi fino a 30.000 caratteri)
+
+Data: 2026-01-28
+Obiettivo: rendere la generazione state-driven robusta anche con episodi lunghi (≈30k caratteri) SENZA aumentare il contesto LLM.
+Vincolo operativo: Ollama contesto 8192. Llama.cpp solo se strettamente necessario.
+
+================================================================================
+SEZIONE 1 — PRINCIPIO CHIAVE PER STORIE LUNGHE
+================================================================================
+Gli episodi possono essere passati INTERI agli agenti, ma LO STATO NON DEVE MAI essere passato completo.
+
+Regola globale:
+- Testo episodio → sempre intero
+- Stato serie completo JSON → mai nel prompt
+- Stato serie compatto → sempre nel prompt
+- Personaggi → solo rilevanti
+- Thread → solo prioritari
+
+Questo evita overflow di contesto e riduce deriva narrativa.
+
+================================================================================
+SEZIONE 2 — MODIFICHE DATABASE (RIASSUNTO STRUTTURALE)
+================================================================================
+
+2.1 Tabella series (campi direttivi e di stato)
+Aggiungere:
+- serie_state_summary (TEXT)
+- last_major_event (TEXT)
+- cosa_non_deve_mai_succedere (TEXT)
+- temi_obbligatori (TEXT)
+- livello_tecnologico_medio (TEXT)
+- world_rules_locked (BIT)
+
+2.2 Tabella series_state (storico + current)
+Campi principali:
+- id, serie_id, is_current, state_version
+- state_summary (TEXT)
+- world_state_json (TEXT/JSON)
+- open_threads_json (TEXT/JSON)
+- last_major_event
+- created_at, created_by
+- source_episode_id
+
+Vincolo: un solo is_current=1 per serie.
+
+2.3 Tabella series_episodes
+Aggiungere:
+- state_in_json
+- state_out_json
+- delta_json
+- canon_events
+- open_threads_out
+- recap_text
+
+2.4 Tabella series_characters
+Aggiungere:
+- ruolo_narrativo
+- arco_personale
+- stato_attuale
+- stato_attuale_json
+- alleanza_relazione
+- last_seen_episode_number
+
+2.5 Tabella opzionale series_threads
+Gestione fili narrativi come oggetti strutturati.
+
+================================================================================
+SEZIONE 3 — STATO COMPATTO (OBBLIGATORIO PER PROMPT)
+================================================================================
+
+Creare sempre una versione compressa dello stato chiamata:
+
+state_summary_compact
+
+Lunghezza massima consigliata: 1200–1500 parole.
+
+Struttura consigliata JSON:
+
+{
+  "global_situation": "...",
+  "recent_major_event": "...",
+  "threat_level": "...",
+  "resources_overview": "...",
+  "fleet_status": "...",
+  "active_threads_top": [
+    {"key":"...", "status":"open", "urgency":4}
+  ],
+  "characters_focus": [
+    {"name":"...", "role":"...", "relation":"alleato", "status":"..."}
+  ],
+  "hard_constraints": [
+    "world_rules_locked=true",
+    "divieto X",
+    "obbligo Y"
+  ]
+}
+
+Questo è L’UNICO stato passato al Writer.
+
+================================================================================
+SEZIONE 4 — FLUSSO AGENTI (POST EPISODIO E PRE SUCCESSIVO)
+================================================================================
+
+Pipeline obbligatoria:
+
+Writer (episodio lungo)
+    ↓
+CanonExtractor (timeline eventi)
+    ↓
+StateDeltaBuilder (differenze)
+    ↓
+ContinuityValidator (controlli)
+    ↓
+StateUpdater (DB + nuovo stato completo)
+    ↓
+StateCompressor (crea state_summary_compact)
+    ↓
+RecapBuilder
+    ↓
+Episodio successivo usa SOLO state_summary_compact
+
+================================================================================
+SEZIONE 5 — AGENTI: MODELLI, CONTROLLI, FALLBACK
+================================================================================
+
+-----------------------------
+WRITER
+-----------------------------
+Modello: Qwen2.5 14B Instruct o Llama 3.1 8B
+Contesto: 8k
+
+Input:
+- state_summary_compact
+- personaggi rilevanti
+- thread prioritari
+- direttive episodio
+
+Controlli:
+- Blocchi OutputContract presenti
+- JSON sezioni valido
+- Lunghezza minima episodio
+- Frasi duplicate
+- Overflow contesto stimato
+
+Fallback:
+- Richiesta CONTINUA se testo troncato
+- Revisor (Mistral 7B)
+- Modello più grande via llama.cpp solo se necessario
+
+-----------------------------
+CANON EXTRACTOR
+-----------------------------
+Modello: Mistral 7B
+Tecnica: estrazione timeline eventi
+
+Controlli:
+- Almeno N eventi
+- Eventi coprono anche finale episodio
+- Similarità embedding eventi vs testo
+
+Fallback:
+- Prompt “più granulare”
+- Qwen 7B
+
+-----------------------------
+STATE DELTA BUILDER
+-----------------------------
+Modello: Phi-3 Medium o Mistral 7B
+Input: solo stato compatto + eventi
+
+Controlli:
+- Delta non vuoto se ci sono eventi
+- Modifiche giustificate
+- JSON valido
+
+Fallback:
+- Prompt “ONLY DIFF”
+- Qwen 14B
+
+-----------------------------
+CONTINUITY VALIDATOR
+-----------------------------
+Modello: Qwen 14B
+NON riceve testo completo, solo riassunti ed eventi.
+
+Controlli deterministici:
+- Personaggi morti che parlano
+- Risorse negative
+- Violazione hard-ban
+- world_rules_locked
+
+Controlli embedding a finestre:
+- Episodio diviso in blocchi
+- Ogni blocco confrontato con stato precedente
+- Blocchi “anomali” segnalati
+
+Fallback:
+- Secondo parere Mistral 7B
+- Rimando al Writer con lista problemi
+
+-----------------------------
+STATE UPDATER
+-----------------------------
+NO LLM per merge logico
+LLM (Mistral 7B) solo per rigenerare state_summary testuale
+
+Controlli:
+- Version incrementata
+- Nessuna perdita thread
+- Coerenza numerica
+
+-----------------------------
+STATE COMPRESSOR (NUOVO CRITICO)
+-----------------------------
+Modello: Mistral 7B
+Output: state_summary_compact
+
+Controlli:
+- Lunghezza massima
+- Include: situazione, minaccia, risorse, personaggi chiave, thread urgenti
+
+Fallback:
+- Qwen 7B
+
+-----------------------------
+RECAP BUILDER
+-----------------------------
+Modello: Llama 3.1 8B
+
+Controlli:
+- Non introduce info nuove
+- Copre eventi principali (embedding vs canon_events)
+
+Fallback:
+- Prompt “ONLY SUMMARIZE” con Mistral 7B
+
+================================================================================
+SEZIONE 6 — CHECK AUTOMATICI GLOBALI
+================================================================================
+- Coerenza narrativa
+- Continuità thread
+- Reset personaggi
+- Coerenza risorse
+- Nessuna frase duplicata nell’episodio
+
+================================================================================
+SEZIONE 7 — ORDINE IMPLEMENTAZIONE
+================================================================================
+1) series_state + versioning
+2) state_in/out episodio
+3) StateUpdater logico
+4) StateCompressor
+5) Prompt Writer con stato compatto
+6) CanonExtractor
+7) ContinuityValidator
+8) RecapBuilder
+9) Threads tabellari
+
+================================================================================
+FINE DOCUMENTO
+================================================================================

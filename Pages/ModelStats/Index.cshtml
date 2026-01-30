@@ -1,0 +1,181 @@
+@page
+@model TinyGenerator.Pages.ModelStats.IndexModel
+@{
+    ViewData["Title"] = "Model Stats";
+    ViewData["PageDescription"] = "Statistiche utilizzo modelli per operazione";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
+}
+
+<div class="page-wrapper">
+    <div style="height: calc(100vh - 200px); width:100%; overflow-x:auto; overflow-y:auto;">
+        <style>
+            .table-container {
+                border: 1px solid #dee2e6;
+                border-radius: 0.375rem;
+                padding: 1rem;
+                background: #fff;
+            }
+
+            #modelStatsTable {
+                font-size: 0.9rem;
+                margin-bottom: 0;
+            }
+
+            #modelStatsTable thead th {
+                font-weight: 600;
+                font-size: 0.85rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                padding: 0.75rem;
+                border-bottom: 2px solid #dee2e6;
+            }
+
+            #modelStatsTable tbody td {
+                padding: 0.75rem;
+                vertical-align: middle;
+            }
+
+            #modelStatsTable tbody tr:hover {
+                background-color: #f8f9fa;
+            }
+
+            #modelStatsTable tbody tr.odd,
+            #modelStatsTable tbody tr.even {
+                background-color: transparent;
+            }
+
+            .dt-buttons .btn {
+                font-size: 0.875rem;
+                padding: 0.375rem 0.75rem;
+            }
+
+            .dataTables_filter input {
+                margin-left: 0.5rem;
+                border-radius: 0.25rem;
+            }
+
+            .dataTables_paginate .pagination {
+                margin-bottom: 0;
+            }
+
+            .dataTables_info {
+                font-size: 0.875rem;
+                color: #6c757d;
+            }
+
+            .btn-group-vertical > .btn,
+            .btn-group > .btn {
+                flex: none;
+            }
+
+            .filters-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.75rem;
+                margin-bottom: 0.75rem;
+            }
+            .filters-row .form-control {
+                max-width: 260px;
+            }
+        </style>
+
+        <div class="filters-row">
+            <input id="modelFilter" class="form-control form-control-sm" placeholder="Filtro modello..." />
+            <input id="operationFilter" class="form-control form-control-sm" placeholder="Filtro comando..." />
+        </div>
+
+        <div class="table-container">
+            <table class="table table-hover" id="modelStatsTable">
+                <thead class="table-light">
+                    <tr>
+                        <th data-col="model">Modello</th>
+                        <th data-col="operation">Operazione</th>
+                        <th data-col="used">Usi</th>
+                        <th data-col="success">Successi</th>
+                        <th data-col="failed">Falliti</th>
+                        <th data-col="successRate">Success rate</th>
+                        <th data-col="avgSuccess">Avg success (s)</th>
+                        <th data-col="avgFail">Avg fail (s)</th>
+                        <th data-col="totalSuccess">Tot success (s)</th>
+                        <th data-col="totalFail">Tot fail (s)</th>
+                        <th data-col="ratioSuccess">Tempo/successo (tot/ok)</th>
+                        <th data-col="ratioFail">Tempo/fallimento (tot/ko)</th>
+                        <th data-col="first">Prima operazione</th>
+                        <th data-col="last">Ultima operazione</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in Model.Items)
+                    {
+                        <tr>
+                            <td data-col="model">@s.ModelName</td>
+                            <td data-col="operation">@s.Operation</td>
+                            <td data-col="used">@s.CountUsed</td>
+                            <td data-col="success">@s.CountSuccessed</td>
+                            <td data-col="failed">@s.CountFailed</td>
+                            <td data-col="successRate">@((s.SuccessRate * 100).ToString("F1"))%</td>
+                            <td data-col="avgSuccess">@s.AvgSuccessDisplay</td>
+                            <td data-col="avgFail">@s.AvgFailDisplay</td>
+                            <td data-col="totalSuccess">@s.TotalSuccessTimeSecs.ToString("F2")</td>
+                            <td data-col="totalFail">@s.TotalFailTimeSecs.ToString("F2")</td>
+                            <td data-col="ratioSuccess">@s.SuccessTimePerSuccessDisplay</td>
+                            <td data-col="ratioFail">@s.FailTimePerFailDisplay</td>
+                            <td data-col="first">@s.FirstOperationDate</td>
+                            <td data-col="last">@s.LastOperationDate</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function initModelStatsTable(){
+        if (typeof jQuery === 'undefined') { setTimeout(initModelStatsTable, 50); return; }
+        var scripts = ['/lib/datatables/js/jquery.dataTables.min.js','/lib/datatables/js/dataTables.bootstrap5.min.js','/lib/datatables/js/dataTables.buttons.min.js','/lib/datatables/js/buttons.bootstrap5.min.js','/lib/datatables/js/buttons.colVis.min.js'];
+        var i=0; function load(u,cb){ var s=document.createElement('script'); s.src=u; s.onload=cb; s.onerror=function(){ console.error('Failed to load script:', u); cb(); }; document.head.appendChild(s);} function next(){ if(i<scripts.length) load(scripts[i++], next); else init(); } next();
+        function init(){ jQuery(function($){ if(typeof $.fn.DataTable === 'undefined'){ console.error('DataTables not loaded'); return; }
+            if ($.fn.DataTable.isDataTable('#modelStatsTable')) {
+                try { $('#modelStatsTable').DataTable().destroy(); } catch(e) { console.warn('Failed to destroy existing DataTable', e); }
+            }
+
+            var table = $('#modelStatsTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                paging: true,
+                pageLength: 25,
+                lengthChange: true,
+                lengthMenu: [[10,25,50,100],[10,25,50,100]],
+                order: [[0,'asc']],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-arrow-clockwise me-1"></i>Aggiorna',
+                        className: 'btn btn-sm btn-primary me-1',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function(){ location.reload(); }
+                    },
+                    {
+                        extend: 'colvis',
+                        text: 'Colonne',
+                        className: 'btn btn-sm btn-secondary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' }
+                    }
+                ]
+            });
+
+            $('#modelFilter').on('input', function(){
+                table.column(0).search(this.value || '').draw();
+            });
+            $('#operationFilter').on('input', function(){
+                table.column(1).search(this.value || '').draw();
+            });
+        }); }
+    })();
+</script>

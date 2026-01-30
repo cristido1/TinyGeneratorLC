@@ -1507,6 +1507,27 @@ public sealed class DatabaseService
             Console.WriteLine("[DB] ✓ Migration AddStoryIdToStories applied");
         }
 
+
+        // Ensure deleted flag exists in stories table
+        var checkStoriesDeleted = conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='deleted'");
+        if (checkStoriesDeleted == 0)
+        {
+            Console.WriteLine("[DB] Applying migration: AddDeletedToStories");
+            conn.Execute("ALTER TABLE stories ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+            Console.WriteLine("[DB] ? Migration AddDeletedToStories applied");
+        }
+
+        // Best-effort: normalize deleted flag to 0 for existing rows
+        try
+        {
+            conn.Execute("UPDATE stories SET deleted = 0 WHERE deleted IS NULL");
+        }
+        catch
+        {
+            // ignore
+        }
+
         // Check if summary column exists
         var checkSummary = conn.ExecuteScalar<int>(
             "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='summary'");
@@ -2561,7 +2582,10 @@ SET TotalScore = (
     public List<TinyGenerator.Models.StoryRecord> GetAllStories()
     {
         using var context = CreateDbContext();
-        var stories = context.Stories.OrderByDescending(s => s.Id).ToList();
+        var stories = context.Stories
+            .Where(s => !s.Deleted)
+            .OrderByDescending(s => s.Id)
+            .ToList();
         // Populate navigation properties
         foreach (var s in stories)
         {
@@ -2593,10 +2617,458 @@ SET TotalScore = (
         return stories;
     }
 
+    public long? GetFirstStoryIdByStatusCode(string statusCode)
+    {
+        if (string.IsNullOrWhiteSpace(statusCode))
+            return null;
+
+        using var context = CreateDbContext();
+        var code = statusCode.Trim().ToLowerInvariant();
+        var statusId = context.StoriesStatus
+            .Where(s => s.Code != null && s.Code.ToLower() == code)
+            .Select(s => (int?)s.Id)
+            .FirstOrDefault();
+
+        if (!statusId.HasValue)
+            return null;
+
+        var storyId = context.Stories
+            .Where(s => s.StatusId == statusId.Value && !s.Deleted)
+            .OrderBy(s => s.Id)
+            .Select(s => (long?)s.Id)
+            .FirstOrDefault();
+
+        return storyId;
+    }
+
+    public long? GetFirstRevisedStoryIdNeedingEvaluations(int minEvaluations)
+    {
+        minEvaluations = Math.Max(1, minEvaluations);
+        using var context = CreateDbContext();
+
+        var statusId = context.StoriesStatus
+            .Where(s => s.Code != null && s.Code.ToLower() == "revised")
+            .Select(s => (int?)s.Id)
+            .FirstOrDefault();
+
+        if (!statusId.HasValue)
+            return null;
+
+        var query = context.Stories
+            .Where(s => s.StatusId == statusId.Value && !s.Deleted)
+            .Select(s => new
+            {
+                s.Id,
+                EvalCount = context.StoryEvaluations.Count(e => e.StoryId == s.Id)
+            })
+            .Where(x => x.EvalCount < minEvaluations)
+            .OrderBy(x => x.Id)
+            .Select(x => (long?)x.Id)
+            .FirstOrDefault();
+
+        return query;
+    }
+
+    public long? GetFirstStoryIdBelowEvaluationThreshold(double minAverageScore, int minEvaluations)
+    {
+        minEvaluations = Math.Max(1, minEvaluations);
+        using var context = CreateDbContext();
+
+        var evaluatedStatusId = context.StoriesStatus
+            .Where(s => s.Code != null && s.Code.ToLower() == "evaluated")
+            .Select(s => (int?)s.Id)
+            .FirstOrDefault();
+        if (!evaluatedStatusId.HasValue)
+        {
+            return null;
+        }
+
+        var candidate = context.StoryEvaluations
+            .GroupBy(e => e.StoryId)
+            .Select(g => new
+            {
+                StoryId = g.Key,
+                Count = g.Count(),
+                Avg = g.Average(x => x.TotalScore)
+            })
+            .Join(context.Stories.Where(s => s.StatusId == evaluatedStatusId.Value && !s.Deleted),
+                eval => eval.StoryId,
+                story => story.Id,
+                (eval, story) => eval)
+            .Where(x => x.Count >= minEvaluations && x.Avg < minAverageScore)
+            .OrderBy(x => x.Avg)
+            .ThenBy(x => x.StoryId)
+            .Select(x => (long?)x.StoryId)
+            .FirstOrDefault();
+
+        return candidate;
+    }
+
+    public bool HasPendingModelResponseLogs()
+    {
+        using var context = CreateDbContext();
+        return context.Logs.Any(l =>
+            !l.Examined &&
+            (l.Category == "ModelResponse" || l.Category == "ModelCompletion") &&
+            l.AgentName != null && l.AgentName != "");
+    }
+
+    public int UpdateModelStatsFromUnexaminedLogs(int batchSize = 200)
+    {
+        batchSize = Math.Max(1, batchSize);
+        using var wrapper = CreateDbContextWrapper();
+        var context = wrapper.Context;
+
+        var responses = context.Logs
+            .Where(l =>
+                !l.Examined &&
+                (l.Category == "ModelResponse" || l.Category == "ModelCompletion") &&
+                l.AgentName != null && l.AgentName != "" &&
+                l.Id != null)
+            .OrderBy(l => l.Id)
+            .Select(l => new ModelLogResponse(
+                l.Id!.Value,
+                l.ThreadId,
+                l.Ts,
+                l.Message,
+                l.ThreadScope,
+                l.Result))
+            .Take(batchSize)
+            .ToList();
+
+        if (responses.Count == 0)
+        {
+            return 0;
+        }
+
+        var threadIds = responses.Select(r => r.ThreadId).Distinct().ToList();
+        var requests = context.Logs
+            .Where(l => l.Category == "ModelRequest" && threadIds.Contains(l.ThreadId))
+            .Select(l => new ModelLogRequest(
+                l.ThreadId,
+                l.Ts,
+                l.Message))
+            .ToList();
+
+        var requestMap = new Dictionary<(int ThreadId, string ModelName), List<DateTime>>();
+        foreach (var req in requests)
+        {
+            var modelName = ParseModelName(req.Message);
+            if (string.IsNullOrWhiteSpace(modelName)) continue;
+            if (!TryParseLogTime(req.Ts, out var ts)) continue;
+
+            var key = (req.ThreadId, modelName);
+            if (!requestMap.TryGetValue(key, out var list))
+            {
+                list = new List<DateTime>();
+                requestMap[key] = list;
+            }
+            list.Add(ts);
+        }
+
+        foreach (var list in requestMap.Values)
+        {
+            list.Sort();
+        }
+
+        var aggregates = new Dictionary<string, ModelStatsAggregate>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var resp in responses)
+        {
+            var modelName = ParseModelName(resp.Message) ?? "unknown";
+            var operation = NormalizeOperation(resp.ThreadScope);
+            var result = (resp.Result ?? string.Empty).Trim().ToUpperInvariant();
+            var success = string.Equals(result, "SUCCESS", StringComparison.OrdinalIgnoreCase);
+
+            if (!TryParseLogTime(resp.Ts, out var responseTime))
+            {
+                responseTime = DateTime.UtcNow;
+            }
+
+            double? durationSecs = null;
+            if (requestMap.TryGetValue((resp.ThreadId, modelName), out var reqTimes))
+            {
+                var reqTime = FindLatestRequestBefore(reqTimes, responseTime);
+                if (reqTime.HasValue)
+                {
+                    durationSecs = Math.Max(0, (responseTime - reqTime.Value).TotalSeconds);
+                }
+            }
+
+            var key = $"{modelName}||{operation}";
+            if (!aggregates.TryGetValue(key, out var agg))
+            {
+                agg = new ModelStatsAggregate(modelName, operation);
+                aggregates[key] = agg;
+            }
+
+            agg.CountUsed++;
+            if (success)
+            {
+                agg.CountSuccessed++;
+                if (durationSecs.HasValue)
+                {
+                    agg.TotalSuccessTimeSecs += durationSecs.Value;
+                }
+            }
+            else
+            {
+                agg.CountFailed++;
+                if (durationSecs.HasValue)
+                {
+                    agg.TotalFailTimeSecs += durationSecs.Value;
+                }
+            }
+
+            agg.UpdateDates(responseTime);
+        }
+
+        using var conn = CreateDapperConnection();
+        foreach (var agg in aggregates.Values)
+        {
+            UpsertModelStats(conn, agg.ModelName, agg.Operation, agg.CountUsed, agg.CountSuccessed, agg.CountFailed,
+                agg.TotalSuccessTimeSecs, agg.TotalFailTimeSecs, agg.LastOperationDate, agg.FirstOperationDate);
+        }
+
+        MergeStoryEvaluationOperations(conn);
+
+        conn.Execute("UPDATE Log SET Examined = 1 WHERE Id IN @Ids", new { Ids = responses.Select(r => r.Id).ToList() });
+
+        return responses.Count;
+    }
+
+    public List<ModelStatsRecord> GetModelStats()
+    {
+        using var context = CreateDbContext();
+        return context.Set<ModelStatsRecord>()
+            .OrderBy(s => s.ModelName)
+            .ThenBy(s => s.Operation)
+            .ToList();
+    }
+
+    private static string? ParseModelName(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return null;
+        var start = message.IndexOf('[');
+        if (start < 0) return null;
+        var end = message.IndexOf(']', start + 1);
+        if (end <= start + 1) return null;
+        return message.Substring(start + 1, end - start - 1).Trim();
+    }
+
+    private static bool TryParseLogTime(string? ts, out DateTime time)
+    {
+        if (!string.IsNullOrWhiteSpace(ts) && DateTime.TryParse(ts, out time))
+        {
+            return true;
+        }
+
+        time = DateTime.MinValue;
+        return false;
+    }
+
+    private static DateTime? FindLatestRequestBefore(List<DateTime> sortedTimes, DateTime responseTime)
+    {
+        DateTime? candidate = null;
+        foreach (var t in sortedTimes)
+        {
+            if (t > responseTime) break;
+            candidate = t;
+        }
+        return candidate;
+    }
+
+    private static void MergeStoryEvaluationOperations(System.Data.IDbConnection conn)
+    {
+        var rows = conn.Query(@"
+SELECT
+    model_name AS ModelName,
+    'story_evaluation' AS Operation,
+    SUM(count_used) AS CountUsed,
+    SUM(count_successed) AS CountSuccessed,
+    SUM(count_failed) AS CountFailed,
+    SUM(total_success_time_secs) AS TotalSuccessTimeSecs,
+    SUM(total_fail_time_secs) AS TotalFailTimeSecs,
+    MAX(last_operation_date) AS LastOperationDate,
+    MIN(first_operation_date) AS FirstOperationDate
+FROM stats_models
+WHERE operation LIKE 'story_evaluation\_%' ESCAPE '\'
+GROUP BY model_name
+").ToList();
+
+        foreach (var row in rows)
+        {
+            UpsertModelStats(conn, row.ModelName, row.Operation, (int)row.CountUsed, (int)row.CountSuccessed,
+                (int)row.CountFailed, (double)row.TotalSuccessTimeSecs, (double)row.TotalFailTimeSecs,
+                row.LastOperationDate as string, row.FirstOperationDate as string);
+        }
+
+        conn.Execute(@"
+DELETE FROM stats_models
+WHERE operation LIKE 'story_evaluation\_%' ESCAPE '\';
+");
+    }
+
+    private static string NormalizeOperation(string? threadScope)
+    {
+        if (string.IsNullOrWhiteSpace(threadScope)) return "unknown";
+        if (threadScope.StartsWith("story_evaluation_", StringComparison.OrdinalIgnoreCase))
+        {
+            return "story_evaluation";
+        }
+        return threadScope;
+    }
+
+    private static void UpsertModelStats(System.Data.IDbConnection conn, string modelName, string operation,
+        int countUsed, int countSuccessed, int countFailed, double totalSuccessTimeSecs, double totalFailTimeSecs,
+        string? lastOperationDate, string? firstOperationDate)
+    {
+        var updated = conn.Execute(@"
+UPDATE stats_models SET
+    count_used = count_used + @CountUsed,
+    count_successed = count_successed + @CountSuccessed,
+    count_failed = count_failed + @CountFailed,
+    total_success_time_secs = total_success_time_secs + @TotalSuccessTimeSecs,
+    total_fail_time_secs = total_fail_time_secs + @TotalFailTimeSecs,
+    last_operation_date = CASE
+        WHEN last_operation_date IS NULL OR @LastOperationDate > last_operation_date
+            THEN @LastOperationDate
+        ELSE last_operation_date
+    END,
+    first_operation_date = CASE
+        WHEN first_operation_date IS NULL OR @FirstOperationDate < first_operation_date
+            THEN @FirstOperationDate
+        ELSE first_operation_date
+    END
+WHERE model_name = @ModelName AND operation = @Operation;",
+            new
+            {
+                ModelName = modelName,
+                Operation = operation,
+                CountUsed = countUsed,
+                CountSuccessed = countSuccessed,
+                CountFailed = countFailed,
+                TotalSuccessTimeSecs = totalSuccessTimeSecs,
+                TotalFailTimeSecs = totalFailTimeSecs,
+                LastOperationDate = lastOperationDate,
+                FirstOperationDate = firstOperationDate
+            });
+
+        if (updated > 0)
+        {
+            return;
+        }
+
+        conn.Execute(@"
+INSERT INTO stats_models (
+    model_name, operation, count_used, count_successed, count_failed,
+    total_success_time_secs, total_fail_time_secs, last_operation_date, first_operation_date
+)
+VALUES (
+    @ModelName, @Operation, @CountUsed, @CountSuccessed, @CountFailed,
+    @TotalSuccessTimeSecs, @TotalFailTimeSecs, @LastOperationDate, @FirstOperationDate
+);",
+            new
+            {
+                ModelName = modelName,
+                Operation = operation,
+                CountUsed = countUsed,
+                CountSuccessed = countSuccessed,
+                CountFailed = countFailed,
+                TotalSuccessTimeSecs = totalSuccessTimeSecs,
+                TotalFailTimeSecs = totalFailTimeSecs,
+                LastOperationDate = lastOperationDate,
+                FirstOperationDate = firstOperationDate
+            });
+    }
+
+    public void AddWriterFailureForStory(long storyId)
+    {
+        if (storyId <= 0) return;
+
+        using var context = CreateDbContext();
+        var story = context.Stories.FirstOrDefault(s => s.Id == storyId);
+        if (story == null) return;
+
+        string? modelName = null;
+        if (story.ModelId.HasValue)
+        {
+            modelName = context.Models.Find(story.ModelId.Value)?.Name;
+        }
+        else if (story.AgentId.HasValue)
+        {
+            var agent = context.Agents.Find(story.AgentId.Value);
+            if (agent?.ModelId.HasValue == true)
+            {
+                modelName = context.Models.Find(agent.ModelId.Value)?.Name;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(modelName)) return;
+
+        var now = DateTime.UtcNow.ToString("o");
+        using var conn = CreateDapperConnection();
+        UpsertModelStats(
+            conn,
+            modelName,
+            "writer",
+            countUsed: 1,
+            countSuccessed: 0,
+            countFailed: 1,
+            totalSuccessTimeSecs: 0,
+            totalFailTimeSecs: 0,
+            lastOperationDate: now,
+            firstOperationDate: now);
+    }
+
+    private sealed record ModelLogResponse(long Id, int ThreadId, string Ts, string Message, string? ThreadScope, string? Result);
+    private sealed record ModelLogRequest(int ThreadId, string Ts, string Message);
+
+    private sealed class ModelStatsAggregate
+    {
+        public string ModelName { get; }
+        public string Operation { get; }
+        public int CountUsed { get; set; }
+        public int CountSuccessed { get; set; }
+        public int CountFailed { get; set; }
+        public double TotalSuccessTimeSecs { get; set; }
+        public double TotalFailTimeSecs { get; set; }
+        public string? FirstOperationDate { get; private set; }
+        public string? LastOperationDate { get; private set; }
+
+        public ModelStatsAggregate(string modelName, string operation)
+        {
+            ModelName = modelName;
+            Operation = operation;
+        }
+
+        public void UpdateDates(DateTime responseTime)
+        {
+            var iso = responseTime.ToString("o");
+            if (string.IsNullOrWhiteSpace(FirstOperationDate))
+            {
+                FirstOperationDate = iso;
+            }
+            else if (string.CompareOrdinal(iso, FirstOperationDate) < 0)
+            {
+                FirstOperationDate = iso;
+            }
+
+            if (string.IsNullOrWhiteSpace(LastOperationDate))
+            {
+                LastOperationDate = iso;
+            }
+            else if (string.CompareOrdinal(iso, LastOperationDate) > 0)
+            {
+                LastOperationDate = iso;
+            }
+        }
+    }
+
     public TinyGenerator.Models.StoryRecord? GetStoryById(long id)
     {
         using var context = CreateDbContext();
-        var s = context.Stories.FirstOrDefault(st => st.Id == id);
+        var s = context.Stories.FirstOrDefault(st => st.Id == id && !st.Deleted);
         if (s == null) return null;
         // Populate navigation properties
         if (s.StatusId.HasValue)
@@ -2650,16 +3122,7 @@ SET TotalScore = (
         using var context = CreateDbContext();
         var story = context.Stories.Find(id);
         if (story == null) return;
-        var genId = story.GenerationId;
-        if (!string.IsNullOrEmpty(genId))
-        {
-            var related = context.Stories.Where(s => s.GenerationId == genId).ToList();
-            context.Stories.RemoveRange(related);
-        }
-        else
-        {
-            context.Stories.Remove(story);
-        }
+        story.Deleted = true;
         context.SaveChanges();
     }
 
@@ -3898,6 +4361,36 @@ CREATE TABLE IF NOT EXISTS usage_state (
             Console.WriteLine($"[DB] Warning: unable to add Result column to Log: {ex.Message}");
         }
 
+        // Migration: add ResultFailReason column to Log if missing
+        try
+        {
+            var hasResultFailReason = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name = 'ResultFailReason'") > 0;
+            if (!hasResultFailReason)
+            {
+                conn.Execute("ALTER TABLE Log ADD COLUMN ResultFailReason TEXT");
+                Console.WriteLine("[DB] Migration: added ResultFailReason column to Log");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add ResultFailReason column to Log: {ex.Message}");
+        }
+
+        // Migration: add Examined column to Log if missing
+        try
+        {
+            var hasExamined = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name = 'Examined'") > 0;
+            if (!hasExamined)
+            {
+                conn.Execute("ALTER TABLE Log ADD COLUMN Examined INTEGER");
+                Console.WriteLine("[DB] Migration: added Examined column to Log");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add Examined column to Log: {ex.Message}");
+        }
+
         // Migration: add StepNumber and MaxStep columns to Log for multi-step tracking
         try
         {
@@ -3917,6 +4410,34 @@ CREATE TABLE IF NOT EXISTS usage_state (
         catch (Exception ex)
         {
             Console.WriteLine($"[DB] Warning: unable to add step columns to Log: {ex.Message}");
+        }
+
+        // Migration: create stats_models table if missing
+        try
+        {
+            var hasStatsModels = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='stats_models'") > 0;
+            if (!hasStatsModels)
+            {
+                Console.WriteLine("[DB] Migration: creating stats_models table");
+                conn.Execute(@"
+CREATE TABLE IF NOT EXISTS stats_models (
+    model_name TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    count_used INTEGER NOT NULL DEFAULT 0,
+    count_successed INTEGER NOT NULL DEFAULT 0,
+    count_failed INTEGER NOT NULL DEFAULT 0,
+    total_success_time_secs REAL NOT NULL DEFAULT 0,
+    total_fail_time_secs REAL NOT NULL DEFAULT 0,
+    last_operation_date TEXT NULL,
+    first_operation_date TEXT NULL,
+    PRIMARY KEY (model_name, operation)
+);
+");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to create stats_models table: {ex.Message}");
         }
 
         // Migration: create app_events table and seed default event types
@@ -3976,8 +4497,8 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 try
                 {
                     conn.Execute(@"
-                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context, Result)
-                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL, NULL
+                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context, Result, ResultFailReason, Examined)
+                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL, NULL, NULL, 0
                         FROM logs l
                         WHERE NOT EXISTS (
                             SELECT 1 FROM Log existing 
@@ -4629,23 +5150,25 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
                 }
 
                 // create aggregated entry
-                var agg = new TinyGenerator.Models.LogEntry
-                {
-                    Ts = ts,
-                    Level = level,
-                    Category = "llama.cpp",
-                    Message = msgSb.Length > 0 ? msgSb.ToString() : string.Empty,
-                    Exception = exceptionSb.Length > 0 ? exceptionSb.ToString() : null,
-                    State = null,
-                    ThreadId = threadId,
-                    StoryId = storyId,
-                    ThreadScope = threadScope,
-                    AgentName = agentName,
-                    Context = null,
-                    Analized = false,
-                    ChatText = chatTextSb.Length > 0 ? chatTextSb.ToString() : string.Empty,
-                    Result = null
-                };
+                  var agg = new TinyGenerator.Models.LogEntry
+                  {
+                      Ts = ts,
+                      Level = level,
+                      Category = "llama.cpp",
+                      Message = msgSb.Length > 0 ? msgSb.ToString() : string.Empty,
+                      Exception = exceptionSb.Length > 0 ? exceptionSb.ToString() : null,
+                      State = null,
+                      ThreadId = threadId,
+                      StoryId = storyId,
+                      ThreadScope = threadScope,
+                      AgentName = agentName,
+                      Context = null,
+                      Analized = false,
+                      ChatText = chatTextSb.Length > 0 ? chatTextSb.ToString() : string.Empty,
+                      Result = null,
+                      ResultFailReason = null,
+                      Examined = false
+                  };
 
                 // Trim very large aggregated messages to avoid DB bloat
                 const int MaxLen = 8000;
@@ -4673,7 +5196,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         await ((SqliteConnection)conn).OpenAsync();
 
         // Build a single INSERT ... VALUES (...),(...),... with uniquely named parameters to avoid collisions
-        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result" };
+        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" };
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
 
@@ -4696,9 +5219,11 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             parameters.Add("@ThreadScope" + i, e.ThreadScope);
             parameters.Add("@AgentName" + i, e.AgentName);
             parameters.Add("@Context" + i, e.Context);
-            parameters.Add("@analized" + i, e.Analized ? 1 : 0);
-            parameters.Add("@chat_text" + i, e.ChatText);
-            parameters.Add("@Result" + i, e.Result);
+              parameters.Add("@analized" + i, e.Analized ? 1 : 0);
+              parameters.Add("@chat_text" + i, e.ChatText);
+              parameters.Add("@Result" + i, e.Result);
+              parameters.Add("@ResultFailReason" + i, e.ResultFailReason);
+              parameters.Add("@Examined" + i, e.Examined ? 1 : 0);
         }
 
         sb.Append(";");
@@ -4710,7 +5235,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         catch (SqliteException ex) when (ex.Message != null && ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase) && ex.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
         {
             // Backward-compat: database not migrated yet.
-            var legacyCols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result" };
+            var legacyCols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" };
             var legacySb = new System.Text.StringBuilder();
             legacySb.Append("INSERT INTO Log (" + string.Join(", ", legacyCols) + ") VALUES ");
             var legacyParams = new DynamicParameters();
@@ -4732,10 +5257,12 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
                 legacyParams.Add("@ThreadScope" + i, e.ThreadScope);
                 legacyParams.Add("@AgentName" + i, e.AgentName);
                 legacyParams.Add("@Context" + i, e.Context);
-                legacyParams.Add("@analized" + i, e.Analized ? 1 : 0);
-                legacyParams.Add("@chat_text" + i, e.ChatText);
-                legacyParams.Add("@Result" + i, e.Result);
-            }
+                  legacyParams.Add("@analized" + i, e.Analized ? 1 : 0);
+                  legacyParams.Add("@chat_text" + i, e.ChatText);
+                  legacyParams.Add("@Result" + i, e.Result);
+                  legacyParams.Add("@ResultFailReason" + i, e.ResultFailReason);
+                  legacyParams.Add("@Examined" + i, e.Examined ? 1 : 0);
+              }
 
             legacySb.Append(";");
             await conn.ExecuteAsync(legacySb.ToString(), legacyParams);
@@ -4881,6 +5408,44 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         {
             log.Analized = analyzed;
         }
+        context.SaveChanges();
+    }
+
+    public void DeleteStoryRowById(long id)
+    {
+        using var context = CreateDbContext();
+        var story = context.Stories.Find(id);
+        if (story == null) return;
+        story.Deleted = true;
+        context.SaveChanges();
+    }
+
+    public void UpdateLatestModelResponseResult(int threadId, string result, string? failReason, bool examined)
+    {
+        if (threadId <= 0) return;
+        if (string.IsNullOrWhiteSpace(result)) return;
+
+        using var context = CreateDbContext();
+        var log = context.Logs
+            .Where(l =>
+                l.ThreadId == threadId &&
+                (l.Category == "ModelCompletion" || l.Category == "ModelResponse"))
+            .OrderByDescending(l => l.Id)
+            .FirstOrDefault();
+
+        if (log == null) return;
+
+        log.Result = result.Trim().ToUpperInvariant();
+        if (string.Equals(log.Result, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            log.ResultFailReason = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(failReason))
+        {
+            log.ResultFailReason = failReason.Trim();
+        }
+
+        log.Examined = examined;
         context.SaveChanges();
     }
 
@@ -5423,6 +5988,7 @@ WHERE Id = @modelId;";
             existing.AgentType = status.AgentType;
             existing.FunctionName = status.FunctionName;
             existing.CaptionToExecute = status.CaptionToExecute;
+            existing.DeleteNextItems = status.DeleteNextItems;
             context.SaveChanges();
         }
     }

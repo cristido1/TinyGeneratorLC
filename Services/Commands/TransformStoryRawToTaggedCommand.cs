@@ -293,11 +293,13 @@ namespace TinyGenerator.Services.Commands
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Tagged story rebuilt from story_tags");
 
-                // Requirement: if tagging succeeds, enqueue ambient_expert to add ambient tags
-                TryEnqueueAmbientExpert(story, effectiveRunId);
+                // Requirement: if tagging succeeds, optionally enqueue ambient_expert to add ambient tags
+                var enqueued = TryEnqueueAmbientExpert(story, effectiveRunId);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
-                return new CommandResult(true, "Tagged story generated (ambient_expert enqueued)");
+                return new CommandResult(true, enqueued
+                    ? "Tagged story generated (ambient_expert enqueued)"
+                    : "Tagged story generated");
             }
             catch (OperationCanceledException)
             {
@@ -309,20 +311,26 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        private void TryEnqueueAmbientExpert(StoryRecord story, string runId)
+        private bool TryEnqueueAmbientExpert(StoryRecord story, string runId)
         {
             try
             {
+                if (!_tuning.TransformStoryRawToTagged.AutolaunchNextCommand)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] ambient_expert enqueue skipped: AutolaunchNextCommand disabled", "info");
+                    return false;
+                }
+
                 if (_commandDispatcher == null)
                 {
                     _logger?.Append(runId, $"[story {_storyId}] ambient_expert enqueue skipped: dispatcher not available", "warn");
-                    return;
+                    return false;
                 }
 
                 if (_storiesService == null || _kernelFactory == null)
                 {
                     _logger?.Append(runId, $"[story {_storyId}] ambient_expert enqueue skipped: missing dependencies", "warn");
-                    return;
+                    return false;
                 }
 
                 var ambientRunId = $"ambient_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
@@ -353,10 +361,12 @@ namespace TinyGenerator.Services.Commands
                     priority: 2);
 
                 _logger?.Append(runId, $"[story {_storyId}] Enqueued ambient_expert (runId={ambientRunId})", "info");
+                return true;
             }
             catch (Exception ex)
             {
                 _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue ambient_expert: {ex.Message}", "warn");
+                return false;
             }
         }
 
@@ -455,6 +465,7 @@ namespace TinyGenerator.Services.Commands
                     {
                         if (quoteLineIds.Count == 0)
                         {
+                            _logger?.MarkLatestModelResponseResult("SUCCESS", null);
                             return new FormatChunkResult(string.Empty, null);
                         }
 
@@ -462,9 +473,11 @@ namespace TinyGenerator.Services.Commands
                         {
                             var onlyId = quoteLineIds.First();
                             var fallback = $"{onlyId:000} [PERSONAGGIO: Sconosciuto] [EMOZIONE: neutra]";
+                            _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota con dialogo presente");
                             return new FormatChunkResult(fallback, null);
                         }
 
+                        _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota con dialogo presente");
                         lastError = "La risposta è vuota ma ci sono righe di dialogo: devi restituire il mapping per le righe dove parla qualcuno.";
                         continue;
                     }
@@ -497,6 +510,7 @@ namespace TinyGenerator.Services.Commands
                         }
                         else if (bad.Count > 1)
                         {
+                            _logger?.MarkLatestModelResponseResult("FAILED", $"Controllo fallito: PERSONAGGIO mancante su {bad.Count} righe");
                             lastError = $"Controllo fallito: sulle righe con doppi apici deve esserci un tag PERSONAGGIO. ID: {string.Join(", ", bad.Select(x => x.ToString("000")))}";
                             continue;
                         }
@@ -508,11 +522,13 @@ namespace TinyGenerator.Services.Commands
                             .Select(k => $"{k.Key:000} {k.Value}".TrimEnd()));
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: {idToTags.Count} lines");
+                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
                     return new FormatChunkResult(mappingNormalized, null);
                 }
                 catch (Exception ex)
                 {
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Attempt {attempt} failed: {ex.Message}", "warn");
+                    _logger?.MarkLatestModelResponseResult("FAILED", $"Errore durante l'elaborazione: {ex.Message}");
                     lastError = $"Errore durante l'elaborazione: {ex.Message}";
                 }
             }

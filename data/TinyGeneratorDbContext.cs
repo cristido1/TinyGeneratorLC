@@ -45,6 +45,7 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<GlobalCoherence> GlobalCoherences => Set<GlobalCoherence>();
     public DbSet<LogAnalysis> LogAnalyses => Set<LogAnalysis>();
     public DbSet<AppEventDefinition> AppEvents => Set<AppEventDefinition>();
+    public DbSet<ModelStatsRecord> ModelStats => Set<ModelStatsRecord>();
     public DbSet<PlannerMethod> PlannerMethods => Set<PlannerMethod>();
     public DbSet<TipoPlanning> TipoPlannings => Set<TipoPlanning>();
     public DbSet<NarrativeProfile> NarrativeProfiles => Set<NarrativeProfile>();
@@ -189,6 +190,9 @@ public class TinyGeneratorDbContext : DbContext
             .WithMany()
             .HasForeignKey(mr => mr.RoleId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ModelStatsRecord>()
+            .HasKey(s => new { s.ModelName, s.Operation });
 
         // Seed default roles
         var now = DateTime.UtcNow.ToString("o");

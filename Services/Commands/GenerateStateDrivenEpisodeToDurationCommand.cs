@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands;
@@ -19,6 +20,7 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
     private readonly ILangChainKernelFactory _kernelFactory;
     private readonly StoriesService _storiesService;
     private readonly ICustomLogger? _logger;
+    private readonly IServiceScopeFactory? _scopeFactory;
 
     public GenerateStateDrivenEpisodeToDurationCommand(
         long storyId,
@@ -29,7 +31,8 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
         ILangChainKernelFactory kernelFactory,
         StoriesService storiesService,
         ICustomLogger? logger = null,
-        CommandTuningOptions? tuning = null)
+        CommandTuningOptions? tuning = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _storyId = storyId;
         _writerAgentId = writerAgentId;
@@ -40,6 +43,7 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
         _storiesService = storiesService ?? throw new ArgumentNullException(nameof(storiesService));
         _logger = logger;
         _tuning = tuning ?? new CommandTuningOptions();
+        _scopeFactory = scopeFactory;
     }
 
     public async Task<CommandResult> ExecuteAsync(string? runIdForProgress = null, CancellationToken ct = default)
@@ -121,7 +125,8 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
                 kernelFactory: _kernelFactory,
                 logger: _logger,
                 options: options,
-                tuning: _tuning);
+                tuning: _tuning,
+                scopeFactory: _scopeFactory);
 
             var result = await chunkCmd.ExecuteAsync(ct).ConfigureAwait(false);
             if (!result.Success)

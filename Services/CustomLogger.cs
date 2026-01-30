@@ -134,6 +134,8 @@ namespace TinyGenerator.Services
                 Context = null,
                 ChatText = chatText,
                 Result = string.IsNullOrWhiteSpace(derivedResult) ? null : derivedResult,
+                ResultFailReason = null,
+                Examined = false,
                 StepNumber = LogScope.CurrentStepNumber,
                 MaxStep = LogScope.CurrentMaxStep
             };
@@ -181,7 +183,7 @@ namespace TinyGenerator.Services
             
             var message = $"[{modelName}] RESPONSE: {displayResponse}";
             var chatText = displayResponse;
-            LogWithChatText("Information", "ModelCompletion", message, chatText);
+            LogWithChatText("Information", "ModelCompletion", message, chatText, result: "SUCCESS");
         }
 
         /// <summary>
@@ -248,7 +250,7 @@ namespace TinyGenerator.Services
                     if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) && messageObj.TryGetProperty("content", out var toolContent))
                     {
                         chatText = toolContent.GetString() ?? responseJson;
-                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, null, threadId);
+                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId);
                         return;
                     }
 
@@ -284,7 +286,28 @@ namespace TinyGenerator.Services
                 chatText = responseJson;
             }
 
-            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, null, threadId);
+            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId);
+        }
+
+        public void MarkLatestModelResponseResult(string result, string? failReason = null, bool? examined = null)
+        {
+            if (_disposed) return;
+
+            var effectiveThreadId = LogScope.CurrentThreadId ?? Environment.CurrentManagedThreadId;
+            if (effectiveThreadId <= 0) return;
+
+            try
+            {
+                _db.UpdateLatestModelResponseResult(
+                    effectiveThreadId,
+                    result,
+                    failReason,
+                    examined ?? true);
+            }
+            catch
+            {
+                // best-effort
+            }
         }
 
         private async Task OnTimerAsync()

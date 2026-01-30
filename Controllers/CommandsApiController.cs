@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using TinyGenerator.Services;
 using TinyGenerator.Services.Commands;
@@ -230,7 +231,8 @@ namespace TinyGenerator.Controllers
             if (!snap.IsActive) return BadRequest(new { error = "Story runtime is not active" });
 
             var runId = Guid.NewGuid().ToString();
-            var cmd = new GenerateNextChunkCommand(request.StoryId, request.WriterAgentId, _database, _kernelFactory, _logger, tuning: _tuning);
+            var scopeFactory = _serviceProvider.GetService<IServiceScopeFactory>();
+            var cmd = new GenerateNextChunkCommand(request.StoryId, request.WriterAgentId, _database, _kernelFactory, _logger, tuning: _tuning, scopeFactory: scopeFactory);
 
             _dispatcher.Enqueue(
                 "GenerateNextChunk",

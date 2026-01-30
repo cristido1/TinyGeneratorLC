@@ -70,6 +70,9 @@ namespace TinyGenerator.Models
         
         [Column("approved")]
         public bool Approved { get; set; }
+
+        [Column("deleted")]
+        public bool Deleted { get; set; }
         
         [NotMapped]
         public string Status { get; set; } = string.Empty;

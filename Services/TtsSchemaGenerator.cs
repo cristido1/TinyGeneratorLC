@@ -82,8 +82,7 @@ namespace TinyGenerator.Services
             // NOTE: Ambience now stores environment description for future image generation, NOT for audio
             string? pendingAmbience = null;
             
-            // Track pending ambient sounds (from [RUMORI: ...] tag) - these are used for AudioCraft generation.
-            // Requirement: background ambient sounds persist from when they're signaled until the next ambient tag (covering the whole story).
+            // Track pending ambient sounds (from [RUMORI: ...] tag) - applied only to the next phrase.
             string? pendingAmbientSounds = null;
             
             // Track pending FX for the next phrase
@@ -189,7 +188,8 @@ namespace TinyGenerator.Services
                         };
 
                         pendingAmbience = null;
-                        // NOTE: do NOT reset pendingAmbientSounds here: it must persist until the next [RUMORI] tag.
+                        // Apply ambient sounds only to the phrase immediately following the tag.
+                        pendingAmbientSounds = null;
                         pendingFxDescription = null;
                         pendingFxDuration = null;
                         pendingMusicDescription = null;
@@ -245,6 +245,30 @@ namespace TinyGenerator.Services
                         pendingAmbientSounds = FilterTextField(desc);
                         _logger?.Log("Debug", "TtsSchemaGenerator",
                             $"Parsed ambient sounds (for AudioCraft): '{pendingAmbientSounds}'");
+                    }
+                    // If the tag has trailing narration text without a character tag, treat it as Narratore.
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        var narratorKey = "Narratore";
+                        if (!characters.ContainsKey(narratorKey))
+                        {
+                            characters[narratorKey] = new TtsCharacter
+                            {
+                                Name = narratorKey,
+                                EmotionDefault = "neutral",
+                                Gender = "male"
+                            };
+                        }
+
+                        var narratorPhrase = new TtsPhrase
+                        {
+                            Character = narratorKey,
+                            Text = CleanText(text),
+                            Emotion = "neutral",
+                            AmbientSounds = pendingAmbientSounds
+                        };
+                        timeline.Add(narratorPhrase);
+                        pendingAmbientSounds = null;
                     }
                     continue;
                 }
@@ -358,96 +382,32 @@ namespace TinyGenerator.Services
                     continue;
                 }
 
-                // Handle FX tags - formats supported:
-                // [FX: 15 secondi, descrizione effetto sonoro]
-                // [FX: 2 s, clic di tastiera, tintinnio]
-                // [FX: Suono di un clic, durata 0.5 s, chiaro e leggero.]
-                // [FX: 2 s] descrizione su riga successiva
-                // [FX, duration_seconds, description]
-                // [FX, description]
+                // Handle FX tags - strict format only:
+                // [FX: <secondi> : <descrizione>]
                 if (tagContent.StartsWith("FX", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Check for format with colon: [FX: ...]
-                    var colonIndex = tagContent.IndexOf(':');
-                    if (colonIndex >= 0)
+                    var m = Regex.Match(
+                        tagContent,
+                        @"^FX\s*:\s*(\d+(?:[.,]\d+)?)(?:\s*(?:s|sec|secondi))?\s*:\s*(.+)$",
+                        RegexOptions.IgnoreCase);
+                    if (m.Success)
                     {
-                        var afterColon = tagContent.Substring(colonIndex + 1).Trim();
-                        
-                        // Try multiple duration patterns:
-                        
-                        // Pattern 1: Duration at start - "15 secondi, descrizione" or "2 s, descrizione"
-                        var durationAtStartMatch = Regex.Match(afterColon, @"^(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)\s*,\s*(.+)$", RegexOptions.IgnoreCase);
-                        if (durationAtStartMatch.Success)
+                        var durationStr = m.Groups[1].Value.Replace(',', '.');
+                        var description = m.Groups[2].Value.Trim();
+                        if (double.TryParse(durationStr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var duration) &&
+                            !string.IsNullOrWhiteSpace(description))
                         {
-                            var durationStr = durationAtStartMatch.Groups[1].Value.Replace(',', '.');
-                            pendingFxDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
-                            pendingFxDescription = FilterTextField(durationAtStartMatch.Groups[2].Value.Trim());
-                            _logger?.Log("Debug", "TtsSchemaGenerator", 
-                                $"Parsed FX (duration at start): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
+                            pendingFxDuration = (int)Math.Ceiling(duration);
+                            pendingFxDescription = FilterTextField(description);
                         }
-                        // Pattern 1b: Duration only in tag, description in following text
-                        else if (Regex.IsMatch(afterColon, @"^(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)\s*$", RegexOptions.IgnoreCase))
-                        {
-                            var durationStr = Regex.Match(afterColon, @"^(\d+(?:[.,]\d+)?)").Groups[1].Value.Replace(',', '.');
-                            pendingFxDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
-                            pendingFxDescription = !string.IsNullOrWhiteSpace(text) ? FilterTextField(text.Trim()) : string.Empty;
-                            _logger?.Log("Debug", "TtsSchemaGenerator",
-                                $"Parsed FX (duration in tag, description in text): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
-                        }
-                        // Pattern 2: "durata X s" anywhere in the text - "Descrizione, durata 0.5 s, altro"
                         else
                         {
-                            var durataMatch = Regex.Match(afterColon, @"durata\s+(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)?", RegexOptions.IgnoreCase);
-                            if (durataMatch.Success)
-                            {
-                                var durationStr = durataMatch.Groups[1].Value.Replace(',', '.');
-                                pendingFxDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
-                                // Remove the "durata X s" part from the description
-                                pendingFxDescription = FilterTextField(
-                                    Regex.Replace(afterColon, @",?\s*durata\s+\d+(?:[.,]\d+)?\s*(?:secondi?|sec|s)?\s*,?", ", ", RegexOptions.IgnoreCase)
-                                        .Trim().Trim(',').Trim());
-                                _logger?.Log("Debug", "TtsSchemaGenerator", 
-                                    $"Parsed FX (durata keyword): duration={pendingFxDuration}s, description='{pendingFxDescription}'");
-                            }
-                            else if (!string.IsNullOrWhiteSpace(afterColon))
-                            {
-                                // No duration specified, use default
-                                pendingFxDuration = 5;
-                                pendingFxDescription = FilterTextField(afterColon);
-                                _logger?.Log("Debug", "TtsSchemaGenerator", 
-                                    $"Parsed FX (no duration, default 5s): description='{pendingFxDescription}'");
-                            }
-                            else if (!string.IsNullOrWhiteSpace(text))
-                            {
-                                pendingFxDuration = 5;
-                                pendingFxDescription = FilterTextField(text.Trim());
-                                _logger?.Log("Debug", "TtsSchemaGenerator",
-                                    $"Parsed FX (description in text, default 5s): description='{pendingFxDescription}'");
-                            }
+                            _logger?.Log("Warning", "TtsSchemaGenerator", $"Invalid FX tag format: [{tagContent}]");
                         }
                     }
                     else
                     {
-                        // Legacy comma format: [FX, duration, description] or [FX, description]
-                        var fxParts = tagContent.Split(',', 3);
-                        if (fxParts.Length >= 3)
-                        {
-                            if (int.TryParse(fxParts[1].Trim(), out var fxDuration))
-                            {
-                                pendingFxDuration = fxDuration;
-                            }
-                            pendingFxDescription = FilterTextField(fxParts[2].Trim());
-                            _logger?.Log("Debug", "TtsSchemaGenerator", 
-                                $"Parsed FX: duration={pendingFxDuration}s, description='{pendingFxDescription}'");
-                        }
-                        else if (fxParts.Length == 2)
-                        {
-                            // Format: [FX, description] with default duration
-                            pendingFxDescription = FilterTextField(fxParts[1].Trim());
-                            pendingFxDuration = 5; // default 5 seconds
-                            _logger?.Log("Debug", "TtsSchemaGenerator", 
-                                $"Parsed FX (default duration): description='{pendingFxDescription}'");
-                        }
+                        _logger?.Log("Warning", "TtsSchemaGenerator", $"Invalid FX tag format: [{tagContent}]");
                     }
                     continue;
                 }
@@ -560,10 +520,16 @@ namespace TinyGenerator.Services
                     ["startMs"] = null,
                     ["endMs"] = null,
 
-                    // Standardized snake_case fields only
+                    // Ambient sounds (audio): keep both camelCase and snake_case for compatibility.
+                    ["ambientSounds"] = pendingAmbientSounds,
+                    ["ambientSoundsDuration"] = null,
+                    ["ambientSoundsFile"] = null,
                     ["ambient_sound_description"] = pendingAmbientSounds,
                     ["ambient_sound_file"] = null,
 
+                    ["fxDescription"] = pendingFxDescription,
+                    ["fxDuration"] = pendingFxDuration,
+                    ["fxFile"] = null,
                     ["fx_description"] = pendingFxDescription,
                     ["fx_duration"] = pendingFxDuration,
                     ["fx_file"] = null,
@@ -573,9 +539,9 @@ namespace TinyGenerator.Services
                     ["music_file"] = null
                 };
 
-                // Reset pending ambience, FX, and music after applying to phrase (applied only once).
-                // Do NOT reset pendingAmbientSounds: it persists until the next ambient tag.
+                // Reset pending ambience, FX, music, and ambient sounds after applying (single use).
                 pendingAmbience = null;
+                pendingAmbientSounds = null;
                 pendingFxDescription = null;
                 pendingFxDuration = null;
                 pendingMusicDescription = null;

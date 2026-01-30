@@ -234,10 +234,12 @@ namespace TinyGenerator.Services.Commands
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Ambient tags rebuilt from story_tags");
 
                 // Enqueue next stage: fx_expert
-                TryEnqueueFxExpert(story, effectiveRunId);
+                var enqueued = TryEnqueueFxExpert(story, effectiveRunId);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
-                return new CommandResult(true, "Ambient tags added (fx_expert enqueued)");
+                return new CommandResult(true, enqueued
+                    ? "Ambient tags added (fx_expert enqueued)"
+                    : "Ambient tags added");
             }
             catch (OperationCanceledException)
             {
@@ -249,14 +251,20 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        private void TryEnqueueFxExpert(StoryRecord story, string runId)
+        private bool TryEnqueueFxExpert(StoryRecord story, string runId)
         {
             try
             {
+                if (!_tuning.AmbientExpert.AutolaunchNextCommand)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] fx_expert enqueue skipped: AutolaunchNextCommand disabled", "info");
+                    return false;
+                }
+
                 if (_commandDispatcher == null || _storiesService == null || _kernelFactory == null)
                 {
                     _logger?.Append(runId, $"[story {_storyId}] fx_expert enqueue skipped: missing dependencies", "warn");
-                    return;
+                    return false;
                 }
 
                 var fxRunId = $"fx_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
@@ -286,10 +294,12 @@ namespace TinyGenerator.Services.Commands
                     priority: 2);
 
                 _logger?.Append(runId, $"[story {_storyId}] Enqueued fx_expert (runId={fxRunId})", "info");
+                return true;
             }
             catch (Exception ex)
             {
                 _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue fx_expert: {ex.Message}", "warn");
+                return false;
             }
         }
 
@@ -438,6 +448,7 @@ namespace TinyGenerator.Services.Commands
                     if (string.IsNullOrWhiteSpace(cleaned))
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Empty response on attempt {attempt}", "warn");
+                        _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota");
                         lastError = "Il testo ritornato è vuoto.";
                         continue;
                     }
@@ -446,6 +457,7 @@ namespace TinyGenerator.Services.Commands
                     var tagCount = tags.Count;
                     if (tagCount == 0)
                     {
+                        _logger?.MarkLatestModelResponseResult("FAILED", "Nessuna riga valida nel formato richiesto");
                         lastError = "Non ho trovato righe valide nel formato \"ID descrizione\".";
                         continue;
                     }
@@ -453,11 +465,13 @@ namespace TinyGenerator.Services.Commands
                     if (tagCount < minTagsRequired)
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough ambient tags: {tagCount} found, minimum {minTagsRequired} required", "warn");
+                        _logger?.MarkLatestModelResponseResult("FAILED", $"Hai inserito solo {tagCount} tag. Devi inserirne almeno {minTagsRequired}.");
                         lastError = $"Hai inserito solo {tagCount} tag [RUMORI]. Devi inserire ALMENO {minTagsRequired} tag di questo tipo per arricchire l'atmosfera della scena, non ripetere gli stessi tag.";
                         continue;
                     }
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalAmbient={tagCount}");
+                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
                     return cleaned;
                 }
                 catch (Exception ex)

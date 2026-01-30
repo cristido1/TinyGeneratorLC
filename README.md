@@ -81,6 +81,63 @@ Il progetto include una modalita' **state-driven** per generare una storia a chu
 
 Nota: `base_system_prompt` e `style_prompt` sono persistiti nel profilo (e seedati), ma l'attuale `PromptBuilder` del comando usa soprattutto **tema** + **coda contesto**; POV/risorse/conseguenze sono invece gia' attive.
 
+### Serie (tabelle `series`, `series_episodes`, `series_characters`)
+Questa sezione descrive **tutti i campi configurabili** della serie e come influenzano la generazione.
+
+#### Tabella `series`
+Campi principali e effetto:
+
+- `titolo` (obbligatorio): usato nei prompt di generazione episodio e nell'annuncio TTS iniziale (se presente `serie_id` sulla storia).
+- `genere`, `sottogenere`, `periodo_narrativo`, `tono_base`, `target`, `lingua`: inseriti nel **contesto serie** passato al writer; influenzano stile e coerenza del testo.
+- `ambientazione_base`: entra nel prompt come ambientazione persistente della serie.
+- `premessa_serie`: entra nel prompt come premessa/incipit della serie.
+- `arco_narrativo_serie`: entra nel prompt come arco narrativo globale.
+- `stile_scrittura`: entra nel prompt come istruzioni di stile.
+- `regole_narrative`: entra nel prompt come vincoli/regole.
+- `serie_final_goal`: entra nel prompt come obiettivo finale della serie.
+- `note_ai`: appendice libera al prompt (note operative).
+- `images_style`: usato per **generazione immagini personaggi**; se presente viene prefissato alla descrizione del personaggio per il prompt immagini.
+- `folder`: se impostato, abilita asset di serie su filesystem:
+  - musica di serie in `series_folder/<folder>/music` (usata per assegnazione musica in `tts_schema.json`);
+  - immagini personaggi in `series_folder/<folder>/images_characters`.
+- `planner_method_id` (FK `planner_methods`): aggiunto al contesto serie e passato come config al multi-step writer (pianificazione strategica).
+- `default_tipo_planning_id` (FK `tipo_planning`): usato come **planning tattico** per gli episodi (successione stati) quando non c'e' override a livello episodio.
+- `default_narrative_profile_id` (FK `narrative_profiles`): usato nella **generazione state-driven** per scegliere il profilo narrativo.
+- `default_planner_mode`: usato nella **generazione state-driven** e salvato in `stories.planner_mode` (`Off` | `Assist` | `Auto`). Attualmente e' persistito ma non modifica il prompt in modo diretto.
+- `narrative_consistency_level`: presente a livello schema ma **al momento non e' usato** nella generazione.
+- `episodi_generati`: contatore incrementato dopo generazione episodio classica (non state-driven).
+- `data_inserimento`, `timestamp`: metadati e concurrency token.
+
+#### Tabella `series_episodes`
+Ogni episodio della serie (1..N).
+
+- `serie_id` (FK): collega l'episodio alla serie.
+- `number`: numero episodio; usato nei prompt e nel titolo di default.
+- `title`: se presente, viene usato nel titolo episodio e nel contesto.
+- `trama`: usata nel prompt come trama specifica dell'episodio.
+- `episode_goal`: inserito nel prompt come obiettivo episodio.
+- `start_situation`: inserito nel prompt come situazione iniziale.
+- `initial_phase`: se valorizzato, passato come config override al multi-step (valori ammessi: `AZIONE`, `STASI`, `ERRORE`, `EFFETTO`).
+- `tipo_planning_id` (FK `tipo_planning`): override del planning tattico per questo episodio (ha priorita' su `series.default_tipo_planning_id`).
+
+#### Tabella `series_characters`
+Personaggi ricorrenti della serie.
+
+- `name`, `gender`, `description`, `eta`, `formazione`, `specializzazione`, `profilo`, `conflitto_interno`:
+  - vengono inseriti nel **contesto serie** per la generazione episodio;
+  - se la storia appartiene a una serie, questi personaggi **sostituiscono** la lista personaggi della storia nelle fasi TTS.
+- `episode_in`, `episode_out`: informativi nel prompt (presenza episodio).
+- `voice_id` (FK `tts_voices`): usato per **assegnare voci fisse** ai personaggi nel `tts_schema.json`.
+  - se esiste un personaggio chiamato `Narratore`/`Narrator` con `voice_id`, quella voce viene usata come **voce narratore**.
+- `image`: nome file immagine (generato o caricato) usato dalla UI.
+- `aspect`: descrizione alternativa usata per il prompt immagini (ha priorita' su `description`).
+
+#### Effetti indiretti sulle storie generate
+- Se una storia ha `serie_id` e `serie_episode`, vengono usati per:
+  - annuncio TTS iniziale: `"Titolo Serie. Episodio N. Titolo storia."`;
+  - assegnazione musica dalla libreria serie (`series_folder/<folder>/music`).
+- Se una serie non ha `folder` impostato, la musica viene presa dal fallback `data/music_stories`.
+
 ### Pipeline TTS
 - Lo schema TTS viene prodotto chunk-by-chunk con `MultiStepOrchestrationService`.
 - La copertura testuale viene validata prima di procedere al chunk successivo.

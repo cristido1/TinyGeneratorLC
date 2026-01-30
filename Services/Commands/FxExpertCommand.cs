@@ -220,7 +220,11 @@ namespace TinyGenerator.Services.Commands
                         return Fail(effectiveRunId, $"FX expert returned empty text for chunk {i + 1}/{chunks.Count}");
                     }
 
-                    var parsed = StoryTaggingService.ParseFxMapping(mappingText);
+                    var parsed = StoryTaggingService.ParseFxMapping(mappingText, out var invalidLines);
+                    if (invalidLines > 0)
+                    {
+                        return Fail(effectiveRunId, $"Formato FX non valido: {invalidLines} righe non rispettano il formato richiesto.");
+                    }
                     fxTags.AddRange(parsed);
                 }
 
@@ -246,10 +250,12 @@ namespace TinyGenerator.Services.Commands
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] FX tags rebuilt from story_tags");
 
                 // Enqueue next stage: music_expert
-                TryEnqueueMusicExpert(story, effectiveRunId);
+                var enqueued = TryEnqueueMusicExpert(story, effectiveRunId);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
-                return new CommandResult(true, "FX tags added (music_expert enqueued)");
+                return new CommandResult(true, enqueued
+                    ? "FX tags added (music_expert enqueued)"
+                    : "FX tags added");
             }
             catch (OperationCanceledException)
             {
@@ -261,14 +267,20 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        private void TryEnqueueMusicExpert(StoryRecord story, string runId)
+        private bool TryEnqueueMusicExpert(StoryRecord story, string runId)
         {
             try
             {
+                if (!_tuning.FxExpert.AutolaunchNextCommand)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] music_expert enqueue skipped: AutolaunchNextCommand disabled", "info");
+                    return false;
+                }
+
                 if (_commandDispatcher == null || _storiesService == null || _kernelFactory == null)
                 {
                     _logger?.Append(runId, $"[story {_storyId}] music_expert enqueue skipped: missing dependencies", "warn");
-                    return;
+                    return false;
                 }
 
                 var musicRunId = $"music_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
@@ -298,10 +310,12 @@ namespace TinyGenerator.Services.Commands
                     priority: 2);
 
                 _logger?.Append(runId, $"[story {_storyId}] Enqueued music_expert (runId={musicRunId})", "info");
+                return true;
             }
             catch (Exception ex)
             {
                 _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue music_expert: {ex.Message}", "warn");
+                return false;
             }
         }
 
@@ -421,6 +435,8 @@ namespace TinyGenerator.Services.Commands
                         Content =
                             "FORMATO RISPOSTA OBBLIGATORIO:\n" +
                             "- Restituisci SOLO righe nel formato: ID descrizione [secondi]\n" +
+                            "- Oppure: ID [secondi] descrizione\n" +
+                            "- I secondi devono essere tra parentesi quadre: [2], [2s], [2 sec], [2sec]\n" +
                             "- Non usare tag [FX] o parentesi diverse dalle [secondi]\n" +
                             "- Non riscrivere il testo, non aggiungere spiegazioni\n" +
                             "- Gli ID sono quelli del testo numerato fornito\n" +
@@ -450,20 +466,29 @@ namespace TinyGenerator.Services.Commands
                     if (string.IsNullOrWhiteSpace(cleaned))
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Empty response on attempt {attempt}", "warn");
+                        _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota");
                         lastError = "Il testo ritornato è vuoto.";
                         continue;
                     }
 
-                    var tags = StoryTaggingService.ParseFxMapping(cleaned);
+                    var tags = StoryTaggingService.ParseFxMapping(cleaned, out var invalidLines);
+                    if (invalidLines > 0)
+                    {
+                        _logger?.MarkLatestModelResponseResult("FAILED", $"Formato FX non valido: {invalidLines} righe non rispettano il formato richiesto.");
+                        lastError = $"Formato FX non valido: {invalidLines} righe non rispettano il formato richiesto.";
+                        continue;
+                    }
                     var tagCount = tags.Count;
                     if (tagCount < minFxTags)
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough FX tags: {tagCount} found, minimum {minFxTags} required", "warn");
+                        _logger?.MarkLatestModelResponseResult("FAILED", $"Hai inserito {tagCount} righe valide. Devi inserire ALMENO {minFxTags} effetti sonori.");
                         lastError = $"Hai inserito {tagCount} righe valide. Devi inserire ALMENO {minFxTags} effetti sonori (formato: ID descrizione [secondi]).";
                         continue;
                     }
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalFx={tagCount}");
+                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
                     return cleaned;
                 }
                 catch (Exception ex)

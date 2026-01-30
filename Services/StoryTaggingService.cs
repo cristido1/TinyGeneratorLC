@@ -215,7 +215,7 @@ public sealed class StoryTaggingService
 
             if (!matchedAny)
             {
-                var text = tail.Trim();
+                var text = CleanAmbientDescription(tail);
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     result.Add(new StoryTagEntry(TagTypeAmbient, id, $"[RUMORI: {text}]"));
@@ -226,9 +226,10 @@ public sealed class StoryTaggingService
         return result;
     }
 
-    public static IReadOnlyList<StoryTagEntry> ParseFxMapping(string mappingText)
+    public static IReadOnlyList<StoryTagEntry> ParseFxMapping(string mappingText, out int invalidLines)
     {
         var result = new List<StoryTagEntry>();
+        invalidLines = 0;
         if (string.IsNullOrWhiteSpace(mappingText)) return result;
 
         var lines = mappingText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
@@ -245,25 +246,48 @@ public sealed class StoryTaggingService
             var tail = line.Substring(i).TrimStart();
             if (tail.Length == 0) continue;
 
-            var durationSeconds = (int?)null;
-            var durationMatch = Regex.Match(tail, @"\[(\d+(?:[.,]\d+)?)\]\s*$", RegexOptions.IgnoreCase);
-            if (durationMatch.Success)
-            {
-                var durationStr = durationMatch.Groups[1].Value.Replace(',', '.');
-                if (double.TryParse(durationStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var duration))
-                {
-                    durationSeconds = (int)Math.Ceiling(duration);
-                }
+            // Accept only strict formats:
+            // 1) "001 descrizione [2]" or "001 descrizione [2 s|2sec|2 sec]"
+            // 2) "001 [2] descrizione" (same duration variants)
+            var durationPattern = @"\[(\d+(?:[.,]\d+)?)(?:\s*(?:s|sec|secondi))?\]";
+            var m1 = Regex.Match(tail, $"^\\s*{durationPattern}\\s*(.+)$", RegexOptions.IgnoreCase);
+            var m2 = Regex.Match(tail, $"^\\s*(.+?)\\s*{durationPattern}\\s*$", RegexOptions.IgnoreCase);
 
-                tail = tail.Substring(0, durationMatch.Index).TrimEnd();
+            string? description = null;
+            string? durationStr = null;
+
+            if (m1.Success)
+            {
+                durationStr = m1.Groups[1].Value;
+                description = m1.Groups[2].Value;
+            }
+            else if (m2.Success)
+            {
+                description = m2.Groups[1].Value;
+                durationStr = m2.Groups[2].Value;
             }
 
-            var description = tail.Trim();
-            if (string.IsNullOrWhiteSpace(description)) continue;
+            if (string.IsNullOrWhiteSpace(description) || string.IsNullOrWhiteSpace(durationStr))
+            {
+                invalidLines++;
+                continue;
+            }
 
-            var tag = durationSeconds.HasValue
-                ? $"[FX: {durationSeconds.Value} s, {description}]"
-                : $"[FX: {description}]";
+            var durationNorm = durationStr.Replace(',', '.');
+            if (!double.TryParse(durationNorm, NumberStyles.Float, CultureInfo.InvariantCulture, out var duration))
+            {
+                invalidLines++;
+                continue;
+            }
+
+            var durationSeconds = (int)Math.Ceiling(duration);
+            if (durationSeconds <= 0)
+            {
+                invalidLines++;
+                continue;
+            }
+
+            var tag = $"[FX: {durationSeconds} : {description.Trim()}]";
             result.Add(new StoryTagEntry(TagTypeFx, id, tag));
         }
 
@@ -314,6 +338,45 @@ public sealed class StoryTaggingService
         return result;
     }
 
+    public static IReadOnlyList<StoryTagEntry> FilterMusicTagsByProximity(
+        IReadOnlyList<StoryTagEntry> tags,
+        int minLineDistance = 20)
+    {
+        if (tags == null || tags.Count == 0) return tags ?? Array.Empty<StoryTagEntry>();
+
+        var ordered = tags
+            .OrderBy(t => t.Line)
+            .ThenBy(t => t.Tag ?? string.Empty)
+            .ToList();
+
+        var filtered = new List<StoryTagEntry>();
+        string? lastTag = null;
+        int lastRow = int.MinValue;
+
+        foreach (var tag in ordered)
+        {
+            // Drop duplicates of the same music tag on consecutive lines.
+            if (lastTag != null &&
+                string.Equals(tag.Tag, lastTag, StringComparison.OrdinalIgnoreCase) &&
+                tag.Line == lastRow + 1)
+            {
+                continue;
+            }
+
+            // Drop tags too close to the previous kept music tag.
+            if (lastRow != int.MinValue && (tag.Line - lastRow) < minLineDistance)
+            {
+                continue;
+            }
+
+            filtered.Add(tag);
+            lastTag = tag.Tag;
+            lastRow = tag.Line;
+        }
+
+        return filtered;
+    }
+
     public static bool IsTagAllowedForType(string tag, string tagType)
     {
         if (string.IsNullOrWhiteSpace(tag)) return false;
@@ -346,7 +409,17 @@ public sealed class StoryTaggingService
         var trimmed = tag.Trim();
         trimmed = Regex.Replace(trimmed, @"\[(\s*)RUMORE\b", "[$1RUMORI", RegexOptions.IgnoreCase);
         trimmed = Regex.Replace(trimmed, @"\[(\s*)AMBIENTE\b", "[$1RUMORI", RegexOptions.IgnoreCase);
+        trimmed = Regex.Replace(trimmed, @"^\[\s*RUMORI\s*:?\s*-?\d+\s*(.+)\]$", m => $"[RUMORI: {m.Groups[1].Value.Trim()}]", RegexOptions.IgnoreCase);
+        trimmed = Regex.Replace(trimmed, @"^\[\s*RUMORI\s*:?\s*:\s*(.+)\]$", m => $"[RUMORI: {m.Groups[1].Value.Trim()}]", RegexOptions.IgnoreCase);
         return trimmed;
+    }
+
+    private static string CleanAmbientDescription(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var cleaned = text.Trim();
+        cleaned = Regex.Replace(cleaned, @"^\s*-?\d+\s+", "");
+        return cleaned.Trim();
     }
 
     public static string BuildStoryTagged(string storyRevised, IReadOnlyList<StoryTagEntry> tags)
@@ -388,6 +461,7 @@ public sealed class StoryTaggingService
             if (piece.IsTaggable && piece.LineId.HasValue)
             {
                 var lineId = piece.LineId.Value;
+                var hasNonFormatterTags = false;
                 if (tagsByLine.TryGetValue(lineId, out var lineTags))
                 {
                     foreach (var type in orderedTypes)
@@ -395,6 +469,7 @@ public sealed class StoryTaggingService
                         foreach (var t in lineTags.Where(t => t.Type == type))
                         {
                             AppendTagLine(sb, t.Tag);
+                            hasNonFormatterTags = true;
                         }
                     }
                 }
@@ -403,7 +478,7 @@ public sealed class StoryTaggingService
                     ? ft
                     : "[NARRATORE]";
 
-                if (!string.Equals(lastFormatterTag, formatterTag, StringComparison.Ordinal))
+                if (hasNonFormatterTags || !string.Equals(lastFormatterTag, formatterTag, StringComparison.Ordinal))
                 {
                     AppendTagLine(sb, formatterTag);
                     lastFormatterTag = formatterTag;

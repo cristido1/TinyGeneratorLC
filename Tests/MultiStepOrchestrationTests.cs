@@ -211,6 +211,7 @@ namespace TinyGenerator.Tests
             public void ShowAgentActivity(string agentName, string status, string? agentId = null, string testType = "question") { }
             public System.Threading.Tasks.Task HideAgentActivityAsync(string agentId) => System.Threading.Tasks.Task.CompletedTask;
             public void HideAgentActivity(string agentId) { }
+            public void MarkLatestModelResponseResult(string result, string? failReason = null, bool? examined = null) { }
 
             public System.Threading.Tasks.Task BroadcastLogsAsync(IEnumerable<TinyGenerator.Models.LogEntry> entries) => System.Threading.Tasks.Task.CompletedTask;
 

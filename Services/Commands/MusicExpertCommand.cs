@@ -215,6 +215,7 @@ namespace TinyGenerator.Services.Commands
                     }
 
                     var parsed = StoryTaggingService.ParseMusicMapping(mappingText);
+                    parsed = StoryTaggingService.FilterMusicTagsByProximity(parsed, minLineDistance: 20);
                     musicTags.AddRange(parsed);
                 }
 
@@ -239,11 +240,16 @@ namespace TinyGenerator.Services.Commands
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Music tags rebuilt from story_tags");
 
+                // Update status to tagged (all tags completed) before enqueueing next steps
+                var allowNext = _storiesService?.ApplyStatusTransitionAndCleanup(story, "tagged", effectiveRunId) ?? true;
+
                 // Final step: enqueue TTS schema generation (was previously triggered by formatter)
-                TryEnqueueTtsSchemaGeneration(story, effectiveRunId);
+                var enqueued = allowNext && TryEnqueueTtsSchemaGeneration(story, effectiveRunId);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
-                return new CommandResult(true, "Music tags added (TTS schema enqueued)");
+                return new CommandResult(true, enqueued
+                    ? "Music tags added (TTS schema enqueued)"
+                    : "Music tags added");
             }
             catch (OperationCanceledException)
             {
@@ -327,20 +333,26 @@ namespace TinyGenerator.Services.Commands
             return new FallbackChunkResult(result, successfulModelRole.ModelId, successfulModelRole.Model.Name);
         }
 
-        private void TryEnqueueTtsSchemaGeneration(StoryRecord story, string runId)
+        private bool TryEnqueueTtsSchemaGeneration(StoryRecord story, string runId)
         {
             try
             {
+                if (!_tuning.MusicExpert.AutolaunchNextCommand)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] TTS schema enqueue skipped: AutolaunchNextCommand disabled", "info");
+                    return false;
+                }
+
                 if (_commandDispatcher == null)
                 {
                     _logger?.Append(runId, $"[story {_storyId}] TTS schema enqueue skipped: dispatcher not available", "warn");
-                    return;
+                    return false;
                 }
 
                 if (_storiesService == null)
                 {
                     _logger?.Append(runId, $"[story {_storyId}] TTS schema enqueue skipped: StoriesService not available", "warn");
-                    return;
+                    return false;
                 }
 
                 // Check if already queued/running
@@ -359,7 +371,7 @@ namespace TinyGenerator.Services.Commands
                     if (alreadyQueued)
                     {
                         _logger?.Append(runId, $"[story {_storyId}] TTS schema not enqueued: already queued/running", "info");
-                        return;
+                        return false;
                     }
                 }
                 catch
@@ -395,10 +407,12 @@ namespace TinyGenerator.Services.Commands
                     priority: 2);
 
                 _logger?.Append(runId, $"[story {_storyId}] Enqueued TTS schema generation (runId={ttsRunId})", "info");
+                return true;
             }
             catch (Exception ex)
             {
                 _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue TTS schema: {ex.Message}", "warn");
+                return false;
             }
         }
 
@@ -474,20 +488,24 @@ namespace TinyGenerator.Services.Commands
                     if (string.IsNullOrWhiteSpace(cleaned))
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Empty response on attempt {attempt}", "warn");
+                        _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota");
                         lastError = "Il testo ritornato è vuoto.";
                         continue;
                     }
 
                     var tags = StoryTaggingService.ParseMusicMapping(cleaned);
+                    tags = StoryTaggingService.FilterMusicTagsByProximity(tags, minLineDistance: 20);
                     var tagCount = tags.Count;
                     if (tagCount < requiredTags)
                     {
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough music tags: {tagCount} found, minimum {requiredTags} required", "warn");
+                        _logger?.MarkLatestModelResponseResult("FAILED", $"Hai inserito solo {tagCount} righe valide. Devi inserirne almeno {requiredTags}.");
                         lastError = $"Hai inserito solo {tagCount} righe valide. Devi inserire ALMENO {requiredTags} indicazioni musicali (formato: ID emozione [secondi]).";
                         continue;
                     }
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalMusic={tagCount}");
+                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
                     return cleaned;
                 }
                 catch (Exception ex)

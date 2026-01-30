@@ -1351,18 +1351,18 @@ namespace TinyGenerator.Pages.Stories
 
             if (!string.IsNullOrWhiteSpace(s.Folder))
             {
-                actions.Add(new { id = "add_tags", title = "Aggiungi TAG", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "regen_ambient_tags", title = "Rigenera RUMORI (ambient_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenAmbientTags", id = s.Id }, Request.Scheme), confirm = true });
-                actions.Add(new { id = "regen_fx_tags", title = "Rigenera FX (fx_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenFxTags", id = s.Id }, Request.Scheme), confirm = true });
-                actions.Add(new { id = "regen_music_tags", title = "Rigenera MUSICA (music_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenMusicTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "add_tags", title = "Rigerera TAG voci", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "regen_ambient_tags", title = "Rigenera TAG RUMORI (ambient_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenAmbientTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "regen_fx_tags", title = "Rigenera TAG FX (fx_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenFxTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "regen_music_tags", title = "Rigenera TAG MUSICA (music_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenMusicTags", id = s.Id }, Request.Scheme), confirm = true });
                 // Combined operation to prepare TTS schema: generate schema, normalize characters, assign voices, normalize sentiments
-                actions.Add(new { id = "prepare_tts_schema", title = "Prepara TTS schema", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "PrepareTtsSchema", id = s.Id }, Request.Scheme) });
+                actions.Add(new { id = "prepare_tts_schema", title = "Prepara TTS schema da TAGs", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "PrepareTtsSchema", id = s.Id }, Request.Scheme) });
 
-                actions.Add(new { id = "gen_tts", title = "Genera TTS", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateTts", id = s.Id, folderName = s.Folder }, Request.Scheme) });
-                actions.Add(new { id = "gen_ambience", title = "Genera Audio Ambientale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateAmbience", id = s.Id, folderName = s.Folder }, Request.Scheme) });
-                actions.Add(new { id = "gen_fx", title = "Genera Effetti Sonori", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateFx", id = s.Id, folderName = s.Folder }, Request.Scheme) });
-                actions.Add(new { id = "gen_music", title = "Genera Musica", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateMusic", id = s.Id, folderName = s.Folder }, Request.Scheme) });
-                actions.Add(new { id = "mix_final", title = "Mix Audio Finale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "MixFinalAudio", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "gen_tts", title = "Genera WAV TTS", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateTts", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "gen_ambience", title = "Genera WAV Audio Ambientale", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateAmbience", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "gen_fx", title = "Genera WAV Effetti Sonori", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateFx", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "gen_music", title = "Genera WAV Musica", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateMusic", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                actions.Add(new { id = "mix_final", title = "Mix Audio Finale WAV", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "MixFinalAudio", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "final_mix_play", title = "Ascolta Mix Finale", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "FinalMixAudio", id = s.Id }, Request.Scheme) });
                 actions.Add(new { id = "tts_playlist", title = "Ascolta sequenza TTS", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "TtsPlaylist", id = s.Id }, Request.Scheme) });
             }

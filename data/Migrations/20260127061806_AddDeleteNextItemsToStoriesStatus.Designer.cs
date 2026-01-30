@@ -2,17 +2,20 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TinyGenerator.Data;
 
 #nullable disable
 
-namespace TinyGenerator.Data.Migrations
+namespace TinyGenerator.data.Migrations
 {
     [DbContext(typeof(TinyGeneratorDbContext))]
-    partial class TinyGeneratorDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260127061806_AddDeleteNextItemsToStoriesStatus")]
+    partial class AddDeleteNextItemsToStoriesStatus
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -126,7 +129,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("agents", (string)null);
+                    b.ToTable("agents");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.AppEventDefinition", b =>
@@ -169,7 +172,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("app_events", (string)null);
+                    b.ToTable("app_events");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.Chapter", b =>
@@ -199,7 +202,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("chapters", (string)null);
+                    b.ToTable("chapters");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.ChunkFacts", b =>
@@ -229,7 +232,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("chunk_facts", (string)null);
+                    b.ToTable("chunk_facts");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.CoherenceScore", b =>
@@ -266,7 +269,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("coherence_scores", (string)null);
+                    b.ToTable("coherence_scores");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.ConsequenceImpact", b =>
@@ -294,7 +297,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("ConsequenceRuleId");
 
-                    b.ToTable("consequence_impacts", (string)null);
+                    b.ToTable("consequence_impacts");
 
                     b.HasData(
                         new
@@ -333,7 +336,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("NarrativeProfileId");
 
-                    b.ToTable("consequence_rules", (string)null);
+                    b.ToTable("consequence_rules");
 
                     b.HasData(
                         new
@@ -376,7 +379,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("NarrativeProfileId");
 
-                    b.ToTable("failure_rules", (string)null);
+                    b.ToTable("failure_rules");
 
                     b.HasData(
                         new
@@ -425,7 +428,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("global_coherence", (string)null);
+                    b.ToTable("global_coherence");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.LogAnalysis", b =>
@@ -461,7 +464,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("log_analysis", (string)null);
+                    b.ToTable("log_analysis");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.LogEntry", b =>
@@ -546,7 +549,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Log", (string)null);
+                    b.ToTable("Log");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.MicroObjective", b =>
@@ -579,7 +582,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("NarrativeProfileId");
 
-                    b.ToTable("micro_objectives", (string)null);
+                    b.ToTable("micro_objectives");
 
                     b.HasData(
                         new
@@ -745,7 +748,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("models", (string)null);
+                    b.ToTable("models");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.ModelRole", b =>
@@ -809,7 +812,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("RoleId");
 
-                    b.ToTable("model_roles", (string)null);
+                    b.ToTable("model_roles");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.ModelTestAsset", b =>
@@ -849,7 +852,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("model_test_assets", (string)null);
+                    b.ToTable("model_test_assets");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.ModelTestRun", b =>
@@ -893,7 +896,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("model_test_runs", (string)null);
+                    b.ToTable("model_test_runs");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.ModelTestStep", b =>
@@ -937,7 +940,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("model_test_steps", (string)null);
+                    b.ToTable("model_test_steps");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.NarrativeProfile", b =>
@@ -972,7 +975,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("narrative_profiles", (string)null);
+                    b.ToTable("narrative_profiles");
 
                     b.HasData(
                         new
@@ -1018,7 +1021,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("NarrativeProfileId");
 
-                    b.ToTable("narrative_resources", (string)null);
+                    b.ToTable("narrative_resources");
 
                     b.HasData(
                         new
@@ -1086,7 +1089,7 @@ namespace TinyGenerator.Data.Migrations
                     b.HasIndex("Code")
                         .IsUnique();
 
-                    b.ToTable("planner_methods", (string)null);
+                    b.ToTable("planner_methods");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.Role", b =>
@@ -1117,7 +1120,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("roles", (string)null);
+                    b.ToTable("roles");
 
                     b.HasData(
                         new
@@ -1299,7 +1302,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("PlannerMethodId");
 
-                    b.ToTable("series", (string)null);
+                    b.ToTable("series");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.SeriesCharacter", b =>
@@ -1373,7 +1376,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("SerieId");
 
-                    b.ToTable("series_characters", (string)null);
+                    b.ToTable("series_characters");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.SeriesEpisode", b =>
@@ -1423,7 +1426,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("TipoPlanningId");
 
-                    b.ToTable("series_episodes", (string)null);
+                    b.ToTable("series_episodes");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.StepTemplate", b =>
@@ -1497,7 +1500,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("step_templates", (string)null);
+                    b.ToTable("step_templates");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.StoryEvaluation", b =>
@@ -1576,7 +1579,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("stories_evaluations", (string)null);
+                    b.ToTable("stories_evaluations");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.StoryRecord", b =>
@@ -1747,7 +1750,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("stories", (string)null);
+                    b.ToTable("stories");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.StoryResourceState", b =>
@@ -1775,7 +1778,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("StoryRuntimeStateId");
 
-                    b.ToTable("story_resource_states", (string)null);
+                    b.ToTable("story_resource_states");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.StoryRuntimeState", b =>
@@ -1826,7 +1829,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasIndex("StoryId");
 
-                    b.ToTable("story_runtime_states", (string)null);
+                    b.ToTable("story_runtime_states");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.StoryStatus", b =>
@@ -1879,7 +1882,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("stories_status", (string)null);
+                    b.ToTable("stories_status");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.TaskExecution", b =>
@@ -1948,7 +1951,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("task_executions", (string)null);
+                    b.ToTable("task_executions");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.TaskExecutionStep", b =>
@@ -1993,7 +1996,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("task_execution_steps", (string)null);
+                    b.ToTable("task_execution_steps");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.TaskTypeInfo", b =>
@@ -2038,7 +2041,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("task_types", (string)null);
+                    b.ToTable("task_types");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.TestDefinition", b =>
@@ -2122,7 +2125,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("test_definitions", (string)null);
+                    b.ToTable("test_definitions");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.TestPrompt", b =>
@@ -2154,7 +2157,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("test_prompts", (string)null);
+                    b.ToTable("test_prompts");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.TipoPlanning", b =>
@@ -2195,7 +2198,7 @@ namespace TinyGenerator.Data.Migrations
                     b.HasIndex("Codice")
                         .IsUnique();
 
-                    b.ToTable("tipo_planning", (string)null);
+                    b.ToTable("tipo_planning");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.TtsVoice", b =>
@@ -2274,7 +2277,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("tts_voices", (string)null);
+                    b.ToTable("tts_voices");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.UsageState", b =>
@@ -2302,7 +2305,7 @@ namespace TinyGenerator.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("usage_state", (string)null);
+                    b.ToTable("usage_state");
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.ConsequenceImpact", b =>

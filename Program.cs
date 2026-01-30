@@ -109,6 +109,14 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<MemoryEmbeddingBac
 builder.Services.Configure<CommandDispatcherOptions>(builder.Configuration.GetSection("CommandDispatcher"));
 // Command tuning (attempts, chunking sizes, thresholds)
 builder.Services.Configure<CommandTuningOptions>(builder.Configuration.GetSection("CommandTuning"));
+// TTS schema generation options (pause/gap between phrases)
+builder.Services.Configure<TtsSchemaGenerationOptions>(builder.Configuration.GetSection("TtsSchemaGeneration"));
+// Audio generation options (autolaunch followups)
+builder.Services.Configure<AudioGenerationOptions>(builder.Configuration.GetSection("AudioGeneration"));
+// Automatic operations (auto enqueue when system idle)
+builder.Services.Configure<AutomaticOperationsOptions>(builder.Configuration.GetSection("AutomaticOperations"));
+// Narrator voice options (default voice id)
+builder.Services.Configure<NarratorVoiceOptions>(builder.Configuration.GetSection("NarratorVoice"));
 builder.Services.AddSingleton<CommandDispatcher>(sp =>
     new CommandDispatcher(
         sp.GetService<IOptions<CommandDispatcherOptions>>(),
@@ -121,6 +129,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>
 
 // Auto-summarize service (batch summarization at startup and every hour)
 builder.Services.AddHostedService<AutoSummarizeService>();
+builder.Services.AddHostedService<AutomaticOperationsService>();
 
 // Sentiment mapping service (embedding-based + agent fallback)
 builder.Services.AddSingleton<SentimentMappingService>(sp => new SentimentMappingService(
@@ -139,6 +148,10 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetService<ICommandDispatcher>(),
     sp.GetService<MultiStepOrchestrationService>(),
     sp.GetService<SentimentMappingService>(),
+    ttsSchemaOptions: sp.GetService<IOptionsMonitor<TtsSchemaGenerationOptions>>(),
+    audioGenerationOptions: sp.GetService<IOptionsMonitor<AudioGenerationOptions>>(),
+    narratorVoiceOptions: sp.GetService<IOptionsMonitor<NarratorVoiceOptions>>(),
+    idleAutoOptions: sp.GetService<IOptionsMonitor<AutomaticOperationsOptions>>(),
     scopeFactory: sp.GetService<IServiceScopeFactory>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 

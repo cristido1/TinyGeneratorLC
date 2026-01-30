@@ -38,6 +38,7 @@
             <th>Level</th>
             <th>Source</th>
             <th>Result</th>
+            <th>Fail Reason</th>
             <th>Operazione</th>
             <th>ThreadId</th>
             <th>StoryId</th>
@@ -100,6 +101,7 @@
                     <span class="text-muted">-</span>
                 }
             </td>
+            <td class="failreason">@(!string.IsNullOrWhiteSpace(log.ResultFailReason) ? log.ResultFailReason : "-")</td>
             <td class="operation">@(!string.IsNullOrWhiteSpace(log.ThreadScope) ? log.ThreadScope : "-")</td>
             <td class="threadid">@(log.ThreadId > 0 ? log.ThreadId.ToString() : "-")</td>
             <td class="storyid">@(log.StoryId.HasValue && log.StoryId.Value > 0 ? log.StoryId.Value.ToString() : "-")</td>
@@ -200,13 +202,14 @@
                     { responsivePriority: 1, targets: 1 }, // Timestamp always visible
                     { responsivePriority: 2, targets: 2 }, // Level always visible
                     { responsivePriority: 3, targets: 4 }, // Result
-                    { responsivePriority: 4, targets: 5 }, // Operation
-                    { responsivePriority: 5, targets: 6 }, // ThreadId
-                    { responsivePriority: 6, targets: 7 }, // StoryId
-                    { responsivePriority: 7, targets: 8 }, // AgentName
-                    { responsivePriority: 8, targets: 9 }, // Message
-                    { responsivePriority: 9, targets: 3 }, // Source
-                    { orderable: false, targets: 10 }      // Actions
+                    { responsivePriority: 4, targets: 5 }, // Fail Reason
+                    { responsivePriority: 5, targets: 6 }, // Operation
+                    { responsivePriority: 6, targets: 7 }, // ThreadId
+                    { responsivePriority: 7, targets: 8 }, // StoryId
+                    { responsivePriority: 8, targets: 9 }, // AgentName
+                    { responsivePriority: 9, targets: 10 }, // Message
+                    { responsivePriority: 10, targets: 3 }, // Source
+                    { orderable: false, targets: 11 }      // Actions
                 ],
                 dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
                      "rt" +

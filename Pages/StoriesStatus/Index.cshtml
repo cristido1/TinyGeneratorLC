@@ -34,6 +34,7 @@
                     <th data-col="agentType">Agent Type</th>
                     <th data-col="function">Function</th>
                     <th data-col="caption">Caption</th>
+                    <th data-col="deleteNext">Delete Next</th>
                     <th data-col="actions">Actions</th>
                 </tr>
             </thead>
@@ -50,6 +51,7 @@
                             <td data-col="agentType">@s.AgentType</td>
                             <td data-col="function">@s.FunctionName</td>
                             <td data-col="caption">@s.CaptionToExecute</td>
+                            <td data-col="deleteNext">@((s.DeleteNextItems) ? "Yes" : "No")</td>
                             <td data-col="actions">
                                 <div class="dropdown">
                                     <button class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">Azioni</button>
@@ -64,7 +66,7 @@
                 }
                 else
                 {
-                    <tr><td colspan="8">No statuses</td></tr>
+                    <tr><td colspan="9">No statuses</td></tr>
                 }
             </tbody>
         </table>

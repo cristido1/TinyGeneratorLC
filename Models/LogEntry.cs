@@ -76,6 +76,12 @@ namespace TinyGenerator.Models
         
         [Column("Result")]
         public string? Result { get; set; } // Optional outcome: SUCCESS / FAILED / null
+
+        [Column("ResultFailReason")]
+        public string? ResultFailReason { get; set; } // Optional failure reason / violated rule
+
+        [Column("Examined")]
+        public bool Examined { get; set; }
         
         [Column("StepNumber")]
         public int? StepNumber { get; set; } // Current step number for multi-step operations

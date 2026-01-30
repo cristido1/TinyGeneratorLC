@@ -32,6 +32,9 @@ public sealed class StoryStatus
     
     [Column("caption_to_execute")]
     public string? CaptionToExecute { get; set; } // caption to execute for this status
+
+    [Column("delete_next_items")]
+    public bool DeleteNextItems { get; set; }
     
     // Concurrency token for optimistic locking
     [Timestamp]

@@ -5,6 +5,7 @@ using TinyGenerator.Models;
 using TinyGenerator.Services;
 using TinyGenerator.Services.Commands;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 
 using SeriesModel = TinyGenerator.Models.Series;
 
@@ -22,6 +23,7 @@ public class GeneraModel : PageModel
     private readonly ICustomLogger _customLogger;
     private readonly ILogger<GeneraModel> _logger;
     private readonly CommandTuningOptions _tuning;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public GeneraModel(
         DatabaseService database,
@@ -31,7 +33,8 @@ public class GeneraModel : PageModel
         ICustomLogger customLogger,
         ILogger<GeneraModel> logger,
         IOptions<CommandTuningOptions> tuningOptions,
-        MultiStepOrchestrationService? orchestrator = null)
+        MultiStepOrchestrationService? orchestrator = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _database = database;
         _orchestrator = orchestrator;
@@ -41,6 +44,7 @@ public class GeneraModel : PageModel
         _customLogger = customLogger;
         _logger = logger;
         _tuning = tuningOptions.Value ?? new CommandTuningOptions();
+        _scopeFactory = scopeFactory ?? throw new InvalidOperationException("IServiceScopeFactory not available");
     }
 
     [BindProperty]
@@ -407,7 +411,8 @@ public class GeneraModel : PageModel
                         database: _database,
                         kernelFactory: _kernelFactory,
                         logger: _customLogger,
-                        tuning: _tuning);
+                        tuning: _tuning,
+                        scopeFactory: _scopeFactory);
 
                     var result = await chunkCmd.ExecuteAsync(ctx.CancellationToken);
                     if (!result.Success)
@@ -520,7 +525,8 @@ public class GeneraModel : PageModel
                         kernelFactory: _kernelFactory,
                         storiesService: _storiesService,
                         logger: _customLogger,
-                        tuning: _tuning);
+                        tuning: _tuning,
+                        scopeFactory: _scopeFactory);
 
                     var result = await cmd.ExecuteAsync(runIdForProgress: genId.ToString(), ct: ctx.CancellationToken);
                     if (!result.Success)
@@ -598,7 +604,8 @@ public class GeneraModel : PageModel
                         database: _database,
                         kernelFactory: _kernelFactory,
                         logger: _customLogger,
-                        tuning: _tuning);
+                        tuning: _tuning,
+                        scopeFactory: _scopeFactory);
 
                     var result = await cmd.ExecuteAsync(ctx.CancellationToken);
                     if (!result.Success)

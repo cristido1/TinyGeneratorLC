@@ -1,0 +1,75 @@
+@page
+@model TinyGenerator.Pages.Settings.IndexModel
+@{
+    ViewData["Title"] = "Settings";
+    ViewData["PageDescription"] = "Modifica appsettings.json (salvataggio con ricarica in memoria)";
+}
+
+@if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+{
+    <div class="alert alert-info" role="alert">@Model.StatusMessage</div>
+}
+
+<form method="post" asp-page-handler="Save">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <div class="text-muted small">
+            Modifica i valori e premi Save. I parametri vengono ricaricati dopo il salvataggio.
+        </div>
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save me-1"></i>Save
+        </button>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr>
+                    <th style="width: 45%;">Chiave</th>
+                    <th style="width: 45%;">Valore</th>
+                    <th style="width: 10%;">Tipo</th>
+                </tr>
+            </thead>
+            <tbody>
+            @for (var i = 0; i < Model.Settings.Count; i++)
+            {
+                var s = Model.Settings[i];
+                <tr>
+                    <td style="padding-left:@(s.Depth * 18)px;">
+                        <code>@s.Path</code>
+                        <input type="hidden" name="settings[@i].Path" value="@s.Path" />
+                        <input type="hidden" name="settings[@i].Type" value="@s.Type" />
+                    </td>
+                    <td>
+                        @if (string.Equals(s.Type, "bool", StringComparison.OrdinalIgnoreCase))
+                        {
+                            <select class="form-select form-select-sm" name="settings[@i].Value">
+                                <option value="true" selected="@("true".Equals(s.Value, StringComparison.OrdinalIgnoreCase))">true</option>
+                                <option value="false" selected="@("false".Equals(s.Value, StringComparison.OrdinalIgnoreCase))">false</option>
+                            </select>
+                        }
+                        else if (string.Equals(s.Type, "number", StringComparison.OrdinalIgnoreCase))
+                        {
+                            <input class="form-control form-control-sm" type="number" step="any" name="settings[@i].Value" value="@s.Value" />
+                        }
+                        else if (string.Equals(s.Type, "json", StringComparison.OrdinalIgnoreCase))
+                        {
+                            <textarea class="form-control form-control-sm" name="settings[@i].Value" rows="2">@s.Value</textarea>
+                        }
+                        else
+                        {
+                            <input class="form-control form-control-sm" type="text" name="settings[@i].Value" value="@s.Value" />
+                        }
+                    </td>
+                    <td class="text-muted small">@s.Type</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex justify-content-end">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save me-1"></i>Save
+        </button>
+    </div>
+</form>

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
 
@@ -25,6 +26,7 @@ public sealed class GenerateNextChunkCommand
     private readonly ILangChainKernelFactory _kernelFactory;
     private readonly ICustomLogger? _logger;
     private readonly GenerateChunkOptions _options;
+    private readonly IServiceScopeFactory? _scopeFactory;
 
     public GenerateNextChunkCommand(
         long storyId,
@@ -33,7 +35,8 @@ public sealed class GenerateNextChunkCommand
         ILangChainKernelFactory kernelFactory,
         ICustomLogger? logger = null,
         GenerateChunkOptions? options = null,
-        CommandTuningOptions? tuning = null)
+        CommandTuningOptions? tuning = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _storyId = storyId;
         _writerAgentId = writerAgentId;
@@ -42,6 +45,7 @@ public sealed class GenerateNextChunkCommand
         _logger = logger;
         _options = options ?? new GenerateChunkOptions();
         _tuning = tuning ?? new CommandTuningOptions();
+        _scopeFactory = scopeFactory;
     }
 
     public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
@@ -393,7 +397,72 @@ public sealed class GenerateNextChunkCommand
                 new List<Dictionary<string, object>>(),
                 ct).ConfigureAwait(false);
 
-            return response ?? string.Empty;
+            var primary = response ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(primary))
+            {
+                return primary;
+            }
+
+            // Try fallback models (model_roles) if primary returned empty.
+            if (_scopeFactory == null)
+            {
+                return primary;
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
+            if (fallbackService == null)
+            {
+                _logger?.Log("Warning", "StateDriven", "ModelFallbackService not available; cannot fallback.");
+                return primary;
+            }
+
+            var roleCode = string.IsNullOrWhiteSpace(writerAgent.Role) ? "writer" : writerAgent.Role;
+            var (fallbackResult, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync(
+                roleCode,
+                writerAgent.ModelId,
+                async modelRole =>
+                {
+                    var modelName = modelRole.Model?.Name;
+                    if (string.IsNullOrWhiteSpace(modelName))
+                    {
+                        throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
+                    }
+
+                    var candidateBridge = _kernelFactory.CreateChatBridge(
+                        modelName,
+                        writerAgent.Temperature,
+                        modelRole.TopP ?? writerAgent.TopP,
+                        writerAgent.RepeatPenalty,
+                        modelRole.TopK ?? writerAgent.TopK,
+                        writerAgent.RepeatLastN,
+                        writerAgent.NumPredict);
+
+                    var fallbackSystem = !string.IsNullOrWhiteSpace(modelRole.Instructions)
+                        ? modelRole.Instructions!
+                        : systemMessage;
+                    var fallbackMessages = new List<ConversationMessage>
+                    {
+                        new ConversationMessage { Role = "system", Content = fallbackSystem },
+                        new ConversationMessage { Role = "user", Content = prompt }
+                    };
+
+                    var fallbackResponse = await candidateBridge.CallModelWithToolsAsync(
+                        fallbackMessages,
+                        new List<Dictionary<string, object>>(),
+                        ct).ConfigureAwait(false);
+
+                    return fallbackResponse ?? string.Empty;
+                },
+                validateResult: s => !string.IsNullOrWhiteSpace(s));
+
+            if (!string.IsNullOrWhiteSpace(fallbackResult) && successfulModelRole?.Model != null)
+            {
+                _logger?.Log("Info", "StateDriven", $"Fallback model succeeded: {successfulModelRole.Model.Name} (role={roleCode})");
+                return fallbackResult!;
+            }
+
+            return primary;
         }
         catch (Exception ex)
         {

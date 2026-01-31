@@ -160,6 +160,9 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
             return new CommandResult(false, $"Failed to finalize story: {completeError}");
         }
 
+        // Enqueue post-episode state-driven pipeline (canon/delta/continuity/state/recap).
+        _storiesService.EnqueueStateDrivenPostEpisodePipeline(_storyId, trigger: "state_driven_episode_completed", priority: 3);
+
         // Enqueue revise => it will enqueue evaluations automatically.
         var reviseRunId = _storiesService.EnqueueReviseStoryCommand(_storyId, trigger: "state_driven_episode_completed", priority: 2, force: true);
 

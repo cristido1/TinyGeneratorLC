@@ -27,26 +27,29 @@ namespace TinyGenerator.Pages.Stories
         private readonly ICustomLogger? _customLogger;
         private readonly ILogger<IndexModel>? _logger;
         private readonly ICommandDispatcher _commandDispatcher;
-    private readonly CommandTuningOptions _tuning;
+        private readonly CommandTuningOptions _tuning;
+        private readonly IOptionsMonitor<AutomaticOperationsOptions>? _idleAutoOptions;
 
         public IndexModel(
             StoriesService stories,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
-                        IOptions<CommandTuningOptions> tuningOptions,
+            IOptions<CommandTuningOptions> tuningOptions,
             IServiceScopeFactory? scopeFactory = null,
             ICustomLogger? customLogger = null,
             ICommandDispatcher? commandDispatcher = null,
+            IOptionsMonitor<AutomaticOperationsOptions>? idleAutoOptions = null,
             ILogger<IndexModel>? logger = null)
         {
             _stories = stories;
             _database = database;
             _kernelFactory = kernelFactory;
             _scopeFactory = scopeFactory;
-                        _tuning = tuningOptions.Value ?? new CommandTuningOptions();
+            _tuning = tuningOptions.Value ?? new CommandTuningOptions();
             _customLogger = customLogger;
             _logger = logger;
             _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
+            _idleAutoOptions = idleAutoOptions;
         }
 
         public IEnumerable<StoryRecord> Stories { get; set; } = new List<StoryRecord>();
@@ -224,8 +227,8 @@ namespace TinyGenerator.Pages.Stories
                 metadata: BuildMetadata(id, "evaluate_action_pacing", agent));
 
             TempData["StatusMessage"] = $"Valutazione azione/ritmo avviata (run {runId}).";
-            return RedirectToPage();
-        }
+        return RedirectToPage();
+    }
 
         public IActionResult OnPostRevise(long id)
         {
@@ -243,6 +246,73 @@ namespace TinyGenerator.Pages.Stories
 
             return RedirectToPage();
         }
+
+        public IActionResult OnPostEnsureTagStatusConsistency()
+        {
+            var evaluatedStatus = _database.GetStoryStatusByCode("evaluated");
+            var insertedStatus = _database.GetStoryStatusByCode("inserted");
+            if (evaluatedStatus == null || insertedStatus == null)
+            {
+                TempData["ErrorMessage"] = "Impossibile determinare i codici di stato necessari (inserted/evaluated).";
+                return RedirectToPage();
+            }
+
+            var stories = _stories.GetAllStories()
+                .Where(s => (s.StatusStep ?? 0) > evaluatedStatus.Step)
+                .ToList();
+
+            var updated = new List<long>();
+            foreach (var story in stories)
+            {
+                if (!string.IsNullOrWhiteSpace(story.StoryTags))
+                {
+                    continue;
+                }
+
+                var hasEvaluations = (story.Evaluations?.Count ?? 0) > 0;
+                var targetStatusId = hasEvaluations ? evaluatedStatus.Id : insertedStatus.Id;
+                if (targetStatusId == story.StatusId)
+                {
+                    continue;
+                }
+
+                _database.UpdateStoryById(story.Id, statusId: targetStatusId, updateStatus: true);
+                updated.Add(story.Id);
+            }
+
+            if (updated.Count == 0)
+            {
+                TempData["StatusMessage"] = "Nessuna storia aggiornata: tutti i record già coerenti o non mancanti di story_tags.";
+            }
+            else
+            {
+                TempData["StatusMessage"] = $"Aggiornati {updated.Count} storie (mancavano story_tags e tornate a step inserito/evaluated).";
+            }
+
+            return RedirectToPage();
+        }
+
+    public IActionResult OnPostCloneFromRevised(long id)
+    {
+        var runId = QueueStoryCommand(
+            id,
+            "clone_revised_story",
+            ctx =>
+            {
+                var result = _stories.TryCloneStoryFromRevised(id);
+                return Task.FromResult(new CommandResult(result.Success, result.Message));
+            },
+            "Clonazione da revisione accodata.",
+            threadScopeOverride: $"story/clone_revised/{id}",
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "clone_revised_story",
+                ["storyId"] = id.ToString()
+            });
+
+        TempData["StatusMessage"] = $"Clonazione accodata (run {runId}).";
+        return RedirectToPage();
+    }
 
         // Allow manual evaluation input (for stories created without an associated model/agent)
         public IActionResult OnPostManualEvaluate(long id, double score, string overall)
@@ -286,14 +356,18 @@ namespace TinyGenerator.Pages.Stories
             {
                 var all = _stories.GetAllStories();
                 var toDelete = new List<StoryRecord>();
+                var opts = _idleAutoOptions?.CurrentValue ?? new AutomaticOperationsOptions();
+                var minAvg = opts.AutoDeleteLowRated.MinAverageScore;
+                var minEvals = Math.Max(1, opts.AutoDeleteLowRated.MinEvaluations);
                 foreach (var s in all)
                 {
+                    if (!string.Equals(s.Status, "evaluated", StringComparison.OrdinalIgnoreCase))
+                        continue;
                     var evals = _database.GetStoryEvaluations(s.Id) ?? new List<StoryEvaluation>();
-                    if (evals.Count < 2) continue;
+                    if (evals.Count < minEvals) continue;
                     var avgTotal = evals.Average(e => e.TotalScore);
-                    // TotalScore is out of 40 -> convert to percentage
-                    var pct = avgTotal * 100.0 / 40.0;
-                    if (pct < 60.0)
+                    var pct = DatabaseService.NormalizeEvaluationScoreTo100(avgTotal);
+                    if (pct < minAvg)
                     {
                         toDelete.Add(s);
                     }
@@ -327,7 +401,7 @@ namespace TinyGenerator.Pages.Stories
                     }
                 }
 
-                TempData["StatusMessage"] = $"Eliminate {deleted} storie con valutazione media <50 e almeno 2 valutazioni.";
+                TempData["StatusMessage"] = $"Eliminate {deleted} storie con valutazione media <{minAvg} e almeno {minEvals} valutazioni (solo evaluated).";
             }
             catch (Exception ex)
             {
@@ -1348,6 +1422,19 @@ namespace TinyGenerator.Pages.Stories
             
             // Revision (POST)
             actions.Add(new { id = "revise", title = "Revisione", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "Revise", id = s.Id }, Request.Scheme) });
+
+            var evalCount = s.Evaluations?.Count ?? 0;
+            if (!string.IsNullOrWhiteSpace(s.StoryRevised) && evalCount >= 2)
+            {
+                actions.Add(new
+                {
+                    id = "clone_revised",
+                    title = "Crea versione migliorata",
+                    method = "POST",
+                    url = Url.Page("/Stories/Index", null, new { handler = "CloneFromRevised", id = s.Id }, Request.Scheme),
+                    confirm = true
+                });
+            }
 
             if (!string.IsNullOrWhiteSpace(s.Folder))
             {

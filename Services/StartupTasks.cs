@@ -11,9 +11,9 @@ namespace TinyGenerator
 {
     public static class StartupTasks
     {
-        public static void TryRestartOllama(ILogger? logger = null)
-        {
-            try
+    public static void TryRestartOllama(ILogger? logger = null)
+    {
+        try
             {
                 var scriptPath = Path.Combine(Directory.GetCurrentDirectory(), "scripts", "restart_ollama.sh");
                 if (!File.Exists(scriptPath))
@@ -41,13 +41,50 @@ namespace TinyGenerator
                     var errText = p.StandardError.ReadToEnd();
                     if (!string.IsNullOrWhiteSpace(outText)) logger?.LogDebug("[Startup] restart_ollama stdout: {out}", outText);
                     if (!string.IsNullOrWhiteSpace(errText)) logger?.LogWarning("[Startup] restart_ollama stderr: {err}", errText);
-                }
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning("[Startup] TryRestartOllama failure: {msg}", ex.Message);
             }
         }
+        catch (Exception ex)
+        {
+            logger?.LogWarning("[Startup] TryRestartOllama failure: {msg}", ex.Message);
+        }
+    }
+
+    public static void ResetLlamaServer(IConfiguration? configuration, ILogger? logger = null)
+    {
+        if (configuration == null) return;
+
+        var serverExe = configuration["LlamaCpp:ServerExe"] ?? "llama-server.exe";
+        var processName = Path.GetFileNameWithoutExtension(serverExe);
+        if (string.IsNullOrWhiteSpace(processName)) return;
+
+        try
+        {
+            var procs = Process.GetProcessesByName(processName);
+            if (procs.Length == 0)
+            {
+                logger?.LogInformation("[Startup] No existing llama.cpp server processes found ({proc}).", processName);
+                return;
+            }
+
+            foreach (var proc in procs)
+            {
+                try
+                {
+                    logger?.LogInformation("[Startup] Terminating existing llama.cpp server (PID={pid})", proc.Id);
+                    proc.Kill(entireProcessTree: true);
+                    proc.WaitForExit(3000);
+                }
+                catch (Exception inner)
+                {
+                    logger?.LogWarning(inner, "[Startup] Failed to terminate llama.cpp server PID={pid}: {msg}", proc.Id, inner.Message);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "[Startup] ResetLlamaServer failed: {msg}", ex.Message);
+        }
+    }
 
         public static async Task<bool> TryRestartAudioCraftAsync(ILogger? logger = null)
         {

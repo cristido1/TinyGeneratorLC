@@ -657,6 +657,55 @@ public sealed class DatabaseService
         AddIfMissing("generated_music", "INTEGER DEFAULT 0");
         AddIfMissing("generated_effects", "INTEGER DEFAULT 0");
         AddIfMissing("generated_mixed_audio", "INTEGER DEFAULT 0");
+
+        // Auto TTS failure tracking (automatic pipeline guard)
+        AddIfMissing("auto_tts_failed", "INTEGER DEFAULT 0");
+        AddIfMissing("auto_tts_failed_at", "TEXT");
+        AddIfMissing("auto_tts_fail_count", "INTEGER DEFAULT 0");
+        AddIfMissing("auto_tts_last_error", "TEXT");
+    }
+
+    public void MarkAutoTtsFailure(long storyId, string? errorMessage = null)
+    {
+        if (storyId <= 0) return;
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            conn.Execute(@"
+                UPDATE stories
+                SET auto_tts_failed = 1,
+                    auto_tts_failed_at = @ts,
+                    auto_tts_fail_count = COALESCE(auto_tts_fail_count, 0) + 1,
+                    auto_tts_last_error = @err
+                WHERE id = @id",
+                new { id = storyId, ts = DateTime.UtcNow.ToString("o"), err = errorMessage ?? string.Empty });
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
+    public void ClearAutoTtsFailure(long storyId)
+    {
+        if (storyId <= 0) return;
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            conn.Execute(@"
+                UPDATE stories
+                SET auto_tts_failed = 0,
+                    auto_tts_failed_at = NULL,
+                    auto_tts_last_error = NULL
+                WHERE id = @id",
+                new { id = storyId });
+        }
+        catch
+        {
+            // best-effort
+        }
     }
 
     /// <summary>
@@ -1332,6 +1381,52 @@ public sealed class DatabaseService
             .ToList();
     }
 
+    public int? GetSeriesIdWithMostEpisodesWritten(bool includeDeleted = false)
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+            SELECT serie_id
+            FROM stories
+            WHERE serie_id IS NOT NULL" + (includeDeleted ? "" : " AND deleted = 0") + @"
+            GROUP BY serie_id
+            ORDER BY COUNT(*) DESC, serie_id ASC
+            LIMIT 1";
+        return conn.QueryFirstOrDefault<int?>(sql);
+    }
+
+    public int GetNextSeriesEpisodeNumber(int serieId)
+    {
+        if (serieId <= 0) return 1;
+        using var conn = CreateConnection();
+        conn.Open();
+        var maxEpisode = conn.ExecuteScalar<long?>(
+            "SELECT MAX(number) FROM series_episodes WHERE serie_id = @sid",
+            new { sid = serieId }) ?? 0;
+        var maxStory = conn.ExecuteScalar<long?>(
+            "SELECT MAX(serie_episode) FROM stories WHERE serie_id = @sid",
+            new { sid = serieId }) ?? 0;
+        var next = Math.Max(maxEpisode, maxStory) + 1;
+        return next <= 0 ? 1 : (int)next;
+    }
+
+    public SeriesEpisode? EnsureSeriesEpisode(int serieId, int episodeNumber)
+    {
+        if (serieId <= 0 || episodeNumber <= 0) return null;
+        using var context = CreateDbContext();
+        var episode = context.SeriesEpisodes.FirstOrDefault(e => e.SerieId == serieId && e.Number == episodeNumber);
+        if (episode != null) return episode;
+
+        episode = new SeriesEpisode
+        {
+            SerieId = serieId,
+            Number = episodeNumber
+        };
+        context.SeriesEpisodes.Add(episode);
+        context.SaveChanges();
+        return episode;
+    }
+
     public SeriesEpisode? GetSeriesEpisodeById(int id)
     {
         using var context = CreateDbContext();
@@ -1464,6 +1559,147 @@ public sealed class DatabaseService
         return updated;
     }
 
+    public SeriesEpisode? GetSeriesEpisodeBySerieAndNumber(int serieId, int number)
+    {
+        using var context = CreateDbContext();
+        return context.SeriesEpisodes
+            .AsNoTracking()
+            .FirstOrDefault(e => e.SerieId == serieId && e.Number == number);
+    }
+
+    public SeriesState? GetCurrentSeriesState(int serieId)
+    {
+        using var context = CreateDbContext();
+        return context.SeriesStates
+            .AsNoTracking()
+            .Where(s => s.SerieId == serieId && s.IsCurrent)
+            .OrderByDescending(s => s.StateVersion)
+            .FirstOrDefault();
+    }
+
+    public SeriesState CreateSeriesState(
+        int serieId,
+        string? worldStateJson,
+        string? openThreadsJson,
+        string? lastMajorEvent,
+        string? createdBy,
+        int? sourceEpisodeId,
+        int? explicitVersion = null)
+    {
+        using var wrapper = CreateDbContextWrapper();
+        var context = wrapper.Context;
+        using var tx = context.Database.BeginTransaction();
+
+        var current = context.SeriesStates.FirstOrDefault(s => s.SerieId == serieId && s.IsCurrent);
+        var nextVersion = explicitVersion ?? ((current?.StateVersion ?? 0) + 1);
+        if (current != null)
+        {
+            current.IsCurrent = false;
+        }
+
+        var state = new SeriesState
+        {
+            SerieId = serieId,
+            IsCurrent = true,
+            StateVersion = nextVersion,
+            StateSummary = null,
+            WorldStateJson = worldStateJson,
+            OpenThreadsJson = openThreadsJson,
+            LastMajorEvent = lastMajorEvent,
+            CreatedAt = DateTime.UtcNow.ToString("o"),
+            CreatedBy = createdBy,
+            SourceEpisodeId = sourceEpisodeId
+        };
+
+        context.SeriesStates.Add(state);
+        context.SaveChanges();
+        tx.Commit();
+        return state;
+    }
+
+    public bool EnsureSeriesEpisodeStateInJson(int serieId, int episodeNumber, string stateInJson)
+    {
+        using var context = CreateDbContext();
+        var episode = context.SeriesEpisodes.FirstOrDefault(e => e.SerieId == serieId && e.Number == episodeNumber);
+        if (episode == null) return false;
+        if (!string.IsNullOrWhiteSpace(episode.StateInJson)) return true;
+        episode.StateInJson = string.IsNullOrWhiteSpace(stateInJson) ? "{}" : stateInJson;
+        context.SaveChanges();
+        return true;
+    }
+
+    public bool UpdateSeriesEpisodeStateFields(
+        int serieId,
+        int episodeNumber,
+        string? stateInJson = null,
+        string? deltaJson = null,
+        string? stateOutJson = null,
+        string? canonEvents = null,
+        string? openThreadsOut = null,
+        string? recapText = null)
+    {
+        using var context = CreateDbContext();
+        var episode = context.SeriesEpisodes.FirstOrDefault(e => e.SerieId == serieId && e.Number == episodeNumber);
+        if (episode == null) return false;
+
+        if (stateInJson != null) episode.StateInJson = stateInJson;
+        if (deltaJson != null) episode.DeltaJson = deltaJson;
+        if (stateOutJson != null) episode.StateOutJson = stateOutJson;
+        if (canonEvents != null) episode.CanonEvents = canonEvents;
+        if (openThreadsOut != null) episode.OpenThreadsOut = openThreadsOut;
+        if (recapText != null) episode.RecapText = recapText;
+
+        context.SaveChanges();
+        return true;
+    }
+
+    public bool UpdateSeriesStateSummaryAndCache(int seriesStateId, string stateSummary)
+    {
+        using var context = CreateDbContext();
+        var state = context.SeriesStates.FirstOrDefault(s => s.Id == seriesStateId);
+        if (state == null) return false;
+
+        state.StateSummary = stateSummary;
+        context.SaveChanges();
+
+        if (state.SerieId > 0)
+        {
+            UpdateSeriesStateCache(state.SerieId, stateSummary, state.LastMajorEvent);
+        }
+
+        return true;
+    }
+
+    public void UpdateSeriesStateCache(int serieId, string? stateSummary, string? lastMajorEvent)
+    {
+        if (serieId <= 0) return;
+        if (stateSummary == null && lastMajorEvent == null) return;
+
+        using var conn = CreateConnection();
+        conn.Open();
+
+        var updates = new List<string>();
+        var parameters = new DynamicParameters();
+        parameters.Add("serieId", serieId);
+
+        if (stateSummary != null)
+        {
+            updates.Add("serie_state_summary = @stateSummary");
+            parameters.Add("stateSummary", stateSummary);
+        }
+
+        if (lastMajorEvent != null)
+        {
+            updates.Add("last_major_event = @lastMajorEvent");
+            parameters.Add("lastMajorEvent", lastMajorEvent);
+        }
+
+        if (updates.Count == 0) return;
+
+        var sql = $"UPDATE series SET {string.Join(", ", updates)} WHERE id = @serieId";
+        conn.Execute(sql, parameters);
+    }
+
     /// <summary>
     /// Apply pending SQL migrations manually (for when EF migrations are disabled).
     /// This method should be called during startup to ensure database schema is up to date.
@@ -1495,6 +1731,47 @@ public sealed class DatabaseService
             Console.WriteLine("[DB] Applying migration: AddStoryIdToLog");
             conn.Execute("ALTER TABLE Log ADD COLUMN story_id INTEGER");
             Console.WriteLine("[DB] ✓ Migration AddStoryIdToLog applied");
+        }
+
+        // Ensure model_name exists in Log table (tracks model used for request/response)
+        var checkLogModelName = conn.ExecuteScalar<int>(
+            "SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name='model_name'");
+        if (checkLogModelName == 0)
+        {
+            Console.WriteLine("[DB] Applying migration: AddModelNameToLog");
+            conn.Execute("ALTER TABLE Log ADD COLUMN model_name TEXT");
+            Console.WriteLine("[DB] ✓ Migration AddModelNameToLog applied");
+        }
+
+        // Ensure system_reports table exists
+        var hasSystemReports = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='system_reports'");
+        if (hasSystemReports == 0)
+        {
+            Console.WriteLine("[DB] Creating system_reports table");
+            conn.Execute(@"
+CREATE TABLE system_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    status TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT NULL,
+    deleted_by TEXT NULL,
+    title TEXT NULL,
+    message TEXT NULL,
+    failure_reason TEXT NULL,
+    agent_name TEXT NULL,
+    agent_role TEXT NULL,
+    model_name TEXT NULL,
+    story_id INTEGER NULL,
+    series_id INTEGER NULL,
+    series_episode INTEGER NULL,
+    operation_type TEXT NULL,
+    execution_time_ms INTEGER NULL,
+    retry_count INTEGER NULL,
+    raw_log_ref TEXT NULL
+)");
+            Console.WriteLine("[DB] Created system_reports table");
         }
 
         // Ensure story_id exists in stories table (preallocated story numbering independent from DB row id)
@@ -1538,6 +1815,122 @@ public sealed class DatabaseService
             conn.Execute("ALTER TABLE stories ADD COLUMN summary TEXT");
             conn.Execute("INSERT OR IGNORE INTO __EFMigrationsHistory (MigrationId, ProductVersion) VALUES ('20251227082500_AddSummaryToStories', '10.0.0')");
             Console.WriteLine("[DB] ✓ Migration AddSummaryToStories applied");
+        }
+
+        // Migration: add Narrative Engine long-story fields to series table
+        try
+        {
+            var seriesColumns = new (string Name, string SqlType)[]
+            {
+                ("serie_state_summary", "TEXT"),
+                ("last_major_event", "TEXT"),
+                ("cosa_non_deve_mai_succedere", "TEXT"),
+                ("temi_obbligatori", "TEXT"),
+                ("livello_tecnologico_medio", "TEXT"),
+                ("world_rules_locked", "INTEGER NOT NULL DEFAULT 0")
+            };
+
+            foreach (var col in seriesColumns)
+            {
+                var exists = conn.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('series') WHERE name='{col.Name}'");
+                if (exists == 0)
+                {
+                    Console.WriteLine($"[DB] Adding {col.Name} column to series");
+                    conn.Execute($"ALTER TABLE series ADD COLUMN {col.Name} {col.SqlType}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add Narrative Engine columns to series: {ex.Message}");
+        }
+
+        // Migration: create series_state table if missing
+        try
+        {
+            var hasSeriesState = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='series_state'") > 0;
+            if (!hasSeriesState)
+            {
+                Console.WriteLine("[DB] Migration: creating series_state table");
+                conn.Execute(@"
+CREATE TABLE IF NOT EXISTS series_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    serie_id INTEGER NOT NULL,
+    is_current INTEGER NOT NULL DEFAULT 0,
+    state_version INTEGER NOT NULL DEFAULT 1,
+    state_summary TEXT,
+    world_state_json TEXT,
+    open_threads_json TEXT,
+    last_major_event TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by TEXT,
+    source_episode_id INTEGER,
+    FOREIGN KEY (serie_id) REFERENCES series(id) ON DELETE CASCADE
+);");
+            }
+
+            conn.Execute(@"CREATE UNIQUE INDEX IF NOT EXISTS idx_series_state_current ON series_state(serie_id) WHERE is_current = 1");
+            conn.Execute(@"CREATE INDEX IF NOT EXISTS idx_series_state_serie ON series_state(serie_id)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to create series_state table: {ex.Message}");
+        }
+
+        // Migration: add state-driven fields to series_episodes table
+        try
+        {
+            var episodeColumns = new (string Name, string SqlType)[]
+            {
+                ("state_in_json", "TEXT"),
+                ("state_out_json", "TEXT"),
+                ("delta_json", "TEXT"),
+                ("canon_events", "TEXT"),
+                ("open_threads_out", "TEXT"),
+                ("recap_text", "TEXT")
+            };
+
+            foreach (var col in episodeColumns)
+            {
+                var exists = conn.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('series_episodes') WHERE name='{col.Name}'");
+                if (exists == 0)
+                {
+                    Console.WriteLine($"[DB] Adding {col.Name} column to series_episodes");
+                    conn.Execute($"ALTER TABLE series_episodes ADD COLUMN {col.Name} {col.SqlType}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add state-driven columns to series_episodes: {ex.Message}");
+        }
+
+        // Migration: add extended character fields to series_characters table
+        try
+        {
+            var characterColumns = new (string Name, string SqlType)[]
+            {
+                ("ruolo_narrativo", "TEXT"),
+                ("arco_personale", "TEXT"),
+                ("stato_attuale", "TEXT"),
+                ("stato_attuale_json", "TEXT"),
+                ("alleanza_relazione", "TEXT"),
+                ("last_seen_episode_number", "INTEGER")
+            };
+
+            foreach (var col in characterColumns)
+            {
+                var exists = conn.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('series_characters') WHERE name='{col.Name}'");
+                if (exists == 0)
+                {
+                    Console.WriteLine($"[DB] Adding {col.Name} column to series_characters");
+                    conn.Execute($"ALTER TABLE series_characters ADD COLUMN {col.Name} {col.SqlType}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add extended columns to series_characters: {ex.Message}");
         }
 
         // Ensure qwen2.5:7b-instruct model exists
@@ -1601,6 +1994,114 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
             )", new { modelId });
             
             Console.WriteLine("[DB] ✓ Story Summarizer agent created");
+        }
+
+        // Seed Narrative Engine long-story roles and agents (if missing)
+        try
+        {
+            var hasRolesTable = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='roles'") > 0;
+            if (hasRolesTable)
+            {
+                var now = DateTime.UtcNow.ToString("o");
+                var newRoles = new (string Role, string Command)[]
+                {
+                    ("canon_extractor", "CanonExtractor"),
+                    ("state_delta_builder", "StateDeltaBuilder"),
+                    ("continuity_validator", "ContinuityValidator"),
+                    ("state_updater", "StateUpdater"),
+                    ("state_compressor", "StateCompressor"),
+                    ("recap_builder", "RecapBuilder")
+                };
+
+                foreach (var role in newRoles)
+                {
+                    conn.Execute(@"
+INSERT OR IGNORE INTO roles (ruolo, comando_collegato, created_at, updated_at)
+VALUES (@ruolo, @comando, @created_at, @updated_at)",
+                        new
+                        {
+                            ruolo = role.Role,
+                            comando = role.Command,
+                            created_at = now,
+                            updated_at = now
+                        });
+                }
+            }
+
+            var newAgents = new (string Name, string Role, string Prompt, string Instructions, string Notes)[]
+            {
+                (
+                    "CanonExtractor",
+                    "canon_extractor",
+                    "Estrai eventi canonici da un episodio.",
+                    "Leggi l'episodio completo e restituisci SOLO un JSON array di eventi canonici ordinati. Ogni evento deve includere: order, title, summary, characters, location, outcome. Nessun testo extra.",
+                    "Narrative Engine: CanonExtractor (long-story pipeline)"
+                ),
+                (
+                    "StateDeltaBuilder",
+                    "state_delta_builder",
+                    "Costruisci il delta di stato a partire da eventi canonici.",
+                    "Usa stato compatto + eventi per produrre SOLO un JSON object con: delta (object), open_threads (array), last_major_event (string). Nessun testo extra.",
+                    "Narrative Engine: StateDeltaBuilder (long-story pipeline)"
+                ),
+                (
+                    "ContinuityValidator",
+                    "continuity_validator",
+                    "Verifica coerenza narrativa.",
+                    "Valida coerenza tra stato compatto ed eventi. Restituisci SOLO un JSON object con issues (array di {severity, description}). Nessun testo extra.",
+                    "Narrative Engine: ContinuityValidator (long-story pipeline)"
+                ),
+                (
+                    "StateUpdater",
+                    "state_updater",
+                    "Aggiorna lo stato logico senza LLM.",
+                    "Questo agente non dovrebbe chiamare un modello: merge logico del delta sullo stato precedente.",
+                    "Narrative Engine: StateUpdater (long-story pipeline)"
+                ),
+                (
+                    "StateCompressor",
+                    "state_compressor",
+                    "Comprimi lo stato in state_summary_compact.",
+                    "Genera SOLO un JSON object compatto (state_summary_compact) entro ~1200-1500 parole includendo situazione, eventi maggiori, risorse, personaggi chiave, thread urgenti, vincoli hard. Nessun testo extra.",
+                    "Narrative Engine: StateCompressor (long-story pipeline)"
+                ),
+                (
+                    "RecapBuilder",
+                    "recap_builder",
+                    "Crea il recap episodio.",
+                    "Usa gli eventi canonici per creare un recap sintetico. Output SOLO testo recap (no titoli).",
+                    "Narrative Engine: RecapBuilder (long-story pipeline)"
+                )
+            };
+
+            foreach (var agent in newAgents)
+            {
+                var exists = conn.ExecuteScalar<long>(
+                    "SELECT COUNT(*) FROM agents WHERE role = @role AND name = @name",
+                    new { role = agent.Role, name = agent.Name });
+                if (exists > 0) continue;
+
+                conn.Execute(@"
+INSERT INTO agents (
+    name, role, model_id, skills, prompt, instructions, is_active,
+    created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict
+) VALUES (
+    @name, @role, NULL, '[]', @prompt, @instructions, 1,
+    datetime('now'), datetime('now'), @notes, NULL, NULL, NULL, NULL, NULL, NULL
+)",
+                    new
+                    {
+                        name = agent.Name,
+                        role = agent.Role,
+                        prompt = agent.Prompt,
+                        instructions = agent.Instructions,
+                        notes = agent.Notes
+                    });
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to seed Narrative Engine roles/agents: {ex.Message}");
         }
     }
 
@@ -2683,7 +3184,7 @@ SET TotalScore = (
             return null;
         }
 
-        var candidate = context.StoryEvaluations
+        var candidates = context.StoryEvaluations
             .GroupBy(e => e.StoryId)
             .Select(g => new
             {
@@ -2695,13 +3196,33 @@ SET TotalScore = (
                 eval => eval.StoryId,
                 story => story.Id,
                 (eval, story) => eval)
-            .Where(x => x.Count >= minEvaluations && x.Avg < minAverageScore)
-            .OrderBy(x => x.Avg)
+            .Where(x => x.Count >= minEvaluations)
+            .ToList();
+
+        if (candidates.Count == 0) return null;
+
+        var candidate = candidates
+            .Select(x => new
+            {
+                x.StoryId,
+                Avg = x.Avg,
+                Normalized = NormalizeEvaluationScoreTo100(x.Avg)
+            })
+            .Where(x => x.Normalized < minAverageScore)
+            .OrderBy(x => x.Normalized)
             .ThenBy(x => x.StoryId)
             .Select(x => (long?)x.StoryId)
             .FirstOrDefault();
 
         return candidate;
+    }
+
+    public static double NormalizeEvaluationScoreTo100(double avgScore)
+    {
+        if (avgScore <= 0) return 0;
+        if (avgScore <= 10.0) return avgScore * 10.0;
+        if (avgScore <= 40.0) return avgScore * 2.5;
+        return avgScore;
     }
 
     public bool HasPendingModelResponseLogs()
@@ -2732,7 +3253,8 @@ SET TotalScore = (
                 l.Ts,
                 l.Message,
                 l.ThreadScope,
-                l.Result))
+                l.Result,
+                l.ModelName))
             .Take(batchSize)
             .ToList();
 
@@ -2741,19 +3263,25 @@ SET TotalScore = (
             return 0;
         }
 
-        var threadIds = responses.Select(r => r.ThreadId).Distinct().ToList();
-        var requests = context.Logs
-            .Where(l => l.Category == "ModelRequest" && threadIds.Contains(l.ThreadId))
-            .Select(l => new ModelLogRequest(
-                l.ThreadId,
-                l.Ts,
-                l.Message))
-            .ToList();
+          var threadIds = responses
+              .Select(r => r.ThreadId)
+              .Where(id => id.HasValue)
+              .Select(id => id!.Value)
+              .Distinct()
+              .ToList();
+          var requests = context.Logs
+              .Where(l => l.Category == "ModelRequest" && l.ThreadId.HasValue && threadIds.Contains(l.ThreadId.Value))
+              .Select(l => new ModelLogRequest(
+                  l.ThreadId!.Value,
+                  l.Ts,
+                  l.Message,
+                  l.ModelName))
+              .ToList();
 
         var requestMap = new Dictionary<(int ThreadId, string ModelName), List<DateTime>>();
         foreach (var req in requests)
         {
-            var modelName = ParseModelName(req.Message);
+            var modelName = req.ModelName ?? ParseModelName(req.Message);
             if (string.IsNullOrWhiteSpace(modelName)) continue;
             if (!TryParseLogTime(req.Ts, out var ts)) continue;
 
@@ -2775,7 +3303,7 @@ SET TotalScore = (
 
         foreach (var resp in responses)
         {
-            var modelName = ParseModelName(resp.Message) ?? "unknown";
+            var modelName = resp.ModelName ?? ParseModelName(resp.Message) ?? "unknown";
             var operation = NormalizeOperation(resp.ThreadScope);
             var result = (resp.Result ?? string.Empty).Trim().ToUpperInvariant();
             var success = string.Equals(result, "SUCCESS", StringComparison.OrdinalIgnoreCase);
@@ -2786,7 +3314,7 @@ SET TotalScore = (
             }
 
             double? durationSecs = null;
-            if (requestMap.TryGetValue((resp.ThreadId, modelName), out var reqTimes))
+            if (resp.ThreadId.HasValue && requestMap.TryGetValue((resp.ThreadId.Value, modelName), out var reqTimes))
             {
                 var reqTime = FindLatestRequestBefore(reqTimes, responseTime);
                 if (reqTime.HasValue)
@@ -3021,8 +3549,8 @@ VALUES (
             firstOperationDate: now);
     }
 
-    private sealed record ModelLogResponse(long Id, int ThreadId, string Ts, string Message, string? ThreadScope, string? Result);
-    private sealed record ModelLogRequest(int ThreadId, string Ts, string Message);
+      private sealed record ModelLogResponse(long Id, int? ThreadId, string Ts, string Message, string? ThreadScope, string? Result, string? ModelName);
+      private sealed record ModelLogRequest(int ThreadId, string Ts, string Message, string? ModelName);
 
     private sealed class ModelStatsAggregate
     {
@@ -5117,6 +5645,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
                 var storyId = e.StoryId;
                 var threadScope = e.ThreadScope;
                 var agentName = e.AgentName;
+                var modelName = e.ModelName;
 
                 void AppendEntry(TinyGenerator.Models.LogEntry le)
                 {
@@ -5134,6 +5663,10 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
                     {
                         if (chatTextSb.Length > 0) chatTextSb.AppendLine();
                         chatTextSb.Append(le.ChatText);
+                    }
+                    if (string.IsNullOrWhiteSpace(modelName) && !string.IsNullOrWhiteSpace(le.ModelName))
+                    {
+                        modelName = le.ModelName;
                     }
                     // escalate level severity if any entry is warning/error
                     var lvl = (le.Level ?? "Information").ToLowerInvariant();
@@ -5162,6 +5695,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
                       StoryId = storyId,
                       ThreadScope = threadScope,
                       AgentName = agentName,
+                      ModelName = modelName,
                       Context = null,
                       Analized = false,
                       ChatText = chatTextSb.Length > 0 ? chatTextSb.ToString() : string.Empty,
@@ -5196,7 +5730,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         await ((SqliteConnection)conn).OpenAsync();
 
         // Build a single INSERT ... VALUES (...),(...),... with uniquely named parameters to avoid collisions
-        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" };
+        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "model_name", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" };
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
 
@@ -5218,6 +5752,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             parameters.Add("@story_id" + i, e.StoryId);
             parameters.Add("@ThreadScope" + i, e.ThreadScope);
             parameters.Add("@AgentName" + i, e.AgentName);
+            parameters.Add("@model_name" + i, e.ModelName);
             parameters.Add("@Context" + i, e.Context);
               parameters.Add("@analized" + i, e.Analized ? 1 : 0);
               parameters.Add("@chat_text" + i, e.ChatText);
@@ -5232,41 +5767,81 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         {
             await conn.ExecuteAsync(sb.ToString(), parameters);
         }
-        catch (SqliteException ex) when (ex.Message != null && ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase) && ex.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
+        catch (SqliteException ex) when (ex.Message != null && ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
         {
-            // Backward-compat: database not migrated yet.
-            var legacyCols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "ThreadScope", "AgentName", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" };
-            var legacySb = new System.Text.StringBuilder();
-            legacySb.Append("INSERT INTO Log (" + string.Join(", ", legacyCols) + ") VALUES ");
-            var legacyParams = new DynamicParameters();
-
-            for (int i = 0; i < list.Count; i++)
+            // Backward-compat: database not migrated yet. Retry with reduced column sets.
+            if (ex.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
             {
-                var pNames = legacyCols.Select(c => "@" + c + i).ToArray();
-                legacySb.Append("(" + string.Join(", ", pNames) + ")");
-                if (i < list.Count - 1) legacySb.Append(",");
+                try
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: false);
+                    return;
+                }
+                catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false);
+                    return;
+                }
+            }
 
-                var e = list[i];
-                legacyParams.Add("@Ts" + i, e.Ts);
-                legacyParams.Add("@Level" + i, e.Level);
-                legacyParams.Add("@Category" + i, e.Category);
-                legacyParams.Add("@Message" + i, e.Message);
-                legacyParams.Add("@Exception" + i, e.Exception);
-                legacyParams.Add("@State" + i, e.State);
-                legacyParams.Add("@ThreadId" + i, e.ThreadId);
-                legacyParams.Add("@ThreadScope" + i, e.ThreadScope);
-                legacyParams.Add("@AgentName" + i, e.AgentName);
-                legacyParams.Add("@Context" + i, e.Context);
-                  legacyParams.Add("@analized" + i, e.Analized ? 1 : 0);
-                  legacyParams.Add("@chat_text" + i, e.ChatText);
-                  legacyParams.Add("@Result" + i, e.Result);
-                  legacyParams.Add("@ResultFailReason" + i, e.ResultFailReason);
-                  legacyParams.Add("@Examined" + i, e.Examined ? 1 : 0);
-              }
-
-            legacySb.Append(";");
-            await conn.ExecuteAsync(legacySb.ToString(), legacyParams);
+            if (ex.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true);
+                    return;
+                }
+                catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false);
+                }
+            }
         }
+    }
+
+    private static async Task TryInsertLogsAsync(IDbConnection conn, List<TinyGenerator.Models.LogEntry> list, bool includeStoryId, bool includeModelName)
+    {
+        var cols = new List<string>
+        {
+            "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId"
+        };
+        if (includeStoryId) cols.Add("story_id");
+        cols.AddRange(new[] { "ThreadScope", "AgentName" });
+        if (includeModelName) cols.Add("model_name");
+        cols.AddRange(new[] { "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" });
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
+        var parameters = new DynamicParameters();
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            var pNames = cols.Select(c => "@" + c + i).ToArray();
+            sb.Append("(" + string.Join(", ", pNames) + ")");
+            if (i < list.Count - 1) sb.Append(",");
+
+            var e = list[i];
+            parameters.Add("@Ts" + i, e.Ts);
+            parameters.Add("@Level" + i, e.Level);
+            parameters.Add("@Category" + i, e.Category);
+            parameters.Add("@Message" + i, e.Message);
+            parameters.Add("@Exception" + i, e.Exception);
+            parameters.Add("@State" + i, e.State);
+            parameters.Add("@ThreadId" + i, e.ThreadId);
+            if (includeStoryId) parameters.Add("@story_id" + i, e.StoryId);
+            parameters.Add("@ThreadScope" + i, e.ThreadScope);
+            parameters.Add("@AgentName" + i, e.AgentName);
+            if (includeModelName) parameters.Add("@model_name" + i, e.ModelName);
+            parameters.Add("@Context" + i, e.Context);
+            parameters.Add("@analized" + i, e.Analized ? 1 : 0);
+            parameters.Add("@chat_text" + i, e.ChatText);
+            parameters.Add("@Result" + i, e.Result);
+            parameters.Add("@ResultFailReason" + i, e.ResultFailReason);
+            parameters.Add("@Examined" + i, e.Examined ? 1 : 0);
+        }
+
+        sb.Append(";");
+        await conn.ExecuteAsync(sb.ToString(), parameters);
     }
 
     private void SeedDefaultOpenAiModels()
@@ -5469,8 +6044,8 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         using var context = CreateDbContext();
         // Get distinct thread IDs from logs that are not analyzed
         var pendingThreads = context.Logs
-            .Where(l => l.ThreadId > 0 && !l.Analized)
-            .Select(l => l.ThreadId)
+            .Where(l => l.ThreadId.HasValue && l.ThreadId.Value > 0 && !l.Analized)
+            .Select(l => l.ThreadId.Value)
             .Distinct()
             .OrderByDescending(t => t)
             .Take(max)
@@ -5512,11 +6087,24 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
 
     public void ClearLogs()
     {
-        using var context = CreateDbContext();
-        // EF Core doesn't support efficient bulk delete, but for log cleanup this is acceptable
-        var logs = context.Logs.ToList();
-        context.Logs.RemoveRange(logs);
-        context.SaveChanges();
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+        conn.Execute("DELETE FROM Log;", transaction: tx);
+        tx.Commit();
+
+        try
+        {
+            using var vacuumConn = CreateDapperConnection();
+            vacuumConn.Open();
+            using var vacuumCmd = vacuumConn.CreateCommand();
+            vacuumCmd.CommandText = "VACUUM;";
+            vacuumCmd.ExecuteNonQuery();
+        }
+        catch
+        {
+            // best effort
+        }
     }
 
     public List<LogEntry> GetLogsByThreadId(int threadId)
@@ -5536,6 +6124,76 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         {
             return null;
         }
+    }
+
+    public List<SystemReport> GetRecentSystemReports(int limit = 5)
+    {
+        limit = Math.Max(1, limit);
+        using var context = CreateDbContext();
+        return context.SystemReports
+            .Where(r => !r.Deleted)
+            .OrderByDescending(r => r.Id)
+            .Take(limit)
+            .ToList();
+    }
+
+    public (List<SystemReport> Items, int Total) GetPagedSystemReports(int pageIndex, int pageSize)
+    {
+        pageIndex = Math.Max(1, pageIndex);
+        pageSize = Math.Max(1, pageSize);
+        using var context = CreateDbContext();
+        var query = context.SystemReports.Where(r => !r.Deleted);
+        var total = query.Count();
+        var items = query
+            .OrderByDescending(r => r.Id)
+            .Skip((pageIndex - 1) * pageSize)
+            .Take(pageSize)
+            .ToList();
+        return (items, total);
+    }
+
+    public void DeleteSystemReport(long reportId, string? deletedBy = null)
+    {
+        if (reportId <= 0) return;
+        var now = DateTime.UtcNow.ToString("o");
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute(@"
+            UPDATE system_reports
+            SET deleted = 1,
+                deleted_at = @now,
+                deleted_by = @by
+            WHERE id = @id",
+            new { id = reportId, now, by = deletedBy ?? "system" });
+    }
+
+    public void DeleteAllSystemReports(string? deletedBy = null)
+    {
+        var now = DateTime.UtcNow.ToString("o");
+        using var conn = CreateConnection();
+        conn.Open();
+        conn.Execute(@"
+            UPDATE system_reports
+            SET deleted = 1,
+                deleted_at = @now,
+                deleted_by = @by",
+            new { now, by = deletedBy ?? "system" });
+    }
+
+    public SystemReport InsertSystemReport(SystemReport report)
+    {
+        if (report == null) throw new ArgumentNullException(nameof(report));
+        using var context = CreateDbContext();
+        context.SystemReports.Add(report);
+        context.SaveChanges();
+        return report;
+    }
+
+    public StoryRecord? GetStoryByCorrelationId(long correlationId)
+    {
+        if (correlationId <= 0) return null;
+        using var context = CreateDbContext();
+        return context.Stories.FirstOrDefault(s => s.StoryId == correlationId && !s.Deleted);
     }
 
     /// <summary>
@@ -6534,6 +7192,7 @@ WHERE Id = @modelId;";
             INNER JOIN stories_evaluations se ON se.story_id = s.id
             LEFT JOIN agents a ON s.agent_id = a.id
             LEFT JOIN models m ON s.model_id = m.Id
+            WHERE s.deleted = 0
             GROUP BY s.id
             ORDER BY AvgScore DESC
             LIMIT @top";

@@ -120,6 +120,73 @@ namespace TinyGenerator.Services
             return (true, "Analisi completata");
         }
 
+        public async Task<(bool success, string? message)> AnalyzeFailureAsync(string failureContext, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(failureContext))
+                return (false, "Failure context mancante");
+
+            var agent = _database.GetAgentByRole("log_analyzer")
+                ?? _database.GetAgentByRole("error_analyzer");
+            if (agent == null || !agent.IsActive)
+                return (false, "Nessun agente attivo con ruolo log_analyzer");
+
+            if (!agent.ModelId.HasValue)
+                return (false, "L'agente log_analyzer non ha un modello associato");
+
+            var modelInfo = _database.GetModelInfoById(agent.ModelId.Value);
+            var modelName = modelInfo?.Name;
+            if (string.IsNullOrWhiteSpace(modelName))
+                return (false, "Impossibile determinare il modello per l'agente log_analyzer");
+
+            LangChainChatBridge bridge;
+            try
+            {
+                bridge = _kernelFactory.CreateChatBridge(
+                    modelName,
+                    agent.Temperature,
+                    agent.TopP,
+                    agent.RepeatPenalty,
+                    agent.TopK,
+                    agent.RepeatLastN,
+                    agent.NumPredict,
+                    useMaxTokens: true);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "LogAnalyzer", $"Errore creazione chat bridge: {ex.Message}");
+                return (false, $"Errore creazione bridge: {ex.Message}");
+            }
+
+            var systemMessage = BuildFailureSystemPrompt();
+            var messages = new List<ConversationMessage>
+            {
+                new ConversationMessage { Role = "system", Content = systemMessage },
+                new ConversationMessage { Role = "user", Content = failureContext }
+            };
+
+            string responseJson;
+            try
+            {
+                responseJson = await bridge.CallModelWithToolsAsync(
+                    messages,
+                    new List<Dictionary<string, object>>(),
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "LogAnalyzer", $"Chiamata modello fallita: {ex.Message}", ex.ToString());
+                return (false, $"Analisi non riuscita: {ex.Message}");
+            }
+
+            var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
+            if (string.IsNullOrWhiteSpace(textContent))
+            {
+                return (false, "Il modello non ha fornito una risposta utile");
+            }
+
+            return (true, textContent.Trim());
+        }
+
         private static string BuildSystemMessage(Agent agent)
         {
             if (!string.IsNullOrWhiteSpace(agent.Instructions))
@@ -138,7 +205,7 @@ namespace TinyGenerator.Services
             }
 
             sb.AppendLine($"[THREAD_SCOPE] {scope}");
-            sb.AppendLine($"[THREAD_ID] {logs.First().ThreadId}");
+            sb.AppendLine($"[THREAD_ID] {logs.First().ThreadId ?? 0}");
             sb.AppendLine("Analizza i log seguenti e fornisci una sintesi in italiano con eventuali errori critici e azioni consigliate.");
             sb.AppendLine();
             sb.AppendLine("=== LOGS ===");
@@ -164,6 +231,30 @@ namespace TinyGenerator.Services
             sb.AppendLine("Fornisci la tua analisi in testo continuo (nessun JSON).");
 
             return sb.ToString();
+        }
+
+        private static string BuildFailureSystemPrompt()
+        {
+            return @"You are an AI system specialized in technical failure analysis for AI pipelines.
+You will receive either:
+- a request and a response that resulted in an error,
+- or a failed command with an error message.
+
+Your tasks:
+1. Identify the most probable technical reason for the failure
+2. Suggest one practical corrective action
+
+Rules:
+- Be concise and technical
+- Do not rewrite or modify the original content
+- Do not invent missing data
+- If the cause is uncertain, say so clearly
+- The suggested action must be realistic and technical
+
+Output format (plain text only):
+
+Failure reason: <short technical explanation>
+Suggested action: <practical technical suggestion>";
         }
 
         private static string Truncate(string value, int maxLength)

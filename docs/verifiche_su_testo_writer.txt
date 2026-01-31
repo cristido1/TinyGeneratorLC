@@ -1,0 +1,112 @@
+SPECIFICA: FILTRI ALGORITMICI PER SCARTARE CHUNK NARRATIVI DEGENERATI
+
+OBIETTIVO:
+Identificare automaticamente chunk generati dal modello che presentano loop, stasi narrativa o degenerazione testuale, senza usare modelli AI di controllo.
+
+INPUT: testo del chunk (stringa)
+OUTPUT: boolean valido/non valido + motivazione
+
+------------------------------------------------------------------
+
+1) CONTROLLO PUNTEGGIATURA DEGENERATIVA
+
+Definizione: uso eccessivo di punteggiatura enfatica ripetuta.
+
+Regex da cercare:
+A) [—-]{1,3}[?!]{1,3}
+B) [.]{3,}
+C) [!]{2,}
+D) [?]{2,}
+
+Procedura:
+- Contare tutte le occorrenze dei pattern A, B, C, D
+- Se il totale > 2 → chunk NON valido
+
+------------------------------------------------------------------
+
+2) LOOP DI BATTUTA IDENTICA
+
+Procedura:
+- Estrarre righe che rappresentano dialogo:
+  - Linee che iniziano con "—"
+  - Testo tra virgolette “ ” oppure " "
+- Normalizzare:
+  - lowercase
+  - rimuovere spazi multipli
+  - rimuovere punteggiatura finale
+
+- Creare mappa frequenze
+- Se una stessa battuta compare >= 2 volte → chunk NON valido
+
+------------------------------------------------------------------
+
+3) LOOP EMOTIVO (STASI SENZA AZIONE)
+
+Obiettivo: evitare sequenze di frasi che descrivono solo emozioni o stati interni.
+
+Lista parole chiave emotive/percezione:
+cuore, respiro, tremare, paura, ansia, tensione, silenzio,
+sentiva, pensava, ricordava, guardava, fissava
+
+Lista verbi di azione concreta:
+entra, esce, corre, prende, lascia, rompe, cade, apre,
+chiude, urla, spinge, colpisce, trascina, afferra
+
+Procedura:
+- Dividere il testo in frasi
+- Per ogni frase:
+  - flag_emotiva = contiene parola chiave emotiva
+  - flag_azione = contiene verbo di azione
+
+- Se esistono 3 frasi consecutive dove:
+  flag_emotiva = true
+  flag_azione = false
+
+→ chunk NON valido
+
+------------------------------------------------------------------
+
+4) ASSENZA DI EVENTI REALI
+
+Procedura:
+- Cercare almeno un verbo di azione concreta (lista sopra)
+- Se nessuno presente → chunk NON valido
+
+------------------------------------------------------------------
+
+5) RIPETIZIONE FRASI SIMILI (ALGORITMICA SEMPLICE)
+
+Senza embeddings.
+
+Procedura:
+- Dividere il testo in frasi
+- Per ogni coppia di frasi i e i+1, i+2:
+  - normalizzare (lowercase, rimuovere punteggiatura)
+  - calcolare similarità Jaccard sulle parole
+  - se similarità > 0.8 → incremento contatore_simili
+
+Se contatore_simili > 2 → chunk NON valido
+
+------------------------------------------------------------------
+
+6) TROPPI PARAGRAFI SENZA AZIONE
+
+Procedura:
+- Dividere per paragrafi (split su doppio newline)
+- Per ogni paragrafo verificare se contiene almeno un verbo di azione
+- Se 2 paragrafi consecutivi non contengono verbi di azione → chunk NON valido
+
+------------------------------------------------------------------
+
+RISPOSTA DEL SISTEMA
+
+Se uno qualsiasi dei controlli fallisce:
+return {
+  valido: false,
+  motivo: "loop narrativo / stasi / ripetizione"
+}
+
+Altrimenti:
+return {
+  valido: true
+}

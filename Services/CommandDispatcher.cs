@@ -74,6 +74,7 @@ namespace TinyGenerator.Services
         private readonly ICustomLogger? _logger;
         private readonly Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? _hubContext;
         private readonly NumeratorService? _numerator;
+        private readonly IServiceProvider _services;
         private readonly List<Task> _workers = new();
         private CancellationTokenSource? _cts;
         private long _counter;
@@ -86,12 +87,13 @@ namespace TinyGenerator.Services
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
-        public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null, Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? hubContext = null, NumeratorService? numerator = null)
+        public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null, Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? hubContext = null, NumeratorService? numerator = null, IServiceProvider? services = null)
         {
             _parallelism = Math.Max(1, options?.Value?.MaxParallelCommands ?? 2);
             _logger = logger;
             _hubContext = hubContext;
             _numerator = numerator;
+            _services = services ?? throw new ArgumentNullException(nameof(services));
         }
 
         public CommandHandle Enqueue(
@@ -257,6 +259,11 @@ namespace TinyGenerator.Services
                 var endLevel = result.Success ? "Information" : "Error";
                 _logger?.Log(endLevel, "Command", $"[{workItem.RunId}] END {workItem.OperationName} => {finalMessage}");
                 workItem.Completion.TrySetResult(result);
+
+                if (!result.Success)
+                {
+                    await TryReportFailureAsync(workItem, result.Message, null, allocatedThreadId).ConfigureAwait(false);
+                }
                 
                 // Aggiorna stato completato
                 if (_active.TryGetValue(workItem.RunId, out var completedState))
@@ -291,6 +298,8 @@ namespace TinyGenerator.Services
                 _logger?.Log("Error", "Command", $"[{workItem.RunId}] ERROR {workItem.OperationName}: {ex.Message}", ex.ToString());
                 var result = new CommandResult(false, ex.Message);
                 workItem.Completion.TrySetResult(result);
+
+                await TryReportFailureAsync(workItem, ex.Message, ex.ToString(), allocatedThreadId).ConfigureAwait(false);
                 
                 if (_active.TryGetValue(workItem.RunId, out var errorState))
                 {
@@ -321,6 +330,53 @@ namespace TinyGenerator.Services
                     cancelCts.Dispose();
                 }
                 await BroadcastCommandsAsync().ConfigureAwait(false);
+            }
+        }
+
+        private async Task TryReportFailureAsync(CommandWorkItem workItem, string? message, string? exception, int threadId)
+        {
+            var systemReports = _services.GetService<SystemReportService>();
+            if (systemReports == null) return;
+            try
+            {
+                CommandState? state = null;
+                int? retryCount = null;
+                if (_active.TryGetValue(workItem.RunId, out var activeState))
+                {
+                    state = activeState;
+                    retryCount = activeState.RetryCount;
+                }
+
+                int? durationMs = null;
+                if (state != null && state.StartedAt.HasValue)
+                {
+                    durationMs = (int)Math.Max(0, (DateTimeOffset.UtcNow - state.StartedAt.Value).TotalMilliseconds);
+                }
+
+                long? storyCorrelationId = LogScope.CurrentStoryId;
+                var opType = workItem.Metadata != null && workItem.Metadata.TryGetValue("operation", out var op)
+                    ? op
+                    : workItem.OperationName;
+
+                var rawLogRef = $"thread:{threadId};run:{workItem.RunId}";
+                var ctx = new SystemReportService.FailureContext(
+                    OperationName: workItem.OperationName,
+                    OperationType: opType,
+                    Message: message,
+                    Exception: exception,
+                    ThreadId: threadId,
+                    StoryCorrelationId: storyCorrelationId,
+                    AgentName: workItem.AgentName,
+                    ModelName: workItem.Metadata != null && workItem.Metadata.TryGetValue("modelName", out var mn) ? mn : null,
+                    RetryCount: retryCount,
+                    ExecutionTimeMs: durationMs,
+                    RawLogRef: rawLogRef);
+
+                await systemReports.ReportFailureAsync(ctx).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Error", "SystemReport", $"Failed to enqueue system report: {ex.Message}", ex.ToString());
             }
         }
 

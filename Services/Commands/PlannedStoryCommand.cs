@@ -339,9 +339,14 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
             var retryDelayMs = Math.Max(0, _tuning.PlannedStory.RetryDelayMilliseconds);
 
             string? lastError = null;
+            var hadCorrections = false;
 
             for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
+                if (attempt > 1)
+                {
+                    hadCorrections = true;
+                }
                 try
                 {
                     var beatPrompt = BuildBeatPrompt(beat, beatNumber, totalBeats, previousBeats, lastError, attempt);
@@ -350,6 +355,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                     if (string.IsNullOrWhiteSpace(beatText))
                     {
                         lastError = "Il writer ha prodotto un output vuoto.";
+                        _logger.MarkLatestModelResponseResult("FAILED", lastError);
                         await LogAndNotifyAsync($"⚠️ Tentativo {attempt}/{maxRetries}: output vuoto", "warning");
                         continue;
                     }
@@ -358,6 +364,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                     if (beatText.Length < minBeatLength)
                     {
                         lastError = $"Il testo è troppo corto ({beatText.Length} caratteri). Devi scrivere ALMENO {minBeatLength} caratteri per sviluppare adeguatamente il beat.";
+                        _logger.MarkLatestModelResponseResult("FAILED", lastError);
                         await LogAndNotifyAsync($"⚠️ Tentativo {attempt}/{maxRetries}: testo troppo corto ({beatText.Length} < {minBeatLength})", "warning");
                         continue;
                     }
@@ -366,16 +373,21 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                     if (ContainsAnticipations(beatText, beatNumber, totalBeats))
                     {
                         lastError = "Il testo contiene anticipazioni di eventi futuri. Scrivi SOLO il contenuto del beat corrente, non anticipare beat successivi.";
+                        _logger.MarkLatestModelResponseResult("FAILED", lastError);
                         await LogAndNotifyAsync($"⚠️ Tentativo {attempt}/{maxRetries}: rilevate anticipazioni", "warning");
                         continue;
                     }
 
                     // Beat valido
+                    _logger.MarkLatestModelResponseResult(
+                        hadCorrections ? "FAILED" : "SUCCESS",
+                        hadCorrections ? "Risposta corretta dopo retry" : null);
                     return beatText;
                 }
                 catch (Exception ex)
                 {
                     lastError = $"Errore tecnico: {ex.Message}";
+                    _logger.MarkLatestModelResponseResult("FAILED", lastError);
                     _logger.Log("Error", "PlannedStory", $"Beat generation error (attempt {attempt}): {ex.Message}");
                 }
 

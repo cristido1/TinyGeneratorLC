@@ -88,6 +88,34 @@
         padding-bottom: 0.5rem;
         border-bottom: 2px solid #343a40;
     }
+    .report-card {
+        background: #f8f9fa;
+        border: 2px solid #343a40;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+    }
+    .report-meta {
+        font-size: 0.8rem;
+        color: #6c757d;
+    }
+    .report-title {
+        font-weight: 600;
+        color: #212529;
+    }
+    .report-badge {
+        padding: 0.2rem 0.5rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border: 1px solid #adb5bd;
+        background: #e9ecef;
+        color: #212529;
+    }
+    .report-badge.sev-error { background: #ffe3e3; border-color: #ffa8a8; color: #c92a2a; }
+    .report-badge.sev-warning { background: #fff4e6; border-color: #ffd8a8; color: #e67700; }
+    .report-badge.sev-critical { background: #fff5f5; border-color: #ffc9c9; color: #a61e4d; }
+    .report-badge.sev-info { background: #e7f5ff; border-color: #a5d8ff; color: #1c7ed6; }
 </style>
 
 <div class="container-fluid px-4">
@@ -267,6 +295,63 @@
                 </table>
             </div>
         </div>
+    </div>
+
+    <!-- Recent System Reports -->
+    <div class="mt-4">
+        <div class="section-title">
+            <i class="bi bi-exclamation-octagon me-2"></i>Ultimi Report di Sistema
+        </div>
+        @if (Model.RecentReports.Any())
+        {
+            foreach (var report in Model.RecentReports)
+            {
+                var sevClass = (report.Severity ?? string.Empty).ToLowerInvariant() switch
+                {
+                    "critical" => "sev-critical",
+                    "error" => "sev-error",
+                    "warning" => "sev-warning",
+                    _ => "sev-info"
+                };
+                <div class="report-card mb-3">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div class="flex-grow-1">
+                            <div class="report-title">@report.Title</div>
+                            <div class="report-meta">
+                                @report.CreatedAt
+                                @if (!string.IsNullOrWhiteSpace(report.OperationType))
+                                {
+                                    <span> • @report.OperationType</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(report.AgentName))
+                                {
+                                    <span> • @report.AgentName</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(report.ModelName))
+                                {
+                                    <span> • @report.ModelName</span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(report.Message))
+                            {
+                                <div class="text-muted mt-2">@report.Message</div>
+                            }
+                        </div>
+                        <div class="d-flex flex-column align-items-end gap-2">
+                            <span class="report-badge @sevClass">@report.Severity</span>
+                            <span class="report-badge">@report.Status</span>
+                        </div>
+                    </div>
+                </div>
+            }
+            <div class="text-end">
+                <a class="btn btn-sm btn-outline-secondary" asp-page="/SystemReports/Index">Vai ai report</a>
+            </div>
+        }
+        else
+        {
+            <div class="text-muted">Nessun report disponibile.</div>
+        }
     </div>
 </div>
 

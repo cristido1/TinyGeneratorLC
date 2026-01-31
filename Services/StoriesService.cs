@@ -138,6 +138,40 @@ public sealed class StoriesService
         message = null;
         try
         {
+            if (string.Equals(trigger, "idle_auto_delete", StringComparison.OrdinalIgnoreCase))
+            {
+                var story = _database.GetStoryById(storyId);
+                if (story == null)
+                {
+                    message = "Story non trovata";
+                    return false;
+                }
+
+                if (!string.Equals(story.Status, "evaluated", StringComparison.OrdinalIgnoreCase))
+                {
+                    message = $"Story non evaluated (status={story.Status})";
+                    return false;
+                }
+
+                var opts = _idleAutoOptions?.CurrentValue ?? new AutomaticOperationsOptions();
+                var minEvaluations = Math.Max(1, opts.AutoDeleteLowRated.MinEvaluations);
+                var minAvg = opts.AutoDeleteLowRated.MinAverageScore;
+                var evals = _database.GetStoryEvaluations(storyId) ?? new List<StoryEvaluation>();
+                if (evals.Count < minEvaluations)
+                {
+                    message = $"Valutazioni insufficienti ({evals.Count}/{minEvaluations})";
+                    return false;
+                }
+
+                var avg = evals.Average(e => e.TotalScore);
+                var avgNormalized = DatabaseService.NormalizeEvaluationScoreTo100(avg);
+                if (avgNormalized >= minAvg)
+                {
+                    message = $"Media valutazioni {avgNormalized:F2} >= soglia {minAvg:F2}";
+                    return false;
+                }
+            }
+
             _database.DeleteStoryRowById(storyId);
 
             if (string.Equals(trigger, "idle_auto_delete", StringComparison.OrdinalIgnoreCase))
@@ -162,7 +196,66 @@ public sealed class StoriesService
     public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, long? storyId = null, int? serieId = null, int? serieEpisode = null)
     {
         storyId ??= LogScope.CurrentStoryId;
-        return _database.InsertSingleStory(prompt, story, storyId, modelId, agentId, score, eval, approved, statusId, memoryKey, title, serieId, serieEpisode);
+        var newStoryId = _database.InsertSingleStory(prompt, story, storyId, modelId, agentId, score, eval, approved, statusId, memoryKey, title, serieId, serieEpisode);
+        EnsureStoryStatusInserted(newStoryId);
+        _ = EnqueueReviseStoryCommand(newStoryId, trigger: "auto_insert", priority: 2, force: false);
+        return newStoryId;
+    }
+
+    private void EnsureStoryStatusInserted(long storyId)
+    {
+        if (storyId <= 0) return;
+        var statusId = ResolveStatusId("inserted");
+        if (!statusId.HasValue) return;
+        try
+        {
+            _database.UpdateStoryById(storyId, statusId: statusId.Value, updateStatus: true);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Impossibile impostare lo stato inserted per story {StoryId}", storyId);
+        }
+    }
+
+    public (bool Success, long? NewStoryId, string Message) TryCloneStoryFromRevised(long storyId)
+    {
+        var story = GetStoryById(storyId);
+        if (story == null)
+        {
+            return (false, null, "Storia non trovata.");
+        }
+
+        var evaluations = _database.GetStoryEvaluations(storyId) ?? new List<StoryEvaluation>();
+        if (evaluations.Count < 2)
+        {
+            return (false, null, "Servono almeno due valutazioni per creare una versione migliorata.");
+        }
+
+        var revised = story.StoryRevised;
+        if (string.IsNullOrWhiteSpace(revised))
+        {
+            return (false, null, "La storia non ha una versione revisionata.");
+        }
+
+        var baseTitle = string.IsNullOrWhiteSpace(story.Title) ? $"Story {story.Id}" : story.Title;
+        var cloneTitle = $"{baseTitle} (versione migliorata)";
+
+        var newStoryId = InsertSingleStory(
+            story.Prompt ?? string.Empty,
+            revised,
+            story.ModelId,
+            story.AgentId,
+            score: 0.0,
+            eval: null,
+            approved: 0,
+            statusId: null,
+            memoryKey: null,
+            title: cloneTitle,
+            storyId: null,
+            serieId: story.SerieId,
+            serieEpisode: story.SerieEpisode);
+
+        return (true, newStoryId, $"Nuova storia {newStoryId} creata dalla revisione.");
     }
 
     public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false, bool allowCreatorMetadataUpdate = false)
@@ -680,7 +773,7 @@ public sealed class StoriesService
                         var (count, _) = _database.GetStoryEvaluationStats(storyId);
                         if (count >= 2)
                         {
-                            allowNext = ApplyStatusTransitionWithCleanup(story, "evaluated", runId);
+                            allowNext = TryTransitionStoryToEvaluatedIfRevised(storyId, runId);
                         }
                         if (allowNext)
                         {
@@ -755,7 +848,7 @@ public sealed class StoriesService
                         var (count, _) = _database.GetStoryEvaluationStats(storyId);
                         if (count >= 2)
                         {
-                            allowNext = ApplyStatusTransitionWithCleanup(story, "evaluated", runId);
+                            allowNext = TryTransitionStoryToEvaluatedIfRevised(storyId, runId);
                         }
                         if (allowNext)
                         {
@@ -883,15 +976,22 @@ public sealed class StoriesService
         string evalText = string.Empty;
 
         var evalOk = false;
+        var hadCorrections = false;
         for (var attempt = 1; attempt <= maxAttemptsFinalEvaluation; attempt++)
         {
+            if (attempt > 1)
+            {
+                hadCorrections = true;
+            }
             var evalRawJson = await chatBridge.CallModelWithToolsAsync(messages, tools: new List<Dictionary<string, object>>()).ConfigureAwait(false);
             var (evalResponseText, _) = LangChainChatBridge.ParseChatResponse(evalRawJson);
             evalText = NormalizeEvaluatorOutput((evalResponseText ?? string.Empty));
             messages.Add(new ConversationMessage { Role = "assistant", Content = evalText });
                 if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 {
-                    _customLogger?.MarkLatestModelResponseResult("SUCCESS", null);
+                    _customLogger?.MarkLatestModelResponseResult(
+                        hadCorrections ? "FAILED" : "SUCCESS",
+                        hadCorrections ? "Risposta corretta dopo retry" : null);
                     evalOk = true;
                     break;
                 }
@@ -1015,6 +1115,23 @@ public sealed class StoriesService
         {
             _logger?.LogWarning(ex, "Auto-format enqueue failed for story {StoryId}", storyId);
         }
+    }
+    private bool TryTransitionStoryToEvaluatedIfRevised(long storyId, string? runId)
+    {
+        if (storyId <= 0) return true;
+        var latestStory = _database.GetStoryById(storyId);
+        if (latestStory == null)
+        {
+            _logger?.LogWarning("Story {StoryId} missing before transitioning to evaluated", storyId);
+            return false;
+        }
+
+        if (!string.Equals(latestStory.Status, "revised", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return ApplyStatusTransitionWithCleanup(latestStory, "evaluated", runId);
     }
     private static string NormalizeEvaluatorOutput(string text)
     {
@@ -1367,8 +1484,11 @@ public sealed class StoriesService
                 async ctx =>
                 {
                     var (ok, err) = await GenerateTtsForStoryInternalAsync(storyId, folderName, ctx.RunId, targetStatusId);
+                    var isAutoTrigger = !string.IsNullOrWhiteSpace(trigger) &&
+                        trigger.Contains("auto", StringComparison.OrdinalIgnoreCase);
                     if (ok)
                     {
+                        _database.ClearAutoTtsFailure(storyId);
                         var story = GetStoryById(storyId);
                         var allowNext = story == null || ApplyStatusTransitionWithCleanup(story, "tts_generated", ctx.RunId);
 
@@ -1377,6 +1497,10 @@ public sealed class StoriesService
                         {
                             EnqueuePostTtsAudioFollowups(storyId, trigger: "tts_audio_generated", priority: Math.Max(priority + 1, 4));
                         }
+                    }
+                    else if (isAutoTrigger)
+                    {
+                        _database.MarkAutoTtsFailure(storyId, err);
                     }
 
                     return new CommandResult(ok, ok ? "Generazione audio TTS completata." : err);
@@ -1401,6 +1525,148 @@ public sealed class StoriesService
         }
 
         return new EnqueueResult(false, "Errore inatteso durante l'accodamento della generazione audio TTS (vedi log applicazione).");
+    }
+
+    public bool EnqueueFinalMixPipeline(long storyId, string trigger, int priority = 7)
+    {
+        try
+        {
+            if (storyId <= 0) return false;
+            if (_commandDispatcher == null) return false;
+
+            var story = GetStoryById(storyId);
+            if (story == null || story.Deleted) return false;
+
+            var folderName = !string.IsNullOrWhiteSpace(story.Folder)
+                ? story.Folder
+                : new DirectoryInfo(EnsureStoryFolder(story)).Name;
+
+            var basePriority = Math.Max(1, priority);
+
+            void EnqueueIfNotQueued(string operationName, string runPrefix, Func<CommandContext, Task<CommandResult>> handler, int opPriority)
+            {
+                try
+                {
+                    var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                        s.Metadata != null &&
+                        s.Metadata.TryGetValue("storyId", out var sid) &&
+                        string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                        (string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase) ||
+                         s.RunId.StartsWith(runPrefix, StringComparison.OrdinalIgnoreCase)));
+
+                    if (alreadyQueued) return;
+                }
+                catch
+                {
+                    // If snapshots fail, still try to enqueue.
+                }
+
+                var runId = $"{runPrefix}{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                _commandDispatcher.Enqueue(
+                    operationName,
+                    handler,
+                    runId: runId,
+                    threadScope: $"story/{operationName}",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["storyId"] = storyId.ToString(),
+                        ["operation"] = operationName,
+                        ["trigger"] = trigger,
+                        ["folder"] = folderName
+                    },
+                    priority: Math.Max(1, opPriority));
+            }
+
+            EnqueueIfNotQueued(
+                "generate_tts_schema",
+                $"generate_tts_schema_{storyId}_",
+                async _ =>
+                {
+                    var (ok, msg) = await GenerateTtsSchemaJsonAsync(storyId);
+                    return new CommandResult(ok, ok ? "Schema TTS generato." : msg);
+                },
+                basePriority);
+
+            EnqueueIfNotQueued(
+                "normalize_characters",
+                $"normalize_characters_{storyId}_",
+                async _ =>
+                {
+                    var (ok, msg) = await NormalizeCharacterNamesAsync(storyId);
+                    return new CommandResult(ok, ok ? "Nomi personaggi normalizzati." : msg);
+                },
+                basePriority + 1);
+
+            EnqueueIfNotQueued(
+                "assign_voices",
+                $"assign_voices_{storyId}_",
+                async _ =>
+                {
+                    var (ok, msg) = await AssignVoicesAsync(storyId);
+                    return new CommandResult(ok, ok ? "Voci assegnate." : msg);
+                },
+                basePriority + 2);
+
+            EnqueueIfNotQueued(
+                "normalize_sentiments",
+                $"normalize_sentiments_{storyId}_",
+                async _ =>
+                {
+                    var (ok, msg) = await NormalizeSentimentsAsync(storyId);
+                    return new CommandResult(ok, ok ? "Sentimenti normalizzati." : msg);
+                },
+                basePriority + 3);
+
+            var ttsRunId = EnqueueGenerateTtsAudioCommand(storyId, trigger: trigger, priority: basePriority + 4);
+            _ = ttsRunId;
+
+            EnqueueIfNotQueued(
+                "generate_music",
+                $"generate_music_{storyId}_",
+                async ctx =>
+                {
+                    var (ok, err) = await GenerateMusicForStoryAsync(storyId, folderName, ctx.RunId);
+                    return new CommandResult(ok, ok ? "Generazione musica completata." : err);
+                },
+                basePriority + 5);
+
+            EnqueueIfNotQueued(
+                "generate_ambience_audio",
+                $"generate_ambience_audio_{storyId}_",
+                async ctx =>
+                {
+                    var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
+                    return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
+                },
+                basePriority + 6);
+
+            EnqueueIfNotQueued(
+                "generate_fx_audio",
+                $"generate_fx_audio_{storyId}_",
+                async ctx =>
+                {
+                    var (ok, err) = await GenerateFxForStoryAsync(storyId, folderName, ctx.RunId);
+                    return new CommandResult(ok, ok ? "Generazione effetti sonori completata." : err);
+                },
+                basePriority + 7);
+
+            EnqueueIfNotQueued(
+                "mix_final_audio",
+                $"mix_final_audio_{storyId}_",
+                async ctx =>
+                {
+                    var (ok, err) = await MixFinalAudioForStoryAsync(storyId, folderName, ctx.RunId);
+                    return new CommandResult(ok, ok ? "Mixaggio audio completato." : err);
+                },
+                basePriority + 8);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to enqueue final mix pipeline for story {StoryId}", storyId);
+            return false;
+        }
     }
 
         public void EnqueuePostTtsAudioFollowups(long storyId, string trigger, int priority = 4)
@@ -1599,10 +1865,7 @@ public sealed class StoriesService
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
-                            if (allowNext)
-                            {
-                                EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped", priority: Math.Max(priority + 1, 3));
-                            }
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped", priority: Math.Max(priority + 1, 3));
                             return new CommandResult(true, allowNext
                                 ? "No revisor configured: copied raw to story_revised and enqueued evaluations."
                                 : "No revisor configured: copied raw to story_revised.");
@@ -1612,10 +1875,7 @@ public sealed class StoriesService
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
-                            if (allowNext)
-                            {
-                                EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model", priority: Math.Max(priority + 1, 3));
-                            }
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model", priority: Math.Max(priority + 1, 3));
                             return new CommandResult(true, allowNext
                                 ? "Revisor has no model: copied raw to story_revised and enqueued evaluations."
                                 : "Revisor has no model: copied raw to story_revised.");
@@ -1626,10 +1886,7 @@ public sealed class StoriesService
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
-                            if (allowNext)
-                            {
-                                EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model_name", priority: Math.Max(priority + 1, 3));
-                            }
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_no_model_name", priority: Math.Max(priority + 1, 3));
                             return new CommandResult(true, allowNext
                                 ? "Revisor model not found: copied raw to story_revised and enqueued evaluations."
                                 : "Revisor model not found: copied raw to story_revised.");
@@ -1645,10 +1902,7 @@ public sealed class StoriesService
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
-                            if (allowNext)
-                            {
-                                EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_empty_prompt", priority: Math.Max(priority + 1, 3));
-                            }
+                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revision_skipped_empty_prompt", priority: Math.Max(priority + 1, 3));
                             return new CommandResult(true, allowNext
                                 ? "Revisor prompt empty: copied raw to story_revised and enqueued evaluations."
                                 : "Revisor prompt empty: copied raw to story_revised.");
@@ -1751,18 +2005,17 @@ public sealed class StoriesService
                         }
 
                         var revised = StripMarkdown(revisedBuilder.ToString());
-                        _database.UpdateStoryRevised(storyId, revised);
+                          _database.UpdateStoryRevised(storyId, revised);
 
-                        // After revision, enqueue evaluations.
-                        allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
-                        if (allowNext)
-                        {
-                            EnqueueAutomaticStoryEvaluations(storyId, trigger: "revised_saved", priority: Math.Max(priority + 1, 3));
-                        }
+                          // After revision, advance status and enqueue evaluations regardless.
+                          allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
+                          EnqueueAutomaticStoryEvaluations(storyId, trigger: "revised_saved", priority: Math.Max(priority + 1, 3));
 
-                        return new CommandResult(true, allowNext
-                            ? "Story revised saved and evaluations enqueued."
-                            : "Story revised saved.");
+                          var message = allowNext
+                             ? "Story revised saved and evaluations enqueued."
+                             : "Story revised saved (status transition deferred); evaluations enqueued.";
+
+                          return new CommandResult(true, message);
                     }
                     catch (OperationCanceledException)
                     {
@@ -1788,6 +2041,55 @@ public sealed class StoriesService
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to enqueue revise_story for story {StoryId}", storyId);
+            return null;
+        }
+    }
+
+    public string? EnqueueStateDrivenPostEpisodePipeline(long storyId, string trigger, int priority = 2)
+    {
+        try
+        {
+            if (storyId <= 0) return null;
+            if (_commandDispatcher == null) return null;
+            if (_kernelFactory == null) return null;
+
+            var story = _database.GetStoryById(storyId);
+            if (story == null) return null;
+            if (!story.SerieId.HasValue || !story.SerieEpisode.HasValue) return null;
+
+            var serieId = story.SerieId.Value;
+            var episodeNumber = story.SerieEpisode.Value;
+
+            var runId = StateDrivenPipelineHelpers.NewRunId("canon_extractor", storyId);
+            _commandDispatcher.Enqueue(
+                "canon_extractor",
+                ctx =>
+                {
+                    var cmd = new CanonExtractorCommand(
+                        storyId,
+                        serieId,
+                        episodeNumber,
+                        runId,
+                        _database,
+                        _kernelFactory,
+                        _commandDispatcher,
+                        _customLogger,
+                        _scopeFactory);
+                    return cmd.ExecuteAsync(ctx.CancellationToken);
+                },
+                runId: runId,
+                threadScope: $"series/{serieId}/episode/{episodeNumber}",
+                metadata: new Dictionary<string, string>(StateDrivenPipelineHelpers.BuildMetadata(storyId, serieId, episodeNumber, "canon_extractor"))
+                {
+                    ["trigger"] = trigger
+                },
+                priority: Math.Max(1, priority));
+
+            return runId;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to enqueue state-driven pipeline for story {StoryId}", storyId);
             return null;
         }
     }
@@ -2008,13 +2310,14 @@ public sealed class StoriesService
             if (storyId <= 0) return;
             if (_commandDispatcher == null) return;
 
-            var evaluators = _database.ListAgents()
-                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
-                    (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
-                     a.Role.Equals("evaluator", StringComparison.OrdinalIgnoreCase) ||
-                     a.Role.Equals("writer_evaluator", StringComparison.OrdinalIgnoreCase)))
-                .OrderBy(a => a.Id)
-                .ToList();
+              var evaluators = _database.ListAgents()
+                  .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                      (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
+                       a.Role.Equals("evaluator", StringComparison.OrdinalIgnoreCase) ||
+                       a.Role.Equals("writer_evaluator", StringComparison.OrdinalIgnoreCase)))
+                  .OrderBy(a => a.Id)
+                  .Take(2)
+                  .ToList();
 
             if (evaluators.Count == 0) return;
 
@@ -4598,13 +4901,13 @@ public sealed class StoriesService
                     "Assigned {Count} voices to characters in story {StoryId}", 
                     assignedCount, story.Id);
 
-                return (true, 
+                return Task.FromResult<(bool, string?)>((true,
                     $"Assegnate {assignedCount} voci a {schema.Characters.Count} personaggi."));
             }
             catch (Exception ex)
             {
                 _service._logger?.LogError(ex, "Errore durante l'assegnazione voci per la storia {Id}", context.Story.Id);
-                return (false, ex.Message);
+                return Task.FromResult<(bool, string?)>((false, ex.Message));
             }
         }
 
@@ -6601,27 +6904,88 @@ public sealed class StoriesService
 
         // Step 2: Assign music files from curated library (series_folder or data/music_stories)
         var musicLibraryFolder = GetMusicLibraryFolderForStory(story);
+        var libraryFiles = new List<string>();
+
         if (string.IsNullOrWhiteSpace(musicLibraryFolder) || !Directory.Exists(musicLibraryFolder))
         {
-            var err = story.SerieId.HasValue
-                ? $"Cartella musica serie non trovata: {musicLibraryFolder}"
-                : $"Cartella musica di fallback non trovata: {musicLibraryFolder}";
-            _customLogger?.Append(runId, $"[{story.Id}] {err}");
-            return (false, err);
+            if (story.SerieId.HasValue)
+            {
+                var serie = _database.GetSeriesById(story.SerieId.Value);
+                if (serie != null)
+                {
+                    _customLogger?.Append(runId, $"[{story.Id}] Cartella musica serie non trovata: {musicLibraryFolder}. Avvio generazione con AudioCraft.");
+                    var gen = await TryGenerateSeriesMusicLibraryAsync(story, serie, phraseEntries, runId);
+                    if (gen.success)
+                    {
+                        libraryFiles = gen.files;
+                        musicLibraryFolder = Path.GetDirectoryName(gen.files.First()) ?? musicLibraryFolder;
+                    }
+                    else
+                    {
+                        var err = gen.error ?? $"Cartella musica serie non trovata: {musicLibraryFolder}";
+                        _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                        return (false, err);
+                    }
+                }
+                else
+                {
+                    var err = $"Cartella musica serie non trovata: {musicLibraryFolder}";
+                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                    return (false, err);
+                }
+            }
+            else
+            {
+                var err = $"Cartella musica di fallback non trovata: {musicLibraryFolder}";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
+            }
         }
-
-        var libraryFiles = Directory
-            .GetFiles(musicLibraryFolder)
-            .Where(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
-                        f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
-                        f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))
-            .ToList();
 
         if (libraryFiles.Count == 0)
         {
-            var err = $"Nessun file musica trovato in {musicLibraryFolder}";
-            _customLogger?.Append(runId, $"[{story.Id}] {err}");
-            return (false, err);
+            libraryFiles = Directory
+                .GetFiles(musicLibraryFolder)
+                .Where(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
+                            f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+                            f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        if (libraryFiles.Count == 0)
+        {
+            if (story.SerieId.HasValue)
+            {
+                var serie = _database.GetSeriesById(story.SerieId.Value);
+                if (serie != null)
+                {
+                    _customLogger?.Append(runId, $"[{story.Id}] Nessun file musica trovato in {musicLibraryFolder}. Avvio generazione con AudioCraft.");
+                    var gen = await TryGenerateSeriesMusicLibraryAsync(story, serie, phraseEntries, runId);
+                    if (gen.success)
+                    {
+                        libraryFiles = gen.files;
+                        musicLibraryFolder = Path.GetDirectoryName(gen.files.First()) ?? musicLibraryFolder;
+                    }
+                    else
+                    {
+                        var err = gen.error ?? $"Nessun file musica trovato in {musicLibraryFolder}";
+                        _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                        return (false, err);
+                    }
+                }
+                else
+                {
+                    var err = $"Nessun file musica trovato in {musicLibraryFolder}";
+                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                    return (false, err);
+                }
+            }
+            else
+            {
+                var err = $"Nessun file musica trovato in {musicLibraryFolder}";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
+            }
         }
 
         var index = BuildMusicLibraryIndex(libraryFiles);
@@ -6815,7 +7179,171 @@ public sealed class StoriesService
         return "any";
     }
 
-    private static string? SelectMusicFileDeterministic(
+    
+    private async Task<(bool success, List<string> files, string? error)> TryGenerateSeriesMusicLibraryAsync(
+        StoryRecord story,
+        Series serie,
+        List<JsonObject> phraseEntries,
+        string runId)
+    {
+        if (story == null || serie == null) return (false, new List<string>(), "Serie non disponibile");
+        if (phraseEntries == null || phraseEntries.Count == 0) return (false, new List<string>(), "Nessuna richiesta musica in timeline");
+
+        var sentiments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in phraseEntries)
+        {
+            var musicDesc = ReadString(entry, "music_description") ?? ReadString(entry, "musicDescription") ?? ReadString(entry, "MusicDescription");
+            if (string.IsNullOrWhiteSpace(musicDesc)) continue;
+            sentiments.Add(musicDesc.Trim());
+        }
+
+        if (sentiments.Count == 0)
+        {
+            return (false, new List<string>(), "Nessun sentimento musica trovato in timeline");
+        }
+
+        var folderBase = (serie.Folder ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(folderBase))
+        {
+            return (false, new List<string>(), "Folder serie non impostato");
+        }
+
+        var musicFolder = Path.Combine(Directory.GetCurrentDirectory(), "series_folder", folderBase, "music");
+        Directory.CreateDirectory(musicFolder);
+
+        var genre = (serie.Genere ?? string.Empty).Trim();
+        var sub = (serie.Sottogenere ?? string.Empty).Trim();
+        var genreCombo = string.Join("/", new[] { genre, sub }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        if (string.IsNullOrWhiteSpace(genreCombo))
+        {
+            genreCombo = "non specificata";
+        }
+
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        var audioCraft = new AudioCraftTool(httpClient, forceCpu: false, logger: _customLogger);
+
+        var generatedFiles = new List<string>();
+        var sentimentIndex = 0;
+
+        foreach (var sentiment in sentiments.OrderBy(s => s, StringComparer.OrdinalIgnoreCase))
+        {
+            sentimentIndex++;
+            var prompt = $"una musica di sottofondo non invasiva per una serie {genreCombo} che esprima il sentimento {sentiment}";
+            var durationSeconds = 30;
+
+            _customLogger?.Append(runId, $"[{story.Id}] Generazione musica serie: '{sentiment}' ({durationSeconds}s)");
+
+            var request = new
+            {
+                operation = "generate_music",
+                prompt = prompt,
+                duration = durationSeconds,
+                model = "facebook/musicgen-small"
+            };
+            var requestJson = JsonSerializer.Serialize(request);
+            string? resultJson = null;
+
+            try
+            {
+                try
+                {
+                    resultJson = await audioCraft.ExecuteAsync(requestJson);
+                }
+                catch (Exception executeEx) when (executeEx.Message.Contains("Connection") || executeEx.Message.Contains("No connection") || executeEx is HttpRequestException)
+                {
+                    _customLogger?.Append(runId, $"[{story.Id}] Errore connessione AudioCraft: {executeEx.Message}. Tentativo riavvio...");
+                    var restarted = await StartupTasks.TryRestartAudioCraftAsync(_logger);
+                    if (!restarted)
+                    {
+                        return (false, new List<string>(), "Servizio AudioCraft non disponibile e impossibile riavviare");
+                    }
+
+                    _customLogger?.Append(runId, $"[{story.Id}] AudioCraft riavviato. Retry musica '{sentiment}'...");
+                    resultJson = await audioCraft.ExecuteAsync(requestJson);
+                }
+
+                _customLogger?.Append(runId, $"[{story.Id}] AudioCraft music response: {resultJson?.Substring(0, Math.Min(500, resultJson?.Length ?? 0))}");
+
+                string? generatedFileName = null;
+                if (!string.IsNullOrWhiteSpace(audioCraft.LastGeneratedMusicFile))
+                {
+                    generatedFileName = audioCraft.LastGeneratedMusicFile;
+                }
+                if (string.IsNullOrWhiteSpace(generatedFileName) && !string.IsNullOrWhiteSpace(resultJson))
+                {
+                    try
+                    {
+                        var resultNode = JsonNode.Parse(resultJson) as JsonObject;
+                        var resultField = resultNode?["result"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(resultField))
+                        {
+                            var inner = JsonNode.Parse(resultField) as JsonObject;
+                            generatedFileName = inner?["file"]?.ToString()
+                                ?? inner?["filename"]?.ToString()
+                                ?? inner?["output"]?.ToString();
+                        }
+                    }
+                    catch
+                    {
+                        // ignore parse errors
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(generatedFileName))
+                {
+                    _customLogger?.Append(runId, $"[{story.Id}] Avviso: file musica non determinato per '{sentiment}'");
+                    continue;
+                }
+
+                var safeSentiment = SlugifyFilePart(sentiment);
+                var localFileName = $"music_{safeSentiment}_{sentimentIndex:D3}.wav";
+                var localFilePath = Path.Combine(musicFolder, localFileName);
+
+                try
+                {
+                    var downloadResponse = await httpClient.GetAsync($"http://localhost:8003/download/{generatedFileName}");
+                    if (!downloadResponse.IsSuccessStatusCode)
+                    {
+                        _customLogger?.Append(runId, $"[{story.Id}] Avviso: download musica fallito per {generatedFileName}");
+                        continue;
+                    }
+
+                    var audioBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
+                    await File.WriteAllBytesAsync(localFilePath, audioBytes);
+                    generatedFiles.Add(localFilePath);
+
+                    var promptFileName = Path.ChangeExtension(localFileName, ".txt");
+                    var promptFilePath = Path.Combine(musicFolder, promptFileName);
+                    await File.WriteAllTextAsync(promptFilePath, prompt);
+                }
+                catch (Exception ex)
+                {
+                    _customLogger?.Append(runId, $"[{story.Id}] Avviso: errore download musica {generatedFileName}: {ex.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _customLogger?.Append(runId, $"[{story.Id}] Errore generazione musica '{sentiment}': {ex.Message}");
+            }
+        }
+
+        if (generatedFiles.Count == 0)
+        {
+            return (false, new List<string>(), "Generazione musica serie fallita");
+        }
+
+        return (true, generatedFiles, null);
+    }
+
+    private static string SlugifyFilePart(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return "music";
+        var cleaned = Regex.Replace(input.Trim().ToLowerInvariant(), "[^a-z0-9]+", "_");
+        cleaned = cleaned.Trim('_');
+        return string.IsNullOrWhiteSpace(cleaned) ? "music" : cleaned;
+    }
+
+private static string? SelectMusicFileDeterministic(
         Dictionary<string, List<string>> index,
         string requestedType,
         HashSet<string> usedDestFileNames,

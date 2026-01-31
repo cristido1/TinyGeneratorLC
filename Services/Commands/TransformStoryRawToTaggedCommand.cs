@@ -392,6 +392,7 @@ namespace TinyGenerator.Services.Commands
             string? lastError = null;
             string? lastRequestText = null;
             string? lastMappingText = null;
+            var hadCorrections = false;
 
             var correctionRetries = Math.Max(0, _tuning.TransformStoryRawToTagged.FormatterV2CorrectionRetries);
             var maxAttempts = correctionRetries > 0
@@ -429,6 +430,10 @@ namespace TinyGenerator.Services.Commands
             {
                 ct.ThrowIfCancellationRequested();
                 _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Formatting attempt {attempt}/{maxAttempts}");
+                if (attempt > 1)
+                {
+                    hadCorrections = true;
+                }
 
                 try
                 {
@@ -465,7 +470,9 @@ namespace TinyGenerator.Services.Commands
                     {
                         if (quoteLineIds.Count == 0)
                         {
-                            _logger?.MarkLatestModelResponseResult("SUCCESS", null);
+                            _logger?.MarkLatestModelResponseResult(
+                                hadCorrections ? "FAILED" : "SUCCESS",
+                                hadCorrections ? "Risposta corretta dopo retry" : null);
                             return new FormatChunkResult(string.Empty, null);
                         }
 
@@ -522,7 +529,9 @@ namespace TinyGenerator.Services.Commands
                             .Select(k => $"{k.Key:000} {k.Value}".TrimEnd()));
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: {idToTags.Count} lines");
-                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
+                    _logger?.MarkLatestModelResponseResult(
+                        hadCorrections ? "FAILED" : "SUCCESS",
+                        hadCorrections ? "Risposta corretta dopo retry" : null);
                     return new FormatChunkResult(mappingNormalized, null);
                 }
                 catch (Exception ex)

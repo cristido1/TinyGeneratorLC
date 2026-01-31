@@ -501,6 +501,10 @@ namespace TinyGenerator.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("Level");
 
+                    b.Property<string>("ModelName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("model_name");
+
                     b.Property<int?>("MaxStep")
                         .HasColumnType("INTEGER")
                         .HasColumnName("MaxStep");
@@ -547,6 +551,97 @@ namespace TinyGenerator.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Log", (string)null);
+                });
+
+            modelBuilder.Entity("TinyGenerator.Models.SystemReport", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AgentName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("agent_name");
+
+                    b.Property<string>("AgentRole")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("agent_role");
+
+                    b.Property<string>("CreatedAt")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("Deleted")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("deleted");
+
+                    b.Property<string>("DeletedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<string>("DeletedBy")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("deleted_by");
+
+                    b.Property<int?>("ExecutionTimeMs")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("execution_time_ms");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("failure_reason");
+
+                    b.Property<string>("Message")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("message");
+
+                    b.Property<string>("ModelName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("model_name");
+
+                    b.Property<string>("OperationType")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("operation_type");
+
+                    b.Property<string>("RawLogRef")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("raw_log_ref");
+
+                    b.Property<int?>("RetryCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("retry_count");
+
+                    b.Property<int?>("SeriesEpisode")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("series_episode");
+
+                    b.Property<int?>("SeriesId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("series_id");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("severity");
+
+                    b.Property<long?>("StoryId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("story_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("title");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("system_reports", (string)null);
                 });
 
             modelBuilder.Entity("TinyGenerator.Models.MicroObjective", b =>

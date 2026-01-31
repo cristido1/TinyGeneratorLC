@@ -18,6 +18,7 @@ public class IndexModel : PageModel
     public int AudioMasterGeneratedCount { get; set; }
     public List<WriterRanking> TopWriters { get; set; } = new();
     public List<TopStory> TopStories { get; set; } = new();
+    public List<SystemReportSummary> RecentReports { get; set; } = new();
     
     // Auto-advancement property
     public bool EnableAutoAdvancement { get; set; }
@@ -38,6 +39,19 @@ public class IndexModel : PageModel
         public bool GeneratedMixedAudio { get; set; }
         public double AvgEvalScore { get; set; }
         public string Timestamp { get; set; } = "";
+    }
+
+    public class SystemReportSummary
+    {
+        public long Id { get; set; }
+        public string CreatedAt { get; set; } = "";
+        public string Severity { get; set; } = "";
+        public string Status { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Message { get; set; } = "";
+        public string? AgentName { get; set; }
+        public string? ModelName { get; set; }
+        public string? OperationType { get; set; }
     }
 
     public IndexModel(ILogger<IndexModel> logger, DatabaseService database, StoriesService stories)
@@ -93,6 +107,20 @@ public class IndexModel : PageModel
                 GeneratedMixedAudio = s.GeneratedMixedAudio,
                 AvgEvalScore = s.AvgScore,
                 Timestamp = s.Timestamp
+            }).ToList();
+
+            var reports = _database.GetRecentSystemReports(5);
+            RecentReports = reports.Select(r => new SystemReportSummary
+            {
+                Id = r.Id,
+                CreatedAt = r.CreatedAt,
+                Severity = r.Severity,
+                Status = r.Status,
+                Title = r.Title ?? "(senza titolo)",
+                Message = r.Message ?? string.Empty,
+                AgentName = r.AgentName,
+                ModelName = r.ModelName,
+                OperationType = r.OperationType
             }).ToList();
         }
         catch (Exception ex)

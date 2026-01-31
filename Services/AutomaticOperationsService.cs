@@ -233,6 +233,19 @@ namespace TinyGenerator.Services
                     }));
             }
 
+            if (opts.AutoFinalMixPipeline.Enabled)
+            {
+                list.Add(new IdleTask(
+                    name: "auto_final_mix_pipeline",
+                    priority: Math.Max(1, opts.AutoFinalMixPipeline.Priority),
+                    hasCandidate: () => TryGetTopStoryForFinalMix(out _),
+                    tryEnqueue: () =>
+                    {
+                        if (!TryGetTopStoryForFinalMix(out var storyId)) return false;
+                        return _stories.EnqueueFinalMixPipeline(storyId, trigger: "idle_auto_top_score", priority: Math.Max(1, opts.AutoFinalMixPipeline.Priority));
+                    }));
+            }
+
             return list.OrderBy(t => t.Priority).ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
@@ -265,6 +278,32 @@ namespace TinyGenerator.Services
             {
                 return false;
             }
+        }
+
+        private bool TryGetTopStoryForFinalMix(out long storyId)
+        {
+            storyId = 0;
+            try
+            {
+                var candidates = _database.GetTopStoriesByEvaluation(10);
+                if (candidates == null || candidates.Count == 0) return false;
+
+                foreach (var candidate in candidates)
+                {
+                    if (candidate.GeneratedMixedAudio) continue;
+                    var story = _database.GetStoryById(candidate.Id);
+                    if (story == null || story.Deleted) continue;
+                    if (story.AutoTtsFailed) continue;
+                    storyId = candidate.Id;
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
         }
 
         private sealed class IdleTask

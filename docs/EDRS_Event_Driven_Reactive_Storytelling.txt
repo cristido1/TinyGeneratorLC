@@ -1,0 +1,157 @@
+METODO DI GENERAZIONE NARRATIVA: EVENT-DRIVEN REACTIVE STORYTELLING (EDRS)
+Documento tecnico per implementazione
+
+Data: 2026-01-28
+
+================================================================================
+1. DEFINIZIONE DEL METODO
+================================================================================
+
+Nome del metodo:
+Event-Driven Reactive Storytelling (EDRS)
+
+Descrizione sintetica:
+EDRS è un sistema di generazione narrativa in cui la trama non viene pianificata e scritta interamente da un unico modello, ma emerge attraverso un ciclo continuo di:
+
+EVENTO → REAZIONE → NUOVO STATO → NUOVO EVENTO
+
+Il mondo narrativo evolve in modo sistemico, e il Writer si limita a rappresentare narrativamente le conseguenze degli eventi generati da un agente separato chiamato Event Generator.
+
+Questo approccio trasforma la generazione da “scrittura lineare” a “simulazione narrativa”.
+
+================================================================================
+2. RUOLI DEGLI AGENTI
+================================================================================
+
+2.1 Event Generator
+Funzione: generare pressioni narrative sul mondo e sui personaggi.
+NON scrive prosa narrativa.
+Produce eventi strutturati.
+
+2.2 Writer
+Funzione: trasformare l’evento in narrazione coerente con stato e personaggi.
+NON decide la direzione globale della trama.
+
+2.3 State Updater
+Funzione: aggiornare lo stato del mondo e dei personaggi in base a quanto accaduto.
+
+2.4 State Compressor
+Funzione: ridurre lo stato completo in uno stato compatto per i prompt.
+
+================================================================================
+3. STRUTTURA DEL CICLO EDRS
+================================================================================
+
+FASE 0 – Stato iniziale
+- Esiste uno stato narrativo iniziale (state_summary_compact)
+
+FASE 1 – Generazione evento
+Input Event Generator:
+- Stato compatto
+- Obiettivo episodio
+Output:
+- Evento strutturato
+
+FASE 2 – Scrittura reazione
+Input Writer:
+- Stato compatto
+- Evento
+Output:
+- Segmento narrativo
+
+FASE 3 – Aggiornamento stato
+Input State Updater:
+- Stato precedente
+- Riassunto segmento scritto
+Output:
+- Nuovo stato narrativo
+
+FASE 4 – Compressione stato
+Input State Compressor:
+- Stato completo
+Output:
+- Nuovo state_summary_compact
+
+FASE 5 – Ripetizione
+Il ciclo torna alla FASE 1 finché non si raggiunge:
+- Obiettivo episodio
+- Climax pianificato
+- Numero massimo di iterazioni
+
+================================================================================
+4. FORMATO DELL’EVENTO (OGGETTO STRUTTURATO)
+================================================================================
+
+L’Event Generator deve produrre SOLO questo tipo di output:
+
+{
+  "event_type": "Escalation | Complication | Revelation | Loss | Opportunity | Mistake",
+  "target": "Personaggio, gruppo o sistema colpito",
+  "description": "Descrizione oggettiva dell’evento",
+  "immediate_effect": "Conseguenza diretta",
+  "pressure_increase": "Bassa | Media | Alta",
+  "resources_impact": "Nessuno | Riduzione | Grave perdita",
+  "threads_impact": ["thread1", "thread2"]
+}
+
+Regole:
+- Nessun dialogo
+- Nessuna scena
+- Nessuna prosa letteraria
+
+================================================================================
+5. REGOLE PER L’EVENT GENERATOR
+================================================================================
+
+Deve:
+- Aumentare gradualmente la pressione narrativa
+- Usare solo elementi già presenti nello stato
+- Non introdurre regole del mondo nuove se world_rules_locked=true
+- Alternare tipi di evento per evitare monotonia
+
+Non deve:
+- Risolvere il conflitto principale da solo
+- Generare eventi scollegati dallo stato
+- Ripetere lo stesso tipo di evento consecutivamente senza escalation
+
+================================================================================
+6. REGOLE PER IL WRITER
+================================================================================
+
+Il Writer:
+- Deve reagire all’evento, non ignorarlo
+- Deve mostrare conseguenze su personaggi e mondo
+- Non deve introdurre eventi globali non richiesti
+- Può introdurre micro-eventi locali, ma non cambiare stato globale senza Event Generator
+
+================================================================================
+7. TERMINAZIONE DEL CICLO
+================================================================================
+
+Il ciclo EDRS si interrompe quando una di queste condizioni è vera:
+- Obiettivo episodio raggiunto
+- Livello di pressione massimo
+- Numero massimo di eventi generati
+- Planner indica fase finale
+
+================================================================================
+8. VANTAGGI DEL METODO
+================================================================================
+
+- Riduce la deriva narrativa nei testi lunghi
+- Mantiene tensione costante
+- Separa creatività stilistica da dinamica della trama
+- Permette controllo deterministico sugli eventi
+
+================================================================================
+9. CASI D’USO IDEALI
+================================================================================
+
+- Episodi lunghi
+- Serie con stato persistente
+- Narrazione militare, sci-fi, thriller, sopravvivenza
+- Sistemi multi-agente con memoria narrativa
+
+================================================================================
+FINE DOCUMENTO
+================================================================================

@@ -13,16 +13,16 @@ namespace TinyGenerator.Services
         Task FlushAsync();
 
         // Log a model prompt (question to the AI model)
-        void LogPrompt(string modelName, string prompt);
+        void LogPrompt(string modelName, string prompt, string? agentName = null);
 
         // Log a model response (answer from the AI model)
-        void LogResponse(string modelName, string response);
+        void LogResponse(string modelName, string response, string? agentName = null);
 
         // Log raw request JSON
-        void LogRequestJson(string modelName, string requestJson, int? threadId = null);
+        void LogRequestJson(string modelName, string requestJson, int? threadId = null, string? agentName = null);
 
         // Log raw response JSON
-        void LogResponseJson(string modelName, string responseJson, int? threadId = null);
+        void LogResponseJson(string modelName, string responseJson, int? threadId = null, string? agentName = null);
 
         void Start(string runId);
         Task AppendAsync(string runId, string message, string? extraClass = null);

@@ -370,7 +370,7 @@ namespace TinyGenerator.Services
                                         content = output ?? string.Empty
                                     }
                                 });
-                                _logger?.LogResponseJson(call.ToolName ?? "tool", toolResponseJson);
+                                _logger?.LogResponseJson(call.ToolName ?? "tool", toolResponseJson, null, LogScope.CurrentAgentName);
                             }
                             catch { }
                             

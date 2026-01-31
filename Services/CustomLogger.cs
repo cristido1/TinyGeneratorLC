@@ -54,7 +54,17 @@ namespace TinyGenerator.Services
             LogWithChatText(level, category, message, null, exception, state, result, null);
         }
 
-        private void LogWithChatText(string level, string category, string message, string? chatText = null, string? exception = null, string? state = null, string? result = null, int? explicitThreadId = null)
+        private void LogWithChatText(
+            string level,
+            string category,
+            string message,
+            string? chatText = null,
+            string? exception = null,
+            string? state = null,
+            string? result = null,
+            int? explicitThreadId = null,
+            string? modelName = null,
+            string? agentNameOverride = null)
         {
             if (_disposed) return;
 
@@ -130,7 +140,8 @@ namespace TinyGenerator.Services
                 ThreadId = effectiveThreadId,
                 StoryId = LogScope.CurrentStoryId,
                 ThreadScope = scope,
-                AgentName = LogScope.CurrentAgentName,
+                AgentName = string.IsNullOrWhiteSpace(agentNameOverride) ? LogScope.CurrentAgentName : agentNameOverride,
+                ModelName = modelName,
                 Context = null,
                 ChatText = chatText,
                 Result = string.IsNullOrWhiteSpace(derivedResult) ? null : derivedResult,
@@ -157,7 +168,7 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Logs a model prompt (question to the AI model)
         /// </summary>
-        public void LogPrompt(string modelName, string prompt)
+        public void LogPrompt(string modelName, string prompt, string? agentName = null)
         {
             if (!_logRequestResponse) return;
             // Don't truncate - save full prompt to DB for complete audit trail
@@ -167,13 +178,13 @@ namespace TinyGenerator.Services
             
             var message = $"[{modelName}] PROMPT: {displayPrompt}";
             var chatText = displayPrompt;
-            LogWithChatText("Information", "ModelPrompt", message, chatText);
+            LogWithChatText("Information", "ModelPrompt", message, chatText, modelName: modelName, agentNameOverride: agentName);
         }
 
         /// <summary>
         /// Logs a model response (answer from the AI model)
         /// </summary>
-        public void LogResponse(string modelName, string response)
+        public void LogResponse(string modelName, string response, string? agentName = null)
         {
             if (!_logRequestResponse) return;
             // Don't truncate - save full response to DB for complete audit trail
@@ -183,13 +194,13 @@ namespace TinyGenerator.Services
             
             var message = $"[{modelName}] RESPONSE: {displayResponse}";
             var chatText = displayResponse;
-            LogWithChatText("Information", "ModelCompletion", message, chatText, result: "SUCCESS");
+            LogWithChatText("Information", "ModelCompletion", message, chatText, result: "SUCCESS", modelName: modelName, agentNameOverride: agentName);
         }
 
         /// <summary>
         /// Logs raw request JSON
         /// </summary>
-        public void LogRequestJson(string modelName, string requestJson, int? threadId = null)
+        public void LogRequestJson(string modelName, string requestJson, int? threadId = null, string? agentName = null)
         {
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] REQUEST_JSON: {requestJson}";
@@ -221,13 +232,13 @@ namespace TinyGenerator.Services
                 chatText = requestJson;
             }
             
-            LogWithChatText("Information", "ModelRequest", message, chatText, null, null, null, threadId);
+            LogWithChatText("Information", "ModelRequest", message, chatText, null, null, null, threadId, modelName, agentName);
         }
 
         /// <summary>
         /// Logs raw response JSON
         /// </summary>
-        public void LogResponseJson(string modelName, string responseJson, int? threadId = null)
+        public void LogResponseJson(string modelName, string responseJson, int? threadId = null, string? agentName = null)
         {
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] RESPONSE_JSON: {responseJson}";
@@ -250,7 +261,7 @@ namespace TinyGenerator.Services
                     if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) && messageObj.TryGetProperty("content", out var toolContent))
                     {
                         chatText = toolContent.GetString() ?? responseJson;
-                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId);
+                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName);
                         return;
                     }
 
@@ -286,7 +297,7 @@ namespace TinyGenerator.Services
                 chatText = responseJson;
             }
 
-            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId);
+            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName);
         }
 
         public void MarkLatestModelResponseResult(string result, string? failReason = null, bool? examined = null)

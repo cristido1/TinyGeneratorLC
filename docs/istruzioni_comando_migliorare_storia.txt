@@ -1,0 +1,92 @@
+PIPELINE AUTOMATICA DI REVISIONE STORIE BASATA SUI VALUTATORI
+
+Obiettivo:
+Migliorare una storia già generata utilizzando i commenti critici dei valutatori automatici, senza modificare la trama originale.
+
+La revisione NON deve sovrascrivere la storia esistente.
+Deve essere creato un NUOVO RECORD della storia con titolo originale + " v2".
+
+----------------------------------------
+FASE 1 — ESTRAZIONE CRITICITÀ
+Agente: critic_extractor
+Ruolo: Analista editoriale
+
+Input:
+- Report completi dei valutatori della storia originale
+
+Compito:
+1. Analizzare i report dei valutatori
+2. Ignorare complimenti, riassunti e giudizi generici
+3. Estrarre solo difetti concreti e problemi narrativi
+4. Unificare criticità simili segnalate da più valutatori
+5. Convertire ogni problema in una breve istruzione operativa
+
+Formato Output:
+Elenco puntato di problemi da correggere, ad esempio:
+- Transizioni tra scene poco fluide
+- Dialoghi troppo spiegativi e poco naturali
+- Personaggi secondari privi di reazioni emotive
+- Eccesso di spiegazioni tecniche che rallentano il ritmo
+
+Questo output sarà passato all’agente story_editor.
+
+----------------------------------------
+FASE 2 — REVISIONE DELLA STORIA
+Agente: story_editor
+Ruolo: Editor narrativo
+
+Input:
+- Testo completo della storia originale
+- Elenco criticità prodotto da critic_extractor
+
+Obiettivo:
+Migliorare la resa narrativa SENZA modificare trama, eventi o finale.
+
+Regole di revisione:
+- Migliorare transizioni tra scene brusche
+- Rendere i dialoghi più naturali e meno spiegativi
+- Aggiungere brevi reazioni emotive nei momenti critici
+- Ridurre descrizioni ridondanti
+- Trasformare spiegazioni tecniche in azioni visive quando possibile
+
+Vincoli assoluti:
+- NON cambiare la trama
+- NON aggiungere nuovi eventi
+- NON modificare il finale
+- NON cambiare i ruoli dei personaggi
+- NON alterare il messaggio della storia
+
+Output:
+Restituire la STORIA COMPLETA revisionata.
+
+----------------------------------------
+FASE 3 — CREAZIONE NUOVA VERSIONE
+
+Dopo la revisione:
+
+1. Creare un NUOVO record storia
+2. Titolo = Titolo originale + " v2"
+3. Contenuto = testo revisionato prodotto da story_editor
+4. Collegare la nuova storia alla stessa serie o contesto della precedente
+5. NON cancellare o modificare la versione originale
+
+----------------------------------------
+FASE 4 — RIVALUTAZIONE
+
+La storia v2 deve essere inviata nuovamente ai valutatori.
+
+Obiettivo:
+Confrontare i punteggi tra:
+- Versione originale
+- Versione v2 revisionata
+
+Questo permette di misurare l’efficacia dell’agente story_editor.
+
+----------------------------------------
+RISULTATO ATTESO
+
+Questa pipeline consente:
+- Miglioramento progressivo delle storie
+- Versioning chiaro
+- Confronto oggettivo dei punteggi
+- Uso dei valutatori come strumenti di editing

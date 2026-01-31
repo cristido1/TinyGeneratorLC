@@ -69,7 +69,7 @@
         <tr class="@rowClass" data-id="@log.Id"
             data-source="@log.Source"
             data-ts="@log.Ts" 
-            data-threadid="@log.ThreadId" 
+            data-threadid="@(log.ThreadId ?? 0)" 
             data-storyid="@(log.StoryId.HasValue ? log.StoryId.Value.ToString() : string.Empty)"
             data-threadscope="@log.ThreadScope"
             data-analized="@log.Analized"
@@ -103,7 +103,7 @@
             </td>
             <td class="failreason">@(!string.IsNullOrWhiteSpace(log.ResultFailReason) ? log.ResultFailReason : "-")</td>
             <td class="operation">@(!string.IsNullOrWhiteSpace(log.ThreadScope) ? log.ThreadScope : "-")</td>
-            <td class="threadid">@(log.ThreadId > 0 ? log.ThreadId.ToString() : "-")</td>
+            <td class="threadid">@(log.ThreadId.HasValue && log.ThreadId.Value > 0 ? log.ThreadId.Value.ToString() : "-")</td>
             <td class="storyid">@(log.StoryId.HasValue && log.StoryId.Value > 0 ? log.StoryId.Value.ToString() : "-")</td>
             <td class="agentname">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
             <td class="message"><span class="text-muted">Premi + per caricare il messaggio</span></td>
@@ -111,7 +111,7 @@
                 <button type="button" class="btn btn-sm btn-outline-secondary btn-analyze me-1">Analizza</button>
                 @if (log.Analized)
                 {
-                    <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Analysis" asp-route-threadId="@log.ThreadId">Vedi analisi</a>
+                    <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Analysis" asp-route-threadId="@(log.ThreadId ?? 0)">Vedi analisi</a>
                 }
             </td>
         </tr>

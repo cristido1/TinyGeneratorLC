@@ -123,6 +123,19 @@ namespace TinyGenerator.Models
         [Column("generated_mixed_audio")]
         public bool GeneratedMixedAudio { get; set; }
 
+        // Auto TTS failure tracking (for automatic pipelines)
+        [Column("auto_tts_failed")]
+        public bool AutoTtsFailed { get; set; }
+
+        [Column("auto_tts_failed_at")]
+        public string? AutoTtsFailedAt { get; set; }
+
+        [Column("auto_tts_fail_count")]
+        public int AutoTtsFailCount { get; set; }
+
+        [Column("auto_tts_last_error")]
+        public string? AutoTtsLastError { get; set; }
+
         /// <summary>
         /// Indicates if the story has a final mixed audio file (final_mix.wav or final_mix.mp3)
         /// </summary>

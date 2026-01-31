@@ -45,4 +45,28 @@ public sealed class SeriesEpisode
     /// </summary>
     [Column("tipo_planning_id")]
     public int? TipoPlanningId { get; set; }
+
+    [Column("state_in_json")]
+    public string? StateInJson { get; set; }
+
+    [Column("state_out_json")]
+    public string? StateOutJson { get; set; }
+
+    [Column("delta_json")]
+    public string? DeltaJson { get; set; }
+
+    [Column("canon_events")]
+    public string? CanonEvents { get; set; }
+
+    [Column("open_threads_out")]
+    public string? OpenThreadsOut { get; set; }
+
+    [Column("recap_text")]
+    public string? RecapText { get; set; }
+
+    [NotMapped]
+    public bool IsCanonical =>
+        !string.IsNullOrWhiteSpace(StateInJson) &&
+        !string.IsNullOrWhiteSpace(DeltaJson) &&
+        !string.IsNullOrWhiteSpace(StateOutJson);
 }

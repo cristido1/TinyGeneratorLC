@@ -1,0 +1,88 @@
+AUTOMATIC ERROR ANALYSIS – SPECIFICATION FOR CODEX
+
+OBJECTIVE
+When an AI operation fails definitively, the system must automatically invoke the agent "log_analyzer" to analyze the failure and store the result.
+
+------------------------------------------------------------
+
+1) WHEN TO TRIGGER ERROR ANALYSIS
+
+An operation is considered a DEFINITIVE FAILURE when:
+- All retry attempts have been exhausted, OR
+- The error is classified as non-recoverable (e.g. invalid request format, model rejection, fatal exception).
+
+At that point, the system must call the agent:
+    error_analyzer
+
+------------------------------------------------------------
+
+2) DATA TO SEND TO log_analyzer
+
+If the failure happened during a model call:
+- Full request sent to the model
+- Full response received (even if partial or malformed)
+
+If the failure is technical/system-level:
+- The command or operation that failed
+- The error message / exception message
+- Optional short stack trace (if available)
+
+------------------------------------------------------------
+
+3) ROLE OF THE log_analyzer AGENT
+
+The agent must:
+- Analyze the failure context
+- Identify the most probable technical cause
+- Suggest one practical corrective technical action
+
+The agent must NOT:
+- Modify or rewrite the original content
+- Invent missing information
+
+------------------------------------------------------------
+
+4) SYSTEM PROMPT FOR THE MODEL USED BY 	log_analyzer
+
+You are an AI system specialized in technical failure analysis for AI pipelines.
+You will receive either:
+– a request and a response that resulted in an error,
+– or a failed command with an error message.
+
+Your tasks:
+1. Identify the most probable technical reason for the failure
+2. Suggest one practical corrective action
+
+Rules:
+- Be concise and technical
+- Do not rewrite or modify the original content
+- Do not invent missing data
+- If the cause is uncertain, say so clearly
+- The suggested action must be realistic and technical
+
+Output format (plain text only):
+
+Failure reason: <short technical explanation>
+Suggested action: <practical technical suggestion>
+
+------------------------------------------------------------
+
+5) WHERE TO STORE THE RESULT
+
+The output produced by 	log_analyzer must be saved into the table:
+    system_reports
+
+In the field:
+    failure_reason
+
+The entire text (both failure reason and suggested action) must be stored in that single field without further parsing.
+
+------------------------------------------------------------
+
+6) FINAL FLOW
+
+1. AI operation fails definitively
+2. System invokes 	log_analyzer
+3. 	log_analyzer receives failure context
+4. 	log_analyzer returns analysis + suggested action
+5. System writes the result into system_reports.failure_reason

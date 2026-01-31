@@ -42,6 +42,24 @@ public sealed class SeriesCharacter
     [Column("conflitto_interno")]
     public string? ConflittoInterno { get; set; }
 
+    [Column("ruolo_narrativo")]
+    public string? RuoloNarrativo { get; set; }
+
+    [Column("arco_personale")]
+    public string? ArcoPersonale { get; set; }
+
+    [Column("stato_attuale")]
+    public string? StatoAttuale { get; set; }
+
+    [Column("stato_attuale_json")]
+    public string? StatoAttualeJson { get; set; }
+
+    [Column("alleanza_relazione")]
+    public string? AlleanzaRelazione { get; set; }
+
+    [Column("last_seen_episode_number")]
+    public int? LastSeenEpisodeNumber { get; set; }
+
     [Column("voice_id")]
     public int? VoiceId { get; set; }
 

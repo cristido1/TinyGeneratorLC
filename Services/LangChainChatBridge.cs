@@ -261,7 +261,7 @@ namespace TinyGenerator.Services
                     "application/json");
 
                     _logger?.Log("Info", "LangChainBridge", $"Calling model {_modelId} at {fullUrl}");
-                    _logger?.LogRequestJson(_modelId, requestJson, currentThreadId);
+                    _logger?.LogRequestJson(_modelId, requestJson, currentThreadId, LogScope.CurrentAgentName);
                     // store request for possible error diagnostics only; do not attach it to
                     // the log unless an error occurs
                     requestJsonForLlama = requestJson;
@@ -282,7 +282,7 @@ namespace TinyGenerator.Services
                 var responseContent = await response.Content.ReadAsStringAsync(ct);
                 
                 _logger?.Log("Info", "LangChainBridge", $"Model responded (status={response.StatusCode})");
-                _logger?.LogResponseJson(_modelId, responseContent, currentThreadId);
+                _logger?.LogResponseJson(_modelId, responseContent, currentThreadId, LogScope.CurrentAgentName);
                 // capture response for possible error diagnostics only
                 responseContentForLlama = responseContent;
                 responseStatusForLlama = (int)response.StatusCode;

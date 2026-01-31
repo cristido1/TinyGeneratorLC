@@ -67,7 +67,7 @@ namespace TinyGenerator.Services
                 // Persist prompt via the central logger which writes to DatabaseService (semaphore-protected)
                 try
                 {
-                    _logger?.LogPrompt(model ?? string.Empty, prompt ?? string.Empty);
+                    _logger?.LogPrompt(model ?? string.Empty, prompt ?? string.Empty, LogScope.CurrentAgentName);
                 }
                 catch { }
             }

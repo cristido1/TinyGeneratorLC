@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +15,11 @@ namespace TinyGenerator.Services.Commands;
 
 public sealed class GenerateNextChunkCommand
 {
+    private const double SentenceSimilarityThreshold = 0.85;
+    private const int LoopRepetitionCountThreshold = 6;
+    private const double LoopRepetitionRatioThreshold = 0.5;
+    private const int PreviousSentencesToCompare = 5;
+
     private readonly CommandTuningOptions _tuning;
 
     public sealed record GenerateChunkOptions(
@@ -69,6 +76,8 @@ public sealed class GenerateNextChunkCommand
             return new CommandResult(false, $"Writer agent {_writerAgentId} not found");
         }
 
+        _database.UpdateStoryById(_storyId, modelId: writer.ModelId, agentId: writer.Id);
+
         var phase = DecidePhase(snap);
         var pov = DecidePov(snap);
 
@@ -87,6 +96,7 @@ public sealed class GenerateNextChunkCommand
         string? lastValidationError = null;
         var attempts = 0;
         var maxAttempts = Math.Max(1, _tuning.GenerateNextChunk.MaxAttempts);
+        var hadCorrections = false;
 
         while (attempts < maxAttempts)
         {
@@ -103,19 +113,43 @@ public sealed class GenerateNextChunkCommand
             output = ExtractAssistantContent(output);
             output = (output ?? string.Empty).Trim();
 
+            if (DetectLoopInChunk(output, BuildStoryHistorySnapshot()))
+            {
+                _logger?.MarkLatestModelResponseResult("FAILED", "Writer loop detected: repeated sentences.");
+                return new CommandResult(false, "Writer loop detected; please retry with a different prompt or writer.");
+            }
+
             if (_options.RequireCliffhanger)
             {
                 if (EndsInTension(output, out var reason))
                 {
+                    if (hadCorrections)
+                    {
+                        _logger?.MarkLatestModelResponseResult("FAILED", "Risposta corretta dopo retry");
+                    }
+                    else
+                    {
+                        _logger?.MarkLatestModelResponseResult("SUCCESS", null);
+                    }
                     lastValidationError = null;
                     break;
                 }
 
                 lastValidationError = reason;
+                hadCorrections = true;
+                _logger?.MarkLatestModelResponseResult("FAILED", lastValidationError);
             }
             else
             {
                 // No cliffhanger validation requested (e.g. final chunk).
+                if (hadCorrections)
+                {
+                    _logger?.MarkLatestModelResponseResult("FAILED", "Risposta corretta dopo retry");
+                }
+                else
+                {
+                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
+                }
                 lastValidationError = null;
                 break;
             }
@@ -130,6 +164,7 @@ public sealed class GenerateNextChunkCommand
 
         if (string.IsNullOrWhiteSpace(output))
         {
+            _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota dal writer");
             return new CommandResult(
                 false,
                 "Writer returned empty output; chunk not persisted. Verify the writer model service (e.g. Ollama/OpenAI endpoint) is running and the selected model is available.");
@@ -346,10 +381,54 @@ public sealed class GenerateNextChunkCommand
         sb.AppendLine("- NON aggiungere sezioni meta (es. 'capitolo', 'fine', 'riassunto').");
         sb.AppendLine();
         sb.AppendLine("REGOLA SULLO STATO:");
-        sb.AppendLine("- AZIONE: eventi, decisioni, movimento, conflitto in corso.");
-        sb.AppendLine("- STASI: pausa, riflessione, setup, atmosfera, preparazione.");
-        sb.AppendLine("- ERRORE: fallimento, imprevisto, rottura del piano, escalation negativa.");
-        sb.AppendLine("- EFFETTO: conseguenze e ricadute (causa-effetto) degli eventi/errore.");
+        sb.AppendLine("- AZIONE: qualcuno fa qualcosa che cambia la situazione. L’azione deve cambiare la situazione in modo visibile o creare nuove conseguenze. Spostarsi o parlare NON basta se non genera un problema, un rischio o una nuova direzione.");
+        sb.AppendLine("- STASI: pausa, dialogo, riflessione, attesa.");
+        sb.AppendLine("- ERRORE: deve accadere un EVENTO NEGATIVO NUOVO e CONCRETO che peggiora la situazione.");
+        sb.AppendLine("- EFFETTO: si vedono le conseguenze dirette di un evento accaduto prima.");
+        sb.AppendLine();
+        sb.AppendLine("ESEMPI DI STATO AZIONE:");
+        sb.AppendLine("- Un personaggio prende una decisione rischiosa e agisce subito.");
+        sb.AppendLine("- Qualcuno si sposta, fugge, insegue o cerca qualcosa.");
+        sb.AppendLine("- Inizia un conflitto fisico o verbale con conseguenze.");
+        sb.AppendLine("- Viene tentato un piano o un’operazione.");
+        sb.AppendLine("- Qualcuno entra o esce improvvisamente dalla scena.");
+        sb.AppendLine();
+        sb.AppendLine("ESEMPI DI STATO STASI:");
+        sb.AppendLine("- Personaggi discutono un piano o una scelta difficile.");
+        sb.AppendLine("- Osservazione dell’ambiente prima di agire.");
+        sb.AppendLine("- Preparazione di strumenti o risorse.");
+        sb.AppendLine("- Momento emotivo che precede un’azione.");
+        sb.AppendLine("Non valido:");
+        sb.AppendLine("- Ripetere atmosfera cupa senza nuove informazioni o preparativi.");
+        sb.AppendLine();
+        sb.AppendLine("ESEMPI DI STATO EFFETTO:");
+        sb.AppendLine("- Ferite, danni o perdite vengono scoperti.");
+        sb.AppendLine("- La comunità reagisce a una decisione precedente.");
+        sb.AppendLine("- Una nuova difficoltà nasce dalle conseguenze di prima.");
+        sb.AppendLine("- Un personaggio cambia atteggiamento dopo l’errore.");
+        sb.AppendLine("Non valido:");
+        sb.AppendLine("- Introdurre un nuovo evento principale (quello è AZIONE o ERRORE).");
+        sb.AppendLine();
+        sb.AppendLine("ESEMPI DI STATO ERRORE:");
+        sb.AppendLine("- perdita o rottura di una risorsa");
+        sb.AppendLine("- minaccia imprevista");
+        sb.AppendLine("- piano che fallisce visibilmente");
+        sb.AppendLine("- decisione che peggiora la situazione");
+        sb.AppendLine("Non valido:");
+        sb.AppendLine("- Solo silenzio, tristezza o senso di colpa.");
+        sb.AppendLine("- Descrivere fallimento senza conseguenze reali.");
+        sb.AppendLine();
+        sb.AppendLine("REGOLE DI PROGRESSIONE:");
+        sb.AppendLine();
+        sb.AppendLine("- Se lo stato è AZIONE o ERRORE:");
+        sb.AppendLine("- L’evento deve produrre conseguenze visibili.");
+        sb.AppendLine("- Alla fine del chunk la situazione deve essere peggiorata, complicata o resa più incerta.");
+        sb.AppendLine("- Muoversi o parlare non basta: deve cambiare la direzione della scena.");
+        sb.AppendLine();
+        sb.AppendLine("CLIFFHANGER:");
+        sb.AppendLine("Il cliffhanger deve derivare direttamente dall’azione appena avvenuta, non da un pensiero o dall’atmosfera.");        
+        sb.AppendLine("Deve lasciare in sospeso un evento imminente, una minaccia o una decisione urgente.");
+        sb.AppendLine("Non è valido chiudere con silenzio, tristezza o riflessione.");
         sb.AppendLine();
         sb.AppendLine("TEMA/CANONE (input utente):");
         sb.AppendLine(snap.Prompt);
@@ -582,5 +661,123 @@ public sealed class GenerateNextChunkCommand
         if (maxChars <= 0) return string.Empty;
         var t = text.Trim();
         return t.Length <= maxChars ? t : t.Substring(t.Length - maxChars);
+    }
+
+    private string BuildStoryHistorySnapshot()
+    {
+        try
+        {
+            var builder = new StringBuilder();
+            var chapters = _database.ListChaptersForStory(_storyId);
+            foreach (var chapter in chapters)
+            {
+                if (string.IsNullOrWhiteSpace(chapter.Content)) continue;
+                builder.AppendLine(chapter.Content.Trim());
+                builder.AppendLine();
+            }
+            return builder.ToString();
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool DetectLoopInChunk(string chunk, string history)
+    {
+        if (string.IsNullOrWhiteSpace(chunk)) return false;
+        var chunkSentences = ExtractSentences(chunk);
+        if (chunkSentences.Count == 0) return false;
+
+        var historySentences = ExtractSentences(history);
+        if (historySentences.Count == 0) return false;
+
+        var relevantHistory = historySentences
+            .Skip(Math.Max(0, historySentences.Count - PreviousSentencesToCompare))
+            .ToList();
+        if (relevantHistory.Count == 0) return false;
+
+        var historyVectors = relevantHistory
+            .Select(BuildNormalizedTermVector)
+            .Where(v => v.Count > 0)
+            .ToList();
+        if (historyVectors.Count == 0) return false;
+
+        int repeatCount = 0;
+        foreach (var sentence in chunkSentences)
+        {
+            var vector = BuildNormalizedTermVector(sentence);
+            if (vector.Count == 0) continue;
+
+            foreach (var prevVector in historyVectors)
+            {
+                if (ComputeCosineSimilarity(vector, prevVector) >= SentenceSimilarityThreshold)
+                {
+                    repeatCount++;
+                    break;
+                }
+            }
+        }
+
+        if (repeatCount == 0) return false;
+        if (repeatCount >= LoopRepetitionCountThreshold) return true;
+        var ratio = (double)repeatCount / chunkSentences.Count;
+        return ratio >= LoopRepetitionRatioThreshold;
+    }
+
+    private static List<string> ExtractSentences(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return new List<string>();
+        var sentences = Regex.Split(text.Trim(), @"(?<=[\.!?])\s+");
+        var result = new List<string>();
+        foreach (var sentence in sentences)
+        {
+            var trimmed = sentence.Trim();
+            if (trimmed.Length > 0)
+            {
+                result.Add(trimmed);
+            }
+        }
+        return result;
+    }
+
+    private static Dictionary<string, double> BuildNormalizedTermVector(string sentence)
+    {
+        var tokens = Regex.Matches(sentence.ToLowerInvariant(), @"\p{L}+");
+        var counts = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match token in tokens)
+        {
+            var term = token.Value;
+            if (string.IsNullOrWhiteSpace(term)) continue;
+            counts[term] = counts.TryGetValue(term, out var current) ? current + 1 : 1;
+        }
+
+        var norm = Math.Sqrt(counts.Values.Sum(v => v * v));
+        if (norm > 0)
+        {
+            var keys = counts.Keys.ToList();
+            foreach (var key in keys)
+            {
+                counts[key] /= norm;
+            }
+        }
+
+        return counts;
+    }
+
+    private static double ComputeCosineSimilarity(Dictionary<string, double> a, Dictionary<string, double> b)
+    {
+        if (a.Count == 0 || b.Count == 0) return 0;
+        var smaller = a.Count <= b.Count ? a : b;
+        var larger = smaller == a ? b : a;
+        double dot = 0;
+        foreach (var kv in smaller)
+        {
+            if (larger.TryGetValue(kv.Key, out var value))
+            {
+                dot += kv.Value * value;
+            }
+        }
+        return dot;
     }
 }

@@ -192,10 +192,10 @@ namespace TinyGenerator.Tests
         {
             public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null) { }
             public System.Threading.Tasks.Task FlushAsync() => System.Threading.Tasks.Task.CompletedTask;
-            public void LogPrompt(string modelName, string prompt) { }
-            public void LogResponse(string modelName, string response) { }
-            public void LogRequestJson(string modelName, string requestJson, int? threadId = null) { }
-            public void LogResponseJson(string modelName, string responseJson, int? threadId = null) { }
+            public void LogPrompt(string modelName, string prompt, string? agentName = null) { }
+            public void LogResponse(string modelName, string response, string? agentName = null) { }
+            public void LogRequestJson(string modelName, string requestJson, int? threadId = null, string? agentName = null) { }
+            public void LogResponseJson(string modelName, string responseJson, int? threadId = null, string? agentName = null) { }
             public void Start(string runId) { }
             public System.Threading.Tasks.Task AppendAsync(string runId, string message, string? extraClass = null) => System.Threading.Tasks.Task.CompletedTask;
             public void Append(string runId, string message, string? extraClass = null) { }

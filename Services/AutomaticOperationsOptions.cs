@@ -30,6 +30,22 @@ namespace TinyGenerator.Services
             Enabled = true,
             Priority = 5
         };
+
+        public AutomaticOperationOptions AutoFinalMixPipeline { get; set; } = new()
+        {
+            Enabled = true,
+            Priority = 7
+        };
+
+        public AutoStateDrivenSeriesEpisodeOptions AutoStateDrivenSeriesEpisode { get; set; } = new()
+        {
+            Enabled = true,
+            Priority = 7,
+            IntervalMinutes = 20,
+            TargetMinutes = 20,
+            WordsPerMinute = 150,
+            WriterAgentId = 0
+        };
     }
 
     public class AutomaticOperationOptions
@@ -42,5 +58,13 @@ namespace TinyGenerator.Services
     {
         public double MinAverageScore { get; set; } = 60;
         public int MinEvaluations { get; set; } = 2;
+    }
+
+    public sealed class AutoStateDrivenSeriesEpisodeOptions : AutomaticOperationOptions
+    {
+        public int IntervalMinutes { get; set; } = 20;
+        public int TargetMinutes { get; set; } = 20;
+        public int WordsPerMinute { get; set; } = 150;
+        public int WriterAgentId { get; set; } = 0;
     }
 }

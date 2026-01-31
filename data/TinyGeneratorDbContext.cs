@@ -31,9 +31,11 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<TaskTypeInfo> TaskTypes => Set<TaskTypeInfo>();
     public DbSet<TtsVoice> TtsVoices => Set<TtsVoice>();
     public DbSet<LogEntry> Logs => Set<LogEntry>();
+    public DbSet<SystemReport> SystemReports => Set<SystemReport>();
     public DbSet<Series> Series => Set<Series>();
     public DbSet<SeriesEpisode> SeriesEpisodes => Set<SeriesEpisode>();
     public DbSet<SeriesCharacter> SeriesCharacters => Set<SeriesCharacter>();
+    public DbSet<SeriesState> SeriesStates => Set<SeriesState>();
     public DbSet<Chapter> Chapters => Set<Chapter>();
     public DbSet<UsageState> UsageStates => Set<UsageState>();
     public DbSet<ModelTestRun> ModelTestRuns => Set<ModelTestRun>();
@@ -75,6 +77,9 @@ public class TinyGeneratorDbContext : DbContext
             .HasOne<Series>()
             .WithMany(s => s.Episodes)
             .HasForeignKey(se => se.SerieId);
+
+        modelBuilder.Entity<SeriesState>()
+            .HasIndex(ss => ss.SerieId);
 
         modelBuilder.Entity<Series>()
             .HasOne<PlannerMethod>()
@@ -203,7 +208,13 @@ public class TinyGeneratorDbContext : DbContext
             new Role { Id = 4, Ruolo = "tts_expert", ComandoCollegato = "TtsGeneration", CreatedAt = now, UpdatedAt = now },
             new Role { Id = 5, Ruolo = "music_expert", ComandoCollegato = "MusicGeneration", CreatedAt = now, UpdatedAt = now },
             new Role { Id = 6, Ruolo = "fx_expert", ComandoCollegato = "FxGeneration", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 7, Ruolo = "summarizer", ComandoCollegato = "SummarizeStory", CreatedAt = now, UpdatedAt = now }
+            new Role { Id = 7, Ruolo = "summarizer", ComandoCollegato = "SummarizeStory", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 8, Ruolo = "canon_extractor", ComandoCollegato = "CanonExtractor", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 9, Ruolo = "state_delta_builder", ComandoCollegato = "StateDeltaBuilder", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 10, Ruolo = "continuity_validator", ComandoCollegato = "ContinuityValidator", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 11, Ruolo = "state_updater", ComandoCollegato = "StateUpdater", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 12, Ruolo = "state_compressor", ComandoCollegato = "StateCompressor", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 13, Ruolo = "recap_builder", ComandoCollegato = "RecapBuilder", CreatedAt = now, UpdatedAt = now }
         );
     }
 }

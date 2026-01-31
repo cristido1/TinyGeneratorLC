@@ -122,7 +122,8 @@ builder.Services.AddSingleton<CommandDispatcher>(sp =>
         sp.GetService<IOptions<CommandDispatcherOptions>>(),
         sp.GetService<ICustomLogger>(),
         sp.GetService<IHubContext<TinyGenerator.Hubs.ProgressHub>>(),
-        sp.GetService<NumeratorService>()
+        sp.GetService<NumeratorService>(),
+        sp
     ));
 builder.Services.AddSingleton<ICommandDispatcher>(sp => sp.GetRequiredService<CommandDispatcher>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>());
@@ -130,6 +131,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>
 // Auto-summarize service (batch summarization at startup and every hour)
 builder.Services.AddHostedService<AutoSummarizeService>();
 builder.Services.AddHostedService<AutomaticOperationsService>();
+builder.Services.AddHostedService<AutoStateDrivenSeriesEpisodeService>();
 
 // Sentiment mapping service (embedding-based + agent fallback)
 builder.Services.AddSingleton<SentimentMappingService>(sp => new SentimentMappingService(
@@ -154,6 +156,7 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     idleAutoOptions: sp.GetService<IOptionsMonitor<AutomaticOperationsOptions>>(),
     scopeFactory: sp.GetService<IServiceScopeFactory>()));
 builder.Services.AddSingleton<LogAnalysisService>();
+builder.Services.AddSingleton<SystemReportService>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
 builder.Services.AddTransient<LangChainTestService>();
@@ -243,6 +246,33 @@ Console.WriteLine($"[Startup] builder.Build() completed at {DateTime.UtcNow:o}")
 
 // Get logger early for startup operations
 var logger = app.Services.GetService<ILoggerFactory>()?.CreateLogger("Startup");
+
+// Ensure llama.cpp server is terminated at startup so we start from a clean slate.
+StartupTasks.ResetLlamaServer(builder.Configuration, logger);
+
+// Print site URL once the app is fully started
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    try
+    {
+        var urls = app.Urls;
+        string displayed;
+        if (urls != null && urls.Count > 0)
+        {
+            displayed = string.Join(", ", urls);
+        }
+        else
+        {
+            var envUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+            displayed = string.IsNullOrWhiteSpace(envUrls) ? "http://localhost:5000" : envUrls;
+        }
+        Console.WriteLine($"[Startup] App ready at: {displayed}");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] App ready (failed to read URLs): {ex.Message}");
+    }
+});
 
 // Apply EF Core migrations automatically at startup
 try
@@ -419,6 +449,20 @@ try
 catch (Exception ex)
 {
     logger?.LogWarning(ex, "PREFIX_STORY_FOLDERS migration failed: {msg}", ex.Message);
+}
+
+// Final startup banner before the host begins accepting requests.
+try
+{
+    var urls = app.Urls;
+    var displayed = (urls != null && urls.Count > 0)
+        ? string.Join(", ", urls)
+        : (Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5000");
+    Console.WriteLine($"[Startup] Startup tasks completed. About to listen on: {displayed}");
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[Startup] Startup tasks completed (failed to read URLs): {ex.Message}");
 }
 
 app.Run();

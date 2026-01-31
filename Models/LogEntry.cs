@@ -54,7 +54,7 @@ namespace TinyGenerator.Models
         
         // Optional metadata
         [Column("ThreadId")]
-        public int ThreadId { get; set; }
+        public int? ThreadId { get; set; }
 
         [Column("story_id")]
         public long? StoryId { get; set; }
@@ -64,6 +64,9 @@ namespace TinyGenerator.Models
         
         [Column("AgentName")]
         public string? AgentName { get; set; }
+
+        [Column("model_name")]
+        public string? ModelName { get; set; }
         
         [Column("Context")]
         public string? Context { get; set; }

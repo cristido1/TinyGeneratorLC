@@ -1,0 +1,154 @@
+@page
+@model TinyGenerator.Pages.SystemReports.IndexModel
+@{
+    ViewData["Title"] = "System Reports";
+}
+
+<style>
+    .reports-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    .report-card {
+        background: #f8f9fa;
+        border: 2px solid #343a40;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+    }
+    .report-meta {
+        font-size: 0.8rem;
+        color: #6c757d;
+    }
+    .report-title {
+        font-weight: 600;
+        color: #212529;
+    }
+    .report-badge {
+        padding: 0.2rem 0.5rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border: 1px solid #adb5bd;
+        background: #e9ecef;
+        color: #212529;
+    }
+    .report-badge.sev-error { background: #ffe3e3; border-color: #ffa8a8; color: #c92a2a; }
+    .report-badge.sev-warning { background: #fff4e6; border-color: #ffd8a8; color: #e67700; }
+    .report-badge.sev-critical { background: #fff5f5; border-color: #ffc9c9; color: #a61e4d; }
+    .report-badge.sev-info { background: #e7f5ff; border-color: #a5d8ff; color: #1c7ed6; }
+    .report-grid {
+        display: grid;
+        gap: 1rem;
+    }
+</style>
+
+<div class="container-fluid px-4">
+    <div class="reports-header">
+        <div class="d-flex flex-column flex-sm-row align-items-sm-center gap-2">
+            <h4 class="mb-0">System Reports</h4>
+            <div class="text-muted small">Totale: @Model.TotalCount</div>
+        </div>
+        <form method="post" asp-page-handler="DeleteAll" class="mb-0">
+            <input type="hidden" name="page" value="@Model.PageIndex" />
+            <input type="hidden" name="pageSize" value="@Model.PageSize" />
+            <button type="submit" class="btn btn-sm btn-outline-danger"
+                    onclick="return confirm('Vuoi cancellare TUTTI i report di sistema? L operazione è irreversibile.');">
+                Cancella tutti i report
+            </button>
+        </form>
+    </div>
+
+    @if (Model.Reports.Any())
+    {
+        <div class="report-grid">
+            @foreach (var report in Model.Reports)
+            {
+                var sevClass = (report.Severity ?? string.Empty).ToLowerInvariant() switch
+                {
+                    "critical" => "sev-critical",
+                    "error" => "sev-error",
+                    "warning" => "sev-warning",
+                    _ => "sev-info"
+                };
+                <div class="report-card">
+                    <div class="d-flex justify-content-between align-items-start gap-3">
+                        <div class="flex-grow-1">
+                            <div class="report-title">@report.Title</div>
+                            <div class="report-meta">
+                                @report.CreatedAt
+                                @if (!string.IsNullOrWhiteSpace(report.OperationType))
+                                {
+                                    <span> • @report.OperationType</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(report.AgentName))
+                                {
+                                    <span> • @report.AgentName</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(report.ModelName))
+                                {
+                                    <span> • @report.ModelName</span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(report.Message))
+                            {
+                                <div class="text-muted mt-2">@report.Message</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(report.FailureReason))
+                            {
+                                <div class="mt-2">
+                                    <div class="small text-muted">Failure reason</div>
+                                    <div>@report.FailureReason</div>
+                                </div>
+                            }
+                        </div>
+                        <div class="d-flex flex-column align-items-end gap-2">
+                            <span class="report-badge @sevClass">@report.Severity</span>
+                            <span class="report-badge">@report.Status</span>
+                        </div>
+                    </div>
+                    <div class="report-meta mt-2">
+                        @if (report.StoryId.HasValue)
+                        {
+                            <span>Story: @report.StoryId</span>
+                        }
+                        @if (report.SeriesId.HasValue)
+                        {
+                            <span> • Serie: @report.SeriesId</span>
+                        }
+                        @if (report.SeriesEpisode.HasValue)
+                        {
+                            <span> • Ep: @report.SeriesEpisode</span>
+                        }
+                        @if (report.ExecutionTimeMs.HasValue)
+                        {
+                            <span> • @report.ExecutionTimeMs ms</span>
+                        }
+                        @if (report.RetryCount.HasValue)
+                        {
+                            <span> • Retry: @report.RetryCount</span>
+                        }
+                    </div>
+                    <div class="d-flex justify-content-end mt-3">
+                        <form method="post" asp-page-handler="DeleteReport" class="mb-0">
+                            <input type="hidden" name="reportId" value="@report.Id" />
+                            <input type="hidden" name="page" value="@Model.PageIndex" />
+                            <input type="hidden" name="pageSize" value="@Model.PageSize" />
+                            <button type="submit" class="btn btn-sm btn-outline-danger"
+                                    onclick="return confirm('Confermi la cancellazione di questo report?');">
+                                Cancella questo report
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="text-muted">Nessun report disponibile.</div>
+    }
+</div>

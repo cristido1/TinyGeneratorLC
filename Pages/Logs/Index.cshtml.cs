@@ -156,7 +156,8 @@ namespace TinyGenerator.Pages.Logs
                 foreach (var log in logs)
                 {
                     var storyIdValue = log.StoryId.HasValue ? log.StoryId.Value.ToString() : "";
-                    csv.AppendLine($"\"{log.Timestamp:yyyy-MM-dd HH:mm:ss}\",\"{log.Level}\",\"{log.ThreadScope}\",{log.ThreadId},{storyIdValue},\"{log.AgentName}\",\"{EscapeCsv(log.Message)}\",\"{log.Source}\"");
+                    var threadIdValue = log.ThreadId.HasValue ? log.ThreadId.Value : 0;
+                    csv.AppendLine($"\"{log.Timestamp:yyyy-MM-dd HH:mm:ss}\",\"{log.Level}\",\"{log.ThreadScope}\",{threadIdValue},{storyIdValue},\"{log.AgentName}\",\"{EscapeCsv(log.Message)}\",\"{log.Source}\"");
                 }
 
                 var fileName = threadId.HasValue && threadId.Value > 0

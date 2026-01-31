@@ -102,6 +102,24 @@ public sealed class Series
     [Column("note_ai")]
     public string? NoteAI { get; set; }
 
+    [Column("serie_state_summary")]
+    public string? SerieStateSummary { get; set; }
+
+    [Column("last_major_event")]
+    public string? LastMajorEvent { get; set; }
+
+    [Column("cosa_non_deve_mai_succedere")]
+    public string? CosaNonDeveMaiSuccedere { get; set; }
+
+    [Column("temi_obbligatori")]
+    public string? TemiObbligatori { get; set; }
+
+    [Column("livello_tecnologico_medio")]
+    public string? LivelloTecnologicoMedio { get; set; }
+
+    [Column("world_rules_locked")]
+    public bool WorldRulesLocked { get; set; } = false;
+
     // ==========================================
     // PLANNING (Strategico/Tattico)
     // ==========================================

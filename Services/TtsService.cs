@@ -241,7 +241,7 @@ namespace TinyGenerator.Services
                     var fullUrl = $"{_options.BaseUrl}{path}";
                     
                     // Log request JSON completo
-                    _logger?.LogRequestJson("TTS", $"POST {fullUrl}\n{payloadJson}");
+                    _logger?.LogRequestJson("TTS", $"POST {fullUrl}\n{payloadJson}", null, LogScope.CurrentAgentName);
                     Console.WriteLine($"[TtsService] POST {fullUrl}");
                     Console.WriteLine($"[TtsService] Request payload: {payloadJson}");
 

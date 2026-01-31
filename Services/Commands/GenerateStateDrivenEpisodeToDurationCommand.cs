@@ -20,6 +20,7 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
     private readonly ILangChainKernelFactory _kernelFactory;
     private readonly StoriesService _storiesService;
     private readonly ICustomLogger? _logger;
+    private readonly TextValidationService _textValidationService;
     private readonly IServiceScopeFactory? _scopeFactory;
 
     public GenerateStateDrivenEpisodeToDurationCommand(
@@ -30,6 +31,7 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
         DatabaseService database,
         ILangChainKernelFactory kernelFactory,
         StoriesService storiesService,
+        TextValidationService textValidationService,
         ICustomLogger? logger = null,
         CommandTuningOptions? tuning = null,
         IServiceScopeFactory? scopeFactory = null)
@@ -42,6 +44,7 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
         _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
         _storiesService = storiesService ?? throw new ArgumentNullException(nameof(storiesService));
         _logger = logger;
+        _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
         _tuning = tuning ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory;
     }
@@ -124,6 +127,7 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand
                 database: _database,
                 kernelFactory: _kernelFactory,
                 logger: _logger,
+                textValidationService: _textValidationService,
                 options: options,
                 tuning: _tuning,
                 scopeFactory: _scopeFactory);

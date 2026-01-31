@@ -17,7 +17,7 @@
 
     <div class="mb-3">
         <label asp-for="Role.ComandoCollegato" class="form-label">Comando Collegato</label>
-        <input asp-for="Role.ComandoCollegato" class="form-control" placeholder="Es: TransformStoryRawToTaggedCommand" />
+        <input asp-for="Role.ComandoCollegato" class="form-control" placeholder="Es: AddVoiceTagsToStoryCommand" />
         <span asp-validation-for="Role.ComandoCollegato" class="text-danger"></span>
         <small class="form-text text-muted">Nome del comando o operazione associata a questo ruolo.</small>
     </div>
@@ -31,3 +31,4 @@
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
 }
+

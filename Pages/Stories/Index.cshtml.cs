@@ -848,10 +848,10 @@ namespace TinyGenerator.Pages.Stories
         {
             var runId = QueueStoryCommand(
                 id,
-                "add_tags",
+                "add_voice_tags_to_story",
                 async ctx =>
                 {
-                    var cmd = new TransformStoryRawToTaggedCommand(
+                    var cmd = new AddVoiceTagsToStoryCommand(
                         id,
                         _database,
                         _kernelFactory,
@@ -904,35 +904,35 @@ namespace TinyGenerator.Pages.Stories
                         return new CommandResult(false, "Impossibile salvare story_tagged ripulito");
                     }
 
-                    var alreadyQueued = IsExpertAlreadyQueued("ambient_expert", id);
+                    var alreadyQueued = IsExpertAlreadyQueued("add_ambient_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}). ambient_expert già in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}). add_ambient_tags_to_story già in coda/in esecuzione");
                     }
 
-                    var expertRunId = $"ambient_expert_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    var expertRunId = $"add_ambient_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
                     _commandDispatcher.Enqueue(
-                        "ambient_expert",
+                        "add_ambient_tags_to_story",
                         async inner =>
                         {
-                            var cmd = new AmbientExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
+                            var cmd = new AddAmbientTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,
-                        threadScope: "story/ambient_expert",
+                        threadScope: "story/add_ambient_tags_to_story",
                         metadata: new Dictionary<string, string>
                         {
                             ["storyId"] = id.ToString(),
-                            ["operation"] = "ambient_expert",
+                            ["operation"] = "add_ambient_tags_to_story",
                             ["trigger"] = "stories_index_regen",
                             ["cleaned"] = "RUMORI",
                             ["taggedVersion"] = nextVersion.ToString()
                         },
                         priority: 2);
 
-                    return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}) e avviato ambient_expert (run {expertRunId})");
+                    return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}) e avviato add_ambient_tags_to_story (run {expertRunId})");
                 },
-                "Ripulizia RUMORI + rilancio ambient_expert avviati in background.");
+                "Ripulizia RUMORI + rilancio add_ambient_tags_to_story avviati in background.");
 
             TempData["StatusMessage"] = $"Rigenerazione RUMORI avviata (run {runId}).";
             return RedirectToPage();
@@ -970,35 +970,35 @@ namespace TinyGenerator.Pages.Stories
                         return new CommandResult(false, "Impossibile salvare story_tagged ripulito");
                     }
 
-                    var alreadyQueued = IsExpertAlreadyQueued("fx_expert", id);
+                    var alreadyQueued = IsExpertAlreadyQueued("add_fx_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}). fx_expert già in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}). add_fx_tags_to_story già in coda/in esecuzione");
                     }
 
-                    var expertRunId = $"fx_expert_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    var expertRunId = $"add_fx_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
                     _commandDispatcher.Enqueue(
-                        "fx_expert",
+                        "add_fx_tags_to_story",
                         async inner =>
                         {
-                            var cmd = new FxExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
+                            var cmd = new AddFxTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,
-                        threadScope: "story/fx_expert",
+                        threadScope: "story/add_fx_tags_to_story",
                         metadata: new Dictionary<string, string>
                         {
                             ["storyId"] = id.ToString(),
-                            ["operation"] = "fx_expert",
+                            ["operation"] = "add_fx_tags_to_story",
                             ["trigger"] = "stories_index_regen",
                             ["cleaned"] = "FX",
                             ["taggedVersion"] = nextVersion.ToString()
                         },
                         priority: 2);
 
-                    return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}) e avviato fx_expert (run {expertRunId})");
+                    return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}) e avviato add_fx_tags_to_story (run {expertRunId})");
                 },
-                "Ripulizia FX + rilancio fx_expert avviati in background.");
+                "Ripulizia FX + rilancio add_fx_tags_to_story avviati in background.");
 
             TempData["StatusMessage"] = $"Rigenerazione FX avviata (run {runId}).";
             return RedirectToPage();
@@ -1036,35 +1036,35 @@ namespace TinyGenerator.Pages.Stories
                         return new CommandResult(false, "Impossibile salvare story_tagged ripulito");
                     }
 
-                    var alreadyQueued = IsExpertAlreadyQueued("music_expert", id);
+                    var alreadyQueued = IsExpertAlreadyQueued("add_music_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}). music_expert già in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}). add_music_tags_to_story già in coda/in esecuzione");
                     }
 
-                    var expertRunId = $"music_expert_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    var expertRunId = $"add_music_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
                     _commandDispatcher.Enqueue(
-                        "music_expert",
+                        "add_music_tags_to_story",
                         async inner =>
                         {
-                            var cmd = new MusicExpertCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
+                            var cmd = new AddMusicTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _commandDispatcher, _tuning, _scopeFactory);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,
-                        threadScope: "story/music_expert",
+                        threadScope: "story/add_music_tags_to_story",
                         metadata: new Dictionary<string, string>
                         {
                             ["storyId"] = id.ToString(),
-                            ["operation"] = "music_expert",
+                            ["operation"] = "add_music_tags_to_story",
                             ["trigger"] = "stories_index_regen",
                             ["cleaned"] = "MUSICA",
                             ["taggedVersion"] = nextVersion.ToString()
                         },
                         priority: 2);
 
-                    return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}) e avviato music_expert (run {expertRunId})");
+                    return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}) e avviato add_music_tags_to_story (run {expertRunId})");
                 },
-                "Ripulizia MUSICA + rilancio music_expert avviati in background.");
+                "Ripulizia MUSICA + rilancio add_music_tags_to_story avviati in background.");
 
             TempData["StatusMessage"] = $"Rigenerazione MUSICA avviata (run {runId}).";
             return RedirectToPage();
@@ -1439,9 +1439,9 @@ namespace TinyGenerator.Pages.Stories
             if (!string.IsNullOrWhiteSpace(s.Folder))
             {
                 actions.Add(new { id = "add_tags", title = "Rigerera TAG voci", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) });
-                actions.Add(new { id = "regen_ambient_tags", title = "Rigenera TAG RUMORI (ambient_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenAmbientTags", id = s.Id }, Request.Scheme), confirm = true });
-                actions.Add(new { id = "regen_fx_tags", title = "Rigenera TAG FX (fx_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenFxTags", id = s.Id }, Request.Scheme), confirm = true });
-                actions.Add(new { id = "regen_music_tags", title = "Rigenera TAG MUSICA (music_expert)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenMusicTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "regen_ambient_tags", title = "Rigenera TAG RUMORI (add_ambient_tags_to_story)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenAmbientTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "regen_fx_tags", title = "Rigenera TAG FX (add_fx_tags_to_story)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenFxTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "regen_music_tags", title = "Rigenera TAG MUSICA (add_music_tags_to_story)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenMusicTags", id = s.Id }, Request.Scheme), confirm = true });
                 // Combined operation to prepare TTS schema: generate schema, normalize characters, assign voices, normalize sentiments
                 actions.Add(new { id = "prepare_tts_schema", title = "Prepara TTS schema da TAGs", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "PrepareTtsSchema", id = s.Id }, Request.Scheme) });
 
@@ -1563,3 +1563,4 @@ namespace TinyGenerator.Pages.Stories
         }
     }
 }
+

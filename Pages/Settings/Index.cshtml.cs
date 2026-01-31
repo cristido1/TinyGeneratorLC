@@ -20,7 +20,7 @@ namespace TinyGenerator.Pages.Settings
         private readonly IConfiguration _configuration;
         private readonly ILogger<IndexModel> _logger;
 
-        public List<SettingEntry> Settings { get; set; } = new();
+        public JsonTreeNode? Root { get; private set; }
 
         [TempData]
         public string? StatusMessage { get; set; }
@@ -34,10 +34,10 @@ namespace TinyGenerator.Pages.Settings
 
         public void OnGet()
         {
-            LoadSettings();
+            LoadTree();
         }
 
-        public IActionResult OnPostSave(List<SettingEntryInput> settings)
+        public IActionResult OnPostSave(Dictionary<string, string> values, Dictionary<string, string> types)
         {
             try
             {
@@ -45,34 +45,44 @@ namespace TinyGenerator.Pages.Settings
                 if (!System.IO.File.Exists(path))
                 {
                     StatusMessage = "appsettings.json non trovato.";
-                    LoadSettings();
+                    LoadTree();
                     return Page();
                 }
 
                 var json = System.IO.File.ReadAllText(path);
-                var root = JsonNode.Parse(json) as JsonObject;
+                var root = JsonNode.Parse(json);
                 if (root == null)
                 {
                     StatusMessage = "Impossibile leggere appsettings.json.";
-                    LoadSettings();
+                    LoadTree();
                     return Page();
                 }
 
                 var errors = new List<string>();
-                foreach (var entry in settings ?? new List<SettingEntryInput>())
+                foreach (var kvp in values ?? new Dictionary<string, string>())
                 {
-                    if (string.IsNullOrWhiteSpace(entry.Path))
+                    var formKey = kvp.Key;
+                    var rawValue = kvp.Value;
+
+                    if (string.IsNullOrWhiteSpace(formKey))
                     {
                         continue;
                     }
 
                     try
                     {
-                        SetValue(root, entry.Path, entry.Type, entry.Value);
+                        var pointer = DecodeFormKey(formKey);
+                        if (string.IsNullOrWhiteSpace(pointer))
+                        {
+                            continue;
+                        }
+
+                        var type = (types != null && types.TryGetValue(formKey, out var t)) ? t : "string";
+                        SetValueByPointer(root, pointer, type, rawValue);
                     }
                     catch (Exception ex)
                     {
-                        errors.Add($"{entry.Path}: {ex.Message}");
+                        errors.Add($"{formKey}: {ex.Message}");
                     }
                 }
 
@@ -98,28 +108,26 @@ namespace TinyGenerator.Pages.Settings
             return RedirectToPage();
         }
 
-        private void LoadSettings()
+        private void LoadTree()
         {
             var path = GetSettingsPath();
             if (!System.IO.File.Exists(path))
             {
-                Settings = new List<SettingEntry>();
+                Root = null;
                 StatusMessage = "appsettings.json non trovato.";
                 return;
             }
 
             var json = System.IO.File.ReadAllText(path);
-            var root = JsonNode.Parse(json) as JsonObject;
+            var root = JsonNode.Parse(json);
             if (root == null)
             {
-                Settings = new List<SettingEntry>();
+                Root = null;
                 StatusMessage = "Impossibile leggere appsettings.json.";
                 return;
             }
 
-            var list = new List<SettingEntry>();
-            Flatten(root, string.Empty, list);
-            Settings = list.OrderBy(s => s.Path, StringComparer.OrdinalIgnoreCase).ToList();
+            Root = BuildTree(root, displayName: "(root)", jsonPointer: string.Empty, depth: 0);
         }
 
         private string GetSettingsPath()
@@ -135,131 +143,250 @@ namespace TinyGenerator.Pages.Settings
             }
         }
 
-        private static void Flatten(JsonNode node, string path, List<SettingEntry> list)
+        private static JsonTreeNode BuildTree(JsonNode node, string displayName, string jsonPointer, int depth)
         {
+            var kind = GetNodeKind(node);
+            var treeNode = new JsonTreeNode
+            {
+                DisplayName = displayName,
+                JsonPointer = jsonPointer,
+                FormKey = EncodeFormKey(jsonPointer),
+                Kind = kind,
+                Depth = depth,
+                Value = GetLeafValue(node, kind)
+            };
+
             if (node is JsonObject obj)
             {
-                foreach (var kvp in obj)
+                foreach (var kvp in obj.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
                 {
-                    var nextPath = string.IsNullOrWhiteSpace(path) ? kvp.Key : $"{path}:{kvp.Key}";
-                    if (kvp.Value != null)
+                    if (kvp.Value == null)
                     {
-                        Flatten(kvp.Value, nextPath, list);
+                        var childPointer = CombinePointer(jsonPointer, EscapePointerToken(kvp.Key));
+                        treeNode.Children.Add(new JsonTreeNode
+                        {
+                            DisplayName = kvp.Key,
+                            JsonPointer = childPointer,
+                            FormKey = EncodeFormKey(childPointer),
+                            Kind = "null",
+                            Depth = depth + 1,
+                            Value = string.Empty
+                        });
+                        continue;
+                    }
+
+                    var childPtr = CombinePointer(jsonPointer, EscapePointerToken(kvp.Key));
+                    treeNode.Children.Add(BuildTree(kvp.Value, kvp.Key, childPtr, depth + 1));
+                }
+            }
+            else if (node is JsonArray arr)
+            {
+                for (int i = 0; i < arr.Count; i++)
+                {
+                    var item = arr[i];
+                    var name = $"[{i}]";
+                    var childPtr = CombinePointer(jsonPointer, i.ToString(CultureInfo.InvariantCulture));
+                    if (item == null)
+                    {
+                        treeNode.Children.Add(new JsonTreeNode
+                        {
+                            DisplayName = name,
+                            JsonPointer = childPtr,
+                            FormKey = EncodeFormKey(childPtr),
+                            Kind = "null",
+                            Depth = depth + 1,
+                            Value = string.Empty
+                        });
+                    }
+                    else
+                    {
+                        treeNode.Children.Add(BuildTree(item, name, childPtr, depth + 1));
                     }
                 }
-                return;
             }
 
-            if (node is JsonArray array)
-            {
-                var json = array.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
-                list.Add(new SettingEntry(path, json, "json", ComputeDepth(path)));
-                return;
-            }
+            return treeNode;
+        }
+
+        private static string GetNodeKind(JsonNode node)
+        {
+            if (node is JsonObject) return "object";
+            if (node is JsonArray) return "array";
 
             if (node is JsonValue value)
             {
-                if (value.TryGetValue<bool>(out var boolValue))
-                {
-                    list.Add(new SettingEntry(path, boolValue ? "true" : "false", "bool", ComputeDepth(path)));
-                    return;
-                }
-                if (value.TryGetValue<long>(out var longValue))
-                {
-                    list.Add(new SettingEntry(path, longValue.ToString(CultureInfo.InvariantCulture), "number", ComputeDepth(path)));
-                    return;
-                }
-                if (value.TryGetValue<double>(out var doubleValue))
-                {
-                    list.Add(new SettingEntry(path, doubleValue.ToString(CultureInfo.InvariantCulture), "number", ComputeDepth(path)));
-                    return;
-                }
-                if (value.TryGetValue<string>(out var stringValue))
-                {
-                    list.Add(new SettingEntry(path, stringValue ?? string.Empty, "string", ComputeDepth(path)));
-                    return;
-                }
-
-                list.Add(new SettingEntry(path, value.ToString() ?? string.Empty, "string", ComputeDepth(path)));
+                if (value.TryGetValue<bool>(out _)) return "bool";
+                if (value.TryGetValue<long>(out _)) return "number";
+                if (value.TryGetValue<double>(out _)) return "number";
+                if (value.TryGetValue<string>(out _)) return "string";
+                return "string";
             }
+
+            return "string";
         }
 
-        private static int ComputeDepth(string path)
+        private static string GetLeafValue(JsonNode node, string kind)
         {
-            if (string.IsNullOrWhiteSpace(path)) return 0;
-            return Math.Max(0, path.Split(':', StringSplitOptions.RemoveEmptyEntries).Length - 1);
+            if (kind is "object" or "array") return string.Empty;
+            if (kind == "null") return string.Empty;
+
+            if (node is JsonValue value)
+            {
+                if (kind == "bool" && value.TryGetValue<bool>(out var b)) return b ? "true" : "false";
+                if (kind == "number" && value.TryGetValue<long>(out var l)) return l.ToString(CultureInfo.InvariantCulture);
+                if (kind == "number" && value.TryGetValue<double>(out var d)) return d.ToString(CultureInfo.InvariantCulture);
+                if (value.TryGetValue<string>(out var s)) return s ?? string.Empty;
+                return value.ToString() ?? string.Empty;
+            }
+
+            return node.ToString() ?? string.Empty;
         }
 
-        private static void SetValue(JsonObject root, string path, string? type, string? rawValue)
+        private static void SetValueByPointer(JsonNode root, string jsonPointer, string? type, string? rawValue)
         {
             if (root == null) throw new ArgumentNullException(nameof(root));
+            if (string.IsNullOrWhiteSpace(jsonPointer)) return;
 
-            var segments = path.Split(':', StringSplitOptions.RemoveEmptyEntries);
+            var pointer = jsonPointer.Trim();
+            if (pointer == "/") return;
+            if (!pointer.StartsWith('/'))
+            {
+                throw new InvalidOperationException("JSON Pointer non valido.");
+            }
+
+            var segments = pointer.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Select(UnescapePointerToken)
+                .ToArray();
+
             if (segments.Length == 0) return;
 
-            JsonObject current = root;
+            JsonNode current = root;
             for (int i = 0; i < segments.Length - 1; i++)
             {
                 var seg = segments[i];
-                if (current[seg] is JsonObject childObj)
+                var nextSeg = segments[i + 1];
+
+                if (current is JsonObject currentObj)
                 {
-                    current = childObj;
+                    if (currentObj[seg] == null)
+                    {
+                        currentObj[seg] = IsArrayIndex(nextSeg) ? new JsonArray() : new JsonObject();
+                    }
+                    current = currentObj[seg]!;
                     continue;
                 }
 
-                var created = new JsonObject();
-                current[seg] = created;
-                current = created;
+                if (current is JsonArray currentArr)
+                {
+                    if (!int.TryParse(seg, NumberStyles.Integer, CultureInfo.InvariantCulture, out var idx) || idx < 0)
+                    {
+                        throw new InvalidOperationException("Indice array non valido nel puntatore.");
+                    }
+                    EnsureArraySize(currentArr, idx + 1);
+                    if (currentArr[idx] == null)
+                    {
+                        currentArr[idx] = IsArrayIndex(nextSeg) ? new JsonArray() : new JsonObject();
+                    }
+                    current = currentArr[idx]!;
+                    continue;
+                }
+
+                throw new InvalidOperationException("Percorso non modificabile: nodo intermedio non è container.");
             }
 
-            var key = segments[^1];
+            var leafSeg = segments[^1];
             var normalizedType = string.IsNullOrWhiteSpace(type) ? "string" : type.Trim().ToLowerInvariant();
             var value = rawValue ?? string.Empty;
 
+            if (current is JsonObject leafObj)
+            {
+                leafObj[leafSeg] = CreateTypedNode(normalizedType, value);
+                return;
+            }
+
+            if (current is JsonArray leafArr)
+            {
+                if (!int.TryParse(leafSeg, NumberStyles.Integer, CultureInfo.InvariantCulture, out var leafIdx) || leafIdx < 0)
+                {
+                    throw new InvalidOperationException("Indice array non valido nel puntatore.");
+                }
+                EnsureArraySize(leafArr, leafIdx + 1);
+                leafArr[leafIdx] = CreateTypedNode(normalizedType, value);
+                return;
+            }
+
+            throw new InvalidOperationException("Nodo destinazione non modificabile.");
+        }
+
+        private static JsonNode? CreateTypedNode(string normalizedType, string value)
+        {
             switch (normalizedType)
             {
                 case "bool":
-                    if (bool.TryParse(value, out var boolValue))
-                    {
-                        current[key] = JsonValue.Create(boolValue);
-                    }
-                    else
-                    {
-                        throw new InvalidOperationException("Valore booleano non valido.");
-                    }
-                    break;
+                    if (bool.TryParse(value, out var boolValue)) return JsonValue.Create(boolValue);
+                    throw new InvalidOperationException("Valore booleano non valido.");
                 case "number":
-                    if (TryParseNumber(value, out var numberNode))
-                    {
-                        current[key] = numberNode;
-                    }
-                    else
-                    {
-                        throw new InvalidOperationException("Valore numerico non valido.");
-                    }
-                    break;
-                case "json":
-                    try
-                    {
-                        var parsed = JsonNode.Parse(value);
-                        if (parsed == null)
-                        {
-                            throw new InvalidOperationException("JSON non valido.");
-                        }
-                        current[key] = parsed;
-                    }
-                    catch (JsonException ex)
-                    {
-                        throw new InvalidOperationException(ex.Message);
-                    }
-                    break;
+                    if (TryParseNumber(value, out var numberNode)) return numberNode;
+                    throw new InvalidOperationException("Valore numerico non valido.");
                 case "null":
-                    current[key] = null;
-                    break;
+                    return null;
                 default:
-                    current[key] = JsonValue.Create(value);
-                    break;
+                    return JsonValue.Create(value);
             }
+        }
+
+        private static bool IsArrayIndex(string segment)
+        {
+            return int.TryParse(segment, NumberStyles.Integer, CultureInfo.InvariantCulture, out var idx) && idx >= 0;
+        }
+
+        private static void EnsureArraySize(JsonArray arr, int size)
+        {
+            while (arr.Count < size)
+            {
+                arr.Add(null);
+            }
+        }
+
+        private static string CombinePointer(string parentPointer, string token)
+        {
+            if (string.IsNullOrWhiteSpace(parentPointer)) return "/" + token;
+            if (parentPointer == "/") return "/" + token;
+            return parentPointer + "/" + token;
+        }
+
+        private static string EscapePointerToken(string token)
+        {
+            return token.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+        }
+
+        private static string UnescapePointerToken(string token)
+        {
+            return token.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal);
+        }
+
+        private static string EncodeFormKey(string pointer)
+        {
+            // base64url, safe for form field keys
+            var bytes = Encoding.UTF8.GetBytes(pointer ?? string.Empty);
+            return Convert.ToBase64String(bytes)
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+        }
+
+        private static string DecodeFormKey(string formKey)
+        {
+            if (string.IsNullOrWhiteSpace(formKey)) return string.Empty;
+
+            var padded = formKey.Replace('-', '+').Replace('_', '/');
+            switch (padded.Length % 4)
+            {
+                case 2: padded += "=="; break;
+                case 3: padded += "="; break;
+            }
+            var bytes = Convert.FromBase64String(padded);
+            return Encoding.UTF8.GetString(bytes);
         }
 
         private static bool TryParseNumber(string value, out JsonNode node)
@@ -293,13 +420,15 @@ namespace TinyGenerator.Pages.Settings
             return false;
         }
 
-        public sealed record SettingEntry(string Path, string Value, string Type, int Depth);
-
-        public sealed class SettingEntryInput
+        public sealed class JsonTreeNode
         {
-            public string Path { get; set; } = string.Empty;
-            public string Value { get; set; } = string.Empty;
-            public string Type { get; set; } = "string";
+            public string DisplayName { get; init; } = string.Empty;
+            public string JsonPointer { get; init; } = string.Empty;
+            public string FormKey { get; init; } = string.Empty;
+            public string Kind { get; init; } = "string";
+            public int Depth { get; init; }
+            public string Value { get; init; } = string.Empty;
+            public List<JsonTreeNode> Children { get; } = new();
         }
     }
 }

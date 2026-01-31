@@ -3,22 +3,28 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
-using System.Text.RegularExpressions;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace TinyGenerator.Services.Commands
 {
     /// <summary>
-    /// Reads story_tagged, splits into chunks, adds ambient/noise tags via ambient_expert agent,
-    /// updates story_tagged, then enqueues fx_expert command.
+    /// Reads story_tagged, splits into chunks, adds music tags via music_expert agent,
+    /// updates story_tagged, then enqueues TTS schema generation (the final step).
     /// </summary>
-    public sealed class AmbientExpertCommand
+    public sealed class AddMusicTagsToStoryCommand
     {
         private readonly CommandTuningOptions _tuning;
+
+        private static readonly Regex MusicTagRegex = new(@"\[\s*(?:MUSICA|MUSIC)\s*:[^\]]*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex MusicTagLineRegex = new(@"(?im)^\s*\[\s*(?:MUSICA|MUSIC)\s*:[^\]]*\]", RegexOptions.Compiled);
+        private static readonly Regex MusicBlockStartRegex = new(@"(?is)^\s*\[\s*(?:MUSICA|MUSIC)\s*:[^\]]*\]", RegexOptions.Compiled);
+        private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
 
         private readonly long _storyId;
         private readonly DatabaseService _database;
@@ -28,7 +34,7 @@ namespace TinyGenerator.Services.Commands
         private readonly ICommandDispatcher? _commandDispatcher;
         private readonly IServiceScopeFactory? _scopeFactory;
 
-        public AmbientExpertCommand(
+        public AddMusicTagsToStoryCommand(
             long storyId,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
@@ -51,11 +57,11 @@ namespace TinyGenerator.Services.Commands
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
         {
             var effectiveRunId = string.IsNullOrWhiteSpace(runId)
-                ? $"ambient_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
+                ? $"add_music_tags_to_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
                 : runId;
 
             _logger?.Start(effectiveRunId);
-            _logger?.Append(effectiveRunId, $"[story {_storyId}] Starting ambient_expert pipeline");
+            _logger?.Append(effectiveRunId, $"[story {_storyId}] Starting add_music_tags_to_story pipeline");
 
             try
             {
@@ -73,25 +79,25 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"Story {_storyId} has no revised text");
                 }
 
-                var ambientAgent = _database.ListAgents()
-                    .FirstOrDefault(a => a.IsActive && string.Equals(a.Role, "ambient_expert", StringComparison.OrdinalIgnoreCase));
+                var musicAgent = _database.ListAgents()
+                    .FirstOrDefault(a => a.IsActive && string.Equals(a.Role, "music_expert", StringComparison.OrdinalIgnoreCase));
 
-                if (ambientAgent == null)
+                if (musicAgent == null)
                 {
-                    return Fail(effectiveRunId, "No active ambient_expert agent found");
+                    return Fail(effectiveRunId, "No active music_expert agent found");
                 }
 
-                if (!ambientAgent.ModelId.HasValue)
+                if (!musicAgent.ModelId.HasValue)
                 {
-                    return Fail(effectiveRunId, $"Ambient expert agent {ambientAgent.Name} has no model configured");
+                    return Fail(effectiveRunId, $"Music expert agent {musicAgent.Name} has no model configured");
                 }
 
-                var currentModelId = ambientAgent.ModelId.Value;
+                var currentModelId = musicAgent.ModelId.Value;
 
-                var modelInfo = _database.GetModelInfoById(ambientAgent.ModelId.Value);
+                var modelInfo = _database.GetModelInfoById(musicAgent.ModelId.Value);
                 if (string.IsNullOrWhiteSpace(modelInfo?.Name))
                 {
-                    return Fail(effectiveRunId, $"Model not found for ambient expert agent {ambientAgent.Name}");
+                    return Fail(effectiveRunId, $"Model not found for music expert agent {musicAgent.Name}");
                 }
 
                 var triedModelNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -101,7 +107,7 @@ namespace TinyGenerator.Services.Commands
 
                 var currentModelName = modelInfo.Name;
 
-                var systemPrompt = BuildSystemPrompt(ambientAgent);
+                var systemPrompt = BuildSystemPrompt(musicAgent);
                 var rowsBuild = StoryTaggingService.BuildStoryRows(sourceText);
                 var storyRows = string.IsNullOrWhiteSpace(story.StoryRows) ? rowsBuild.StoryRows : story.StoryRows;
                 if (string.IsNullOrWhiteSpace(storyRows))
@@ -119,9 +125,9 @@ namespace TinyGenerator.Services.Commands
 
                 var chunks = StoryTaggingService.SplitRowsIntoChunks(
                     rows,
-                    _tuning.AmbientExpert.MinTokensPerChunk,
-                    _tuning.AmbientExpert.MaxTokensPerChunk,
-                    _tuning.AmbientExpert.TargetTokensPerChunk);
+                    _tuning.MusicExpert.MinTokensPerChunk,
+                    _tuning.MusicExpert.MaxTokensPerChunk,
+                    _tuning.MusicExpert.TargetTokensPerChunk);
                 if (chunks.Count == 0)
                 {
                     return Fail(effectiveRunId, "No chunks produced from story rows");
@@ -131,14 +137,14 @@ namespace TinyGenerator.Services.Commands
 
                 var bridge = _kernelFactory.CreateChatBridge(
                     currentModelName,
-                    ambientAgent.Temperature,
-                    ambientAgent.TopP,
-                    ambientAgent.RepeatPenalty,
-                    ambientAgent.TopK,
-                    ambientAgent.RepeatLastN,
-                    ambientAgent.NumPredict);
+                    musicAgent.Temperature,
+                    musicAgent.TopP,
+                    musicAgent.RepeatPenalty,
+                    musicAgent.TopK,
+                    musicAgent.RepeatLastN,
+                    musicAgent.NumPredict);
 
-                var ambientTags = new List<StoryTaggingService.StoryTagEntry>();
+                var musicTags = new List<StoryTaggingService.StoryTagEntry>();
                 for (int i = 0; i < chunks.Count; i++)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -146,7 +152,7 @@ namespace TinyGenerator.Services.Commands
 
                     try
                     {
-                        _commandDispatcher?.UpdateStep(effectiveRunId, i + 1, chunks.Count, $"Adding ambient tags chunk {i + 1}/{chunks.Count}");
+                        _commandDispatcher?.UpdateStep(effectiveRunId, i + 1, chunks.Count, $"Adding music tags chunk {i + 1}/{chunks.Count}");
                     }
                     catch
                     {
@@ -168,18 +174,18 @@ namespace TinyGenerator.Services.Commands
                     catch (Exception ex) when (_scopeFactory != null)
                     {
                         _logger?.Append(effectiveRunId,
-                            $"[chunk {i + 1}/{chunks.Count}] Primary ambient_expert model '{currentModelName}' failed: {ex.Message}. Attempting fallback models...",
+                            $"[chunk {i + 1}/{chunks.Count}] Primary music_expert model '{currentModelName}' failed: {ex.Message}. Attempting fallback models...",
                             "warn");
 
                         var fallback = await TryChunkWithFallbackAsync(
-                            roleCode: "ambient_expert",
+                            roleCode: "music_expert",
                             failingModelId: currentModelId,
                             systemPrompt: systemPrompt,
                             chunkText: chunk.Text,
                             chunkIndex: i + 1,
                             chunkCount: chunks.Count,
                             runId: effectiveRunId,
-                            agent: ambientAgent,
+                            agent: musicAgent,
                             triedModelNames: triedModelNames,
                             ct: ct);
 
@@ -195,26 +201,27 @@ namespace TinyGenerator.Services.Commands
                         currentModelName = fallback.Value.ModelName;
                         bridge = _kernelFactory.CreateChatBridge(
                             currentModelName,
-                            ambientAgent.Temperature,
-                            ambientAgent.TopP,
-                            ambientAgent.RepeatPenalty,
-                            ambientAgent.TopK,
-                            ambientAgent.RepeatLastN,
-                            ambientAgent.NumPredict);
+                            musicAgent.Temperature,
+                            musicAgent.TopP,
+                            musicAgent.RepeatPenalty,
+                            musicAgent.TopK,
+                            musicAgent.RepeatLastN,
+                            musicAgent.NumPredict);
                     }
 
                     if (string.IsNullOrWhiteSpace(mappingText))
                     {
-                        return Fail(effectiveRunId, $"Ambient expert returned empty text for chunk {i + 1}/{chunks.Count}");
+                        return Fail(effectiveRunId, $"Music expert returned empty text for chunk {i + 1}/{chunks.Count}");
                     }
 
-                    var parsed = StoryTaggingService.ParseAmbientMapping(mappingText);
-                    ambientTags.AddRange(parsed);
+                    var parsed = StoryTaggingService.ParseMusicMapping(mappingText);
+                    parsed = StoryTaggingService.FilterMusicTagsByProximity(parsed, minLineDistance: 20);
+                    musicTags.AddRange(parsed);
                 }
 
                 var existingTags = StoryTaggingService.LoadStoryTags(story.StoryTags);
-                existingTags.RemoveAll(t => t.Type == StoryTaggingService.TagTypeAmbient);
-                existingTags.AddRange(ambientTags);
+                existingTags.RemoveAll(t => t.Type == StoryTaggingService.TagTypeMusic);
+                existingTags.AddRange(musicTags);
                 var storyTagsJson = StoryTaggingService.SerializeStoryTags(existingTags);
                 _database.UpdateStoryRowsAndTags(story.Id, storyRows, storyTagsJson);
 
@@ -231,15 +238,15 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"Failed to persist tagged story for {_storyId}");
                 }
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] Ambient tags rebuilt from story_tags");
+                _logger?.Append(effectiveRunId, $"[story {_storyId}] Music tags rebuilt from story_tags");
 
-                // Enqueue next stage: fx_expert
-                var enqueued = TryEnqueueFxExpert(story, effectiveRunId);
+                var allowNext = _storiesService?.ApplyStatusTransitionWithCleanup(story, "tagged", effectiveRunId) ?? true;
+                var enqueued = TryEnqueueNextStatus(story, allowNext, effectiveRunId);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
                 return new CommandResult(true, enqueued
-                    ? "Ambient tags added (fx_expert enqueued)"
-                    : "Ambient tags added");
+                    ? "Music tags added (next status enqueued)"
+                    : "Music tags added");
             }
             catch (OperationCanceledException)
             {
@@ -248,58 +255,6 @@ namespace TinyGenerator.Services.Commands
             catch (Exception ex)
             {
                 return Fail(effectiveRunId, ex.Message);
-            }
-        }
-
-        private bool TryEnqueueFxExpert(StoryRecord story, string runId)
-        {
-            try
-            {
-                if (!_tuning.AmbientExpert.AutolaunchNextCommand)
-                {
-                    _logger?.Append(runId, $"[story {_storyId}] fx_expert enqueue skipped: AutolaunchNextCommand disabled", "info");
-                    return false;
-                }
-
-                if (_commandDispatcher == null || _storiesService == null || _kernelFactory == null)
-                {
-                    _logger?.Append(runId, $"[story {_storyId}] fx_expert enqueue skipped: missing dependencies", "warn");
-                    return false;
-                }
-
-                var fxRunId = $"fx_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-
-                _commandDispatcher.Enqueue(
-                    "fx_expert",
-                    async ctx =>
-                    {
-                        try
-                        {
-                            var cmd = new FxExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher, _tuning, _scopeFactory);
-                            return await cmd.ExecuteAsync(ctx.CancellationToken, fxRunId);
-                        }
-                        catch (Exception ex)
-                        {
-                            return new CommandResult(false, ex.Message);
-                        }
-                    },
-                    runId: fxRunId,
-                    threadScope: "story/fx_expert",
-                    metadata: new Dictionary<string, string>
-                    {
-                        ["storyId"] = _storyId.ToString(),
-                        ["operation"] = "fx_expert",
-                        ["trigger"] = "ambient_expert_completed"
-                    },
-                    priority: 2);
-
-                _logger?.Append(runId, $"[story {_storyId}] Enqueued fx_expert (runId={fxRunId})", "info");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue fx_expert: {ex.Message}", "warn");
-                return false;
             }
         }
 
@@ -375,6 +330,58 @@ namespace TinyGenerator.Services.Commands
             return new FallbackChunkResult(result, successfulModelRole.ModelId, successfulModelRole.Model.Name);
         }
 
+        private bool TryEnqueueNextStatus(StoryRecord story, bool allowNext, string runId)
+        {
+            try
+            {
+                if (!allowNext)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: delete_next_items attivo", "info");
+                    return false;
+                }
+
+                if (_storiesService != null && !_storiesService.IsTaggedFinalAutoLaunchEnabled())
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: StoryTaggingPipeline final autolaunch disabled", "info");
+                    return false;
+                }
+
+                if (_storiesService != null && !_storiesService.TryValidateTaggedMusic(story, out var musicReason))
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: music validation failed ({musicReason})", "warn");
+                    return false;
+                }
+
+                if (!_tuning.MusicExpert.AutolaunchNextCommand)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: AutolaunchNextCommand disabled", "info");
+                    return false;
+                }
+
+                if (_storiesService == null)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: StoriesService not available", "warn");
+                    return false;
+                }
+
+                var refreshedStory = _storiesService.GetStoryById(story.Id) ?? story;
+                var nextRunId = _storiesService.EnqueueNextStatusCommand(refreshedStory, "music_tags_completed", priority: 2);
+                if (!string.IsNullOrWhiteSpace(nextRunId))
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] Enqueued next status (runId={nextRunId})", "info");
+                    return true;
+                }
+
+                _logger?.Append(runId, $"[story {_storyId}] Next status enqueue skipped: no next status available", "info");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue next status: {ex.Message}", "warn");
+                return false;
+            }
+        }
+
         private CommandResult Fail(string runId, string message)
         {
             _logger?.Append(runId, message, "error");
@@ -394,17 +401,16 @@ namespace TinyGenerator.Services.Commands
             string? lastError = null;
             string? lastAssistantText = null;
             List<ConversationMessage>? lastRequestMessages = null;
-
-            var maxAttempts = Math.Max(1, _tuning.AmbientExpert.MaxAttemptsPerChunk);
-            var minTagsRequired = Math.Max(0, _tuning.AmbientExpert.MinAmbientTagsPerChunkRequirement);
-            var retryDelayBaseSeconds = Math.Max(0, _tuning.AmbientExpert.RetryDelayBaseSeconds);
-            var diagnoseOnFinalFailure = _tuning.AmbientExpert.DiagnoseOnFinalFailure;
+            var maxAttempts = Math.Max(1, _tuning.MusicExpert.MaxAttemptsPerChunk);
+            var retryDelayBaseSeconds = Math.Max(0, _tuning.MusicExpert.RetryDelayBaseSeconds);
+            var requiredTags = ComputeRequiredMusicTagsForChunk(chunkText);
+            var diagnoseOnFinalFailure = _tuning.MusicExpert.DiagnoseOnFinalFailure;
             var hadCorrections = false;
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 ct.ThrowIfCancellationRequested();
-                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Ambient tagging attempt {attempt}/{maxAttempts}");
+                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Music tagging attempt {attempt}/{maxAttempts} (minTags={requiredTags})");
 
                 try
                 {
@@ -419,11 +425,11 @@ namespace TinyGenerator.Services.Commands
                         Role = "system",
                         Content =
                             "FORMATO RISPOSTA OBBLIGATORIO:\n" +
-                            "- Restituisci SOLO righe nel formato: ID descrizione dei rumori\n" +
-                            "- Non usare parentesi o tag [RUMORI]\n" +
+                            "- Restituisci SOLO righe nel formato: ID emozione [secondi]\n" +
+                            "- Non usare tag [MUSIC] o parentesi diverse dalle [secondi]\n" +
                             "- Non riscrivere il testo, non aggiungere spiegazioni\n" +
                             "- Gli ID sono quelli del testo numerato fornito\n" +
-                            "- Se non c'è un rumore per una riga, non restituire quella riga\n"
+                            "- Se non c'è musica per una riga, non restituire quella riga\n"
                     });
 
                     // Add error feedback for retry attempts
@@ -456,26 +462,19 @@ namespace TinyGenerator.Services.Commands
                         continue;
                     }
 
-                    var tags = StoryTaggingService.ParseAmbientMapping(cleaned);
+                    var tags = StoryTaggingService.ParseMusicMapping(cleaned);
+                    tags = StoryTaggingService.FilterMusicTagsByProximity(tags, minLineDistance: 20);
                     var tagCount = tags.Count;
-                    if (tagCount == 0)
+                    if (tagCount < requiredTags)
                     {
-                        _logger?.MarkLatestModelResponseResult("FAILED", "Nessuna riga valida nel formato richiesto");
-                        lastError = "Non ho trovato righe valide nel formato \"ID descrizione\".";
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough music tags: {tagCount} found, minimum {requiredTags} required", "warn");
+                        _logger?.MarkLatestModelResponseResult("FAILED", $"Hai inserito solo {tagCount} righe valide. Devi inserirne almeno {requiredTags}.");
+                        lastError = $"Hai inserito solo {tagCount} righe valide. Devi inserire ALMENO {requiredTags} indicazioni musicali (formato: ID emozione [secondi]).";
                         hadCorrections = true;
                         continue;
                     }
 
-                    if (tagCount < minTagsRequired)
-                    {
-                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough ambient tags: {tagCount} found, minimum {minTagsRequired} required", "warn");
-                        _logger?.MarkLatestModelResponseResult("FAILED", $"Hai inserito solo {tagCount} tag. Devi inserirne almeno {minTagsRequired}.");
-                        lastError = $"Hai inserito solo {tagCount} tag [RUMORI]. Devi inserire ALMENO {minTagsRequired} tag di questo tipo per arricchire l'atmosfera della scena, non ripetere gli stessi tag.";
-                        hadCorrections = true;
-                        continue;
-                    }
-
-                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalAmbient={tagCount}");
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalMusic={tagCount}");
                     _logger?.MarkLatestModelResponseResult(
                         hadCorrections ? "FAILED" : "SUCCESS",
                         hadCorrections ? "Risposta corretta dopo retry" : null);
@@ -513,12 +512,12 @@ namespace TinyGenerator.Services.Commands
 
                     if (!string.IsNullOrWhiteSpace(diagnosis))
                     {
-                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] ambient_expert self-diagnosis: {diagnosis}", "warn");
+                        _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] music_expert self-diagnosis: {diagnosis}", "warn");
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Failed to collect ambient_expert self-diagnosis: {ex.Message}", "warn");
+                    _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Failed to collect music_expert self-diagnosis: {ex.Message}", "warn");
                 }
             }
 
@@ -537,12 +536,12 @@ namespace TinyGenerator.Services.Commands
             CancellationToken ct)
         {
             var auditSystem =
-                "Sei un auditor tecnico per l'agente ambient_expert. " +
+                "Sei un auditor tecnico per l'agente music_expert. " +
                 "Devi spiegare in modo conciso perché l'output non ha superato la validazione o perché è fallito. " +
                 "Non inventare contenuti; basati sui dati forniti.";
 
             var sb = new StringBuilder();
-            sb.AppendLine($"DIAGNOSI ambient_expert - chunk {chunkIndex}/{chunkCount}");
+            sb.AppendLine($"DIAGNOSI music_expert - chunk {chunkIndex}/{chunkCount}");
             sb.AppendLine();
 
             if (!string.IsNullOrWhiteSpace(lastFailureReason))
@@ -589,296 +588,347 @@ namespace TinyGenerator.Services.Commands
             return string.IsNullOrWhiteSpace(textContent) ? null : textContent.Trim();
         }
 
-        private static string MergeAmbientTagsIntoOriginalChunk(string originalChunk, string modelOutput, out int insertedCount)
+        private int ComputeRequiredMusicTagsForChunk(string chunkText)
         {
-            insertedCount = 0;
+            var maxRequired = Math.Max(1, _tuning.MusicExpert.MaxMusicTagsPerChunkRequirement);
+            var minRequired = Math.Max(0, _tuning.MusicExpert.MinMusicTagsPerChunkRequirement);
+
+            if (string.IsNullOrWhiteSpace(chunkText)) return maxRequired;
+
+            // Approx tokens (4 chars ≈ 1 token) like other chunkers.
+            var approxTokens = Math.Max(1, chunkText.Length / 4);
+
+            // Small chunks shouldn't be forced to produce 3 music cues.
+            int required;
+            if (approxTokens <= 450) required = 1;
+            else if (approxTokens <= 900) required = 2;
+            else required = 3;
+
+            required = Math.Clamp(required, minRequired, maxRequired);
+            return required;
+        }
+
+        private sealed record MusicInsertion(string MusicBlock, string? PrevTagLine, string? NextTagLine);
+
+        private static string MergeMusicIntoOriginalChunk(string originalChunk, string modelOutput, out int insertedMusicBlocks)
+        {
+            insertedMusicBlocks = 0;
             if (string.IsNullOrWhiteSpace(originalChunk) || string.IsNullOrWhiteSpace(modelOutput))
             {
-                return originalChunk ?? string.Empty;
+                return originalChunk;
             }
 
-            var newline = DetectNewline(originalChunk);
-            var originalNormalized = NormalizeNewlines(originalChunk);
-            var outputNormalized = NormalizeNewlines(modelOutput);
+            var original = NormalizeNewlines(originalChunk);
+            var output = NormalizeNewlines(modelOutput);
 
-            var originalLines = originalNormalized.Split('\n').ToList();
-            var outputLines = outputNormalized.Split('\n').ToList();
+            var insertions = ExtractMusicInsertions(output);
+            if (insertions.Count == 0)
+            {
+                return original;
+            }
 
-            var existingTagLines = new HashSet<string>(
-                originalLines.Where(IsAmbientTagLine).Select(NormalizeTagLine),
-                StringComparer.OrdinalIgnoreCase);
-
+            var current = original;
             var searchStart = 0;
 
-            // Group ambient insertions by anchor position (PrevAnchorTagLine, NextAnchorTagLine, NearestContentAnchor)
-            var pending = ExtractAmbientInsertions(outputLines);
-            var grouped = pending
-                .GroupBy(ins => $"{ins.PrevAnchorTagLine}|{ins.NextAnchorTagLine}|{ins.NearestContentAnchor}")
-                .ToList();
-
-            foreach (var group in grouped)
+            foreach (var ins in insertions)
             {
-                // Concatenate all tag texts for this anchor
-                var allTexts = group.Select(g => Regex.Replace(g.TagLine, @"^\s*\[(?:AMBIENTE|RUMORI|RUMORE)\s*:?(.*?)\]", "$1", RegexOptions.IgnoreCase).Trim()).Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
-                if (allTexts.Count == 0) continue;
-                var tagText = string.Join("; ", allTexts);
-                var tagLine = $"[RUMORI: {tagText}]";
-                var tagKey = NormalizeTagLine(tagLine);
-                if (string.IsNullOrWhiteSpace(tagLine) || existingTagLines.Contains(tagKey)) continue;
-
-                var anchor = group.First();
-                var insertAt = -1;
-                if (!string.IsNullOrWhiteSpace(anchor.NextAnchorTagLine))
-                    insertAt = FindLineIndex(originalLines, anchor.NextAnchorTagLine!, searchStart);
-                if (insertAt < 0 && !string.IsNullOrWhiteSpace(anchor.PrevAnchorTagLine))
-                {
-                    var prevIdx = FindLineIndex(originalLines, anchor.PrevAnchorTagLine!, searchStart);
-                    if (prevIdx >= 0)
-                    {
-                        insertAt = FindNextTagLineIndex(originalLines, prevIdx + 1);
-                        if (insertAt < 0) insertAt = originalLines.Count;
-                    }
-                }
-                if (insertAt < 0 && !string.IsNullOrWhiteSpace(anchor.NearestContentAnchor))
-                    insertAt = FindLineIndex(originalLines, anchor.NearestContentAnchor!, searchStart);
-                if (insertAt < 0) insertAt = originalLines.Count;
-
-                // Safety: do not split an existing multi-line block.
-                if (insertAt < originalLines.Count && insertAt > 0)
-                {
-                    var blockStart = FindNearestBlockStartTagIndex(originalLines, insertAt - 1);
-                    if (blockStart >= 0)
-                    {
-                        var blockTagLine = (originalLines[blockStart] ?? string.Empty).TrimStart();
-                        var isNarrator = IsNarratorTagLine(blockTagLine);
-                        var nextLine = (originalLines[insertAt] ?? string.Empty).TrimStart();
-                        if (!nextLine.StartsWith("[", StringComparison.Ordinal) && blockStart < insertAt && !isNarrator)
-                            insertAt = blockStart;
-                    }
-                }
-
-                insertAt = Math.Clamp(insertAt, 0, originalLines.Count);
-                originalLines.Insert(insertAt, tagLine);
-                insertedCount++;
-                existingTagLines.Add(tagKey);
-
-                // Narrator block reopen rule
-                if (insertAt + 1 < originalLines.Count)
-                {
-                    var next = (originalLines[insertAt + 1] ?? string.Empty).TrimStart();
-                    if (!next.StartsWith("[", StringComparison.Ordinal))
-                    {
-                        var blockStart = FindNearestBlockStartTagIndex(originalLines, insertAt - 1);
-                        if (blockStart >= 0 && IsNarratorTagLine((originalLines[blockStart] ?? string.Empty).TrimStart()))
-                            originalLines.Insert(insertAt + 1, "[NARRATORE]");
-                    }
-                }
-                searchStart = insertAt + 1;
-            }
-
-            var merged = string.Join("\n", originalLines);
-            merged = merged.Replace("\n", newline);
-            return merged;
-        }
-
-        private sealed record AmbientInsertion(string TagLine, string? PrevAnchorTagLine, string? NextAnchorTagLine, string? NearestContentAnchor);
-
-        private static List<AmbientInsertion> ExtractAmbientInsertions(IReadOnlyList<string> outputLines)
-        {
-            var result = new List<AmbientInsertion>();
-            if (outputLines.Count == 0) return result;
-
-            for (var i = 0; i < outputLines.Count; i++)
-            {
-                var line = outputLines[i] ?? string.Empty;
-                var match = Regex.Match(line, @"\[(?:AMBIENTE|RUMORI|RUMORE)\b[^\]]*\]", RegexOptions.IgnoreCase);
-                if (!match.Success)
+                var musicBlock = NormalizeNewlines(ins.MusicBlock).Trim();
+                if (string.IsNullOrWhiteSpace(musicBlock) || !MusicBlockStartRegex.IsMatch(musicBlock))
                 {
                     continue;
                 }
 
-                // If the tag occurs mid-line, start the insertion from there.
-                var tagLine = line.Substring(match.Index).TrimStart();
-                tagLine = Regex.Replace(tagLine, @"\[(\s*)RUMORE\b", "[$1RUMORI", RegexOptions.IgnoreCase).TrimEnd();
-
-                if (string.IsNullOrWhiteSpace(tagLine))
+                // Avoid duplicating an identical block.
+                if (current.Contains(musicBlock, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                // Optionally include a short description line immediately after the tag.
-                // We keep it on the SAME line (do not split blocks), unless the tag line already has tail text.
-                if (!tagLine.Contains(']') || tagLine.TrimEnd().EndsWith("]", StringComparison.Ordinal))
+                int insertAt = -1;
+                if (!string.IsNullOrWhiteSpace(ins.NextTagLine))
                 {
-                    if (i + 1 < outputLines.Count)
+                    insertAt = FindTagLineStartIndex(current, NormalizeTagLine(ins.NextTagLine), searchStart);
+                }
+
+                if (insertAt < 0 && !string.IsNullOrWhiteSpace(ins.PrevTagLine))
+                {
+                    var prevPos = FindTagLineStartIndex(current, NormalizeTagLine(ins.PrevTagLine), searchStart);
+                    if (prevPos >= 0)
                     {
-                        var next = (outputLines[i + 1] ?? string.Empty).Trim();
-                        if (!string.IsNullOrWhiteSpace(next) &&
-                            !next.StartsWith("[", StringComparison.Ordinal) &&
-                            next.Length <= 200)
-                        {
-                            // append as tail to the tag line (safer than adding a new line that might split blocks)
-                            tagLine = tagLine + " " + next;
-                        }
+                        var afterPrev = FindNextNonMusicTagLineStartIndex(current, prevPos + 1);
+                        insertAt = afterPrev >= 0 ? afterPrev : current.Length;
                     }
                 }
 
-                string? prevTag = null;
-                for (var p = i - 1; p >= 0; p--)
+                if (insertAt < 0)
                 {
-                    var t = (outputLines[p] ?? string.Empty).TrimStart();
-                    if (IsNonAmbientTagLine(t))
-                    {
-                        prevTag = (outputLines[p] ?? string.Empty).TrimEnd();
-                        break;
-                    }
+                    insertAt = current.Length;
                 }
 
-                string? nextTag = null;
-                for (var n = i + 1; n < outputLines.Count; n++)
+                var (safeInsertAt, reopenNarrator) = AdjustInsertionIndexForBlockSafety(current, insertAt);
+                insertAt = safeInsertAt;
+
+                var prefix = string.Empty;
+                if (insertAt > 0 && current[insertAt - 1] != '\n')
                 {
-                    var t = (outputLines[n] ?? string.Empty).TrimStart();
-                    if (IsNonAmbientTagLine(t))
-                    {
-                        nextTag = (outputLines[n] ?? string.Empty).TrimEnd();
-                        break;
-                    }
+                    prefix = "\n";
                 }
 
-                var contentAnchor = FindNearestContentAnchor(outputLines, i);
-                result.Add(new AmbientInsertion(tagLine, prevTag, nextTag, contentAnchor));
+                var suffix = string.Empty;
+                if (!musicBlock.EndsWith("\n", StringComparison.Ordinal))
+                {
+                    suffix = "\n";
+                }
+
+                var extraGap = string.Empty;
+                if (!reopenNarrator && insertAt < current.Length && (insertAt == 0 || current[insertAt] == '[' || current[insertAt] == '\n'))
+                {
+                    extraGap = "\n";
+                }
+
+                var narratorReopen = reopenNarrator ? "[NARRATORE]\n" : string.Empty;
+
+                current = current.Insert(insertAt, prefix + musicBlock + suffix + narratorReopen + extraGap);
+                insertedMusicBlocks++;
+                searchStart = Math.Min(current.Length, insertAt + prefix.Length + musicBlock.Length + suffix.Length + extraGap.Length);
             }
 
-            return result;
+            return current;
         }
 
-        private static string NormalizeNewlines(string text)
+        private static (int InsertAt, bool ReopenNarrator) AdjustInsertionIndexForBlockSafety(string current, int insertAt)
         {
-            return (text ?? string.Empty).Replace("\r\n", "\n").Replace("\r", "\n");
-        }
+            if (string.IsNullOrEmpty(current)) return (0, false);
 
-        private static string DetectNewline(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return "\n";
-            return text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
-        }
+            var idx = Math.Clamp(insertAt, 0, current.Length);
 
-        private static bool IsAmbientTagLine(string line)
-        {
-            if (string.IsNullOrWhiteSpace(line)) return false;
-            // Tag lines are expected to start the line.
-            return Regex.IsMatch(line, @"^\s*\[(?:AMBIENTE|RUMORI|RUMORE)\b[^\]]*\]", RegexOptions.IgnoreCase);
+            // If idx is inside a line, snap to the start of that line.
+            if (idx > 0)
+            {
+                var prevNl = current.LastIndexOf('\n', Math.Min(idx - 1, current.Length - 1));
+                var lineStart = prevNl >= 0 ? prevNl + 1 : 0;
+                if (idx != lineStart)
+                {
+                    idx = lineStart;
+                }
+            }
+
+            // If we are inserting at a tag line boundary, it is safe.
+            if (idx < current.Length)
+            {
+                var lineEnd = current.IndexOf('\n', idx);
+                if (lineEnd < 0) lineEnd = current.Length;
+                var line = current.Substring(idx, lineEnd - idx);
+                if (IsNonMusicTagLine(line))
+                {
+                    return (idx, false);
+                }
+            }
+
+            // Otherwise, we are inserting before a content line.
+            // Do not split an existing block: move insertion BEFORE the block start tag,
+            // except for narrator blocks where we allow splitting across newline and reopen narrator.
+            var prevTagStart = FindPreviousNonMusicTagLineStartIndex(current, Math.Max(0, idx - 1));
+            if (prevTagStart < 0)
+            {
+                return (idx, false);
+            }
+
+            var prevLineEnd = current.IndexOf('\n', prevTagStart);
+            if (prevLineEnd < 0) prevLineEnd = current.Length;
+            var prevTagLine = current.Substring(prevTagStart, prevLineEnd - prevTagStart);
+
+            if (IsNarratorTagLine(prevTagLine))
+            {
+                return (idx, true);
+            }
+
+            return (prevTagStart, false);
         }
 
         private static bool IsNarratorTagLine(string line)
         {
             if (string.IsNullOrWhiteSpace(line)) return false;
-            return Regex.IsMatch(line, @"^\s*\[NARRATORE\b[^\]]*\]", RegexOptions.IgnoreCase);
+            var t = line.TrimStart();
+            return t.StartsWith("[NARRATORE", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static bool IsNonAmbientTagLine(string line)
+        private static int FindPreviousNonMusicTagLineStartIndex(string text, int fromIndex)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return -1;
+
+            var s = NormalizeNewlines(text);
+            var idx = Math.Clamp(fromIndex, 0, Math.Max(0, s.Length - 1));
+
+            var lineStart = s.LastIndexOf('\n', idx);
+            if (lineStart < 0) lineStart = 0;
+            else lineStart = lineStart + 1;
+
+            while (lineStart >= 0)
+            {
+                var lineEnd = s.IndexOf('\n', lineStart);
+                if (lineEnd < 0) lineEnd = s.Length;
+                var line = s.Substring(lineStart, lineEnd - lineStart);
+
+                if (IsNonMusicTagLine(line))
+                {
+                    return lineStart;
+                }
+
+                if (lineStart == 0) break;
+                var prevNl = s.LastIndexOf('\n', Math.Max(0, lineStart - 2));
+                if (prevNl < 0)
+                {
+                    lineStart = 0;
+                }
+                else
+                {
+                    lineStart = prevNl + 1;
+                }
+            }
+
+            return -1;
+        }
+
+        private static List<MusicInsertion> ExtractMusicInsertions(string modelOutput)
+        {
+            var result = new List<MusicInsertion>();
+            if (string.IsNullOrWhiteSpace(modelOutput)) return result;
+
+            var lines = NormalizeNewlines(modelOutput).Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i] ?? string.Empty;
+                var match = MusicTagRegex.Match(line);
+                if (!match.Success)
+                {
+                    continue;
+                }
+
+                // Start the music block at the first music tag occurrence (even if mid-line).
+                var musicFirstLine = line.Substring(match.Index).TrimStart();
+
+                var start = i;
+                var end = i;
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    var next = lines[j] ?? string.Empty;
+                    if (IsNonMusicTagLine(next))
+                    {
+                        break;
+                    }
+                    end = j;
+                }
+
+                var blockLines = lines.Skip(start).Take(end - start + 1).ToArray();
+                blockLines[0] = musicFirstLine;
+                var musicBlock = string.Join("\n", blockLines).Trim();
+
+                string? prevTag = null;
+                for (var p = start - 1; p >= 0; p--)
+                {
+                    if (IsNonMusicTagLine(lines[p] ?? string.Empty))
+                    {
+                        prevTag = (lines[p] ?? string.Empty).TrimEnd();
+                        break;
+                    }
+                }
+
+                string? nextTag = null;
+                for (var n = end + 1; n < lines.Length; n++)
+                {
+                    if (IsNonMusicTagLine(lines[n] ?? string.Empty))
+                    {
+                        nextTag = (lines[n] ?? string.Empty).TrimEnd();
+                        break;
+                    }
+                }
+
+                result.Add(new MusicInsertion(musicBlock, prevTag, nextTag));
+                i = end;
+            }
+
+            return result;
+        }
+
+        private static bool IsNonMusicTagLine(string line)
         {
             if (string.IsNullOrWhiteSpace(line)) return false;
             var t = line.TrimStart();
             if (!t.StartsWith("[", StringComparison.Ordinal)) return false;
             if (!t.Contains(']')) return false;
-            return !IsAmbientTagLine(t);
-        }
-
-        private static bool IsContentLine(string line)
-        {
-            if (string.IsNullOrWhiteSpace(line)) return false;
-            // Treat any line starting with '[' as a tag line (not content).
-            return !Regex.IsMatch(line, @"^\s*\[", RegexOptions.Compiled);
+            return !MusicTagLineRegex.IsMatch(t);
         }
 
         private static string NormalizeTagLine(string line)
         {
-            return (line ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(line)) return string.Empty;
+            return WhitespaceRegex.Replace(line.Trim(), " ");
         }
 
-        private static string? FindNearestContentAnchor(IReadOnlyList<string> lines, int tagLineIndex)
+        private static string NormalizeNewlines(string text)
         {
-            // Prefer the next content line as an anchor (insert tag *before* it).
-            for (var j = tagLineIndex + 1; j < lines.Count; j++)
-            {
-                var candidate = lines[j] ?? string.Empty;
-                if (IsContentLine(candidate))
-                {
-                    return candidate.Trim();
-                }
-            }
-
-            // Fallback: use previous content line as anchor (insert tag *after* it).
-            for (var j = tagLineIndex - 1; j >= 0; j--)
-            {
-                var candidate = lines[j] ?? string.Empty;
-                if (IsContentLine(candidate))
-                {
-                    return candidate.Trim();
-                }
-            }
-
-            return null;
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+            return text.Replace("\r\n", "\n").Replace("\r", "\n");
         }
 
-        private static int FindLineIndex(IReadOnlyList<string> lines, string anchorLine, int startIndex)
+        private static int FindTagLineStartIndex(string text, string normalizedTagLine, int startIndex)
         {
-            if (lines.Count == 0 || string.IsNullOrWhiteSpace(anchorLine)) return -1;
+            if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(normalizedTagLine)) return -1;
+            var s = NormalizeNewlines(text);
 
-            var anchorTrim = anchorLine.Trim();
-            var start = Math.Clamp(startIndex, 0, Math.Max(0, lines.Count - 1));
-
-            // 1) Exact match (trimmed)
-            for (var i = start; i < lines.Count; i++)
+            var idx = Math.Max(0, startIndex);
+            if (idx > 0)
             {
-                if (string.Equals((lines[i] ?? string.Empty).Trim(), anchorTrim, StringComparison.Ordinal))
-                {
-                    return i;
-                }
+                var prevNl = s.LastIndexOf('\n', Math.Min(idx, s.Length - 1));
+                if (prevNl >= 0) idx = prevNl + 1;
             }
 
-            // 2) Contains match (trimmed)
-            for (var i = start; i < lines.Count; i++)
+            while (idx <= s.Length)
             {
-                var candidate = (lines[i] ?? string.Empty).Trim();
-                if (candidate.Length == 0) continue;
+                var lineEnd = s.IndexOf('\n', idx);
+                if (lineEnd < 0) lineEnd = s.Length;
+                var line = s.Substring(idx, lineEnd - idx);
 
-                if (candidate.Contains(anchorTrim, StringComparison.Ordinal) ||
-                    anchorTrim.Contains(candidate, StringComparison.Ordinal))
+                if (IsNonMusicTagLine(line) && string.Equals(NormalizeTagLine(line), normalizedTagLine, StringComparison.Ordinal))
                 {
-                    return i;
+                    return idx;
                 }
+
+                if (lineEnd >= s.Length) break;
+                idx = lineEnd + 1;
             }
 
             return -1;
         }
 
-        private static int FindNextTagLineIndex(IReadOnlyList<string> lines, int startIndex)
+        private static int FindNextNonMusicTagLineStartIndex(string text, int startIndex)
         {
-            var start = Math.Clamp(startIndex, 0, lines.Count);
-            for (var i = start; i < lines.Count; i++)
-            {
-                var t = (lines[i] ?? string.Empty).TrimStart();
-                if (t.StartsWith("[", StringComparison.Ordinal) && t.Contains(']'))
-                {
-                    return i;
-                }
-            }
-            return -1;
-        }
+            if (string.IsNullOrWhiteSpace(text)) return -1;
+            var s = NormalizeNewlines(text);
+            var idx = Math.Max(0, startIndex);
 
-        private static int FindNearestBlockStartTagIndex(IReadOnlyList<string> lines, int fromIndex)
-        {
-            var i = Math.Min(fromIndex, lines.Count - 1);
-            for (; i >= 0; i--)
+            if (idx > 0)
             {
-                var t = (lines[i] ?? string.Empty).TrimStart();
-                if (t.StartsWith("[", StringComparison.Ordinal) && t.Contains(']'))
-                {
-                    return i;
-                }
+                var prevNl = s.LastIndexOf('\n', Math.Min(idx, s.Length - 1));
+                if (prevNl >= 0) idx = prevNl + 1;
             }
+
+            while (idx <= s.Length)
+            {
+                var lineEnd = s.IndexOf('\n', idx);
+                if (lineEnd < 0) lineEnd = s.Length;
+                var line = s.Substring(idx, lineEnd - idx);
+
+                if (IsNonMusicTagLine(line))
+                {
+                    return idx;
+                }
+
+                if (lineEnd >= s.Length) break;
+                idx = lineEnd + 1;
+            }
+
             return -1;
         }
 
@@ -908,9 +958,9 @@ namespace TinyGenerator.Services.Commands
                 return chunks;
             }
 
-            var minTokensPerChunk = Math.Max(0, _tuning.AmbientExpert.MinTokensPerChunk);
-            var maxTokensPerChunk = Math.Max(1, _tuning.AmbientExpert.MaxTokensPerChunk);
-            var targetTokensPerChunk = Math.Max(1, _tuning.AmbientExpert.TargetTokensPerChunk);
+            var minTokensPerChunk = Math.Max(0, _tuning.MusicExpert.MinTokensPerChunk);
+            var maxTokensPerChunk = Math.Max(1, _tuning.MusicExpert.MaxTokensPerChunk);
+            var targetTokensPerChunk = Math.Max(1, _tuning.MusicExpert.TargetTokensPerChunk);
             // NOTE: These expert commands merge and then concatenate chunks. Overlap would duplicate content.
             var overlapTokens = 0;
 

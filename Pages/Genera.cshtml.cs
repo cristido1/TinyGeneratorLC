@@ -24,6 +24,7 @@ public class GeneraModel : PageModel
     private readonly ILogger<GeneraModel> _logger;
     private readonly CommandTuningOptions _tuning;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly TextValidationService _textValidationService;
 
     public GeneraModel(
         DatabaseService database,
@@ -33,6 +34,7 @@ public class GeneraModel : PageModel
         ICustomLogger customLogger,
         ILogger<GeneraModel> logger,
         IOptions<CommandTuningOptions> tuningOptions,
+        TextValidationService textValidationService,
         MultiStepOrchestrationService? orchestrator = null,
         IServiceScopeFactory? scopeFactory = null)
     {
@@ -45,6 +47,7 @@ public class GeneraModel : PageModel
         _logger = logger;
         _tuning = tuningOptions.Value ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory ?? throw new InvalidOperationException("IServiceScopeFactory not available");
+        _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
     }
 
     [BindProperty]
@@ -411,6 +414,7 @@ public class GeneraModel : PageModel
                         database: _database,
                         kernelFactory: _kernelFactory,
                         logger: _customLogger,
+                        textValidationService: _textValidationService,
                         tuning: _tuning,
                         scopeFactory: _scopeFactory);
 
@@ -525,6 +529,7 @@ public class GeneraModel : PageModel
                         kernelFactory: _kernelFactory,
                         storiesService: _storiesService,
                         logger: _customLogger,
+                        textValidationService: _textValidationService,
                         tuning: _tuning,
                         scopeFactory: _scopeFactory);
 
@@ -604,6 +609,7 @@ public class GeneraModel : PageModel
                         database: _database,
                         kernelFactory: _kernelFactory,
                         logger: _customLogger,
+                        textValidationService: _textValidationService,
                         tuning: _tuning,
                         scopeFactory: _scopeFactory);
 

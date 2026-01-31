@@ -303,7 +303,7 @@ public List<RowAction> GetActionsForItem(Item item) { ... }
 DataTables passa il dato della riga, il rendering mantiene il dropdown HTML.
 
 10) CSS CUSTOM OBBLIGATORIO
-
+Pulsanti bianchi.
 Applicare CSS minimale per modernizzare DataTables:
 
 ```css
@@ -399,7 +399,8 @@ document.addEventListener('DOMContentLoaded', function() {
       {
         extend: 'colvis',
         text: 'Colonne',
-        className: 'btn btn-sm btn-outline-secondary'
+        className: 'btn btn-sm btn-outline-secondary',
+        attr: { style: 'width: auto; flex: 0 0 auto;' },
       }
     ],
     

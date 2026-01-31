@@ -23,6 +23,7 @@ public sealed class AutoStateDrivenSeriesEpisodeService : BackgroundService
     private readonly IOptionsMonitor<AutomaticOperationsOptions> _optionsMonitor;
     private readonly CommandTuningOptions _tuning;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly TextValidationService _textValidationService;
     private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(30);
 
     private DateTime _lastAttemptUtc = DateTime.UtcNow;
@@ -36,7 +37,8 @@ public sealed class AutoStateDrivenSeriesEpisodeService : BackgroundService
         ILogger<AutoStateDrivenSeriesEpisodeService> logger,
         IOptionsMonitor<AutomaticOperationsOptions> optionsMonitor,
         IOptions<CommandTuningOptions> tuningOptions,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        TextValidationService textValidationService)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _storiesService = storiesService ?? throw new ArgumentNullException(nameof(storiesService));
@@ -47,6 +49,7 @@ public sealed class AutoStateDrivenSeriesEpisodeService : BackgroundService
         _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
         _tuning = tuningOptions.Value ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -173,6 +176,7 @@ public sealed class AutoStateDrivenSeriesEpisodeService : BackgroundService
                         kernelFactory: _kernelFactory,
                         storiesService: _storiesService,
                         logger: _customLogger,
+                        textValidationService: _textValidationService,
                         tuning: _tuning,
                         scopeFactory: _scopeFactory);
 

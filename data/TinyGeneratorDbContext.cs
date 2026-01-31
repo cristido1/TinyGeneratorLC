@@ -203,7 +203,7 @@ public class TinyGeneratorDbContext : DbContext
         var now = DateTime.UtcNow.ToString("o");
         modelBuilder.Entity<Role>().HasData(
             new Role { Id = 1, Ruolo = "writer", ComandoCollegato = "FullStoryPipelineCommand", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 2, Ruolo = "formatter", ComandoCollegato = "TransformStoryRawToTaggedCommand", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 2, Ruolo = "formatter", ComandoCollegato = "AddVoiceTagsToStoryCommand", CreatedAt = now, UpdatedAt = now },
             new Role { Id = 3, Ruolo = "evaluator", ComandoCollegato = "StoryEvaluation", CreatedAt = now, UpdatedAt = now },
             new Role { Id = 4, Ruolo = "tts_expert", ComandoCollegato = "TtsGeneration", CreatedAt = now, UpdatedAt = now },
             new Role { Id = 5, Ruolo = "music_expert", ComandoCollegato = "MusicGeneration", CreatedAt = now, UpdatedAt = now },
@@ -218,3 +218,4 @@ public class TinyGeneratorDbContext : DbContext
         );
     }
 }
+

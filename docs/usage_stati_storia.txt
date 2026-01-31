@@ -1,26 +1,28 @@
 Stati storia:
-1) inserted : la storia è appena stata inserita ed ha solo il campo story_raw compilato, non ci sono operazioni precedenti. 
-2) revised: la storia è stata sottoposta a revisione quindi a partire dal testo di story_raw è stato generato il testo story_revised, per passare a questo stato dallo stato inserted è necessario lanciare il comando di generazione storia revised
-3) evaluated : la storia scritta in story_revised è stata valutata da almeno due valutatori e quindi ha un punteggio di valutazione tra 1 e 100, per passare a questo stato vanno completate le valutazioni di almeno due agenti valutatori.
+1) inserted : la storia e appena stata inserita ed ha solo il campo story_raw compilato, non ci sono operazioni precedenti.
+2) revised: la storia e stata sottoposta a revisione quindi a partire dal testo di story_raw e stato generato il testo story_revised, per passare a questo stato dallo stato inserted e necessario lanciare il comando di generazione storia revised.
+3) evaluated : la storia scritta in story_revised e stata valutata da almeno due valutatori e quindi ha un punteggio di valutazione tra 1 e 100, per passare a questo stato vanno completate le valutazioni di almeno due agenti valutatori.
 -------------------------------------------------
 proseguono solo le storie con punteggio >= 65
------------------------------------------------
-4) tagged : a partire dal testo in story_revised è stato generato il testo in story_tagged, per passare in questo stato va lanciato il comando di generazione della storia tagged. 
-5) tts_schema_generated: a partire dal testo in story_revised viene generato nella cartella della storia il file tts_schema.json, poi viene normalizzato l'elenco dei personaggi e dei sentimenti, per passare in questi stato va lanciato il comando di generaizone tts_schema e di normalizzazione personaggi e sentimenti.
-6) tts_generated : sono stati generati i files .wav del tts e nel file tts_schema.json ci sono i nomi ed i tempi dei files .wav generati, per passare a questa fase va lanciato il comando di generazione tts.
-7) ambient_generated : sono stati generati i files .wav dei rumori ambientali e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato bisogna lanciare il comando di generazione dei rumori ambientali.
-8) fx_generated : sono stati generati i files .wav degli effetti sonori e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato 
-bisogna lanciare il comando di generazione effetti speciali.
-9) music_generated : sono stati generati i files .wav della musica e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato 
-bisogna lanciare il comando di generazione della musica.
-10) audio_master_generated : a partire dai tempi in tts_schema.json ed i nomi ed i tempi dei file tts, rumori ambientali, effetti speciali e musica genero il file audio principale .wav e anche la versione mp3, per passare in questo stato bisogna lanciare il comando di mix audio finale.
+-------------------------------------------------
+4) tagged_voice: il formatter ha trasformato story_revised in story_tagged aggiungendo i blocchi narrativi base e i tag [PERSONAGGIO: ...] / [EMOZIONE: ...]; la generazione e completata quando la storia contiene i tag di dialogo e delle emozioni.
+5) tagged_ambient: dopo tagged_voice l'ambient_expert arricchisce story_tagged con i tag [RUMORI] e con i riferimenti alla colonna sonora ambientale; lo stato viene assegnato solo quando i rumori ambientali sono stati inseriti con successo senza cancellare i tag precedenti.
+6) tagged_fx: il fx_expert aggiunge i tag [FX:durata] descrivendo gli effetti speciali; il passaggio a questo stato conferma che i nuovi tag sono stati salvati senza rompere la struttura narrativa.
+7) tagged : l'ultimo agente di tagging (musica) inserisce i blocchi [MUSICA], completando l'intero schema di tag prima di aprire la fase TTS.
+8) tts_schema_generated: a partire dal testo in story_revised viene generato nella cartella della storia il file tts_schema.json, poi viene normalizzato l'elenco dei personaggi e dei sentimenti, per passare in questo stato va lanciato il comando di generazione tts_schema e di normalizzazione personaggi e sentimenti.
+9) tts_generated : sono stati generati i files .wav del tts e nel file tts_schema.json ci sono i nomi ed i tempi dei files .wav generati, per passare a questa fase va lanciato il comando di generazione tts.
+10) ambient_generated : sono stati generati i files .wav dei rumori ambientali e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato bisogna lanciare il comando di generazione dei rumori ambientali.
+11) fx_generated : sono stati generati i files .wav degli effetti sonori e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato bisogna lanciare il comando di generazione effetti speciali.
+12) music_generated : sono stati generati i files .wav della musica e sono stati compilati nel campo tts_schema.json i nomi dei relativi files, per passare in questo stato bisogna lanciare il comando di generazione della musica.
+13) audio_master_generated : a partire dai tempi in tts_schema.json ed i nomi ed i tempi dei file tts, rumori ambientali, effetti speciali e musica genero il file audio principale .wav e anche la versione mp3, per passare in questo stato bisogna lanciare il comando di mix audio finale.
 
 Funzionamento:
-- C'è un comando che viene accodato al dispatcher per passare da uno stato ad un'altro
+- C'e un comando che viene accodato al dispatcher per passare da uno stato ad un altro
 - Alla fine di ciascun comando, ma dentro il comando viene accodato il comando per far passare allo stato successivo
-- Dopo la fase 3 c'è un blocco e si continua solo se la valutazione >= 65
-- gli stati devono essere eseguiti in ordine, prima uno e poi l'altro perchè generalmente lo stato successivo conta su quello precedente.
-- per generare il master audio tutti i comandi devono essere conclusi
-- se uno dei comandi fallisce allora la catena si ferma
-- ho visto che c'è un comando di avanzamento stato, ma questo deve solo accodare i comandi reali e terminare. 
-- il cambio di stato alla fine del comando principale
+- Dopo la fase 3 c'e un blocco e si continua solo se la valutazione >= 65
+- Gli stati di tagging ora sono quattro: voice (tagged_voice), ambient (tagged_ambient), fx (tagged_fx) e il tag finale (tagged). L'ordine e obbligatorio perche ogni passaggio dipende dai tag prodotti da quello precedente e solo dopo tagged si puo avviare la generazione dello schema TTS.
+- Gli stati successivi (tts_schema_generated e oltre) mantengono lo stesso ordine descritto prima.
+- Per generare il master audio tutti i comandi devono essere conclusi
+- Se uno dei comandi fallisce la catena si ferma fino a nuovo intervento
+- C'e un comando di avanzamento stato che si occupa solo di enqueueare i comandi reali e terminare.
+- Il cambio di stato deve essere eseguito dal comando principale responsabile del dato passaggio.

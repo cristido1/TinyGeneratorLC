@@ -6,10 +6,12 @@ namespace TinyGenerator.Services.Commands
     /// <summary>
     /// Comando che esegue l'intero pipeline di produzione storia:
     /// 1. Genera storie da tutti gli agenti writer attivi (multi-step)
-    /// 2. Aspetta il completamento di tutte le generazioni
-    /// 3. Valuta le storie generate con successo tramite gli agenti evaluator
-    /// 4. Seleziona la storia con il punteggio più alto
-    /// 5. Esegue il pipeline completo: tts_schema, normalize characters, normalize sentiments, TTS, ambience, FX, final mix
+    /// 2. Avvia generazione storie in parallelo
+    /// 3. Aspetta completamento tutte le generazioni
+    /// 4. Raccogli storie generate con successo
+    /// 5. Valuta le storie con gli agenti evaluator
+    /// 6. Seleziona la storia con il punteggio più alto
+    /// 7. Esegui il pipeline completo (TTS, voci, audio) sulla storia vincitrice
     /// </summary>
     public class FullStoryPipelineCommand
     {
@@ -178,7 +180,7 @@ namespace TinyGenerator.Services.Commands
                     // Se non ci sono valutatori, prendi la prima storia
                     var (agent, storyId, _) = successfulStories[0];
                     await BroadcastPipelinePhaseAsync("Fase 7/7: Pipeline audio...");
-                    var pipelineOk = await RunFullPipelineOnStoryAsync(storyId, agent.Name, ct);
+                    var pipelineOk = await EnqueueFullAudioPipelineForStoryAsync(storyId, agent.Name, ct);
                     if (pipelineOk)
                     {
                         await LogAndNotifyAsync("🎉 Pipeline completo terminato con successo!", "success");
@@ -273,7 +275,7 @@ namespace TinyGenerator.Services.Commands
                 // ║ FASE 7: Esegui il pipeline completo sulla storia vincitrice  ║
                 // ╚══════════════════════════════════════════════════════════════╝
                 await BroadcastPipelinePhaseAsync($"Fase 7/7: Pipeline audio su storia {bestStoryId}...");
-                var pipelineSuccess = await RunFullPipelineOnStoryAsync(bestStoryId, bestWriterName, ct);
+                var pipelineSuccess = await EnqueueFullAudioPipelineForStoryAsync(bestStoryId, bestWriterName, ct);
 
                 if (pipelineSuccess)
                 {
@@ -476,5 +478,29 @@ namespace TinyGenerator.Services.Commands
                 // Ignore broadcast errors
             }
         }
+
+        private async Task<bool> EnqueueFullAudioPipelineForStoryAsync(long storyId, string writerName, CancellationToken ct)
+        {
+            await BroadcastPipelinePhaseAsync($"Fase 7/7: Pipeline audio su storia {storyId} ({writerName})...");
+
+            if (ct.IsCancellationRequested)
+            {
+                await LogAndNotifyAsync("Pipeline audio cancellato prima di accodare la catena stati", "warning");
+                return false;
+            }
+
+            var chainId = _storiesService.EnqueueAllNextStatusCommand(storyId, trigger: "full_pipeline", priority: 3);
+            if (string.IsNullOrWhiteSpace(chainId))
+            {
+                await LogAndNotifyAsync("❌ Impossibile accodare la catena completa di stati", "error");
+                return false;
+            }
+
+            await LogAndNotifyAsync($"✅ Catena stati audio accodata (id {chainId}).", "success");
+            return true;
+        }
+
+        private Task<bool> RunFullPipelineOnStoryAsync(long storyId, string writerName, CancellationToken ct)
+            => EnqueueFullAudioPipelineForStoryAsync(storyId, writerName, ct);
     }
 }

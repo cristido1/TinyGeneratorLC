@@ -42,7 +42,9 @@ public sealed class StoriesService
     private readonly IOptionsMonitor<AudioGenerationOptions>? _audioGenerationOptions;
     private readonly IOptionsMonitor<NarratorVoiceOptions>? _narratorVoiceOptions;
     private readonly IOptionsMonitor<AutomaticOperationsOptions>? _idleAutoOptions;
+    private readonly IOptionsMonitor<StoryTaggingPipelineOptions>? _storyTaggingOptions;
     private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly StoryMainCommands _mainCommands;
     private readonly ConcurrentDictionary<long, StatusChainState> _statusChains = new();
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
     {
@@ -51,6 +53,12 @@ public sealed class StoriesService
         // IMPORTANT: write real UTF-8 characters (no \uXXXX escaping) so TTS reads accents correctly.
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
+
+    private static readonly Regex PersonaggioRegex = new(@"\[PERSONAGGIO:\s*([^\]\|]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex EmotionRegex = new(@"\[EMOZIONE:", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex AmbientRegex = new(@"\[RUMORI", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex FxRegex = new(@"\[FX:", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex MusicRegex = new(@"\[MUSICA", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private const double AutoFormatMinAverageScore = 65.0;
     private const int AutoFormatMinEvaluations = 2;
@@ -70,7 +78,8 @@ public sealed class StoriesService
         IOptionsMonitor<AudioGenerationOptions>? audioGenerationOptions = null,
         IOptionsMonitor<NarratorVoiceOptions>? narratorVoiceOptions = null,
         IOptionsMonitor<AutomaticOperationsOptions>? idleAutoOptions = null,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        IOptionsMonitor<StoryTaggingPipelineOptions>? storyTaggingOptions = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _ttsService = ttsService ?? throw new ArgumentNullException(nameof(ttsService));
@@ -87,7 +96,17 @@ public sealed class StoriesService
         _narratorVoiceOptions = narratorVoiceOptions;
         _scopeFactory = scopeFactory;
         _idleAutoOptions = idleAutoOptions;
+        _storyTaggingOptions = storyTaggingOptions;
+        _mainCommands = new StoryMainCommands(this);
     }
+
+    internal DatabaseService Database => _database;
+    internal ILogger<StoriesService>? Logger => _logger;
+    internal ILangChainKernelFactory? KernelFactory => _kernelFactory;
+    internal ICustomLogger? CustomLogger => _customLogger;
+    internal ICommandDispatcher? CommandDispatcher => _commandDispatcher;
+    internal CommandTuningOptions Tuning => _tuning;
+    internal IServiceScopeFactory? ScopeFactory => _scopeFactory;
 
     public long SaveGeneration(string prompt, StoryGenerationResult r, string? memoryKey = null)
     {
@@ -217,6 +236,137 @@ public sealed class StoriesService
         }
     }
 
+    public bool IsTaggedVoiceAutoLaunchEnabled()
+        => _storyTaggingOptions?.CurrentValue?.TaggedVoice?.AutolaunchNextCommand ?? true;
+
+    public bool IsTaggedAmbientAutoLaunchEnabled()
+        => _storyTaggingOptions?.CurrentValue?.TaggedAmbient?.AutolaunchNextCommand ?? true;
+
+    public bool IsTaggedFxAutoLaunchEnabled()
+        => _storyTaggingOptions?.CurrentValue?.TaggedFx?.AutolaunchNextCommand ?? true;
+
+    public bool IsTaggedFinalAutoLaunchEnabled()
+        => _storyTaggingOptions?.CurrentValue?.Tagged?.AutolaunchNextCommand ?? true;
+
+    public bool TryValidateTaggedVoice(StoryRecord? story, out string? reason)
+    {
+        reason = null;
+        var options = _storyTaggingOptions?.CurrentValue?.TaggedVoice;
+        if (options == null || story == null)
+        {
+            return true;
+        }
+
+        var text = story.StoryTagged ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            reason = "story_tagged vuoto";
+            return false;
+        }
+
+        if (options.EnableDialogTagCheck)
+        {
+            var characters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match match in PersonaggioRegex.Matches(text))
+            {
+                var name = match.Groups[1].Value.Trim();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    characters.Add(name);
+                }
+            }
+
+            if (characters.Count < Math.Max(1, options.MinDistinctCharacters))
+            {
+                reason = $"{characters.Count} personaggi distinti, minimo {options.MinDistinctCharacters}";
+                return false;
+            }
+        }
+
+        if (options.EnableEmotionTagCheck)
+        {
+            var personCount = PersonaggioRegex.Matches(text).Count;
+            var emotionCount = EmotionRegex.Matches(text).Count;
+            if (personCount > 0 && emotionCount < personCount)
+            {
+                reason = $"{emotionCount} tag [EMOZIONE], servono almeno {personCount}";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public bool TryValidateTaggedAmbient(StoryRecord? story, out string? reason)
+    {
+        reason = null;
+        var options = _storyTaggingOptions?.CurrentValue?.TaggedAmbient;
+        if (options == null || !options.EnableAmbientTagCheck || story == null)
+        {
+            return true;
+        }
+
+        var text = story.StoryTagged ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            reason = "story_tagged vuoto";
+            return false;
+        }
+
+        var ambientTags = AmbientRegex.Matches(text).Count;
+        var paragraphs = Regex.Split(text.Trim(), @"\r?\n\s*\r?\n")
+            .Count(p => !string.IsNullOrWhiteSpace(p));
+        paragraphs = Math.Max(1, paragraphs);
+        var density = (double)ambientTags / paragraphs;
+        if (density < options.MinAmbientTagDensity)
+        {
+            reason = $"densità rumori {density:F2} < {options.MinAmbientTagDensity:F2}";
+            return false;
+        }
+
+        return true;
+    }
+
+    public bool TryValidateTaggedFx(StoryRecord? story, out string? reason)
+    {
+        reason = null;
+        var options = _storyTaggingOptions?.CurrentValue?.TaggedFx;
+        if (options == null || !options.EnableFxTagCheck || story == null)
+        {
+            return true;
+        }
+
+        var text = story.StoryTagged ?? string.Empty;
+        var fxTags = FxRegex.Matches(text).Count;
+        if (fxTags < options.MinFxTagCount)
+        {
+            reason = $"tag FX {fxTags} < {options.MinFxTagCount}";
+            return false;
+        }
+
+        return true;
+    }
+
+    public bool TryValidateTaggedMusic(StoryRecord? story, out string? reason)
+    {
+        reason = null;
+        var options = _storyTaggingOptions?.CurrentValue?.Tagged;
+        if (options == null || !options.EnableMusicTagCheck || story == null)
+        {
+            return true;
+        }
+
+        var text = story.StoryTagged ?? string.Empty;
+        var musicTags = MusicRegex.Matches(text).Count;
+        if (musicTags < options.MinMusicTagCount)
+        {
+            reason = $"tag MUSICA {musicTags} < {options.MinMusicTagCount}";
+            return false;
+        }
+
+        return true;
+    }
+
     public (bool Success, long? NewStoryId, string Message) TryCloneStoryFromRevised(long storyId)
     {
         var story = GetStoryById(storyId);
@@ -296,6 +446,144 @@ public sealed class StoriesService
         }
 
         return ordered.FirstOrDefault(s => s.Step > current.Step);
+    }
+
+    public string? EnqueueNextStatusCommand(StoryRecord story, string trigger, int priority = 2)
+    {
+        if (story == null) return null;
+        if (_commandDispatcher == null) return null;
+
+        var statuses = _database.ListAllStoryStatuses();
+        var next = GetNextStatusForStory(story, statuses);
+        if (next == null) return null;
+
+        var command = CreateCommandForStatus(next);
+        if (command == null) return null;
+
+        var operationName = next.FunctionName ?? next.Code ?? "status";
+
+        try
+        {
+            var existing = _commandDispatcher.GetActiveCommands().FirstOrDefault(s =>
+                s.Metadata != null &&
+                s.Metadata.TryGetValue("storyId", out var sid) &&
+                string.Equals(sid, story.Id.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                (string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase) ||
+                 s.RunId.StartsWith($"status_{next.Code ?? next.Id.ToString()}_{story.Id}_", StringComparison.OrdinalIgnoreCase)));
+            if (existing != null && !string.IsNullOrWhiteSpace(existing.RunId))
+            {
+                return existing.RunId;
+            }
+        }
+        catch
+        {
+            // best-effort: ignore de-dup errors
+        }
+
+        var runId = $"status_{next.Code ?? next.Id.ToString()}_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+        _commandDispatcher.Enqueue(
+            operationName,
+            async ctx =>
+            {
+                var latestStory = GetStoryById(story.Id);
+                if (latestStory == null)
+                    return new CommandResult(false, "Storia non trovata");
+
+                var (success, message) = await ExecuteStoryCommandAsync(latestStory, command, next);
+                return new CommandResult(success, message);
+            },
+            runId: runId,
+            threadScope: $"story/status_next/{story.Id}",
+            metadata: new Dictionary<string, string>
+            {
+                ["storyId"] = story.Id.ToString(),
+                ["operation"] = operationName,
+                ["trigger"] = trigger,
+                ["statusId"] = next.Id.ToString(),
+                ["statusCode"] = next.Code ?? string.Empty
+            },
+            priority: Math.Max(1, priority));
+
+        return runId;
+    }
+
+    public string? EnqueueAllNextStatusCommand(StoryRecord story, string trigger, int priority = 2)
+    {
+        if (story == null) return null;
+        if (_commandDispatcher == null) return null;
+
+        var statuses = _database.ListAllStoryStatuses();
+        if (statuses == null || statuses.Count == 0) return null;
+
+        var existing = _commandDispatcher.GetActiveCommands().FirstOrDefault(s =>
+            string.Equals(s.OperationName, "status_all", StringComparison.OrdinalIgnoreCase) &&
+            s.Metadata != null &&
+            s.Metadata.TryGetValue("storyId", out var sid) &&
+            string.Equals(sid, story.Id.ToString(), StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)));
+
+        if (existing != null && !string.IsNullOrWhiteSpace(existing.RunId))
+        {
+            return existing.RunId;
+        }
+
+        var runId = $"status_all_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+        _commandDispatcher.Enqueue(
+            "status_all",
+            async ctx =>
+            {
+                var currentStory = GetStoryById(story.Id);
+                if (currentStory == null)
+                {
+                    return new CommandResult(false, "Storia non trovata");
+                }
+
+                while (true)
+                {
+                    if (ctx.CancellationToken.IsCancellationRequested)
+                    {
+                        return new CommandResult(false, "Pipeline stati cancellata");
+                    }
+
+                    var nextStatus = GetNextStatusForStory(currentStory, statuses);
+                    if (nextStatus == null)
+                    {
+                        break;
+                    }
+
+                    var command = CreateCommandForStatus(nextStatus);
+                    if (command == null)
+                    {
+                        return new CommandResult(false, $"Operazione {nextStatus.Code ?? nextStatus.Id.ToString()} non supportata");
+                    }
+
+                    var (success, message) = await ExecuteStoryCommandAsync(currentStory, command, nextStatus);
+                    if (!success)
+                    {
+                        return new CommandResult(false, message);
+                    }
+
+                    currentStory = GetStoryById(story.Id);
+                    if (currentStory == null)
+                    {
+                        return new CommandResult(false, "Storia non trovata");
+                    }
+                }
+
+                return new CommandResult(true, "Pipeline stati completata");
+            },
+            runId: runId,
+            threadScope: $"story/status_all/{story.Id}",
+            metadata: new Dictionary<string, string>
+            {
+                ["storyId"] = story.Id.ToString(),
+                ["operation"] = "status_all",
+                ["trigger"] = trigger
+            },
+            priority: Math.Max(1, priority));
+
+        return runId;
     }
 
     private sealed class StatusChainState
@@ -1042,78 +1330,126 @@ public sealed class StoriesService
         try
         {
             if (storyId <= 0) return;
-            if (_commandDispatcher == null) return;
-
-            var story = _database.GetStoryById(storyId);
-            if (story == null) return;
-            if (!string.IsNullOrWhiteSpace(story.StoryTagged)) return;
-            if (string.IsNullOrWhiteSpace(story.StoryRaw)) return;
-
-            // Avoid duplicate enqueues if a format command is already queued/running.
-            try
-            {
-                var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
-                    s.Metadata != null &&
-                    s.Metadata.TryGetValue("storyId", out var sid) &&
-                    string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
-                    (
-                        string.Equals(s.OperationName, "TransformStoryRawToTagged", StringComparison.OrdinalIgnoreCase) ||
-                        (s.Metadata.TryGetValue("operation", out var op) && op.Contains("format_story", StringComparison.OrdinalIgnoreCase)) ||
-                        s.RunId.StartsWith($"format_story_{storyId}_", StringComparison.OrdinalIgnoreCase)
-                    ));
-
-                if (alreadyQueued) return;
-            }
-            catch
-            {
-                // If dispatcher snapshots fail for any reason, we still allow enqueue.
-            }
 
             var (count, average) = _database.GetStoryEvaluationStats(storyId);
             if (count < AutoFormatMinEvaluations) return;
             if (average <= AutoFormatMinAverageScore) return;
 
-            if (_kernelFactory == null) return;
+            var metadata = new Dictionary<string, string>
+            {
+                ["evaluationCount"] = count.ToString(),
+                ["evaluationAvg"] = average.ToString("F2")
+            };
 
-            var formatRunId = $"format_story_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-            _commandDispatcher.Enqueue(
-                "TransformStoryRawToTagged",
-                async ctx =>
-                {
-                    try
-                    {
-                        var cmd = new TransformStoryRawToTaggedCommand(
-                            storyId,
-                            _database,
-                            _kernelFactory,
-                            storiesService: this,
-                            logger: _customLogger,
-                            commandDispatcher: _commandDispatcher,
-                            tuning: _tuning,
-                            scopeFactory: _scopeFactory);
-
-                        return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
-                    }
-                    catch (Exception ex)
-                    {
-                        return new CommandResult(false, ex.Message);
-                    }
-                },
-                runId: formatRunId,
-                threadScope: "story/format",
-                metadata: new Dictionary<string, string>
-                {
-                    ["storyId"] = storyId.ToString(),
-                    ["operation"] = "format_story_auto",
-                    ["trigger"] = "evaluation_saved",
-                    ["evaluationCount"] = count.ToString(),
-                    ["evaluationAvg"] = average.ToString("F2")
-                },
-                priority: 2);
+            TryEnqueueTransformStoryRawToTagged(
+                storyId,
+                trigger: "evaluation_saved",
+                priority: 2,
+                extraMetadata: metadata);
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Auto-format enqueue failed for story {StoryId}", storyId);
+        }
+    }
+
+    public bool TryEnqueueTransformStoryRawToTagged(
+        long storyId,
+        string trigger,
+        int priority = 2,
+        IDictionary<string, string>? extraMetadata = null,
+        string? runIdOverride = null)
+    {
+        if (storyId <= 0) return false;
+        if (_commandDispatcher == null) return false;
+        if (_kernelFactory == null) return false;
+
+        var story = _database.GetStoryById(storyId);
+        if (story == null || story.Deleted) return false;
+        if (!string.IsNullOrWhiteSpace(story.StoryTagged)) return false;
+        if (string.IsNullOrWhiteSpace(story.StoryRaw)) return false;
+
+        if (IsFormatterCommandQueued(storyId)) return false;
+
+        var metadata = extraMetadata != null
+            ? new Dictionary<string, string>(extraMetadata, StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        metadata["storyId"] = storyId.ToString();
+        metadata["operation"] = "format_story_auto";
+        metadata["trigger"] = trigger;
+
+        var runId = string.IsNullOrWhiteSpace(runIdOverride)
+            ? $"format_story_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}"
+            : runIdOverride;
+
+        _commandDispatcher.Enqueue(
+            "TransformStoryRawToTagged",
+            async ctx =>
+            {
+                try
+                {
+                    var cmd = new AddVoiceTagsToStoryCommand(
+                        storyId,
+                        _database,
+                        _kernelFactory,
+                        storiesService: this,
+                        logger: _customLogger,
+                        commandDispatcher: _commandDispatcher,
+                        tuning: _tuning,
+                        scopeFactory: _scopeFactory);
+
+                    return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
+                }
+                catch (Exception ex)
+                {
+                    return new CommandResult(false, ex.Message);
+                }
+            },
+            runId: runId,
+            threadScope: "story/format",
+            metadata: metadata,
+            priority: priority);
+
+        if (metadata.TryGetValue("evaluationAvg", out var avgStr) &&
+            double.TryParse(avgStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var avgValue))
+        {
+            _logger?.LogInformation(
+                "Auto-tag enqueued for story {StoryId} (avg={Avg:F2}, trigger={Trigger})",
+                storyId,
+                avgValue,
+                trigger);
+        }
+        else
+        {
+            _logger?.LogInformation(
+                "TransformStoryRawToTagged enqueued for story {StoryId} (trigger={Trigger})",
+                storyId,
+                trigger);
+        }
+
+        return true;
+    }
+
+    private bool IsFormatterCommandQueued(long storyId)
+    {
+        if (storyId <= 0 || _commandDispatcher == null) return false;
+
+        try
+        {
+            return _commandDispatcher.GetActiveCommands().Any(s =>
+                s.Metadata != null &&
+                s.Metadata.TryGetValue("storyId", out var sid) &&
+                string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                (
+                    string.Equals(s.OperationName, "TransformStoryRawToTagged", StringComparison.OrdinalIgnoreCase) ||
+                    (s.Metadata.TryGetValue("operation", out var op) && op.Contains("format_story", StringComparison.OrdinalIgnoreCase)) ||
+                    s.RunId.StartsWith($"format_story_{storyId}_", StringComparison.OrdinalIgnoreCase)
+                ));
+        }
+        catch
+        {
+            return false;
         }
     }
     private bool TryTransitionStoryToEvaluatedIfRevised(long storyId, string? runId)
@@ -1440,7 +1776,7 @@ public sealed class StoriesService
     public EnqueueResult TryEnqueueGenerateTtsAudioCommand(long storyId, string trigger, int priority = 3)
         => TryEnqueueGenerateTtsAudioCommandInternal(storyId, trigger, priority, targetStatusId: null);
 
-    private EnqueueResult TryEnqueueGenerateTtsAudioCommandInternal(long storyId, string trigger, int priority, int? targetStatusId)
+    internal EnqueueResult TryEnqueueGenerateTtsAudioCommandInternal(long storyId, string trigger, int priority, int? targetStatusId)
     {
         try
         {
@@ -1665,6 +2001,104 @@ public sealed class StoriesService
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to enqueue final mix pipeline for story {StoryId}", storyId);
+            return false;
+        }
+    }
+
+    public long? GetTopStoryForAudioPipeline()
+    {
+        try
+        {
+            var candidates = _database.GetTopStoriesByEvaluation(10);
+            if (candidates == null || candidates.Count == 0) return null;
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate.GeneratedMixedAudio) continue;
+                var story = GetStoryById(candidate.Id);
+                if (story == null || story.Deleted) continue;
+                if (story.AutoTtsFailed) continue;
+                if (story.GeneratedAmbient && story.GeneratedEffects && story.GeneratedMusic && story.GeneratedTts) continue;
+                return candidate.Id;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Errore nel calcolo della top story per audio pipeline");
+        }
+
+        return null;
+    }
+
+    public bool TryEnqueueFullAudioPipelineForTopStory(string trigger, int priority = 7)
+    {
+        var storyId = GetTopStoryForAudioPipeline();
+        if (!storyId.HasValue) return false;
+
+        return EnqueueFinalMixPipeline(storyId.Value, trigger, priority);
+    }
+
+    public bool TryEnqueueGenerateTtsSchemaOnly(long storyId, string trigger, int priority = 3)
+    {
+        if (storyId <= 0 || _commandDispatcher == null) return false;
+
+        var story = GetStoryById(storyId);
+        if (story == null || story.Deleted) return false;
+        if (!string.Equals(story.Status, "tagged", StringComparison.OrdinalIgnoreCase)) return false;
+        if (story.GeneratedTtsJson) return false;
+
+        if (IsCommandQueued(storyId, "generate_tts_schema", $"generate_tts_schema_{storyId}_"))
+        {
+            return false;
+        }
+
+        var folderName = !string.IsNullOrWhiteSpace(story.Folder)
+            ? story.Folder
+            : new DirectoryInfo(EnsureStoryFolder(story)).Name;
+
+        var runId = $"generate_tts_schema_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+
+        _commandDispatcher.Enqueue(
+            "generate_tts_schema",
+            async ctx =>
+            {
+                var (ok, msg) = await GenerateTtsSchemaJsonAsync(storyId);
+                return new CommandResult(ok, ok ? "Schema TTS generato" : msg ?? "Errore generazione schema TTS");
+            },
+            runId: runId,
+            threadScope: "story/generate_tts_schema",
+            metadata: new Dictionary<string, string>
+            {
+                ["storyId"] = storyId.ToString(),
+                ["operation"] = "generate_tts_schema",
+                ["trigger"] = trigger,
+                ["folder"] = folderName
+            },
+            priority: Math.Max(1, priority));
+
+        _logger?.LogInformation(
+            "Auto TTS schema enqueued for tagged story {StoryId} (trigger={Trigger})",
+            storyId,
+            trigger);
+
+        return true;
+    }
+
+    private bool IsCommandQueued(long storyId, string operationName, string runPrefix)
+    {
+        if (storyId <= 0 || _commandDispatcher == null) return false;
+
+        try
+        {
+            return _commandDispatcher.GetActiveCommands().Any(s =>
+                s.Metadata != null &&
+                s.Metadata.TryGetValue("storyId", out var sid) &&
+                string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                (string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase) ||
+                 s.RunId.StartsWith(runPrefix, StringComparison.OrdinalIgnoreCase)));
+        }
+        catch
+        {
             return false;
         }
     }
@@ -3161,7 +3595,7 @@ public sealed class StoriesService
         return Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
     }
 
-    private bool ApplyStatusTransitionWithCleanup(StoryRecord story, string statusCode, string? runId = null)
+    internal bool ApplyStatusTransitionWithCleanup(StoryRecord story, string statusCode, string? runId = null)
     {
         if (story == null || string.IsNullOrWhiteSpace(statusCode)) return true;
 
@@ -3400,20 +3834,15 @@ public sealed class StoriesService
                 {
                     foreach (var item in arr.OfType<JsonObject>())
                     {
-                        // delete existing tts file if present
-                        var fn = item.TryGetPropertyValue("fileName", out var f1) ? f1?.ToString() : null;
-                        if (string.IsNullOrWhiteSpace(fn)) fn = item.TryGetPropertyValue("FileName", out var f2) ? f2?.ToString() : fn;
-                        if (!string.IsNullOrWhiteSpace(fn)) DeleteIfExists(Path.Combine(folderPath, fn));
-
-                        // remove timing and file fields so they will be recalculated
-                        item.Remove("fileName");
-                        item.Remove("FileName");
+                        // only reset timing fields; keep existing file references to allow reuse
                         item.Remove("startMs");
                         item.Remove("StartMs");
                         item.Remove("durationMs");
                         item.Remove("DurationMs");
+                        item.Remove("endMs");
+                        item.Remove("EndMs");
 
-                        // keep ambient/fx/music descriptions and durations; clean only files + ambient durations
+                        // remove regenerated metadata that should be recalculated
                         item.Remove("ambientSoundsDuration");
                         item.Remove("ambient_sounds_duration");
                         item.Remove("fxFile");
@@ -4084,69 +4513,15 @@ public sealed class StoriesService
 
     private IStoryCommand? CreateCommandForStatus(StoryStatus status)
     {
-        if (status == null || string.IsNullOrWhiteSpace(status.OperationType))
-            return null;
-
-        var opType = status.OperationType.ToLowerInvariant();
-        switch (opType)
-        {
-            case "agent_call":
-                var agentType = status.AgentType?.ToLowerInvariant();
-                return agentType switch
-                {
-                    "tts_json" or "tts" => new GenerateTtsSchemaCommand(this),
-                    "tts_voice" or "voice" => new AssignVoicesCommand(this),
-                    "evaluator" or "story_evaluator" or "writer_evaluator" => new EvaluateStoryCommand(this),
-                    "revisor" => new ReviseStoryCommand(this),
-                    "formatter" => new TagStoryCommand(this),
-                    _ => new NotImplementedCommand($"agent_call:{agentType ?? "unknown"}")
-                };
-            case "function_call":
-                var functionName = status.FunctionName?.ToLowerInvariant();
-                return functionName switch
-                {
-                    "evaluate_story" => new EvaluateStoryCommand(this),
-                    "generate_tts_audio" or "tts_audio" or "build_tts_audio" or "generate_voice_tts" or "generate_voices" => new GenerateTtsAudioCommand(this),
-                    "generate_ambience_audio" or "ambience_audio" or "generate_ambient" or "ambient_sounds" => new GenerateAmbienceAudioCommand(this),
-                    "generate_fx_audio" or "fx_audio" or "generate_fx" or "sound_effects" => new GenerateFxAudioCommand(this),
-                    "generate_music" or "music_audio" or "generate_music_audio" => new GenerateMusicCommand(this),
-                    "generate_audio_master" or "audio_master" or "mix_audio" or "mix_final" or "final_mix" => new MixFinalAudioCommand(this),
-                    "assign_voices" or "voice_assignment" => new AssignVoicesCommand(this),
-                    "prepare_tts_schema" => new PrepareTtsSchemaCommand(this),
-                    _ => new FunctionCallCommand(this, status)
-                };
-            default:
-                return null;
-        }
+        return _mainCommands.CreateCommandForStatus(status);
     }
 
     private string? GetOperationNameForStatus(StoryStatus status)
     {
-        if (status == null || string.IsNullOrWhiteSpace(status.OperationType))
-            return null;
-
-        var opType = status.OperationType.ToLowerInvariant();
-        switch (opType)
-        {
-            case "agent_call":
-                var agentType = status.AgentType?.ToLowerInvariant();
-                return agentType switch
-                {
-                    "tts_json" or "tts" => "generate_tts_schema",
-                    "tts_voice" or "voice" => "assign_voices",
-                    "evaluator" or "story_evaluator" or "writer_evaluator" => "evaluate_story",
-                    "revisor" => "revise_story",
-                    "formatter" => "tag_story",
-                    _ => $"agent_call:{agentType ?? "unknown"}"
-                };
-            case "function_call":
-                return status.FunctionName ?? "function_call";
-            default:
-                return status.OperationType;
-        }
+        return _mainCommands.GetOperationNameForStatus(status);
     }
 
-    private interface IStoryCommand
+    internal interface IStoryCommand
     {
         bool RequireStoryText { get; }
         bool EnsureFolder { get; }
@@ -4154,9 +4529,10 @@ public sealed class StoriesService
         Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context);
     }
 
-    private sealed record StoryCommandContext(StoryRecord Story, string FolderPath, StoryStatus? TargetStatus);
+    internal sealed record StoryCommandContext(StoryRecord Story, string FolderPath, StoryStatus? TargetStatus);
 
-    private sealed class GenerateTtsSchemaCommand : IStoryCommand
+
+    internal sealed class GenerateTtsSchemaCommand : IStoryCommand
     {
         private readonly StoriesService _service;
 
@@ -4263,6 +4639,25 @@ public sealed class StoriesService
 
                 try { _service._database.UpdateStoryGeneratedTtsJson(story.Id, true); } catch { }
 
+                var normResults = new List<(string Name, bool Success, string? Message)>();
+                var (normCharOk, normCharMsg) = await _service.NormalizeCharacterNamesAsync(story.Id);
+                normResults.Add(("NormalizeCharacterNames", normCharOk, normCharMsg));
+                var (assignVoicesOk, assignVoicesMsg) = await _service.AssignVoicesAsync(story.Id);
+                normResults.Add(("AssignVoices", assignVoicesOk, assignVoicesMsg));
+                var (normSentOk, normSentMsg) = await _service.NormalizeSentimentsAsync(story.Id);
+                normResults.Add(("NormalizeSentiments", normSentOk, normSentMsg));
+
+                var summaryBuilder = new StringBuilder();
+                summaryBuilder.AppendLine($"Schema TTS generato: {schema.Characters.Count} personaggi, {schema.Timeline.Count} frasi");
+                var schemaSuccess = true;
+                foreach (var result in normResults)
+                {
+                    schemaSuccess &= result.Success;
+                    var messageText = result.Message ?? (result.Success ? "ok" : "fallito");
+                    summaryBuilder.AppendLine($"{result.Name}: {messageText}");
+                }
+                var summaryMessage = summaryBuilder.ToString().Trim();
+
                 var allowNext = _service.ApplyStatusTransitionWithCleanup(story, "tts_schema_generated", null);
 
                 _service._logger?.LogInformation(
@@ -4294,7 +4689,7 @@ public sealed class StoriesService
                     _service._logger?.LogInformation("TTS schema autolaunch disabled for story {StoryId}", story.Id);
                 }
 
-                return (true, $"Schema TTS generato: {schema.Characters.Count} personaggi, {schema.Timeline.Count} frasi");
+                return (schemaSuccess, summaryMessage);
             }
             catch (Exception ex)
             {
@@ -4690,7 +5085,7 @@ public sealed class StoriesService
     /// Characters get voices matching gender and closest age, preferring higher scores.
     /// Each character must have a distinct voice.
     /// </summary>
-    private sealed class AssignVoicesCommand : IStoryCommand
+    internal sealed class AssignVoicesCommand : IStoryCommand
     {
         private readonly StoriesService _service;
 
@@ -5086,7 +5481,7 @@ public sealed class StoriesService
         }
     }
 
-    private sealed class DeleteFinalMixCommand : IStoryCommand
+    internal sealed class DeleteFinalMixCommand : IStoryCommand
     {
         private readonly StoriesService _service;
 
@@ -5102,7 +5497,7 @@ public sealed class StoriesService
         }
     }
 
-    private sealed class DeleteMusicCommand : IStoryCommand
+    internal sealed class DeleteMusicCommand : IStoryCommand
     {
         private readonly StoriesService _service;
 
@@ -5133,7 +5528,7 @@ public sealed class StoriesService
         }
     }
 
-    private sealed class DeleteFxCommand : IStoryCommand
+    internal sealed class DeleteFxCommand : IStoryCommand
     {
         private readonly StoriesService _service;
 
@@ -5164,7 +5559,7 @@ public sealed class StoriesService
         }
     }
 
-    private sealed class DeleteAmbienceCommand : IStoryCommand
+    internal sealed class DeleteAmbienceCommand : IStoryCommand
     {
         private readonly StoriesService _service;
 
@@ -5286,232 +5681,6 @@ public sealed class StoriesService
         }
     }
 
-    private sealed class EvaluateStoryCommand : IStoryCommand
-    {
-        private readonly StoriesService _service;
-
-        public EvaluateStoryCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => true;
-        public bool EnsureFolder => false;
-        public bool HandlesStatusTransition => false;
-
-        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-        {
-            var story = context.Story;
-            var evaluators = _service._database.ListAgents()
-                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
-                    (a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ||
-                     a.Role.Equals("evaluator", StringComparison.OrdinalIgnoreCase) ||
-                     a.Role.Equals("writer_evaluator", StringComparison.OrdinalIgnoreCase)))
-                .OrderBy(a => a.Id)
-                .ToList();
-
-            if (evaluators.Count == 0)
-            {
-                return (false, "Nessun agente valutatore configurato");
-            }
-
-            // Execute evaluators in parallel directly (not via dispatcher) to avoid deadlock
-            // when this command is already running inside the dispatcher
-            return await RunParallelAsync(story, evaluators);
-        }
-
-        private async Task<(bool success, string? message)> RunParallelAsync(StoryRecord story, List<Agent> evaluators)
-        {
-            // If a dispatcher is available, enqueue one command per evaluator and return immediately.
-            if (_service._commandDispatcher != null)
-            {
-                var enqueued = new List<string>();
-                foreach (var evaluator in evaluators)
-                {
-                    try
-                    {
-                        var runId = $"evaluate_story_{story.Id}_agent_{evaluator.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-                        var meta = new Dictionary<string, string>
-                        {
-                            ["storyId"] = story.Id.ToString(),
-                            ["agentId"] = evaluator.Id.ToString(),
-                            ["agentName"] = evaluator.Name ?? string.Empty,
-                            ["operation"] = "evaluate_story"
-                        };
-
-                        _service._commandDispatcher.Enqueue(
-                            "evaluate_story",
-                            async ctx =>
-                            {
-                                try
-                                {
-                                    var (success, score, error) = await _service.EvaluateStoryWithAgentAsync(story.Id, evaluator.Id);
-                                    var msg = success ? $"Valutazione completata. Score: {score:F2}" : $"Valutazione fallita: {error}";
-                                    return new CommandResult(success, msg);
-                                }
-                                catch (Exception ex)
-                                {
-                                    return new CommandResult(false, ex.Message);
-                                }
-                            },
-                            runId: runId,
-                            threadScope: $"story/evaluate/agent_{evaluator.Id}",
-                            metadata: meta);
-
-                        enqueued.Add($"{evaluator.Name ?? ("Evaluator " + evaluator.Id)} ({runId})");
-                    }
-                    catch (Exception ex)
-                    {
-                        _service._logger?.LogWarning(ex, "Failed to enqueue evaluation for story {StoryId} agent {AgentId}", story.Id, evaluator.Id);
-                    }
-                }
-
-                var msg = enqueued.Count > 0 ? $"Valutazioni accodate: {string.Join("; ", enqueued)}" : "Nessuna valutazione accodata";
-                return (enqueued.Count > 0, msg);
-            }
-
-            // Fallback: if no dispatcher is available, run in parallel inline (previous behaviour)
-            var tasks = evaluators.Select(async evaluator =>
-            {
-                try
-                {
-                    var (success, score, error) = await _service.EvaluateStoryWithAgentAsync(story.Id, evaluator.Id);
-                    var label = string.IsNullOrWhiteSpace(evaluator.Name) ? $"Evaluator {evaluator.Id}" : evaluator.Name;
-                    return success
-                        ? (success: true, message: $"{label}: punteggio {score:F2}")
-                        : (success: false, message: $"{label}: errore {error ?? "sconosciuto"}");
-                }
-                catch (Exception ex)
-                {
-                    var label = string.IsNullOrWhiteSpace(evaluator.Name) ? $"Evaluator {evaluator.Id}" : evaluator.Name;
-                    return (success: false, message: $"{label}: eccezione {ex.Message}");
-                }
-            }).ToList();
-
-            var results = await Task.WhenAll(tasks);
-            var allOk = results.All(r => r.success);
-            var joined = string.Join("; ", results.Select(r => r.message));
-
-            return allOk
-                ? (true, $"Valutazione completata. {joined}")
-                : (false, $"Valutazione parziale. {joined}");
-        }
-    }
-
-    private sealed class ReviseStoryCommand : IStoryCommand
-    {
-        private readonly StoriesService _service;
-
-        public ReviseStoryCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => true;
-        public bool EnsureFolder => false;
-        public bool HandlesStatusTransition => false;
-
-        public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-        {
-            var runId = _service.EnqueueReviseStoryCommand(context.Story.Id, trigger: "status_flow", priority: 2, force: true);
-            return Task.FromResult<(bool success, string? message)>(string.IsNullOrWhiteSpace(runId)
-                ? (false, "Revisione non accodata")
-                : (true, $"Revisione accodata (run {runId})"));
-        }
-    }
-
-    private sealed class TagStoryCommand : IStoryCommand
-    {
-        private readonly StoriesService _service;
-
-        public TagStoryCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => true;
-        public bool EnsureFolder => false;
-        public bool HandlesStatusTransition => false;
-
-        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-        {
-            if (_service._kernelFactory == null)
-            {
-                return (false, "Kernel factory non disponibile");
-            }
-
-            var cmd = new TransformStoryRawToTaggedCommand(
-                context.Story.Id,
-                _service._database,
-                _service._kernelFactory,
-                _service,
-                _service._customLogger,
-                _service._commandDispatcher,
-                _service._tuning,
-                _service._scopeFactory);
-
-            var result = await cmd.ExecuteAsync();
-            return (result.Success, result.Message);
-        }
-    }
-
-    private sealed class PrepareTtsSchemaCommand : IStoryCommand
-    {
-        private readonly StoriesService _service;
-
-        public PrepareTtsSchemaCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => true;
-        public bool EnsureFolder => true;
-        public bool HandlesStatusTransition => false;
-
-        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-        {
-            var sb = new StringBuilder();
-            var overallSuccess = true;
-
-            try
-            {
-                var (ttsOk, ttsMsg) = await _service.GenerateTtsSchemaJsonAsync(context.Story.Id);
-                sb.AppendLine($"GenerateTtsSchema: {ttsMsg}");
-                if (!ttsOk) overallSuccess = false;
-            }
-            catch (Exception ex)
-            {
-                sb.AppendLine("GenerateTtsSchema: exception " + ex.Message);
-                overallSuccess = false;
-            }
-
-            try
-            {
-                var (normCharOk, normCharMsg) = await _service.NormalizeCharacterNamesAsync(context.Story.Id);
-                sb.AppendLine($"NormalizeCharacterNames: {normCharMsg}");
-                if (!normCharOk) overallSuccess = false;
-            }
-            catch (Exception ex)
-            {
-                sb.AppendLine("NormalizeCharacterNames: exception " + ex.Message);
-                overallSuccess = false;
-            }
-
-            try
-            {
-                var (assignOk, assignMsg) = await _service.AssignVoicesAsync(context.Story.Id);
-                sb.AppendLine($"AssignVoices: {assignMsg}");
-                if (!assignOk) overallSuccess = false;
-            }
-            catch (Exception ex)
-            {
-                sb.AppendLine("AssignVoices: exception " + ex.Message);
-                overallSuccess = false;
-            }
-
-            try
-            {
-                var (normSentOk, normSentMsg) = await _service.NormalizeSentimentsAsync(context.Story.Id);
-                sb.AppendLine($"NormalizeSentiments: {normSentMsg}");
-                if (!normSentOk) overallSuccess = false;
-            }
-            catch (Exception ex)
-            {
-                sb.AppendLine("NormalizeSentiments: exception " + ex.Message);
-                overallSuccess = false;
-            }
-
-            return (overallSuccess, sb.ToString());
-        }
-    }
 
     private static void ApplyVoiceToCharacter(TtsCharacter character, TinyGenerator.Models.TtsVoice voice)
     {
@@ -5571,78 +5740,50 @@ public sealed class StoriesService
         return bestCandidates[index];
     }
 
-    private sealed class GenerateTtsAudioCommand : IStoryCommand
-    {
-        private readonly StoriesService _service;
-
-        public GenerateTtsAudioCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => true;
-        public bool EnsureFolder => true;
-        public bool HandlesStatusTransition => true;
-
-        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-        {
-            // Unify: always enqueue the dispatcher command (storyId only) instead of executing directly.
-            // Status transition is handled by the dispatcher handler via targetStatusId metadata.
-            var enqueue = _service.TryEnqueueGenerateTtsAudioCommandInternal(
-                context.Story.Id,
-                trigger: "status_transition",
-                priority: 3,
-                targetStatusId: context.TargetStatus?.Id);
-
-            return (enqueue.Enqueued, enqueue.Enqueued
-                ? $"Generazione audio TTS accodata (run {enqueue.RunId})."
-                : enqueue.Message);
-        }
-    }
-
-    private Task<(bool success, string? message)> StartTtsAudioGenerationAsync(StoryCommandContext context)
+    private async Task<(bool success, string? message)> StartTtsAudioGenerationAsync(StoryCommandContext context)
     {
         var storyId = context.Story.Id;
         var runId = $"ttsaudio_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
         _customLogger?.Start(runId);
         _customLogger?.Append(runId, $"[{storyId}] Avvio generazione tracce audio nella cartella {context.FolderPath}");
 
-        _ = Task.Run(async () =>
+        try
         {
-            try
-            {
-                var (success, message) = await GenerateTtsAudioInternalAsync(context, runId);
+            var (success, message) = await GenerateTtsAudioInternalAsync(context, runId);
 
-                if (success)
+            if (success)
+            {
+                try
                 {
-                    try
+                    var story = GetStoryById(storyId);
+                    if (story != null)
                     {
-                        var story = GetStoryById(storyId);
-                        if (story != null)
+                        var allowNext = ApplyStatusTransitionWithCleanup(story, "tts_generated", runId);
+                        if (!allowNext)
                         {
-                            var allowNext = ApplyStatusTransitionWithCleanup(story, "tts_generated", runId);
-                            if (!allowNext)
-                            {
-                                _customLogger?.Append(runId, $"[{storyId}] delete_next_items attivo: cleanup dopo tts_generated applicato", "info");
-                            }
+                            _customLogger?.Append(runId, $"[{storyId}] delete_next_items attivo: cleanup dopo tts_generated applicato", "info");
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogError(ex, "Impossibile aggiornare lo stato della storia {Id}", storyId);
-                        _customLogger?.Append(runId, $"[{storyId}] Aggiornamento stato fallito: {ex.Message}");
-                    }
                 }
-
-                await (_customLogger?.MarkCompletedAsync(runId, message ?? (success ? "Generazione audio completata" : "Errore generazione audio"))
-                    ?? Task.CompletedTask);
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Impossibile aggiornare lo stato della storia {Id}", storyId);
+                    _customLogger?.Append(runId, $"[{storyId}] Aggiornamento stato fallito: {ex.Message}");
+                }
             }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Errore non gestito durante la generazione audio TTS per la storia {Id}", storyId);
-                _customLogger?.Append(runId, $"[{storyId}] Errore inatteso: {ex.Message}");
-                await (_customLogger?.MarkCompletedAsync(runId, $"Errore: {ex.Message}") ?? Task.CompletedTask);
-            }
-        });
 
-        return Task.FromResult<(bool success, string? message)>((true, $"Generazione audio avviata (run {runId}). Monitora i log per i dettagli.")); 
+            await (_customLogger?.MarkCompletedAsync(runId, message ?? (success ? "Generazione audio completata" : "Errore generazione audio"))
+                ?? Task.CompletedTask);
+
+            return (success, message);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Errore non gestito durante la generazione audio TTS per la storia {Id}", storyId);
+            _customLogger?.Append(runId, $"[{storyId}] Errore inatteso: {ex.Message}");
+            await (_customLogger?.MarkCompletedAsync(runId, $"Errore: {ex.Message}") ?? Task.CompletedTask);
+            return (false, $"Errore inatteso: {ex.Message}");
+        }
     }
 
     private async Task<(bool success, string? message)> GenerateTtsAudioInternalAsync(StoryCommandContext context, string runId)
@@ -5751,11 +5892,6 @@ public sealed class StoriesService
                 return (false, err);
             }
 
-            var fileName = BuildAudioFileName(fileCounter++, characterName, usedFiles);
-            var filePath = Path.Combine(folderPath, fileName);
-
-            _customLogger?.Append(runId, $"[{story.Id}] Generazione frase {phraseCounter}/{phraseEntries.Count} ({characterName}) -> {fileName}");
-
             byte[] audioBytes;
             int? durationFromResult;
             string cleanText = string.Empty;
@@ -5768,7 +5904,43 @@ public sealed class StoriesService
                     continue;
                 }
 
+                var reuse = TryReuseExistingAudioEntry(entry, folderPath, cleanText, characterName, emotion, runId, story.Id, usedFiles);
+                if (reuse.reused && !string.IsNullOrWhiteSpace(reuse.fileName))
+                {
+                    var reuseStartMs = currentMs;
+                    var reuseEndMs = reuseStartMs + reuse.durationMs;
+                    entry["fileName"] = reuse.fileName;
+                    entry["durationMs"] = reuse.durationMs;
+                    entry["startMs"] = reuseStartMs;
+                    entry["endMs"] = reuseEndMs;
+                    currentMs = reuseEndMs + GetPhraseGapMs(cleanText);
+                    continue;
+                }
+
+                var fileName = BuildAudioFileName(fileCounter++, characterName, usedFiles);
+                var filePath = Path.Combine(folderPath, fileName);
+
+                _customLogger?.Append(runId, $"[{story.Id}] Generazione frase {phraseCounter}/{phraseEntries.Count} ({characterName}) -> {fileName}");
+
                 (audioBytes, durationFromResult) = await GenerateAudioBytesAsync(character.VoiceId!, cleanText, emotion);
+
+                await File.WriteAllBytesAsync(filePath, audioBytes);
+                
+                // Save TTS text to .txt file with same name
+                var txtFilePath = Path.ChangeExtension(filePath, ".txt");
+                await File.WriteAllTextAsync(txtFilePath, $"[{characterName}, {emotion}]\n{cleanText}");
+
+                var durationMs = durationFromResult ?? TryGetWavDuration(audioBytes) ?? 0;
+                var startMs = currentMs;
+                var endMs = durationMs > 0 ? startMs + durationMs : startMs;
+
+                entry["fileName"] = fileName;
+                entry["durationMs"] = durationMs;
+                entry["startMs"] = startMs;
+                entry["endMs"] = endMs;
+
+                currentMs = endMs + GetPhraseGapMs(cleanText);
+                _customLogger?.Append(runId, $"[{story.Id}] Frase completata: {fileName} ({durationMs} ms)");
             }
             catch (Exception ex)
             {
@@ -5777,34 +5949,6 @@ public sealed class StoriesService
                 _customLogger?.Append(runId, $"[{story.Id}] {err}");
                 return (false, err);
             }
-
-            try
-            {
-                await File.WriteAllBytesAsync(filePath, audioBytes);
-                
-                // Save TTS text to .txt file with same name
-                var txtFilePath = Path.ChangeExtension(filePath, ".txt");
-                await File.WriteAllTextAsync(txtFilePath, $"[{characterName}, {emotion}]\n{cleanText}");
-            }
-            catch (Exception ex)
-            {
-                var err = $"Impossibile salvare il file {fileName}: {ex.Message}";
-                _logger?.LogError(ex, "Impossibile salvare il file {File} per la storia {Id}", fileName, story.Id);
-                _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                return (false, err);
-            }
-
-            var durationMs = durationFromResult ?? TryGetWavDuration(audioBytes) ?? 0;
-            var startMs = currentMs;
-            var endMs = durationMs > 0 ? startMs + durationMs : startMs;
-
-            entry["fileName"] = fileName;
-            entry["durationMs"] = durationMs;
-            entry["startMs"] = startMs;
-            entry["endMs"] = endMs;
-
-            currentMs = endMs + GetPhraseGapMs(cleanText);
-            _customLogger?.Append(runId, $"[{story.Id}] Frase completata: {fileName} ({durationMs} ms)");
         }
 
         try
@@ -5948,11 +6092,6 @@ public sealed class StoriesService
                 return (false, err);
             }
 
-            var fileName = BuildAudioFileName(fileCounter++, characterName, usedFiles);
-            var filePath = Path.Combine(folderPath, fileName);
-
-            _customLogger?.Append(dispatcherRunId, $"[{story.Id}] Generazione frase {phraseCounter}/{phraseEntries.Count} ({characterName}) -> {fileName}");
-
             byte[] audioBytes;
             int? durationFromResult;
             string cleanText = string.Empty;
@@ -5965,7 +6104,42 @@ public sealed class StoriesService
                     continue;
                 }
 
+                var reuse = TryReuseExistingAudioEntry(entry, folderPath, cleanText, characterName, emotion, dispatcherRunId, story.Id, usedFiles);
+                if (reuse.reused && !string.IsNullOrWhiteSpace(reuse.fileName))
+                {
+                    var reuseStartMs = currentMs;
+                    var reuseEndMs = reuseStartMs + reuse.durationMs;
+                    entry["fileName"] = reuse.fileName;
+                    entry["durationMs"] = reuse.durationMs;
+                    entry["startMs"] = reuseStartMs;
+                    entry["endMs"] = reuseEndMs;
+                    currentMs = reuseEndMs + GetPhraseGapMs(cleanText);
+                    continue;
+                }
+
+                var fileName = BuildAudioFileName(fileCounter++, characterName, usedFiles);
+                var filePath = Path.Combine(folderPath, fileName);
+
+                _customLogger?.Append(dispatcherRunId, $"[{story.Id}] Generazione frase {phraseCounter}/{phraseEntries.Count} ({characterName}) -> {fileName}");
+
                 (audioBytes, durationFromResult) = await GenerateAudioBytesAsync(character.VoiceId!, cleanText, emotion);
+
+                await File.WriteAllBytesAsync(filePath, audioBytes);
+                
+                var txtFilePath = Path.ChangeExtension(filePath, ".txt");
+                await File.WriteAllTextAsync(txtFilePath, $"[{characterName}, {emotion}]\n{cleanText}");
+
+                var durationMs = durationFromResult ?? TryGetWavDuration(audioBytes) ?? 0;
+                var startMs = currentMs;
+                var endMs = currentMs + durationMs;
+                currentMs = endMs + GetPhraseGapMs(cleanText);
+
+                entry["fileName"] = fileName;
+                entry["durationMs"] = durationMs;
+                entry["startMs"] = startMs;
+                entry["endMs"] = endMs;
+
+                _customLogger?.Append(dispatcherRunId, $"[{story.Id}] Frase completata: {fileName} ({durationMs} ms)");
             }
             catch (Exception ex)
             {
@@ -5974,30 +6148,6 @@ public sealed class StoriesService
                 _customLogger?.Append(dispatcherRunId, $"[{story.Id}] {err}");
                 return (false, err);
             }
-
-            try
-            {
-                await File.WriteAllBytesAsync(filePath, audioBytes);
-            }
-            catch (Exception ex)
-            {
-                var err = $"Impossibile salvare il file {fileName}: {ex.Message}";
-                _logger?.LogError(ex, "Impossibile salvare il file {File} per la storia {Id}", fileName, story.Id);
-                _customLogger?.Append(dispatcherRunId, $"[{story.Id}] {err}");
-                return (false, err);
-            }
-
-            var durationMs = durationFromResult ?? TryGetWavDuration(audioBytes) ?? 0;
-            var startMs = currentMs;
-            var endMs = currentMs + durationMs;
-            currentMs = endMs + GetPhraseGapMs(cleanText);
-
-            entry["fileName"] = fileName;
-            entry["durationMs"] = durationMs;
-            entry["startMs"] = startMs;
-            entry["endMs"] = endMs;
-
-            _customLogger?.Append(dispatcherRunId, $"[{story.Id}] Frase completata: {fileName} ({durationMs} ms)");
         }
 
         try
@@ -6025,34 +6175,124 @@ public sealed class StoriesService
         return (true, successMsg);
     }
 
-    // =====================================================================
-    // Generate Ambience Audio Command
-    // =====================================================================
-
-    private sealed class GenerateAmbienceAudioCommand : IStoryCommand
+    private (bool reused, string? fileName, int durationMs) TryReuseExistingAudioEntry(
+        JsonObject entry,
+        string folderPath,
+        string cleanText,
+        string characterName,
+        string emotion,
+        string runId,
+        long storyId,
+        HashSet<string> usedFiles)
     {
-        private readonly StoriesService _service;
-
-        public GenerateAmbienceAudioCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => false;
-        public bool EnsureFolder => true;
-        public bool HandlesStatusTransition => true;
-
-        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
+        var existingFileName = ReadString(entry, "fileName") ??
+                               ReadString(entry, "FileName") ??
+                               ReadString(entry, "file_name");
+        if (string.IsNullOrWhiteSpace(existingFileName))
         {
-            var deleteCmd = new DeleteAmbienceCommand(_service);
-            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
-            if (!cleanupOk)
+            return (false, null, 0);
+        }
+
+        var filePath = Path.Combine(folderPath, existingFileName);
+        var txtPath = Path.ChangeExtension(filePath, ".txt");
+        if (!File.Exists(filePath) || !File.Exists(txtPath))
+        {
+            return (false, null, 0);
+        }
+
+        try
+        {
+            var lines = File.ReadAllLines(txtPath);
+            if (lines.Length < 2)
             {
-                return (false, cleanupMessage ?? "Impossibile cancellare i rumori ambientali esistenti");
+                return (false, null, 0);
             }
 
-            return await _service.StartAmbienceAudioGenerationAsync(context);
+            if (!TryParseTtsSidecarHeader(lines[0], out var recordedCharacter, out var recordedEmotion))
+            {
+                return (false, null, 0);
+            }
+
+            if (!string.Equals(recordedCharacter, characterName, StringComparison.OrdinalIgnoreCase))
+            {
+                return (false, null, 0);
+            }
+
+            var normalizedRecordedEmotion = NormalizeEmotionForTts(recordedEmotion);
+            var normalizedTargetEmotion = NormalizeEmotionForTts(emotion);
+            if (!string.Equals(normalizedRecordedEmotion, normalizedTargetEmotion, StringComparison.OrdinalIgnoreCase))
+            {
+                return (false, null, 0);
+            }
+
+            var recordedText = string.Join("\n", lines.Skip(1));
+            if (!string.Equals(NormalizeTextForComparison(recordedText), NormalizeTextForComparison(cleanText), StringComparison.Ordinal))
+            {
+                return (false, null, 0);
+            }
+        }
+        catch
+        {
+            return (false, null, 0);
+        }
+
+        var duration = TryGetWavDurationFromFile(filePath) ?? 0;
+        usedFiles.Add(existingFileName);
+        _customLogger?.Append(runId, $"[{storyId}] Riutilizzo file audio esistente {existingFileName} (testo invariato).");
+        return (true, existingFileName, duration);
+    }
+
+    private static bool TryParseTtsSidecarHeader(string headerLine, out string character, out string emotion)
+    {
+        character = string.Empty;
+        emotion = string.Empty;
+        if (string.IsNullOrWhiteSpace(headerLine))
+            return false;
+
+        var trimmed = headerLine.Trim();
+        if (trimmed.StartsWith("[") && trimmed.EndsWith("]"))
+        {
+            trimmed = trimmed[1..^1];
+        }
+
+        var parts = trimmed.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+            return false;
+
+        character = parts[0].Trim();
+        emotion = parts[1].Trim();
+        return true;
+    }
+
+    private static string NormalizeTextForComparison(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        return value.Replace("\r\n", "\n").Replace("\r", "\n").Trim();
+    }
+
+    private int? TryGetWavDurationFromFile(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath))
+                return null;
+
+            var bytes = File.ReadAllBytes(filePath);
+            return TryGetWavDuration(bytes);
+        }
+        catch
+        {
+            return null;
         }
     }
 
-    private Task<(bool success, string? message)> StartAmbienceAudioGenerationAsync(StoryCommandContext context)
+// =====================================================================
+// Generate Ambience Audio Command
+// =====================================================================
+
+    internal Task<(bool success, string? message)> StartAmbienceAudioGenerationAsync(StoryCommandContext context)
     {
         var storyId = context.Story.Id;
         var runId = $"ambience_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
@@ -6457,30 +6697,7 @@ public sealed class StoriesService
     // Generate FX Audio Command (Sound Effects)
     // =====================================================================
 
-    private sealed class GenerateFxAudioCommand : IStoryCommand
-    {
-        private readonly StoriesService _service;
-
-        public GenerateFxAudioCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => false;
-        public bool EnsureFolder => true;
-        public bool HandlesStatusTransition => true;
-
-        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-        {
-            var deleteCmd = new DeleteFxCommand(_service);
-            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
-            if (!cleanupOk)
-            {
-                return (false, cleanupMessage ?? "Impossibile cancellare gli effetti sonori esistenti");
-            }
-
-            return await _service.StartFxAudioGenerationAsync(context);
-        }
-    }
-
-    private Task<(bool success, string? message)> StartFxAudioGenerationAsync(StoryCommandContext context)
+    internal Task<(bool success, string? message)> StartFxAudioGenerationAsync(StoryCommandContext context)
     {
         var storyId = context.Story.Id;
         var runId = $"fx_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
@@ -6785,30 +7002,7 @@ public sealed class StoriesService
 
     // ==================== GENERATE MUSIC COMMAND ====================
 
-    private sealed class GenerateMusicCommand : IStoryCommand
-    {
-        private readonly StoriesService _service;
-
-        public GenerateMusicCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => false;
-        public bool EnsureFolder => true;
-        public bool HandlesStatusTransition => false;
-
-        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-        {
-            var deleteCmd = new DeleteMusicCommand(_service);
-            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
-            if (!cleanupOk)
-            {
-                return (false, cleanupMessage ?? "Impossibile cancellare la musica esistente");
-            }
-
-            return await _service.StartMusicGenerationAsync(context);
-        }
-    }
-
-    private Task<(bool success, string? message)> StartMusicGenerationAsync(StoryCommandContext context)
+    internal Task<(bool success, string? message)> StartMusicGenerationAsync(StoryCommandContext context)
     {
         var storyId = context.Story.Id;
         var runId = $"music_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
@@ -7408,30 +7602,7 @@ private static string? SelectMusicFileDeterministic(
 
     // ==================== MIX FINAL AUDIO COMMAND ====================
 
-    private sealed class MixFinalAudioCommand : IStoryCommand
-    {
-        private readonly StoriesService _service;
-
-        public MixFinalAudioCommand(StoriesService service) => _service = service;
-
-        public bool RequireStoryText => false;
-        public bool EnsureFolder => true;
-        public bool HandlesStatusTransition => true;
-
-        public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-        {
-            var deleteCmd = new DeleteFinalMixCommand(_service);
-            var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
-            if (!cleanupOk)
-            {
-                return (false, cleanupMessage ?? "Impossibile cancellare il mix finale esistente");
-            }
-
-            return await _service.StartMixFinalAudioAsync(context);
-        }
-    }
-
-    private Task<(bool success, string? message)> StartMixFinalAudioAsync(StoryCommandContext context)
+    internal Task<(bool success, string? message)> StartMixFinalAudioAsync(StoryCommandContext context)
     {
         var storyId = context.Story.Id;
         var runId = $"mixaudio_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
@@ -8861,7 +9032,7 @@ private static string? SelectMusicFileDeterministic(
 
     private sealed record CharacterVoiceInfo(string Name, string? VoiceId, string? Gender);
 
-    private sealed class FunctionCallCommand : IStoryCommand
+    internal sealed class FunctionCallCommand : IStoryCommand
     {
         private readonly StoriesService _service;
         private readonly StoryStatus _status;
@@ -8884,7 +9055,7 @@ private static string? SelectMusicFileDeterministic(
         }
     }
 
-    private sealed class NotImplementedCommand : IStoryCommand
+    internal sealed class NotImplementedCommand : IStoryCommand
     {
         private readonly string _message;
 
@@ -8996,6 +9167,7 @@ Regole:
 - Copri tutto il chunk, pi� blocchi uno dopo l'altro finch� il chunk e esaurito.";
     }
 }
+
 
 
 

@@ -183,7 +183,7 @@ namespace TinyGenerator.Services.Commands
                 await BroadcastPhaseAsync("Fase 5/5: Accodamento comandi post-generazione...");
                 await LogAndNotifyAsync("📋 Accodamento comandi formatter/experts...");
 
-                // Enqueue TransformStoryRawToTaggedCommand (formatter + experts)
+                // Enqueue AddVoiceTagsToStoryCommand (formatter + experts)
                 EnqueueTransformCommand(storyId);
 
                 await LogAndNotifyAsync("🎉 Generazione storia pianificata completata!", "success");
@@ -569,7 +569,7 @@ REGOLE FONDAMENTALI:
                     "TransformStoryRawToTagged",
                     async ctx =>
                     {
-                        var cmd = new TransformStoryRawToTaggedCommand(
+                        var cmd = new AddVoiceTagsToStoryCommand(
                             storyId,
                             _database,
                             _kernelFactory,
@@ -585,7 +585,7 @@ REGOLE FONDAMENTALI:
                     priority: 2
                 );
 
-                _logger.Log("Information", "PlannedStory", $"Enqueued TransformStoryRawToTaggedCommand for story {storyId}");
+                _logger.Log("Information", "PlannedStory", $"Enqueued AddVoiceTagsToStoryCommand for story {storyId}");
             }
             catch (Exception ex)
             {

@@ -1,0 +1,93 @@
+@model TinyGenerator.Pages.Settings.IndexModel.JsonTreeNode
+
+@{
+    var node = Model;
+    var isContainer = node.Kind == "object" || node.Kind == "array";
+    var openByDefault = node.Depth < 1;
+    var elementCount = node.Children.Count;
+    var level = Math.Abs(node.Depth % 6);
+    
+    string GetTypeIcon(string kind)
+    {
+        return kind switch
+        {
+            "string" => "bi-text-left",
+            "number" => "bi-123",
+            "bool" => "bi-toggle-on",
+            "array" => "bi-list-ul",
+            // avoid braces icon (requested)
+            "object" => "bi-box",
+            "null" => "bi-dash-circle",
+            _ => "bi-question-circle"
+        };
+    }
+    
+    string GetTypeBadgeClass(string kind)
+    {
+        return kind switch
+        {
+            "string" => "badge-type-string",
+            "number" => "badge-type-number",
+            "bool" => "badge-type-bool",
+            "array" => "badge-type-array",
+            "object" => "badge-type-object",
+            "null" => "badge-type-null",
+            _ => "badge-type-default"
+        };
+    }
+}
+
+<div class="json-tree-item" data-level="@level">
+@if (isContainer)
+{
+    <details class="json-container" open="@openByDefault">
+        <summary class="json-container-header">
+            <i class="bi @GetTypeIcon(node.Kind) type-icon @GetTypeBadgeClass(node.Kind)"></i>
+            <span class="node-name">@node.DisplayName</span>
+            @if (elementCount > 0)
+            {
+                <span class="badge element-count">@elementCount</span>
+            }
+        </summary>
+
+        <div class="json-container-body">
+            @foreach (var child in node.Children)
+            {
+                <partial name="_JsonTreeNode" model="child" />
+            }
+        </div>
+    </details>
+}
+else
+{
+    <div class="json-leaf-item">
+        <div class="json-leaf-content">
+            <div class="json-leaf-label">
+                <i class="bi @GetTypeIcon(node.Kind) type-icon @GetTypeBadgeClass(node.Kind)"></i>
+                <span class="node-name">@node.DisplayName</span>
+            </div>
+            <div class="json-leaf-value">
+                @switch (node.Kind)
+                {
+                    case "bool":
+                        <select class="form-select form-select-sm" name="values[@node.FormKey]">
+                            <option value="true" selected="@("true".Equals(node.Value, StringComparison.OrdinalIgnoreCase))">true</option>
+                            <option value="false" selected="@("false".Equals(node.Value, StringComparison.OrdinalIgnoreCase))">false</option>
+                        </select>
+                        break;
+                    case "number":
+                        <input class="form-control form-control-sm" type="number" step="any" name="values[@node.FormKey]" value="@node.Value" />
+                        break;
+                    case "null":
+                        <input class="form-control form-control-sm" type="text" name="values[@node.FormKey]" value="" placeholder="(null)" disabled />
+                        break;
+                    default:
+                        <input class="form-control form-control-sm" type="text" name="values[@node.FormKey]" value="@node.Value" />
+                        break;
+                }
+                <input type="hidden" name="types[@node.FormKey]" value="@node.Kind" />
+            </div>
+        </div>
+    </div>
+}
+</div>

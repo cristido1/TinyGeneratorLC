@@ -24,71 +24,50 @@
 
 <div class="page-wrapper">
     <div class="d-flex mb-2 align-items-center toolbar-row">
-        <form method="get" class="d-flex" style="gap:.5rem;">
-            <input name="search" value="@Model.Search" class="form-control form-control-sm" style="max-width:260px;" placeholder="Cerca..." />
-            <select name="pageSize" class="form-select form-select-sm" style="width:80px;">
-                @{ var _sizes = new[] {10,25,50}; }
-                @foreach(var s in _sizes) {
-                    if (s == Model.PageSize) {
-                        <option value="@s" selected>@s</option>
-                    } else {
-                        <option value="@s">@s</option>
-                    }
-                }
-            </select>
-            <button class="btn btn-sm btn-outline-secondary" type="submit">Vai</button>
-        </form>
-        <a class="btn btn-sm btn-success ms-2" asp-page="Create"><i class="bi bi-plus-lg"></i> Nuova storia</a>
-        <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="testTtsSchema()"><i class="bi bi-box"></i> Test TTS</button>
-        <form method="post" asp-page-handler="BatchSummarize" onsubmit="return confirm('Avviare la generazione batch dei riassunti per tutte le storie con valutazione >= 60?')" style="display:inline-block; margin-left:8px;">
-            <button type="submit" class="btn btn-sm btn-outline-info ms-2"><i class="bi bi-file-text"></i> Riassunti Batch</button>
-        </form>
-        <form method="post" asp-page-handler="DeleteLowRated" onsubmit="return confirm('Eliminare tutte le storie con valutazione media <50 e almeno 2 valutazioni? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
-            <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-trash"></i> Elimina storie scadenti</button>
-        </form>
-        <form method="post" asp-page-handler="DeleteAllEvaluations" onsubmit="return confirm('Cancellare TUTTE le valutazioni per TUTTE le storie (incluse coerenza e valutazioni azione/ritmo)? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
-            <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-eraser"></i> Cancella tutte le valutazioni</button>
-        </form>
-        <form method="post" asp-page-handler="EnsureTagStatusConsistency" onsubmit="return confirm('Allineare gli stati delle storie mancanti di story_tags? Le storie senza tag torneranno indietro agli step appropriati.')" style="display:inline-block; margin-left:8px;">
-            <button type="submit" class="btn btn-sm btn-outline-warning ms-2"><i class="bi bi-arrow-counterclockwise"></i> Verifica story_tags</button>
-        </form>
-        <form method="post" asp-page-handler="RealignCreatorModelIds" onsubmit="return confirm('Allineare model_id delle storie al model_id configurato dell\'agente (agent_id)? Non modifica agent_id. Operazione consigliata solo se hai storie con agent/modello incoerenti.')" style="display:inline-block; margin-left:8px;">
-            <button type="submit" class="btn btn-sm btn-outline-warning ms-2"><i class="bi bi-wrench-adjustable"></i> Allinea model_id</button>
-        </form>
-        <div class="dropdown ms-2">
-            <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                <i class="bi bi-check2-all"></i> Valuta tutti
-            </button>
-            <ul class="dropdown-menu" id="bulkEvaluateMenu">
-                @if (Model.Evaluators != null && Model.Evaluators.Any())
-                {
-                    foreach (var ev in Model.Evaluators)
-                    {
-                        <li><button class="dropdown-item" type="button" onclick="bulkEvaluate(@ev.Id)">@ev.Name (@ev.Role)</button></li>
-                    }
-                }
-                else
-                {
-                    <li><span class="dropdown-item text-muted">Nessun evaluator attivo</span></li>
-                }
-            </ul>
-        </div>
-        <div class="ms-auto d-flex gap-1">
-            <div class="dropdown">
-                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Colonne visibili">
-                    <i class="bi bi-layout-three-columns"></i>
+        <!-- Buttons moved into DataTables buttons area. External buttons container: will be moved via JS. -->
+        <div class="me-auto"></div>
+        <div id="externalButtons" class="d-none">
+            <a class="btn btn-sm btn-success ms-2" asp-page="Create"><i class="bi bi-plus-lg"></i> Nuova storia</a>
+            <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="testTtsSchema()"><i class="bi bi-box"></i> Test TTS</button>
+            <form method="post" asp-page-handler="BatchSummarize" onsubmit="return confirm('Avviare la generazione batch dei riassunti per tutte le storie con valutazione >= 60?')" style="display:inline-block; margin-left:8px;">
+                <button type="submit" class="btn btn-sm btn-outline-info ms-2"><i class="bi bi-file-text"></i> Riassunti Batch</button>
+            </form>
+            <form method="post" asp-page-handler="DeleteLowRated" onsubmit="return confirm('Eliminare tutte le storie con valutazione media <50 e almeno 2 valutazioni? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
+                <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-trash"></i> Elimina storie scadenti</button>
+            </form>
+            <form method="post" asp-page-handler="DeleteAllEvaluations" onsubmit="return confirm('Cancellare TUTTE le valutazioni per TUTTE le storie (incluse coerenza e valutazioni azione/ritmo)? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
+                <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-eraser"></i> Cancella tutte le valutazioni</button>
+            </form>
+            <form method="post" asp-page-handler="EnsureTagStatusConsistency" onsubmit="return confirm('Allineare gli stati delle storie mancanti di story_tags? Le storie senza tag torneranno indietro agli step appropriati.')" style="display:inline-block; margin-left:8px;">
+                <button type="submit" class="btn btn-sm btn-outline-warning ms-2"><i class="bi bi-arrow-counterclockwise"></i> Verifica story_tags</button>
+            </form>
+            <form method="post" asp-page-handler="RealignCreatorModelIds" onsubmit="return confirm('Allineare model_id delle storie al model_id configurato dell\'agente (agent_id)? Non modifica agent_id. Operazione consigliata solo se hai storie con agent/modello incoerenti.')" style="display:inline-block; margin-left:8px;">
+                <button type="submit" class="btn btn-sm btn-outline-warning ms-2"><i class="bi bi-wrench-adjustable"></i> Allinea model_id</button>
+            </form>
+            <div class="dropdown ms-2 d-inline-block">
+                <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                    <i class="bi bi-check2-all"></i> Valuta tutti
                 </button>
-                <div class="dropdown-menu dropdown-menu-end p-2" id="colVisMenu" style="min-width: 200px; max-height: 350px; overflow-y: auto;"></div>
+                <ul class="dropdown-menu" id="bulkEvaluateMenu">
+                    @if (Model.Evaluators != null && Model.Evaluators.Any())
+                    {
+                        foreach (var ev in Model.Evaluators)
+                        {
+                            <li><button class="dropdown-item" type="button" onclick="bulkEvaluate(@ev.Id)">@ev.Name (@ev.Role)</button></li>
+                        }
+                    }
+                    else
+                    {
+                        <li><span class="dropdown-item text-muted">Nessun evaluator attivo</span></li>
+                    }
+                </ul>
             </div>
-            <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">Refresh</button>
+            <button class="btn btn-sm btn-outline-secondary ms-2" id="refreshBtn">Refresh</button>
         </div>
     </div>
 
-    <div style="height: calc(100vh - 200px); width:100%; overflow-x:auto; overflow-y:auto;">
+        <div style="height: calc(100vh - 200px); width:100%; overflow-x:auto; overflow-y:auto;">
         <style>
-            .stories-table-wrapper { border: 2px solid #ccc; border-radius: 8px; overflow: visible; }
-            .stories-table-wrapper table { margin-bottom: 0; border-radius: 0; }
-
             /* Grigietto pager styles */
             #pager { padding: 8px 12px; text-align: right; }
             #pager .pagination { margin: 0; display: inline-flex; gap: 4px; }
@@ -106,7 +85,6 @@
             }
             #pager .page-item.disabled .page-link { opacity: 0.6; }
         </style>
-        <div class="stories-table-wrapper">
         <table class="table table-striped table-hover" id="storiesTable">
             <thead class="table-light">
                 <tr>
@@ -284,8 +262,8 @@
                             </div>
                         </td>
                     </tr>
-                    <tr class="story-evals-row d-none" data-story-id="@s.Id">
-                        <td colspan="16">
+                    <tr class="story-evals-row d-none" data-story-id="@s.Id" data-detail-row>
+                        <td class="detail-cell">
                             <div class="p-3 bg-light border rounded">
                                 @if (s.Evaluations != null && s.Evaluations.Any())
                                 {
@@ -300,13 +278,25 @@
                                 }
                             </div>
                         </td>
+                        @for (int _i = 1; _i < 18; _i++) {
+                            <td></td>
+                        }
                     </tr>
                 }
             </tbody>
         </table>
-        </div>
+        
 
-        <div id="pager" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy"></div>
+        <style>
+            /* Ensure detail rows visually span the table while keeping correct TD count for DataTables */
+            tr[data-detail-row] td { padding: 0; border: none; }
+            tr[data-detail-row] td.detail-cell { display: block; width: 100%; padding: .75rem; }
+            tr[data-detail-row] td:not(.detail-cell) { display: none; }
+            /* Remove outer border wrapper previously used */
+            .stories-table-wrapper { border: none; }
+        </style>
+
+        <div id="pager" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" style="display:none;"></div>
     </div>
 </div>
 
@@ -407,5 +397,54 @@
                 });
             });
         });
+    </script>
+    
+    <script>
+        (function initStoriesTable(){
+            if (typeof jQuery === 'undefined') { document.addEventListener('DOMContentLoaded', initStoriesTable); return; }
+            var scripts = ['/lib/datatables/js/jquery.dataTables.min.js','/lib/datatables/js/dataTables.bootstrap5.min.js','/lib/datatables/js/dataTables.buttons.min.js','/lib/datatables/js/buttons.bootstrap5.min.js','/lib/datatables/js/buttons.colVis.min.js'];
+            var i=0; function load(u,cb){var s=document.createElement('script');s.src=u;s.onload=cb;s.onerror=cb;document.head.appendChild(s);} function next(){ if(i<scripts.length) load(scripts[i++], next); else init(); } next();
+            function init(){ jQuery(document).ready(function($){ if(typeof $.fn.DataTable==='undefined'){ console.error('DataTables not loaded'); return; }
+                var pageLen = @Model.PageSize;
+                var table = $('#storiesTable').DataTable({
+                    dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>",
+                    stateSave: true,
+                    paging: true,
+                    pageLength: pageLen || 10,
+                    lengthChange: true,
+                    lengthMenu: [[10,25,50,100],[10,25,50,100]],
+                    order: [[1,'desc']],
+                    columnDefs: [
+                        { orderable: false, targets: [10,16,17] },
+                        { targets: 0, width: '6rem', className: 'text-nowrap' }
+                    ],
+                    buttons: [
+                        {
+                            text: '<i class="bi bi-arrow-clockwise"></i> Refresh',
+                            className: 'btn btn-sm btn-secondary',
+                            action: function(e, dt, node, config) { location.reload(); }
+                        }
+                    ]
+                });
+
+                // wire column visibility menu to ListUI if present
+                try { window.ListUI && window.ListUI.init && window.ListUI.init({ tableSelector: '#storiesTable', colsMenuId: 'colVisMenu' }); } catch(e){}
+
+                // move external top buttons into DataTables Buttons container
+                try {
+                    var external = $('#externalButtons');
+                    if (external.length) {
+                        external.removeClass('d-none');
+                        var dtBtns = $('#storiesTable_wrapper .dt-buttons');
+                        if (dtBtns.length) dtBtns.append(external);
+                        else $('.dt-buttons').append(external);
+                        // rebind refresh
+                        $('#refreshBtn').off('click').on('click', function(){ location.reload(); });
+                    }
+                } catch(e) {}
+
+                // Preserve existing detail toggle behaviour (already bound by list-ui)
+            }); }
+        })();
     </script>
 }

@@ -14,7 +14,7 @@ using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands
 {
-    public sealed class TransformStoryRawToTaggedCommand
+    public sealed class AddVoiceTagsToStoryCommand
     {
         private const string FormatterV2SystemPrompt =
             "Sei un agente di classificazione.\n\n" +
@@ -44,7 +44,7 @@ namespace TinyGenerator.Services.Commands
 
         private sealed record FormatChunkResult(string TaggedText, string? LastError);
 
-        public TransformStoryRawToTaggedCommand(
+        public AddVoiceTagsToStoryCommand(
             long storyId,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
@@ -67,11 +67,11 @@ namespace TinyGenerator.Services.Commands
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
         {
             var effectiveRunId = string.IsNullOrWhiteSpace(runId)
-                ? $"format_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
+                ? $"add_voice_tags_to_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
                 : runId;
 
             _logger?.Start(effectiveRunId);
-            _logger?.Append(effectiveRunId, $"[story {_storyId}] Starting formatter pipeline");
+            _logger?.Append(effectiveRunId, $"[story {_storyId}] Starting add_voice_tags_to_story pipeline");
 
             try
             {
@@ -293,12 +293,13 @@ namespace TinyGenerator.Services.Commands
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Tagged story rebuilt from story_tags");
 
-                // Requirement: if tagging succeeds, optionally enqueue ambient_expert to add ambient tags
-                var enqueued = TryEnqueueAmbientExpert(story, effectiveRunId);
+                var allowNext = _storiesService?.ApplyStatusTransitionWithCleanup(story, "tagged_voice", effectiveRunId) ?? true;
+
+                var enqueued = TryEnqueueNextStatus(story, allowNext, effectiveRunId);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
                 return new CommandResult(true, enqueued
-                    ? "Tagged story generated (ambient_expert enqueued)"
+                    ? "Tagged story generated (next status enqueued)"
                     : "Tagged story generated");
             }
             catch (OperationCanceledException)
@@ -311,61 +312,54 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        private bool TryEnqueueAmbientExpert(StoryRecord story, string runId)
+        private bool TryEnqueueNextStatus(StoryRecord story, bool allowNext, string runId)
         {
             try
             {
+                if (!allowNext)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: delete_next_items attivo", "info");
+                    return false;
+                }
+
+                if (_storiesService != null && !_storiesService.IsTaggedVoiceAutoLaunchEnabled())
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: StoryTaggingPipeline Autolaunch disabled", "info");
+                    return false;
+                }
+
+                if (_storiesService != null && !_storiesService.TryValidateTaggedVoice(story, out var voiceReason))
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: voice validation failed ({voiceReason})", "warn");
+                    return false;
+                }
+
                 if (!_tuning.TransformStoryRawToTagged.AutolaunchNextCommand)
                 {
-                    _logger?.Append(runId, $"[story {_storyId}] ambient_expert enqueue skipped: AutolaunchNextCommand disabled", "info");
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: AutolaunchNextCommand disabled", "info");
                     return false;
                 }
 
-                if (_commandDispatcher == null)
+                if (_storiesService == null)
                 {
-                    _logger?.Append(runId, $"[story {_storyId}] ambient_expert enqueue skipped: dispatcher not available", "warn");
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: stories service missing", "warn");
                     return false;
                 }
 
-                if (_storiesService == null || _kernelFactory == null)
+                var refreshedStory = _storiesService.GetStoryById(story.Id) ?? story;
+                var nextRunId = _storiesService.EnqueueNextStatusCommand(refreshedStory, "voice_tags_completed", priority: 2);
+                if (!string.IsNullOrWhiteSpace(nextRunId))
                 {
-                    _logger?.Append(runId, $"[story {_storyId}] ambient_expert enqueue skipped: missing dependencies", "warn");
-                    return false;
+                    _logger?.Append(runId, $"[story {_storyId}] Enqueued next status (runId={nextRunId})", "info");
+                    return true;
                 }
 
-                var ambientRunId = $"ambient_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-
-                _commandDispatcher.Enqueue(
-                    "ambient_expert",
-                    async ctx =>
-                    {
-                        try
-                        {
-                            var cmd = new AmbientExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher, _tuning, _scopeFactory);
-                            return await cmd.ExecuteAsync(ctx.CancellationToken, ambientRunId);
-                        }
-                        catch (Exception ex)
-                        {
-                            return new CommandResult(false, ex.Message);
-                        }
-                    },
-                    runId: ambientRunId,
-                    threadScope: "story/ambient_expert",
-                    metadata: new Dictionary<string, string>
-                    {
-                        ["storyId"] = _storyId.ToString(),
-                        ["operation"] = "ambient_expert",
-                        ["trigger"] = "formatter_completed",
-                        ["taggedVersion"] = (story.StoryTaggedVersion ?? 0).ToString()
-                    },
-                    priority: 2);
-
-                _logger?.Append(runId, $"[story {_storyId}] Enqueued ambient_expert (runId={ambientRunId})", "info");
-                return true;
+                _logger?.Append(runId, $"[story {_storyId}] Next status enqueue skipped: no next status available", "info");
+                return false;
             }
             catch (Exception ex)
             {
-                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue ambient_expert: {ex.Message}", "warn");
+                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue next status: {ex.Message}", "warn");
                 return false;
             }
         }
@@ -936,3 +930,4 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
+

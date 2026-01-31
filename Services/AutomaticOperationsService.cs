@@ -82,14 +82,12 @@ namespace TinyGenerator.Services
                     var available = tasks.Where(t => t.HasCandidate()).ToList();
                     if (available.Count == 0)
                     {
-                        _lastAttemptUtc = nowUtc;
                         continue;
                     }
 
                     var chosen = PickNextTask(available);
                     if (chosen == null)
                     {
-                        _lastAttemptUtc = nowUtc;
                         continue;
                     }
 
@@ -184,6 +182,50 @@ namespace TinyGenerator.Services
                     }));
             }
 
+            if (opts.EvaluateRevised.AutolaunchNextCommand)
+            {
+                list.Add(new IdleTask(
+                    name: "auto_tag_best_evaluated",
+                    priority: Math.Max(1, opts.EvaluateRevised.Priority + 1),
+                    hasCandidate: () => _database.GetTopEvaluatedStoryForTagging(opts.EvaluateRevised.AutolaunchEvaluationLimit) != null,
+                    tryEnqueue: () =>
+                    {
+                        var candidate = _database.GetTopEvaluatedStoryForTagging(opts.EvaluateRevised.AutolaunchEvaluationLimit);
+                        if (candidate == null) return false;
+
+                        var metadata = new Dictionary<string, string>
+                        {
+                            ["evaluationCount"] = candidate.EvaluationCount.ToString(),
+                            ["evaluationAvg"] = candidate.AverageScore.ToString("F2"),
+                            ["trigger"] = "auto_tag_best_evaluated"
+                        };
+
+                return _stories.TryEnqueueTransformStoryRawToTagged(
+                    candidate.StoryId,
+                    trigger: "auto_tag_best_evaluated",
+                    priority: Math.Max(1, opts.EvaluateRevised.Priority + 1),
+                    extraMetadata: metadata);
+            }));
+            }
+
+            if (opts.EvaluateRevised.AutolaunchTtsSchemaAfterTagged)
+            {
+                list.Add(new IdleTask(
+                    name: "auto_tts_schema_from_tagged",
+                    priority: Math.Max(1, opts.EvaluateRevised.Priority + 2),
+                    hasCandidate: () => _database.GetTopTaggedStoryForTts(opts.EvaluateRevised.AutolaunchTtsSchemaThreshold) != null,
+                    tryEnqueue: () =>
+                    {
+                        var candidate = _database.GetTopTaggedStoryForTts(opts.EvaluateRevised.AutolaunchTtsSchemaThreshold);
+                        if (candidate == null) return false;
+
+                        return _stories.TryEnqueueGenerateTtsSchemaOnly(
+                            candidate.StoryId,
+                            trigger: "auto_tts_schema_from_tagged",
+                            priority: Math.Max(1, opts.EvaluateRevised.Priority + 2));
+                    }));
+            }
+
             if (opts.AutoDeleteLowRated.Enabled)
             {
                 list.Add(new IdleTask(
@@ -242,7 +284,21 @@ namespace TinyGenerator.Services
                     tryEnqueue: () =>
                     {
                         if (!TryGetTopStoryForFinalMix(out var storyId)) return false;
-                        return _stories.EnqueueFinalMixPipeline(storyId, trigger: "idle_auto_top_score", priority: Math.Max(1, opts.AutoFinalMixPipeline.Priority));
+                       return _stories.EnqueueFinalMixPipeline(storyId, trigger: "idle_auto_top_score", priority: Math.Max(1, opts.AutoFinalMixPipeline.Priority));
+                    }));
+            }
+
+            if (opts.AutoCompleteAudioPipeline.Enabled)
+            {
+                list.Add(new IdleTask(
+                    name: "auto_complete_audio_pipeline",
+                    priority: Math.Max(1, opts.AutoCompleteAudioPipeline.Priority),
+                    hasCandidate: () => _stories.GetTopStoryForAudioPipeline().HasValue,
+                    tryEnqueue: () =>
+                    {
+                        return _stories.TryEnqueueFullAudioPipelineForTopStory(
+                            trigger: "auto_complete_audio_pipeline",
+                            priority: Math.Max(1, opts.AutoCompleteAudioPipeline.Priority));
                     }));
             }
 

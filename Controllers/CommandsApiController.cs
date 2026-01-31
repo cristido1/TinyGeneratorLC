@@ -17,6 +17,7 @@ namespace TinyGenerator.Controllers
         private readonly ICustomLogger _logger;
         private readonly CommandTuningOptions _tuning;
         private readonly IServiceProvider _serviceProvider;
+        private readonly TextValidationService _textValidationService;
 
         public CommandsApiController(
             ICommandDispatcher dispatcher,
@@ -25,7 +26,8 @@ namespace TinyGenerator.Controllers
             StoriesService storiesService,
             ICustomLogger logger,
             IOptions<CommandTuningOptions> tuningOptions,
-            IServiceProvider serviceProvider)
+            IServiceProvider serviceProvider,
+            TextValidationService textValidationService)
         {
             _dispatcher = dispatcher;
             _database = database;
@@ -34,6 +36,7 @@ namespace TinyGenerator.Controllers
             _logger = logger;
             _tuning = tuningOptions.Value ?? new CommandTuningOptions();
             _serviceProvider = serviceProvider;
+            _textValidationService = textValidationService;
         }
 
         [HttpGet]
@@ -127,7 +130,7 @@ namespace TinyGenerator.Controllers
                 // IMPORTANT: do not capture scoped DbContext-backed services for a background command.
                 // Pass the scope factory instead and resolve ModelFallbackService inside the command when needed.
                 var scopeFactory = _serviceProvider.GetService<IServiceScopeFactory>();
-            var cmd = new TransformStoryRawToTaggedCommand(
+            var cmd = new AddVoiceTagsToStoryCommand(
                 storyId,
                 _database,
                 _kernelFactory,
@@ -232,7 +235,15 @@ namespace TinyGenerator.Controllers
 
             var runId = Guid.NewGuid().ToString();
             var scopeFactory = _serviceProvider.GetService<IServiceScopeFactory>();
-            var cmd = new GenerateNextChunkCommand(request.StoryId, request.WriterAgentId, _database, _kernelFactory, _logger, tuning: _tuning, scopeFactory: scopeFactory);
+            var cmd = new GenerateNextChunkCommand(
+                storyId: request.StoryId,
+                writerAgentId: request.WriterAgentId,
+                database: _database,
+                kernelFactory: _kernelFactory,
+                textValidationService: _textValidationService,
+                logger: _logger,
+                tuning: _tuning,
+                scopeFactory: scopeFactory);
 
             _dispatcher.Enqueue(
                 "GenerateNextChunk",
@@ -266,3 +277,4 @@ namespace TinyGenerator.Controllers
         public int WriterAgentId { get; set; }
     }
 }
+

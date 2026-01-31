@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
@@ -70,7 +70,7 @@ namespace TinyGenerator.data.Migrations
                 values: new object[,]
                 {
                     { 1, "FullStoryPipelineCommand", "2026-01-23T13:31:40.2134749Z", "writer", "2026-01-23T13:31:40.2134749Z" },
-                    { 2, "TransformStoryRawToTaggedCommand", "2026-01-23T13:31:40.2134749Z", "formatter", "2026-01-23T13:31:40.2134749Z" },
+                    { 2, "AddVoiceTagsToStoryCommand", "2026-01-23T13:31:40.2134749Z", "formatter", "2026-01-23T13:31:40.2134749Z" },
                     { 3, "StoryEvaluation", "2026-01-23T13:31:40.2134749Z", "evaluator", "2026-01-23T13:31:40.2134749Z" },
                     { 4, "TtsGeneration", "2026-01-23T13:31:40.2134749Z", "tts_expert", "2026-01-23T13:31:40.2134749Z" },
                     { 5, "MusicGeneration", "2026-01-23T13:31:40.2134749Z", "music_expert", "2026-01-23T13:31:40.2134749Z" },
@@ -100,3 +100,4 @@ namespace TinyGenerator.data.Migrations
         }
     }
 }
+

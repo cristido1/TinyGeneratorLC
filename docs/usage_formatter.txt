@@ -22,7 +22,7 @@ NUOVO COMANDO
 ========================================
 
 Nome suggerito:
-TransformStoryRawToTaggedCommand
+AddVoiceTagsToStoryCommand
 
 Responsabilità del comando:
 - Leggere il campo story_raw dalla tabella stories.
@@ -166,3 +166,4 @@ NOTE IMPORTANTI
 ========================================
 FINE FILE
 ========================================
+

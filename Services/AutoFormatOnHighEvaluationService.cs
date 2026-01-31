@@ -97,7 +97,7 @@ namespace TinyGenerator.Services
                     {
                         try
                         {
-                            var cmd = new TransformStoryRawToTaggedCommand(
+                            var cmd = new AddVoiceTagsToStoryCommand(
                                 storyId,
                                 _database,
                                 _kernelFactory,
@@ -149,3 +149,4 @@ namespace TinyGenerator.Services
         }
     }
 }
+

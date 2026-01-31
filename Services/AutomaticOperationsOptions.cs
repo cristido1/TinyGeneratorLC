@@ -11,10 +11,12 @@ namespace TinyGenerator.Services
             Priority = 1
         };
 
-        public AutomaticOperationOptions EvaluateRevised { get; set; } = new()
+        public AutomaticEvaluationOptions EvaluateRevised { get; set; } = new()
         {
             Enabled = true,
-            Priority = 2
+            Priority = 2,
+            AutolaunchNextCommand = true,
+            AutolaunchEvaluationLimit = 60
         };
 
         public AutomaticDeleteOptions AutoDeleteLowRated { get; set; } = new()
@@ -37,6 +39,12 @@ namespace TinyGenerator.Services
             Priority = 7
         };
 
+        public AutomaticOperationOptions AutoCompleteAudioPipeline { get; set; } = new()
+        {
+            Enabled = true,
+            Priority = 8
+        };
+
         public AutoStateDrivenSeriesEpisodeOptions AutoStateDrivenSeriesEpisode { get; set; } = new()
         {
             Enabled = true,
@@ -52,6 +60,14 @@ namespace TinyGenerator.Services
     {
         public bool Enabled { get; set; } = true;
         public int Priority { get; set; } = 2;
+    }
+
+    public sealed class AutomaticEvaluationOptions : AutomaticOperationOptions
+    {
+        public bool AutolaunchNextCommand { get; set; } = true;
+        public double AutolaunchEvaluationLimit { get; set; } = 60;
+        public bool AutolaunchTtsSchemaAfterTagged { get; set; } = true;
+        public double AutolaunchTtsSchemaThreshold { get; set; } = 70;
     }
 
     public sealed class AutomaticDeleteOptions : AutomaticOperationOptions

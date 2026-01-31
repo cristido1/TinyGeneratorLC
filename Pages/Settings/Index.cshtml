@@ -20,52 +20,30 @@
         </button>
     </div>
 
-    <div class="table-responsive">
-        <table class="table table-sm table-striped align-middle">
-            <thead>
-                <tr>
-                    <th style="width: 45%;">Chiave</th>
-                    <th style="width: 45%;">Valore</th>
-                    <th style="width: 10%;">Tipo</th>
-                </tr>
-            </thead>
-            <tbody>
-            @for (var i = 0; i < Model.Settings.Count; i++)
-            {
-                var s = Model.Settings[i];
-                <tr>
-                    <td style="padding-left:@(s.Depth * 18)px;">
-                        <code>@s.Path</code>
-                        <input type="hidden" name="settings[@i].Path" value="@s.Path" />
-                        <input type="hidden" name="settings[@i].Type" value="@s.Type" />
-                    </td>
-                    <td>
-                        @if (string.Equals(s.Type, "bool", StringComparison.OrdinalIgnoreCase))
-                        {
-                            <select class="form-select form-select-sm" name="settings[@i].Value">
-                                <option value="true" selected="@("true".Equals(s.Value, StringComparison.OrdinalIgnoreCase))">true</option>
-                                <option value="false" selected="@("false".Equals(s.Value, StringComparison.OrdinalIgnoreCase))">false</option>
-                            </select>
-                        }
-                        else if (string.Equals(s.Type, "number", StringComparison.OrdinalIgnoreCase))
-                        {
-                            <input class="form-control form-control-sm" type="number" step="any" name="settings[@i].Value" value="@s.Value" />
-                        }
-                        else if (string.Equals(s.Type, "json", StringComparison.OrdinalIgnoreCase))
-                        {
-                            <textarea class="form-control form-control-sm" name="settings[@i].Value" rows="2">@s.Value</textarea>
-                        }
-                        else
-                        {
-                            <input class="form-control form-control-sm" type="text" name="settings[@i].Value" value="@s.Value" />
-                        }
-                    </td>
-                    <td class="text-muted small">@s.Type</td>
-                </tr>
-            }
-            </tbody>
-        </table>
+    <div class="d-flex gap-2 mb-3">
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="expandAllBtn">
+            <i class="bi bi-arrows-expand me-1"></i>Expand all
+        </button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="collapseAllBtn">
+            <i class="bi bi-arrows-collapse me-1"></i>Collapse all
+        </button>
     </div>
+
+    @if (Model.Root == null)
+    {
+        <div class="alert alert-warning" role="alert">Nessuna impostazione caricata.</div>
+    }
+    else
+    {
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small mb-3">
+                    Editor ad albero: espandi/seleziona i nodi per modificare le foglie (string/number/bool/null). Oggetti e array sono navigabili.
+                </div>
+                <partial name="_JsonTreeNode" model="Model.Root" />
+            </div>
+        </div>
+    }
 
     <div class="d-flex justify-content-end">
         <button type="submit" class="btn btn-primary">
@@ -73,3 +51,156 @@
         </button>
     </div>
 </form>
+
+<script>
+    (function () {
+        function setAllDetails(open) {
+            document.querySelectorAll('.json-tree details.json-container').forEach(function (d) {
+                d.open = open;
+            });
+        }
+
+        var expandBtn = document.getElementById('expandAllBtn');
+        var collapseBtn = document.getElementById('collapseAllBtn');
+
+        if (expandBtn) expandBtn.addEventListener('click', function () { setAllDetails(true); });
+        if (collapseBtn) collapseBtn.addEventListener('click', function () { setAllDetails(false); });
+    })();
+</script>
+
+<style>
+    :root {
+        --json-l0-bg: #f8f9fa;
+        --json-l1-bg: #f5f7ff;
+        --json-l2-bg: #f4fbf7;
+        --json-l3-bg: #fff7f2;
+        --json-l4-bg: #f7f4ff;
+        --json-l5-bg: #f2fbff;
+
+        --json-l0-border: #d7dbe0;
+        --json-l1-border: #cfd8ff;
+        --json-l2-border: #c9f0da;
+        --json-l3-border: #ffd9c2;
+        --json-l4-border: #dbcfff;
+        --json-l5-border: #c8efff;
+    }
+
+    .json-tree-item {
+        margin-bottom: 0.5rem;
+    }
+    
+    .json-container {
+        background: var(--json-l0-bg);
+        border-radius: 6px;
+        padding: 0;
+        border: 1px solid var(--json-l0-border);
+    }
+
+    .json-tree-item[data-level="0"] .json-container { background: var(--json-l0-bg); border-color: var(--json-l0-border); }
+    .json-tree-item[data-level="1"] .json-container { background: var(--json-l1-bg); border-color: var(--json-l1-border); }
+    .json-tree-item[data-level="2"] .json-container { background: var(--json-l2-bg); border-color: var(--json-l2-border); }
+    .json-tree-item[data-level="3"] .json-container { background: var(--json-l3-bg); border-color: var(--json-l3-border); }
+    .json-tree-item[data-level="4"] .json-container { background: var(--json-l4-bg); border-color: var(--json-l4-border); }
+    .json-tree-item[data-level="5"] .json-container { background: var(--json-l5-bg); border-color: var(--json-l5-border); }
+    
+    .json-container-header {
+        cursor: pointer;
+        user-select: none;
+        padding: 0.75rem 1rem;
+        list-style: none;
+        transition: background-color 0.15s ease;
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        white-space: nowrap;
+    }
+    
+    .json-container-header:hover {
+        background-color: #e9ecef;
+    }
+    
+    .json-container[open] > .json-container-header {
+        border-bottom: 1px solid #e9ecef;
+    }
+    
+    .json-container-body {
+        padding: 0.75rem 1rem 0.75rem 2rem;
+    }
+    
+    .json-leaf-item {
+        padding: 0.5rem 0;
+    }
+    
+    .json-leaf-content {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+    
+    .json-leaf-label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 200px;
+        flex: 1;
+    }
+    
+    .json-leaf-value {
+        flex: 2;
+        min-width: 250px;
+    }
+    
+    .node-name {
+        font-weight: 500;
+        font-size: 0.9rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    
+    .type-icon {
+        font-size: 1rem;
+        width: 20px;
+        text-align: center;
+    }
+    
+    .badge-type-string .type-icon { color: #198754; }
+    .badge-type-number .type-icon { color: #0d6efd; }
+    .badge-type-bool .type-icon { color: #fd7e14; }
+    .badge-type-array .type-icon { color: #6f42c1; }
+    .badge-type-object .type-icon { color: #6c757d; }
+    .badge-type-null .type-icon { color: #adb5bd; }
+    
+    .element-count {
+        background-color: #6c757d;
+        color: white;
+        font-size: 0.7rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 10px;
+    }
+    
+    .json-leaf-value .form-control,
+    .json-leaf-value .form-select {
+        max-width: 100%;
+    }
+    
+    details > summary::-webkit-details-marker {
+        display: none;
+    }
+    
+    details > summary::before {
+        content: '▶';
+        display: inline-block;
+        margin-right: 0.5rem;
+        transition: transform 0.2s;
+        font-size: 1.1rem;
+        color: #6c757d;
+        line-height: 1;
+        flex: 0 0 auto;
+    }
+    
+    details[open] > summary::before {
+        transform: rotate(90deg);
+    }
+</style>

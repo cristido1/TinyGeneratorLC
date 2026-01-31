@@ -109,12 +109,15 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<MemoryEmbeddingBac
 builder.Services.Configure<CommandDispatcherOptions>(builder.Configuration.GetSection("CommandDispatcher"));
 // Command tuning (attempts, chunking sizes, thresholds)
 builder.Services.Configure<CommandTuningOptions>(builder.Configuration.GetSection("CommandTuning"));
+builder.Services.Configure<StateDrivenStoryGenerationOptions>(builder.Configuration.GetSection("StateDrivenStoryGeneration"));
+builder.Services.AddSingleton<TextValidationService>();
 // TTS schema generation options (pause/gap between phrases)
 builder.Services.Configure<TtsSchemaGenerationOptions>(builder.Configuration.GetSection("TtsSchemaGeneration"));
 // Audio generation options (autolaunch followups)
 builder.Services.Configure<AudioGenerationOptions>(builder.Configuration.GetSection("AudioGeneration"));
 // Automatic operations (auto enqueue when system idle)
 builder.Services.Configure<AutomaticOperationsOptions>(builder.Configuration.GetSection("AutomaticOperations"));
+builder.Services.Configure<StoryTaggingPipelineOptions>(builder.Configuration.GetSection("StoryTaggingPipeline"));
 // Narrator voice options (default voice id)
 builder.Services.Configure<NarratorVoiceOptions>(builder.Configuration.GetSection("NarratorVoice"));
 builder.Services.AddSingleton<CommandDispatcher>(sp =>
@@ -154,7 +157,8 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     audioGenerationOptions: sp.GetService<IOptionsMonitor<AudioGenerationOptions>>(),
     narratorVoiceOptions: sp.GetService<IOptionsMonitor<NarratorVoiceOptions>>(),
     idleAutoOptions: sp.GetService<IOptionsMonitor<AutomaticOperationsOptions>>(),
-    scopeFactory: sp.GetService<IServiceScopeFactory>()));
+    scopeFactory: sp.GetService<IServiceScopeFactory>(),
+    storyTaggingOptions: sp.GetService<IOptionsMonitor<StoryTaggingPipelineOptions>>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 builder.Services.AddSingleton<SystemReportService>();
 

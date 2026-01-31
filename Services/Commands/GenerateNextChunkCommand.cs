@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Data.Common;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,11 +13,6 @@ namespace TinyGenerator.Services.Commands;
 
 public sealed class GenerateNextChunkCommand
 {
-    private const double SentenceSimilarityThreshold = 0.85;
-    private const int LoopRepetitionCountThreshold = 6;
-    private const double LoopRepetitionRatioThreshold = 0.5;
-    private const int PreviousSentencesToCompare = 5;
-
     private readonly CommandTuningOptions _tuning;
 
     public sealed record GenerateChunkOptions(
@@ -32,6 +25,7 @@ public sealed class GenerateNextChunkCommand
     private readonly DatabaseService _database;
     private readonly ILangChainKernelFactory _kernelFactory;
     private readonly ICustomLogger? _logger;
+    private readonly TextValidationService _textValidationService;
     private readonly GenerateChunkOptions _options;
     private readonly IServiceScopeFactory? _scopeFactory;
 
@@ -40,6 +34,7 @@ public sealed class GenerateNextChunkCommand
         int writerAgentId,
         DatabaseService database,
         ILangChainKernelFactory kernelFactory,
+        TextValidationService textValidationService,
         ICustomLogger? logger = null,
         GenerateChunkOptions? options = null,
         CommandTuningOptions? tuning = null,
@@ -53,6 +48,7 @@ public sealed class GenerateNextChunkCommand
         _options = options ?? new GenerateChunkOptions();
         _tuning = tuning ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory;
+        _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
     }
 
     public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
@@ -113,10 +109,12 @@ public sealed class GenerateNextChunkCommand
             output = ExtractAssistantContent(output);
             output = (output ?? string.Empty).Trim();
 
-            if (DetectLoopInChunk(output, BuildStoryHistorySnapshot()))
+            var history = BuildStoryHistorySnapshot();
+            var validation = _textValidationService.Validate(output, history);
+            if (!validation.IsValid)
             {
-                _logger?.MarkLatestModelResponseResult("FAILED", "Writer loop detected: repeated sentences.");
-                return new CommandResult(false, "Writer loop detected; please retry with a different prompt or writer.");
+                _logger?.MarkLatestModelResponseResult("FAILED", $"Text validation: {validation.Reason}");
+                return new CommandResult(false, $"Text validation failed: {validation.Reason}");
             }
 
             if (_options.RequireCliffhanger)
@@ -683,101 +681,4 @@ public sealed class GenerateNextChunkCommand
         }
     }
 
-    private static bool DetectLoopInChunk(string chunk, string history)
-    {
-        if (string.IsNullOrWhiteSpace(chunk)) return false;
-        var chunkSentences = ExtractSentences(chunk);
-        if (chunkSentences.Count == 0) return false;
-
-        var historySentences = ExtractSentences(history);
-        if (historySentences.Count == 0) return false;
-
-        var relevantHistory = historySentences
-            .Skip(Math.Max(0, historySentences.Count - PreviousSentencesToCompare))
-            .ToList();
-        if (relevantHistory.Count == 0) return false;
-
-        var historyVectors = relevantHistory
-            .Select(BuildNormalizedTermVector)
-            .Where(v => v.Count > 0)
-            .ToList();
-        if (historyVectors.Count == 0) return false;
-
-        int repeatCount = 0;
-        foreach (var sentence in chunkSentences)
-        {
-            var vector = BuildNormalizedTermVector(sentence);
-            if (vector.Count == 0) continue;
-
-            foreach (var prevVector in historyVectors)
-            {
-                if (ComputeCosineSimilarity(vector, prevVector) >= SentenceSimilarityThreshold)
-                {
-                    repeatCount++;
-                    break;
-                }
-            }
-        }
-
-        if (repeatCount == 0) return false;
-        if (repeatCount >= LoopRepetitionCountThreshold) return true;
-        var ratio = (double)repeatCount / chunkSentences.Count;
-        return ratio >= LoopRepetitionRatioThreshold;
-    }
-
-    private static List<string> ExtractSentences(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return new List<string>();
-        var sentences = Regex.Split(text.Trim(), @"(?<=[\.!?])\s+");
-        var result = new List<string>();
-        foreach (var sentence in sentences)
-        {
-            var trimmed = sentence.Trim();
-            if (trimmed.Length > 0)
-            {
-                result.Add(trimmed);
-            }
-        }
-        return result;
-    }
-
-    private static Dictionary<string, double> BuildNormalizedTermVector(string sentence)
-    {
-        var tokens = Regex.Matches(sentence.ToLowerInvariant(), @"\p{L}+");
-        var counts = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match token in tokens)
-        {
-            var term = token.Value;
-            if (string.IsNullOrWhiteSpace(term)) continue;
-            counts[term] = counts.TryGetValue(term, out var current) ? current + 1 : 1;
-        }
-
-        var norm = Math.Sqrt(counts.Values.Sum(v => v * v));
-        if (norm > 0)
-        {
-            var keys = counts.Keys.ToList();
-            foreach (var key in keys)
-            {
-                counts[key] /= norm;
-            }
-        }
-
-        return counts;
-    }
-
-    private static double ComputeCosineSimilarity(Dictionary<string, double> a, Dictionary<string, double> b)
-    {
-        if (a.Count == 0 || b.Count == 0) return 0;
-        var smaller = a.Count <= b.Count ? a : b;
-        var larger = smaller == a ? b : a;
-        double dot = 0;
-        foreach (var kv in smaller)
-        {
-            if (larger.TryGetValue(kv.Key, out var value))
-            {
-                dot += kv.Value * value;
-            }
-        }
-        return dot;
-    }
 }

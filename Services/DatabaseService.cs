@@ -3225,6 +3225,112 @@ SET TotalScore = (
         return avgScore;
     }
 
+    public sealed record TopEvaluatedStoryCandidate(long StoryId, double AverageScore, int EvaluationCount);
+
+    public TopEvaluatedStoryCandidate? GetTopEvaluatedStoryForTagging(double minAverageScore)
+    {
+        var statusId = ResolveStoryStatusId("evaluated");
+        if (!statusId.HasValue)
+        {
+            return null;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        var sql = @"
+SELECT 
+    s.id AS StoryId,
+    AVG(se.total_score) AS AverageScore,
+    COUNT(se.id) AS EvaluationCount
+FROM stories s
+INNER JOIN stories_evaluations se ON se.story_id = s.id
+WHERE s.status_id = @StatusId
+  AND s.deleted = 0
+  AND (s.story_tagged IS NULL OR TRIM(s.story_tagged) = '')
+  AND s.auto_tts_failed = 0
+GROUP BY s.id
+HAVING COUNT(se.id) >= 2";
+
+        var best = conn.Query(sql, new { StatusId = statusId.Value })
+            .Select(row => new
+            {
+                StoryId = (long)row.StoryId,
+                AverageScore = Convert.ToDouble(row.AverageScore ?? 0.0),
+                EvaluationCount = (int)(row.EvaluationCount ?? 0)
+            })
+            .Select(candidate => new
+            {
+                candidate.StoryId,
+                candidate.AverageScore,
+                candidate.EvaluationCount,
+                Normalized = NormalizeEvaluationScoreTo100(candidate.AverageScore)
+            })
+            .Where(candidate => candidate.Normalized > minAverageScore)
+            .OrderByDescending(candidate => candidate.Normalized)
+            .ThenBy(candidate => candidate.StoryId)
+            .FirstOrDefault();
+
+        if (best == null) return null;
+
+        return new TopEvaluatedStoryCandidate(
+            best.StoryId,
+            best.AverageScore,
+            best.EvaluationCount);
+    }
+
+    public TopEvaluatedStoryCandidate? GetTopTaggedStoryForTts(double minAverageScore)
+    {
+        var statusId = ResolveStoryStatusId("tagged");
+        if (!statusId.HasValue)
+        {
+            return null;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        var sql = @"
+SELECT 
+    s.id AS StoryId,
+    AVG(se.total_score) AS AverageScore,
+    COUNT(se.id) AS EvaluationCount
+FROM stories s
+INNER JOIN stories_evaluations se ON se.story_id = s.id
+WHERE s.status_id = @StatusId
+  AND s.deleted = 0
+  AND (s.story_tagged IS NOT NULL AND TRIM(s.story_tagged) != '')
+  AND s.generated_tts_json = 0
+GROUP BY s.id
+HAVING COUNT(se.id) >= 2";
+
+        var best = conn.Query(sql, new { StatusId = statusId.Value })
+            .Select(row => new
+            {
+                StoryId = (long)row.StoryId,
+                AverageScore = Convert.ToDouble(row.AverageScore ?? 0.0),
+                EvaluationCount = (int)(row.EvaluationCount ?? 0)
+            })
+            .Select(candidate => new
+            {
+                candidate.StoryId,
+                candidate.AverageScore,
+                candidate.EvaluationCount,
+                Normalized = NormalizeEvaluationScoreTo100(candidate.AverageScore)
+            })
+            .Where(candidate => candidate.Normalized > minAverageScore)
+            .OrderByDescending(candidate => candidate.Normalized)
+            .ThenBy(candidate => candidate.StoryId)
+            .FirstOrDefault();
+
+        if (best == null) return null;
+
+        return new TopEvaluatedStoryCandidate(
+            best.StoryId,
+            best.AverageScore,
+            best.EvaluationCount);
+    }
+
     public bool HasPendingModelResponseLogs()
     {
         using var context = CreateDbContext();

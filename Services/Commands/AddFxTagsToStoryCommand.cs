@@ -14,9 +14,9 @@ namespace TinyGenerator.Services.Commands
 {
     /// <summary>
     /// Reads story_tagged, splits into chunks, adds FX tags via fx_expert agent,
-    /// updates story_tagged, then enqueues music_expert command.
+    /// updates story_tagged, then enqueues add_music_tags_to_story.
     /// </summary>
-    public sealed class FxExpertCommand
+    public sealed class AddFxTagsToStoryCommand
     {
         // NOTE: Models may truncate or fail to reproduce the full input text.
         // We therefore merge returned FX blocks back into the original chunk, using surrounding
@@ -36,7 +36,7 @@ namespace TinyGenerator.Services.Commands
         private readonly ICommandDispatcher? _commandDispatcher;
         private readonly IServiceScopeFactory? _scopeFactory;
 
-        public FxExpertCommand(
+        public AddFxTagsToStoryCommand(
             long storyId,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
@@ -59,11 +59,11 @@ namespace TinyGenerator.Services.Commands
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
         {
             var effectiveRunId = string.IsNullOrWhiteSpace(runId)
-                ? $"fx_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
+                ? $"add_fx_tags_to_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
                 : runId;
 
             _logger?.Start(effectiveRunId);
-            _logger?.Append(effectiveRunId, $"[story {_storyId}] Starting fx_expert pipeline");
+            _logger?.Append(effectiveRunId, $"[story {_storyId}] Starting add_fx_tags_to_story pipeline");
 
             try
             {
@@ -249,12 +249,12 @@ namespace TinyGenerator.Services.Commands
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] FX tags rebuilt from story_tags");
 
-                // Enqueue next stage: music_expert
-                var enqueued = TryEnqueueMusicExpert(story, effectiveRunId);
+                var allowNext = _storiesService?.ApplyStatusTransitionWithCleanup(story, "tagged_fx", effectiveRunId) ?? true;
+                var enqueued = TryEnqueueNextStatus(story, allowNext, effectiveRunId);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
                 return new CommandResult(true, enqueued
-                    ? "FX tags added (music_expert enqueued)"
+                    ? "FX tags added (next status enqueued)"
                     : "FX tags added");
             }
             catch (OperationCanceledException)
@@ -267,54 +267,54 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        private bool TryEnqueueMusicExpert(StoryRecord story, string runId)
+        private bool TryEnqueueNextStatus(StoryRecord story, bool allowNext, string runId)
         {
             try
             {
+                if (!allowNext)
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: delete_next_items attivo", "info");
+                    return false;
+                }
+
+                if (_storiesService != null && !_storiesService.IsTaggedFxAutoLaunchEnabled())
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: StoryTaggingPipeline fx autolaunch disabled", "info");
+                    return false;
+                }
+
+                if (_storiesService != null && !_storiesService.TryValidateTaggedFx(story, out var fxReason))
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: fx validation failed ({fxReason})", "warn");
+                    return false;
+                }
+
                 if (!_tuning.FxExpert.AutolaunchNextCommand)
                 {
-                    _logger?.Append(runId, $"[story {_storyId}] music_expert enqueue skipped: AutolaunchNextCommand disabled", "info");
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: AutolaunchNextCommand disabled", "info");
                     return false;
                 }
 
-                if (_commandDispatcher == null || _storiesService == null || _kernelFactory == null)
+                if (_storiesService == null)
                 {
-                    _logger?.Append(runId, $"[story {_storyId}] music_expert enqueue skipped: missing dependencies", "warn");
+                    _logger?.Append(runId, $"[story {_storyId}] next status enqueue skipped: stories service missing", "warn");
                     return false;
                 }
 
-                var musicRunId = $"music_expert_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                var refreshedStory = _storiesService.GetStoryById(story.Id) ?? story;
+                var nextRunId = _storiesService.EnqueueNextStatusCommand(refreshedStory, "fx_tags_completed", priority: 2);
+                if (!string.IsNullOrWhiteSpace(nextRunId))
+                {
+                    _logger?.Append(runId, $"[story {_storyId}] Enqueued next status (runId={nextRunId})", "info");
+                    return true;
+                }
 
-                _commandDispatcher.Enqueue(
-                    "music_expert",
-                    async ctx =>
-                    {
-                        try
-                        {
-                            var cmd = new MusicExpertCommand(_storyId, _database, _kernelFactory, _storiesService, _logger, _commandDispatcher, _tuning, _scopeFactory);
-                            return await cmd.ExecuteAsync(ctx.CancellationToken, musicRunId);
-                        }
-                        catch (Exception ex)
-                        {
-                            return new CommandResult(false, ex.Message);
-                        }
-                    },
-                    runId: musicRunId,
-                    threadScope: "story/music_expert",
-                    metadata: new Dictionary<string, string>
-                    {
-                        ["storyId"] = _storyId.ToString(),
-                        ["operation"] = "music_expert",
-                        ["trigger"] = "fx_expert_completed"
-                    },
-                    priority: 2);
-
-                _logger?.Append(runId, $"[story {_storyId}] Enqueued music_expert (runId={musicRunId})", "info");
-                return true;
+                _logger?.Append(runId, $"[story {_storyId}] Next status enqueue skipped: no next status available", "info");
+                return false;
             }
             catch (Exception ex)
             {
-                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue music_expert: {ex.Message}", "warn");
+                _logger?.Append(runId, $"[story {_storyId}] Failed to enqueue next status: {ex.Message}", "warn");
                 return false;
             }
         }
@@ -1112,3 +1112,4 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
+

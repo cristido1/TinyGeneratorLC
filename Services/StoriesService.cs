@@ -456,19 +456,24 @@ public sealed partial class StoriesService
         return ordered.FirstOrDefault(s => s.Step > current.Step);
     }
 
-    public string? EnqueueAllNextStatusCommand(long storyId, string trigger, int priority = 2)
+    public string? EnqueueAllNextStatusCommand(long storyId, string trigger, int priority = 2, bool ignoreActiveChain = false)
     {
         var story = GetStoryById(storyId);
         if (story == null)
             return null;
 
-        return EnqueueAllNextStatusCommand(story, trigger, priority);
+        return EnqueueAllNextStatusCommand(story, trigger, priority, ignoreActiveChain);
     }
 
-    public string? EnqueueAllNextStatusCommand(StoryRecord story, string trigger, int priority = 2)
+    public string? EnqueueAllNextStatusCommand(StoryRecord story, string trigger, int priority = 2, bool ignoreActiveChain = false)
     {
         if (story == null) return null;
         if (_commandDispatcher == null) return null;
+
+        if (ignoreActiveChain)
+        {
+            StopStatusChain(story.Id);
+        }
 
         return EnqueueStatusChain(story.Id);
     }
@@ -7689,45 +7694,42 @@ private static string? SelectMusicFileDeterministic(
 
     // ==================== MIX FINAL AUDIO COMMAND ====================
 
-    internal Task<(bool success, string? message)> StartMixFinalAudioAsync(StoryCommandContext context)
+    internal async Task<(bool success, string? message)> StartMixFinalAudioAsync(StoryCommandContext context)
     {
         var storyId = context.Story.Id;
         var runId = $"mixaudio_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
         _customLogger?.Start(runId);
         _customLogger?.Append(runId, $"[{storyId}] Avvio mixaggio audio finale nella cartella {context.FolderPath}");
 
-        _ = Task.Run(async () =>
+        try
         {
-            try
-            {
-                var (success, message) = await MixFinalAudioInternalAsync(context, runId);
+            var (success, message) = await MixFinalAudioInternalAsync(context, runId);
 
-                if (success && context.TargetStatus?.Id > 0)
+            if (success && context.TargetStatus?.Id > 0)
+            {
+                try
                 {
-                    try
-                    {
-                        _database.UpdateStoryById(storyId, statusId: context.TargetStatus.Id, updateStatus: true);
-                        _customLogger?.Append(runId, $"[{storyId}] Stato aggiornato a {context.TargetStatus.Code ?? context.TargetStatus.Id.ToString()}");
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogError(ex, "Impossibile aggiornare lo stato della storia {Id}", storyId);
-                        _customLogger?.Append(runId, $"[{storyId}] Aggiornamento stato fallito: {ex.Message}");
-                    }
+                    _database.UpdateStoryById(storyId, statusId: context.TargetStatus.Id, updateStatus: true);
+                    _customLogger?.Append(runId, $"[{storyId}] Stato aggiornato a {context.TargetStatus.Code ?? context.TargetStatus.Id.ToString()}");
                 }
-
-                await (_customLogger?.MarkCompletedAsync(runId, message ?? (success ? "Mixaggio audio completato" : "Errore mixaggio audio"))
-                    ?? Task.CompletedTask);
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Impossibile aggiornare lo stato della storia {Id}", storyId);
+                    _customLogger?.Append(runId, $"[{storyId}] Aggiornamento stato fallito: {ex.Message}");
+                }
             }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Errore non gestito durante il mixaggio audio per la storia {Id}", storyId);
-                _customLogger?.Append(runId, $"[{storyId}] Errore inatteso: {ex.Message}");
-                await (_customLogger?.MarkCompletedAsync(runId, $"Errore: {ex.Message}") ?? Task.CompletedTask);
-            }
-        });
 
-        return Task.FromResult<(bool success, string? message)>((true, $"Mixaggio audio avviato (run {runId}). Monitora i log per i dettagli."));
+            var completionMessage = message ?? (success ? "Mixaggio audio completato" : "Errore mixaggio audio");
+            await (_customLogger?.MarkCompletedAsync(runId, completionMessage) ?? Task.CompletedTask);
+            return (success, message);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Errore non gestito durante il mixaggio audio per la storia {Id}", storyId);
+            _customLogger?.Append(runId, $"[{storyId}] Errore inatteso: {ex.Message}");
+            await (_customLogger?.MarkCompletedAsync(runId, $"Errore: {ex.Message}") ?? Task.CompletedTask);
+            return (false, $"Errore: {ex.Message}");
+        }
     }
 
     private async Task<(bool success, string? message)> MixFinalAudioInternalAsync(StoryCommandContext context, string runId)

@@ -66,6 +66,13 @@ namespace TinyGenerator.Services
                         continue;
                     }
 
+                    if (HasAnyActiveCommands())
+                    {
+                        _lastActivityUtc = DateTime.UtcNow;
+                        _idleAttempted = false;
+                        continue;
+                    }
+
                     if (HasActiveNonIgnoredCommands())
                     {
                         _lastActivityUtc = DateTime.UtcNow;
@@ -419,16 +426,12 @@ namespace TinyGenerator.Services
                         {
                             return new IdleTaskResult(false, null, reason ?? "nessuna storia candidata", filter, count);
                         }
-                        if (_stories.IsStatusChainActive(storyId, out var existingChain))
-                        {
-                            var title = _database.GetStoryById(storyId)?.Title;
-                            return new IdleTaskResult(false, storyId, $"catena stati già attiva ({existingChain})", filter, count, title);
-                        }
+                        var title = _database.GetStoryById(storyId)?.Title;
                         var runId = _stories.EnqueueAllNextStatusCommand(
                             storyId,
                             trigger: "auto_complete_audio_pipeline",
-                            priority: Math.Max(1, opts.AutoCompleteAudioPipeline.Priority));
-                        var title = _database.GetStoryById(storyId)?.Title;
+                            priority: Math.Max(1, opts.AutoCompleteAudioPipeline.Priority),
+                            ignoreActiveChain: true);
                         return !string.IsNullOrWhiteSpace(runId)
                             ? new IdleTaskResult(true, storyId, null, filter, count, title)
                             : new IdleTaskResult(false, storyId, "enqueue catena stati fallito", filter, count, title);

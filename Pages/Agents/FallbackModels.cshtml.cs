@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -167,7 +168,40 @@ namespace TinyGenerator.Pages.Agents
         private void LoadReferenceData()
         {
             Models = _database.ListModels();
-            AllRoles = _context.Roles.OrderBy(r => r.Ruolo).ToList();
+            var roles = _context.Roles.ToList();
+            var existing = new HashSet<string>(roles.Select(r => r.Ruolo), StringComparer.OrdinalIgnoreCase);
+            var agentRoles = _database.ListAgentRoles();
+            var now = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            var added = false;
+
+            foreach (var role in agentRoles)
+            {
+                if (string.IsNullOrWhiteSpace(role)) continue;
+                if (existing.Contains(role)) continue;
+                _context.Roles.Add(new RoleModel
+                {
+                    Ruolo = role,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                });
+                existing.Add(role);
+                added = true;
+            }
+
+            if (added)
+            {
+                _context.SaveChanges();
+            }
+
+            var deduped = _context.Roles
+                .AsNoTracking()
+                .ToList()
+                .GroupBy(r => r.Ruolo, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderBy(r => r.Id).First())
+                .OrderBy(r => r.Ruolo)
+                .ToList();
+
+            AllRoles = deduped;
         }
 
         private List<ModelRole> LoadModelRoles()

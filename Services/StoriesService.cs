@@ -20,7 +20,7 @@ using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Services;
 
-public sealed class StoriesService
+public sealed partial class StoriesService
 {
     public void UpdateStoryTitle(long storyId, string title)
     {
@@ -40,6 +40,7 @@ public sealed class StoriesService
     private readonly CommandTuningOptions _tuning;
     private readonly IOptionsMonitor<TtsSchemaGenerationOptions>? _ttsSchemaOptions;
     private readonly IOptionsMonitor<AudioGenerationOptions>? _audioGenerationOptions;
+    private readonly IOptionsMonitor<AudioMixOptions>? _audioMixOptions;
     private readonly IOptionsMonitor<NarratorVoiceOptions>? _narratorVoiceOptions;
     private readonly IOptionsMonitor<AutomaticOperationsOptions>? _idleAutoOptions;
     private readonly IOptionsMonitor<StoryTaggingPipelineOptions>? _storyTaggingOptions;
@@ -76,6 +77,7 @@ public sealed class StoriesService
         IOptions<CommandTuningOptions>? tuningOptions = null,
         IOptionsMonitor<TtsSchemaGenerationOptions>? ttsSchemaOptions = null,
         IOptionsMonitor<AudioGenerationOptions>? audioGenerationOptions = null,
+        IOptionsMonitor<AudioMixOptions>? audioMixOptions = null,
         IOptionsMonitor<NarratorVoiceOptions>? narratorVoiceOptions = null,
         IOptionsMonitor<AutomaticOperationsOptions>? idleAutoOptions = null,
         IServiceScopeFactory? scopeFactory = null,
@@ -93,6 +95,7 @@ public sealed class StoriesService
         _tuning = tuningOptions?.Value ?? new CommandTuningOptions();
         _ttsSchemaOptions = ttsSchemaOptions;
         _audioGenerationOptions = audioGenerationOptions;
+        _audioMixOptions = audioMixOptions;
         _narratorVoiceOptions = narratorVoiceOptions;
         _scopeFactory = scopeFactory;
         _idleAutoOptions = idleAutoOptions;
@@ -247,6 +250,11 @@ public sealed class StoriesService
 
     public bool IsTaggedFinalAutoLaunchEnabled()
         => _storyTaggingOptions?.CurrentValue?.Tagged?.AutolaunchNextCommand ?? true;
+
+    public bool IsTtsSchemaAutoLaunchEnabled()
+        => _audioGenerationOptions?.CurrentValue?.Tts?.AutolaunchNextCommand
+            ?? _ttsSchemaOptions?.CurrentValue?.AutolaunchNextCommand
+            ?? true;
 
     public bool TryValidateTaggedVoice(StoryRecord? story, out string? reason)
     {
@@ -448,63 +456,13 @@ public sealed class StoriesService
         return ordered.FirstOrDefault(s => s.Step > current.Step);
     }
 
-    public string? EnqueueNextStatusCommand(StoryRecord story, string trigger, int priority = 2)
+    public string? EnqueueAllNextStatusCommand(long storyId, string trigger, int priority = 2)
     {
-        if (story == null) return null;
-        if (_commandDispatcher == null) return null;
+        var story = GetStoryById(storyId);
+        if (story == null)
+            return null;
 
-        var statuses = _database.ListAllStoryStatuses();
-        var next = GetNextStatusForStory(story, statuses);
-        if (next == null) return null;
-
-        var command = CreateCommandForStatus(next);
-        if (command == null) return null;
-
-        var operationName = next.FunctionName ?? next.Code ?? "status";
-
-        try
-        {
-            var existing = _commandDispatcher.GetActiveCommands().FirstOrDefault(s =>
-                s.Metadata != null &&
-                s.Metadata.TryGetValue("storyId", out var sid) &&
-                string.Equals(sid, story.Id.ToString(), StringComparison.OrdinalIgnoreCase) &&
-                (string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase) ||
-                 s.RunId.StartsWith($"status_{next.Code ?? next.Id.ToString()}_{story.Id}_", StringComparison.OrdinalIgnoreCase)));
-            if (existing != null && !string.IsNullOrWhiteSpace(existing.RunId))
-            {
-                return existing.RunId;
-            }
-        }
-        catch
-        {
-            // best-effort: ignore de-dup errors
-        }
-
-        var runId = $"status_{next.Code ?? next.Id.ToString()}_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-        _commandDispatcher.Enqueue(
-            operationName,
-            async ctx =>
-            {
-                var latestStory = GetStoryById(story.Id);
-                if (latestStory == null)
-                    return new CommandResult(false, "Storia non trovata");
-
-                var (success, message) = await ExecuteStoryCommandAsync(latestStory, command, next);
-                return new CommandResult(success, message);
-            },
-            runId: runId,
-            threadScope: $"story/status_next/{story.Id}",
-            metadata: new Dictionary<string, string>
-            {
-                ["storyId"] = story.Id.ToString(),
-                ["operation"] = operationName,
-                ["trigger"] = trigger,
-                ["statusId"] = next.Id.ToString(),
-                ["statusCode"] = next.Code ?? string.Empty
-            },
-            priority: Math.Max(1, priority));
-
-        return runId;
+        return EnqueueAllNextStatusCommand(story, trigger, priority);
     }
 
     public string? EnqueueAllNextStatusCommand(StoryRecord story, string trigger, int priority = 2)
@@ -512,78 +470,7 @@ public sealed class StoriesService
         if (story == null) return null;
         if (_commandDispatcher == null) return null;
 
-        var statuses = _database.ListAllStoryStatuses();
-        if (statuses == null || statuses.Count == 0) return null;
-
-        var existing = _commandDispatcher.GetActiveCommands().FirstOrDefault(s =>
-            string.Equals(s.OperationName, "status_all", StringComparison.OrdinalIgnoreCase) &&
-            s.Metadata != null &&
-            s.Metadata.TryGetValue("storyId", out var sid) &&
-            string.Equals(sid, story.Id.ToString(), StringComparison.OrdinalIgnoreCase) &&
-            (string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)));
-
-        if (existing != null && !string.IsNullOrWhiteSpace(existing.RunId))
-        {
-            return existing.RunId;
-        }
-
-        var runId = $"status_all_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-        _commandDispatcher.Enqueue(
-            "status_all",
-            async ctx =>
-            {
-                var currentStory = GetStoryById(story.Id);
-                if (currentStory == null)
-                {
-                    return new CommandResult(false, "Storia non trovata");
-                }
-
-                while (true)
-                {
-                    if (ctx.CancellationToken.IsCancellationRequested)
-                    {
-                        return new CommandResult(false, "Pipeline stati cancellata");
-                    }
-
-                    var nextStatus = GetNextStatusForStory(currentStory, statuses);
-                    if (nextStatus == null)
-                    {
-                        break;
-                    }
-
-                    var command = CreateCommandForStatus(nextStatus);
-                    if (command == null)
-                    {
-                        return new CommandResult(false, $"Operazione {nextStatus.Code ?? nextStatus.Id.ToString()} non supportata");
-                    }
-
-                    var (success, message) = await ExecuteStoryCommandAsync(currentStory, command, nextStatus);
-                    if (!success)
-                    {
-                        return new CommandResult(false, message);
-                    }
-
-                    currentStory = GetStoryById(story.Id);
-                    if (currentStory == null)
-                    {
-                        return new CommandResult(false, "Storia non trovata");
-                    }
-                }
-
-                return new CommandResult(true, "Pipeline stati completata");
-            },
-            runId: runId,
-            threadScope: $"story/status_all/{story.Id}",
-            metadata: new Dictionary<string, string>
-            {
-                ["storyId"] = story.Id.ToString(),
-                ["operation"] = "status_all",
-                ["trigger"] = trigger
-            },
-            priority: Math.Max(1, priority));
-
-        return runId;
+        return EnqueueStatusChain(story.Id);
     }
 
     private sealed class StatusChainState
@@ -697,6 +584,7 @@ public sealed class StoriesService
             ["statusId"] = next.Id.ToString(),
             ["statusCode"] = next.Code ?? string.Empty
         };
+        TryPopulateAgentMetadata(next, metadata);
 
         _commandDispatcher.Enqueue(
             next.FunctionName ?? next.Code ?? "status",
@@ -706,6 +594,7 @@ public sealed class StoriesService
                 if (latestStory == null)
                     return new CommandResult(false, "Storia non trovata");
 
+                using var runScope = BeginDispatcherRunScope(ctx.RunId, ctx.CancellationToken);
                 var (success, message) = await ExecuteStoryCommandAsync(latestStory, cmd, next);
                 
                 // After successful command execution, automatically advance to next status in chain
@@ -1701,7 +1590,7 @@ public sealed class StoriesService
         if (string.IsNullOrWhiteSpace(folderName))
             return (false, "Folder name is required");
 
-        return await GenerateTtsForStoryInternalAsync(storyId, folderName, dispatcherRunId, targetStatusId: null);
+        return await GenerateTtsForStoryInternalAsync(storyId, folderName, dispatcherRunId, targetStatusId: null, CancellationToken.None);
     }
 
     /// <summary>
@@ -1718,10 +1607,10 @@ public sealed class StoriesService
             ? story.Folder
             : new DirectoryInfo(EnsureStoryFolder(story)).Name;
 
-        return await GenerateTtsForStoryInternalAsync(storyId, folderName, dispatcherRunId, targetStatusId: null);
+        return await GenerateTtsForStoryInternalAsync(storyId, folderName, dispatcherRunId, targetStatusId: null, CancellationToken.None);
     }
 
-    private async Task<(bool success, string? error)> GenerateTtsForStoryInternalAsync(long storyId, string folderName, string? dispatcherRunId, int? targetStatusId)
+    private async Task<(bool success, string? error)> GenerateTtsForStoryInternalAsync(long storyId, string folderName, string? dispatcherRunId, int? targetStatusId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(folderName))
             return (false, "Folder name is required");
@@ -1746,7 +1635,7 @@ public sealed class StoriesService
         // Run synchronously when dispatcherRunId is provided so we can report progress
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
-            var result = await GenerateTtsAudioWithProgressAsync(context, dispatcherRunId);
+            var result = await GenerateTtsAudioWithProgressAsync(context, dispatcherRunId, cancellationToken);
             if (result.success && targetStatusId.HasValue)
             {
                 try
@@ -1793,15 +1682,31 @@ public sealed class StoriesService
                 ? story.Folder
                 : new DirectoryInfo(EnsureStoryFolder(story)).Name;
 
-            // De-dup: don't enqueue if already queued/running.
-            try
-            {
-                var existing = _commandDispatcher.GetActiveCommands().FirstOrDefault(s =>
-                    s.Metadata != null &&
-                    s.Metadata.TryGetValue("storyId", out var sid) &&
-                    string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
-                    (string.Equals(s.OperationName, "generate_tts_audio", StringComparison.OrdinalIgnoreCase) ||
-                     s.RunId.StartsWith($"generate_tts_audio_{storyId}_", StringComparison.OrdinalIgnoreCase)));
+                // De-dup: don't enqueue if already queued/running.
+                try
+                {
+                    static bool IsBlockingStatus(CommandSnapshot s)
+                        => string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase)
+                           || string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase);
+
+                    static bool IsStatusChainWrapper(CommandSnapshot s)
+                    {
+                        if (s.Metadata != null && s.Metadata.TryGetValue("chainMode", out var chainMode))
+                        {
+                            return string.Equals(chainMode, "1", StringComparison.OrdinalIgnoreCase);
+                        }
+                        return s.ThreadScope != null &&
+                               s.ThreadScope.StartsWith("story/status_chain", StringComparison.OrdinalIgnoreCase);
+                    }
+
+                    var existing = _commandDispatcher.GetActiveCommands().FirstOrDefault(s =>
+                        s.Metadata != null &&
+                        s.Metadata.TryGetValue("storyId", out var sid) &&
+                        string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                        !IsStatusChainWrapper(s) &&
+                        IsBlockingStatus(s) &&
+                        (string.Equals(s.OperationName, "generate_tts_audio", StringComparison.OrdinalIgnoreCase) ||
+                         s.RunId.StartsWith($"generate_tts_audio_{storyId}_", StringComparison.OrdinalIgnoreCase)));
 
                 if (existing != null && !string.IsNullOrWhiteSpace(existing.RunId))
                 {
@@ -1819,7 +1724,7 @@ public sealed class StoriesService
                 "generate_tts_audio",
                 async ctx =>
                 {
-                    var (ok, err) = await GenerateTtsForStoryInternalAsync(storyId, folderName, ctx.RunId, targetStatusId);
+                    var (ok, err) = await GenerateTtsForStoryInternalAsync(storyId, folderName, ctx.RunId, targetStatusId, ctx.CancellationToken);
                     var isAutoTrigger = !string.IsNullOrWhiteSpace(trigger) &&
                         trigger.Contains("auto", StringComparison.OrdinalIgnoreCase);
                     if (ok)
@@ -4521,6 +4426,57 @@ public sealed class StoriesService
         return _mainCommands.GetOperationNameForStatus(status);
     }
 
+    private void TryPopulateAgentMetadata(StoryStatus status, Dictionary<string, string> metadata)
+    {
+        if (status == null || metadata == null)
+            return;
+
+        string? role = null;
+        if (string.Equals(status.OperationType, "agent_call", StringComparison.OrdinalIgnoreCase))
+        {
+            role = status.AgentType;
+        }
+        else if (string.Equals(status.OperationType, "function_call", StringComparison.OrdinalIgnoreCase))
+        {
+            var fn = status.FunctionName?.ToLowerInvariant();
+            role = fn switch
+            {
+                "add_voice_tags_to_story" => "formatter",
+                "add_ambient_tags_to_story" => "ambient_expert",
+                "add_fx_tags_to_story" => "fx_expert",
+                "add_music_tags_to_story" => "music_expert",
+                _ => null
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(role))
+            return;
+
+        try
+        {
+            var agent = _database.ListAgents()
+                .FirstOrDefault(a => a.IsActive && string.Equals(a.Role, role, StringComparison.OrdinalIgnoreCase));
+            if (agent == null)
+                return;
+
+            if (!metadata.ContainsKey("agentName"))
+                metadata["agentName"] = agent.Name ?? role;
+            if (!metadata.ContainsKey("agentRole"))
+                metadata["agentRole"] = agent.Role ?? role;
+
+            if (agent.ModelId.HasValue && !metadata.ContainsKey("modelName"))
+            {
+                var model = _database.GetModelInfoById(agent.ModelId.Value);
+                if (!string.IsNullOrWhiteSpace(model?.Name))
+                    metadata["modelName"] = model.Name!;
+            }
+        }
+        catch
+        {
+            // best-effort metadata only
+        }
+    }
+
     internal interface IStoryCommand
     {
         bool RequireStoryText { get; }
@@ -4530,6 +4486,38 @@ public sealed class StoriesService
     }
 
     internal sealed record StoryCommandContext(StoryRecord Story, string FolderPath, StoryStatus? TargetStatus);
+
+    private static readonly System.Threading.AsyncLocal<string?> _dispatcherRunId = new();
+    private static readonly System.Threading.AsyncLocal<CancellationToken?> _dispatcherCancellation = new();
+
+    internal string? CurrentDispatcherRunId => _dispatcherRunId.Value;
+    internal CancellationToken? CurrentDispatcherCancellationToken => _dispatcherCancellation.Value;
+
+    private sealed class DispatcherRunScope : IDisposable
+    {
+        private readonly string? _previous;
+        private readonly CancellationToken? _previousToken;
+        private bool _disposed;
+
+        public DispatcherRunScope(string? runId, CancellationToken? cancellationToken = null)
+        {
+            _previous = _dispatcherRunId.Value;
+            _previousToken = _dispatcherCancellation.Value;
+            _dispatcherRunId.Value = runId;
+            _dispatcherCancellation.Value = cancellationToken;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _dispatcherRunId.Value = _previous;
+            _dispatcherCancellation.Value = _previousToken;
+        }
+    }
+
+    private IDisposable BeginDispatcherRunScope(string? runId, CancellationToken? cancellationToken = null)
+        => new DispatcherRunScope(runId, cancellationToken);
 
 
     internal sealed class GenerateTtsSchemaCommand : IStoryCommand
@@ -5979,8 +5967,12 @@ public sealed class StoriesService
     /// <summary>
     /// Generates TTS audio synchronously and reports progress to the CommandDispatcher.
     /// </summary>
-    private async Task<(bool success, string? message)> GenerateTtsAudioWithProgressAsync(StoryCommandContext context, string dispatcherRunId)
+    private async Task<(bool success, string? message)> GenerateTtsAudioWithProgressAsync(
+        StoryCommandContext context,
+        string dispatcherRunId,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var story = context.Story;
         var folderPath = context.FolderPath;
         var schemaPath = Path.Combine(folderPath, "tts_schema.json");
@@ -5997,6 +5989,7 @@ public sealed class StoriesService
         JsonObject? rootNode;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var json = await File.ReadAllTextAsync(schemaPath);
             rootNode = JsonNode.Parse(json) as JsonObject;
         }
@@ -6071,6 +6064,7 @@ public sealed class StoriesService
 
         foreach (var entry in timelineArray.OfType<JsonObject>())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (IsPauseEntry(entry, out var pauseMs))
             {
                 currentMs += pauseMs;
@@ -6104,6 +6098,7 @@ public sealed class StoriesService
                     continue;
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 var reuse = TryReuseExistingAudioEntry(entry, folderPath, cleanText, characterName, emotion, dispatcherRunId, story.Id, usedFiles);
                 if (reuse.reused && !string.IsNullOrWhiteSpace(reuse.fileName))
                 {
@@ -6122,11 +6117,14 @@ public sealed class StoriesService
 
                 _customLogger?.Append(dispatcherRunId, $"[{story.Id}] Generazione frase {phraseCounter}/{phraseEntries.Count} ({characterName}) -> {fileName}");
 
+                cancellationToken.ThrowIfCancellationRequested();
                 (audioBytes, durationFromResult) = await GenerateAudioBytesAsync(character.VoiceId!, cleanText, emotion);
 
+                cancellationToken.ThrowIfCancellationRequested();
                 await File.WriteAllBytesAsync(filePath, audioBytes);
                 
                 var txtFilePath = Path.ChangeExtension(filePath, ".txt");
+                cancellationToken.ThrowIfCancellationRequested();
                 await File.WriteAllTextAsync(txtFilePath, $"[{characterName}, {emotion}]\n{cleanText}");
 
                 var durationMs = durationFromResult ?? TryGetWavDuration(audioBytes) ?? 0;
@@ -6152,6 +6150,7 @@ public sealed class StoriesService
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             SanitizeTtsSchemaTextFields(rootNode);
             var updated = rootNode.ToJsonString(SchemaJsonOptions);
             await File.WriteAllTextAsync(schemaPath, updated);
@@ -6340,11 +6339,12 @@ public sealed class StoriesService
         return Task.FromResult<(bool success, string? message)>((true, $"Generazione audio ambientale avviata (run {runId}). Monitora i log per i dettagli."));
     }
 
-    private async Task<(bool success, string? message)> GenerateAmbienceAudioInternalAsync(StoryCommandContext context, string runId)
+    internal async Task<(bool success, string? message)> GenerateAmbienceAudioInternalAsync(StoryCommandContext context, string runId)
     {
         var story = context.Story;
         var folderPath = context.FolderPath;
         var schemaPath = Path.Combine(folderPath, "tts_schema.json");
+        var cancellationToken = CurrentDispatcherCancellationToken ?? CancellationToken.None;
 
         if (!File.Exists(schemaPath))
         {
@@ -6356,6 +6356,7 @@ public sealed class StoriesService
         JsonObject? rootNode;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var json = await File.ReadAllTextAsync(schemaPath);
             rootNode = JsonNode.Parse(json) as JsonObject;
         }
@@ -6457,6 +6458,7 @@ public sealed class StoriesService
                 // Try to execute with retry logic if service is down
                 try
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     resultJson = await audioCraft.ExecuteAsync(requestJson);
                 }
                 catch (Exception executeEx) when (executeEx.Message.Contains("Connection") || executeEx.Message.Contains("No connection") || executeEx is HttpRequestException)
@@ -6472,6 +6474,7 @@ public sealed class StoriesService
                         // Retry the request
                         try
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             resultJson = await audioCraft.ExecuteAsync(requestJson);
                         }
                         catch (Exception retryEx)
@@ -6489,6 +6492,12 @@ public sealed class StoriesService
 
                 // Parse result to get filename
                 var resultNode = JsonNode.Parse(resultJson) as JsonObject;
+                if (resultNode?["error"] != null)
+                {
+                    var err = resultNode["error"]?.ToString() ?? "Errore AudioCraft";
+                    _customLogger?.Append(runId, $"[{story.Id}] AudioCraft error: {err}");
+                    return (false, err);
+                }
                 var resultField = resultNode?["result"]?.ToString();
 
                 _customLogger?.Append(runId, $"[{story.Id}] AudioCraft response: {resultJson?.Substring(0, Math.Min(500, resultJson?.Length ?? 0))}");
@@ -6525,8 +6534,9 @@ public sealed class StoriesService
 
                 if (string.IsNullOrWhiteSpace(generatedFileName))
                 {
-                    _customLogger?.Append(runId, $"[{story.Id}] Avviso: impossibile determinare il file generato per il segmento {segmentCounter}. Result: {resultJson}");
-                    continue;
+                    var err = $"Impossibile determinare il file generato per il segmento {segmentCounter}. Result: {resultJson}";
+                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                    return (false, err);
                 }
 
                 // Download file from AudioCraft server
@@ -6535,7 +6545,7 @@ public sealed class StoriesService
 
                 try
                 {
-                    var downloadResponse = await httpClient.GetAsync($"http://localhost:8003/download/{generatedFileName}");
+                    var downloadResponse = await httpClient.GetAsync($"http://localhost:8003/download/{generatedFileName}", cancellationToken);
                     if (downloadResponse.IsSuccessStatusCode)
                     {
                         var audioBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
@@ -6550,14 +6560,16 @@ public sealed class StoriesService
                     }
                     else
                     {
-                        _customLogger?.Append(runId, $"[{story.Id}] Avviso: impossibile scaricare {generatedFileName}");
-                        continue;
+                        var err = $"Impossibile scaricare {generatedFileName}";
+                        _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                        return (false, err);
                     }
                 }
                 catch (Exception ex)
                 {
-                    _customLogger?.Append(runId, $"[{story.Id}] Avviso: errore download {generatedFileName}: {ex.Message}");
-                    continue;
+                    var err = $"Errore download {generatedFileName}: {ex.Message}";
+                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                    return (false, err);
                 }
 
                 // Update tts_schema.json: add ambient sound file reference only on the definition record
@@ -6567,10 +6579,17 @@ public sealed class StoriesService
                     phraseEntries[segment.DefinitionIndex]["ambientSoundsFile"] = localFileName; // backward compat
                 }
             }
+            catch (OperationCanceledException)
+            {
+                var err = "Operazione annullata";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
+            }
             catch (Exception ex)
             {
-                _customLogger?.Append(runId, $"[{story.Id}] Errore generazione segmento {segmentCounter}: {ex.Message}");
-                // Continue with next segment
+                var err = $"Errore generazione segmento {segmentCounter}: {ex.Message}";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
             }
         }
 
@@ -6693,6 +6712,55 @@ public sealed class StoriesService
         return 0;
     }
 
+    private static bool TimelineContainsTitle(List<JsonObject> entries, string title)
+    {
+        if (entries == null || entries.Count == 0 || string.IsNullOrWhiteSpace(title))
+        {
+            return false;
+        }
+
+        var titleNorm = NormalizeForTitleMatch(title);
+        if (string.IsNullOrWhiteSpace(titleNorm))
+        {
+            return false;
+        }
+
+        foreach (var entry in entries)
+        {
+            if (!TryReadPhrase(entry, out _, out var text, out _))
+            {
+                continue;
+            }
+
+            var textNorm = NormalizeForTitleMatch(text);
+            if (!string.IsNullOrWhiteSpace(textNorm) && textNorm.Contains(titleNorm, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeForTitleMatch(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(text.Length);
+        foreach (var ch in text)
+        {
+            if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch))
+            {
+                sb.Append(char.ToLowerInvariant(ch));
+            }
+        }
+
+        return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
+    }
+
     // =====================================================================
     // Generate FX Audio Command (Sound Effects)
     // =====================================================================
@@ -6745,11 +6813,12 @@ public sealed class StoriesService
         return Task.FromResult<(bool success, string? message)>((true, $"Generazione effetti sonori avviata (run {runId}). Monitora i log per i dettagli."));
     }
 
-    private async Task<(bool success, string? message)> GenerateFxAudioInternalAsync(StoryCommandContext context, string runId)
+    internal async Task<(bool success, string? message)> GenerateFxAudioInternalAsync(StoryCommandContext context, string runId)
     {
         var story = context.Story;
         var folderPath = context.FolderPath;
         var schemaPath = Path.Combine(folderPath, "tts_schema.json");
+        var cancellationToken = CurrentDispatcherCancellationToken ?? CancellationToken.None;
 
         if (!File.Exists(schemaPath))
         {
@@ -6761,6 +6830,7 @@ public sealed class StoriesService
         JsonObject? rootNode;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var json = await File.ReadAllTextAsync(schemaPath);
             rootNode = JsonNode.Parse(json) as JsonObject;
         }
@@ -6853,10 +6923,17 @@ public sealed class StoriesService
                     model = "facebook/audiogen-medium"
                 };
                 var requestJson = JsonSerializer.Serialize(audioRequest);
+                cancellationToken.ThrowIfCancellationRequested();
                 var resultJson = await audioCraft.ExecuteAsync(requestJson);
 
                 // Parse result to get filename
                 var resultNode = JsonNode.Parse(resultJson) as JsonObject;
+                if (resultNode?["error"] != null)
+                {
+                    var err = resultNode["error"]?.ToString() ?? "Errore AudioCraft";
+                    _customLogger?.Append(runId, $"[{story.Id}] AudioCraft error: {err}");
+                    return (false, err);
+                }
                 var resultField = resultNode?["result"]?.ToString();
 
                 _customLogger?.Append(runId, $"[{story.Id}] AudioCraft FX response: {resultJson?.Substring(0, Math.Min(500, resultJson?.Length ?? 0))}");
@@ -6900,8 +6977,9 @@ public sealed class StoriesService
 
                 if (string.IsNullOrWhiteSpace(generatedFileName))
                 {
-                    _customLogger?.Append(runId, $"[{story.Id}] Avviso: impossibile determinare il file generato per FX {fxCounter}. Result: {resultJson}");
-                    continue;
+                    var err = $"Impossibile determinare il file generato per FX {fxCounter}. Result: {resultJson}";
+                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                    return (false, err);
                 }
 
                 // Download file from AudioCraft server
@@ -6910,7 +6988,7 @@ public sealed class StoriesService
 
                 try
                 {
-                    var downloadResponse = await httpClient.GetAsync($"http://localhost:8003/download/{generatedFileName}");
+                    var downloadResponse = await httpClient.GetAsync($"http://localhost:8003/download/{generatedFileName}", cancellationToken);
                     if (downloadResponse.IsSuccessStatusCode)
                     {
                         var audioBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
@@ -6925,24 +7003,33 @@ public sealed class StoriesService
                     }
                     else
                     {
-                        _customLogger?.Append(runId, $"[{story.Id}] Avviso: impossibile scaricare {generatedFileName} (status {downloadResponse.StatusCode})");
-                        continue;
+                        var err = $"Impossibile scaricare {generatedFileName} (status {downloadResponse.StatusCode})";
+                        _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                        return (false, err);
                     }
                 }
                 catch (Exception ex)
                 {
-                    _customLogger?.Append(runId, $"[{story.Id}] Avviso: errore download {generatedFileName}: {ex.Message}");
-                    continue;
+                    var err = $"Errore download {generatedFileName}: {ex.Message}";
+                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                    return (false, err);
                 }
 
                 // Update tts_schema.json: add fxFile property
                 entry["fxFile"] = localFileName;
                 entry["fx_file"] = localFileName;
             }
+            catch (OperationCanceledException)
+            {
+                var err = "Operazione annullata";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
+            }
             catch (Exception ex)
             {
-                _customLogger?.Append(runId, $"[{story.Id}] Errore generazione FX {fxCounter}: {ex.Message}");
-                // Continue with next FX
+                var err = $"Errore generazione FX {fxCounter}: {ex.Message}";
+                _customLogger?.Append(runId, $"[{story.Id}] {err}");
+                return (false, err);
             }
         }
 
@@ -7044,7 +7131,7 @@ public sealed class StoriesService
         return Task.FromResult<(bool success, string? message)>((true, $"Generazione musica avviata (run {runId}). Monitora i log per i dettagli."));
     }
 
-    private async Task<(bool success, string? message)> GenerateMusicInternalAsync(StoryCommandContext context, string runId)
+    internal async Task<(bool success, string? message)> GenerateMusicInternalAsync(StoryCommandContext context, string runId)
     {
         var story = context.Story;
         var folderPath = context.FolderPath;
@@ -7870,7 +7957,9 @@ private static string? SelectMusicFileDeterministic(
                     }
 
                     var storyTitle = (story.Title ?? string.Empty).Trim();
-                    if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null && !string.IsNullOrWhiteSpace(narratorVoice))
+                    var titleAlreadyInTimeline = !string.IsNullOrWhiteSpace(storyTitle)
+                        && TimelineContainsTitle(phraseEntries, storyTitle);
+                    if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null && !string.IsNullOrWhiteSpace(narratorVoice) && !titleAlreadyInTimeline)
                     {
                         string? seriesTitle = null;
                         if (story.SerieId.HasValue)
@@ -8157,6 +8246,29 @@ private static string? SelectMusicFileDeterministic(
         string runId,
         long storyId)
     {
+        var mixOptions = _audioMixOptions?.CurrentValue ?? new AudioMixOptions();
+        var voiceScale = NormalizeMixScale(mixOptions.VoiceVolume, defaultValue: 7);
+        var ambienceScale = NormalizeMixScale(mixOptions.BackgroundSoundsVolume, defaultValue: 3);
+        var fxScale = NormalizeMixScale(mixOptions.FxSourdsVolume, defaultValue: 6);
+        var musicScale = NormalizeMixScale(mixOptions.MusicVolume, defaultValue: 3);
+
+        if (voiceScale <= 0)
+        {
+            ttsFiles = new List<(string FilePath, int StartMs)>();
+        }
+        if (ambienceScale <= 0)
+        {
+            ambienceFiles = new List<(string FilePath, int StartMs, int DurationMs)>();
+        }
+        if (fxScale <= 0)
+        {
+            fxFiles = new List<(string FilePath, int StartMs)>();
+        }
+        if (musicScale <= 0)
+        {
+            musicFiles = new List<(string FilePath, int StartMs, int DurationMs)>();
+        }
+
         // NEW STRATEGY: Create 3 separate tracks, then mix them
         // Track 1: TTS voices (may require batching if >50 files)
         // Track 2: Ambience + FX (usually few files, no batching needed)
@@ -8167,46 +8279,55 @@ private static string? SelectMusicFileDeterministic(
         
         try
         {
-            var trackFiles = new List<string>();
-            
-            // ===== TRACK 1: TTS VOICES =====
-            var ttsTrackFile = Path.Combine(folderPath, $"track_tts_{storyId}.wav");
-            if (ttsFiles.Count > 0)
+        var trackFiles = new List<string>();
+        
+        // ===== TRACK 1: TTS VOICES =====
+        var ttsTrackFile = Path.Combine(folderPath, $"track_tts_{storyId}.wav");
+        if (ttsFiles.Count > 0 && voiceScale > 0)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] Generazione traccia TTS...");
+            var ttsResult = await CreateTtsTrackAsync(folderPath, ttsFiles, ttsTrackFile, runId, storyId, voiceScale);
+            if (!ttsResult.success)
             {
-                _customLogger?.Append(runId, $"[{storyId}] Generazione traccia TTS...");
-                var ttsResult = await CreateTtsTrackAsync(folderPath, ttsFiles, ttsTrackFile, runId, storyId);
-                if (!ttsResult.success)
-                {
-                    return ttsResult;
-                }
-                trackFiles.Add(ttsTrackFile);
+                return ttsResult;
             }
-            
-            // ===== TRACK 2: AMBIENCE + FX =====
-            var ambienceFxTrackFile = Path.Combine(folderPath, $"track_ambience_fx_{storyId}.wav");
-            if (ambienceFiles.Count > 0 || fxFiles.Count > 0)
+            trackFiles.Add(ttsTrackFile);
+        }
+        
+        // ===== TRACK 2: AMBIENCE + FX =====
+        var ambienceFxTrackFile = Path.Combine(folderPath, $"track_ambience_fx_{storyId}.wav");
+        if ((ambienceFiles.Count > 0 || fxFiles.Count > 0) && (ambienceScale > 0 || fxScale > 0))
+        {
+            _customLogger?.Append(runId, $"[{storyId}] Generazione traccia ambience+FX...");
+            var ambienceFxResult = await CreateAmbienceFxTrackAsync(
+                folderPath,
+                ambienceFiles,
+                fxFiles,
+                ambienceFxTrackFile,
+                runId,
+                storyId,
+                lowerAmbienceBecauseMusic: musicFiles.Count > 0,
+                ambienceScale,
+                fxScale);
+            if (!ambienceFxResult.success)
             {
-                _customLogger?.Append(runId, $"[{storyId}] Generazione traccia ambience+FX...");
-                var ambienceFxResult = await CreateAmbienceFxTrackAsync(folderPath, ambienceFiles, fxFiles, ambienceFxTrackFile, runId, storyId, lowerAmbienceBecauseMusic: musicFiles.Count > 0);
-                if (!ambienceFxResult.success)
-                {
-                    TryDeleteFile(ttsTrackFile);
-                    return ambienceFxResult;
-                }
-                trackFiles.Add(ambienceFxTrackFile);
+                TryDeleteFile(ttsTrackFile);
+                return ambienceFxResult;
             }
-            
-            // ===== TRACK 3: MUSIC =====
-            var musicTrackFile = Path.Combine(folderPath, $"track_music_{storyId}.wav");
-            if (musicFiles.Count > 0)
+            trackFiles.Add(ambienceFxTrackFile);
+        }
+        
+        // ===== TRACK 3: MUSIC =====
+        var musicTrackFile = Path.Combine(folderPath, $"track_music_{storyId}.wav");
+        if (musicFiles.Count > 0 && musicScale > 0)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] Generazione traccia music...");
+            var musicResult = await CreateMusicTrackAsync(folderPath, musicFiles, musicTrackFile, runId, storyId, musicScale);
+            if (!musicResult.success)
             {
-                _customLogger?.Append(runId, $"[{storyId}] Generazione traccia music...");
-                var musicResult = await CreateMusicTrackAsync(folderPath, musicFiles, musicTrackFile, runId, storyId);
-                if (!musicResult.success)
-                {
-                    TryDeleteFile(ttsTrackFile);
-                    TryDeleteFile(ambienceFxTrackFile);
-                    return musicResult;
+                TryDeleteFile(ttsTrackFile);
+                TryDeleteFile(ambienceFxTrackFile);
+                return musicResult;
                 }
                 trackFiles.Add(musicTrackFile);
             }
@@ -8255,13 +8376,29 @@ private static string? SelectMusicFileDeterministic(
             return (false, $"Eccezione durante il mix: {ex.Message}");
         }
     }
+
+    private static double NormalizeMixScale(double value, double defaultValue)
+    {
+        if (defaultValue <= 0)
+        {
+            return 0;
+        }
+
+        if (value <= 0)
+        {
+            return 0;
+        }
+
+        return value / defaultValue;
+    }
     
     private async Task<(bool success, string? error)> CreateTtsTrackAsync(
         string folderPath,
         List<(string FilePath, int StartMs)> ttsFiles,
         string outputFile,
         string runId,
-        long storyId)
+        long storyId,
+        double volumeScale)
     {
         const int MaxInputsPerBatch = 50;
         
@@ -8277,7 +8414,7 @@ private static string? SelectMusicFileDeterministic(
                 var (filePath, startMs) = ttsFiles[i];
                 inputArgs.Append($" -i \"{filePath}\"");
                 var label = $"tts{i}";
-                filterArgs.Append($"[{i}]adelay={startMs}|{startMs}[{label}];");
+                filterArgs.Append($"[{i}]adelay={startMs}|{startMs},volume={volumeScale.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}[{label}];");
                 labels.Add($"[{label}]");
             }
             
@@ -8302,7 +8439,14 @@ private static string? SelectMusicFileDeterministic(
                 var batch = ttsFiles.Skip(i).Take(MaxInputsPerBatch).ToList();
                 var batchFile = Path.Combine(folderPath, $"batch_tts_{storyId}_{i / MaxInputsPerBatch}.wav");
                 
-                var batchResult = await CreateTtsBatchAsync(folderPath, batch, batchFile, runId, storyId, i / MaxInputsPerBatch);
+                var batchResult = await CreateTtsBatchAsync(
+                    folderPath,
+                    batch,
+                    batchFile,
+                    runId,
+                    storyId,
+                    i / MaxInputsPerBatch,
+                    volumeScale);
                 if (!batchResult.success)
                 {
                     foreach (var f in batchFiles) TryDeleteFile(f);
@@ -8324,7 +8468,8 @@ private static string? SelectMusicFileDeterministic(
         string outputFile,
         string runId,
         long storyId,
-        int batchIndex)
+        int batchIndex,
+        double volumeScale)
     {
         var inputArgs = new StringBuilder();
         var filterArgs = new StringBuilder();
@@ -8337,7 +8482,7 @@ private static string? SelectMusicFileDeterministic(
             var (filePath, startMs) = files[i];
             inputArgs.Append($" -i \"{filePath}\"");
             var label = $"t{i}";
-            filterArgs.Append($"[{i}]adelay={startMs}|{startMs}[{label}];");
+            filterArgs.Append($"[{i}]adelay={startMs}|{startMs},volume={volumeScale.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}[{label}];");
             labels.Add($"[{label}]");
         }
         
@@ -8359,7 +8504,9 @@ private static string? SelectMusicFileDeterministic(
         string outputFile,
         string runId,
         long storyId,
-        bool lowerAmbienceBecauseMusic)
+        bool lowerAmbienceBecauseMusic,
+        double ambienceScale,
+        double fxScale)
     {
         var inputArgs = new StringBuilder();
         var filterArgs = new StringBuilder();
@@ -8368,11 +8515,16 @@ private static string? SelectMusicFileDeterministic(
         var tempLoopedFiles = new List<string>();
 
         // If there's music in the final mix, keep ambience (rumori) lower so it doesn't fight the music bed.
-        var ambienceVolume = lowerAmbienceBecauseMusic ? 0.18 : 0.30;
+        var ambienceBase = lowerAmbienceBecauseMusic ? 0.18 : 0.30;
+        var ambienceVolume = ambienceBase * ambienceScale;
         
         // Add ambience with timing and volume. If the file is shorter than needed, loop it and trim.
         foreach (var (filePath, startMs, durationMs) in ambienceFiles)
         {
+            if (ambienceScale <= 0)
+            {
+                break;
+            }
             string inputFile = filePath;
             if (durationMs > 0)
             {
@@ -8416,9 +8568,14 @@ private static string? SelectMusicFileDeterministic(
         // Add FX with timing and volume
         foreach (var (filePath, startMs) in fxFiles)
         {
+            if (fxScale <= 0)
+            {
+                break;
+            }
             inputArgs.Append($" -i \"{filePath}\"");
             var label = $"fx{idx}";
-            filterArgs.Append($"[{idx}]adelay={startMs}|{startMs},volume=0.90[{label}];");
+            var fxVolume = 0.90 * fxScale;
+            filterArgs.Append($"[{idx}]adelay={startMs}|{startMs},volume={fxVolume.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}[{label}];");
             labels.Add($"[{label}]");
             idx++;
         }
@@ -8494,7 +8651,8 @@ private static string? SelectMusicFileDeterministic(
         List<(string FilePath, int StartMs, int DurationMs)> musicFiles,
         string outputFile,
         string runId,
-        long storyId)
+        long storyId,
+        double volumeScale)
     {
         var inputArgs = new StringBuilder();
         var filterArgs = new StringBuilder();
@@ -8513,7 +8671,8 @@ private static string? SelectMusicFileDeterministic(
             var fadeStart = fadeStartSeconds.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
             var fadeDur = fadeDurSeconds.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
 
-            filterArgs.Append($"[{i}]atrim=start=0:end={endSeconds},afade=t=out:st={fadeStart}:d={fadeDur},adelay={startMs}|{startMs},volume=0.70[{label}];");
+            var musicVolume = 0.70 * volumeScale;
+            filterArgs.Append($"[{i}]atrim=start=0:end={endSeconds},afade=t=out:st={fadeStart}:d={fadeDur},adelay={startMs}|{startMs},volume={musicVolume.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}[{label}];");
             labels.Add($"[{label}]");
         }
         

@@ -42,8 +42,8 @@
             <th>Operazione</th>
             <th>ThreadId</th>
             <th>StoryId</th>
-            <th>AgentName</th>
-            <th>Message</th>
+            <th>Agent</th>
+            <th>Model</th>
             <th>Azioni</th>
         </tr>
     </thead>
@@ -73,7 +73,7 @@
             data-storyid="@(log.StoryId.HasValue ? log.StoryId.Value.ToString() : string.Empty)"
             data-threadscope="@log.ThreadScope"
             data-analized="@log.Analized"
-            data-agentname="@log.AgentName" 
+            data-agent="@log.AgentName" 
             data-state="@log.State" 
             data-context="@log.Context" 
             data-exception="@log.Exception">
@@ -105,8 +105,8 @@
             <td class="operation">@(!string.IsNullOrWhiteSpace(log.ThreadScope) ? log.ThreadScope : "-")</td>
             <td class="threadid">@(log.ThreadId.HasValue && log.ThreadId.Value > 0 ? log.ThreadId.Value.ToString() : "-")</td>
             <td class="storyid">@(log.StoryId.HasValue && log.StoryId.Value > 0 ? log.StoryId.Value.ToString() : "-")</td>
-            <td class="agentname">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
-            <td class="message"><span class="text-muted">Premi + per caricare il messaggio</span></td>
+            <td class="agent">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
+            <td class="model">@(!string.IsNullOrWhiteSpace(log.ModelName) ? log.ModelName : "-")</td>
             <td class="actions" style="white-space:nowrap;">
                 <button type="button" class="btn btn-sm btn-outline-secondary btn-analyze me-1">Analizza</button>
                 @if (log.Analized)

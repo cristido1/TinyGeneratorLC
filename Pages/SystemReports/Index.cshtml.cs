@@ -31,13 +31,27 @@ public class IndexModel : PageModel
 
     public IActionResult OnPostDeleteAll(int? page, int? pageSize)
     {
-        _database.DeleteAllSystemReports();
-        return RedirectToPage(new { page = page ?? PageIndex, pageSize = pageSize ?? PageSize });
+        try
+        {
+            _database.DeleteAllSystemReports();
+        }
+        catch
+        {
+            // best-effort: avoid error page on delete
+        }
+        return RedirectToPage("/SystemReports/Index", new { page = page ?? 1, pageSize = pageSize ?? 20 });
     }
 
     public IActionResult OnPostDeleteReport(long reportId, int? page, int? pageSize)
     {
-        _database.DeleteSystemReport(reportId);
-        return RedirectToPage(new { page = page ?? PageIndex, pageSize = pageSize ?? PageSize });
+        try
+        {
+            _database.DeleteSystemReport(reportId);
+        }
+        catch
+        {
+            // best-effort: avoid error page on delete
+        }
+        return RedirectToPage("/SystemReports/Index", new { page = page ?? 1, pageSize = pageSize ?? 20 });
     }
 }

@@ -21,7 +21,7 @@ This file gives the minimal, actionable facts an AI coding assistant needs to be
 
 **Repo-specific conventions & gotchas**
 - Razor Pages first: prefer page model handlers (`Pages/*.cshtml.cs`) over heavy client-side JS. See `Pages/Genera.cshtml` for generation flow.
-- **Index pages (list/grid)**: when creating or modifying a Razor Pages *Index* page (list/grid), follow the standard in [docs/index_page_rules.txt](docs/index_page_rules.txt).
+- **Index pages / DataTables (MANDATORY)**: before creating or modifying any Razor Pages *Index* page (list/grid) OR any page that uses DataTables.net, read and follow [docs/index_page_rules.txt](docs/index_page_rules.txt).
 - **Data grids**: use DataTables.net (NOT Ag Grid) with Bootstrap 5 for all list/grid pages. Follow the complete standard in [usage_index_standard.txt](usage_index_standard.txt) for layout, DOM structure, client-side processing, ColVis button, state persistence, and child row expansion.
 - Tool function-calling is enforced by tests — tools must expose valid JSON function schemas and be registered in `LangChainToolFactory`.
 - Pipelines fail-fast on tool invocation errors; retry logic covers recoverable failures but do not silently swallow tool errors.

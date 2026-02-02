@@ -1,0 +1,84 @@
+@page
+@model TinyGenerator.Pages.GeneraSerie.IndexModel
+@{
+    ViewData["Title"] = "Genera Serie";
+    ViewData["PageDescription"] = "Crea una nuova serie con la pipeline multi-agente";
+}
+
+@if (TempData["StatusMessage"] is string okMsg && !string.IsNullOrWhiteSpace(okMsg))
+{
+    <div class="alert alert-success">@okMsg</div>
+}
+@if (TempData["ErrorMessage"] is string errMsg && !string.IsNullOrWhiteSpace(errMsg))
+{
+    <div class="alert alert-danger">@errMsg</div>
+}
+
+<div class="card mb-3">
+    <div class="card-body">
+        <form method="post" asp-page-handler="Enqueue">
+            @Html.AntiForgeryToken()
+            <div class="mb-3">
+                <label for="Prompt" class="form-label fw-semibold">Prompt</label>
+                <textarea class="form-control font-monospace" id="Prompt" name="Prompt" rows="10" required>@Model.Prompt</textarea>
+                <div class="form-text">Inserisci concept, mondo, conflitto centrale, tono emotivo, temi umani.</div>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-play-fill me-1"></i> Accoda GenerateNewSerie
+                </button>
+                <button type="reset" class="btn btn-outline-secondary">Pulisci</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <span class="fw-semibold">Esempi di prompt</span>
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#promptExamples" aria-expanded="false" aria-controls="promptExamples">
+            Mostra/Nascondi
+        </button>
+    </div>
+    <div id="promptExamples" class="collapse">
+        <div class="card-body">
+            <pre class="mb-0" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace;">THRILLER AI
+Una serie thriller ambientata in un futuro vicino dove le decisioni pubbliche sono gestite da un’IA nazionale. Eventi misteriosi mostrano che il sistema sta “correggendo” la società in modo spietato. Tono teso, realistico. Temi: controllo, libero arbitrio.
+
+SCI-FI SURVIVAL
+Una colonia spaziale perde contatto con la Terra e scopre che nessuno verrà a salvarli. Devono costruire una nuova società su un pianeta ostile. Tono realistico, drammatico. Temi: leadership, fiducia.
+
+MISTERY MEMORIA
+In una città compaiono persone che nessuno ricorda ma che sostengono di aver sempre vissuto lì. Un’insegnante indaga su un fenomeno che altera la memoria collettiva. Tono inquietante. Temi: identità, verità.
+
+POLITICO
+Un nuovo partito vince promettendo ordine. Giornalisti e funzionari scoprono che il governo sta smantellando la democrazia. Tono realistico. Temi: potere, compromesso morale.
+
+SCI-FI MILITARE
+Dopo la distruzione della Terra, una flotta militare in fuga deve decidere se cercare sopravvissuti o prepararsi a una guerra contro un nemico sconosciuto. Tono duro, militare. Temi: sacrificio, comando.
+
+CYBERPUNK NOIR
+In una città dove i ricordi si possono modificare, un’investigatrice scopre un caso che mette in dubbio la propria identità. Tono noir. Temi: identità, realtà.
+
+🎭 COMMEDIA UFFICIO ASSURDO
+
+Una serie comedy ambientata in un piccolo ufficio comunale di provincia dove un gruppo di impiegati deve gestire problemi assurdi e richieste improbabili dei cittadini, mentre lotta contro burocrazia, tagli di bilancio e un sistema informatico vecchio di vent’anni che sembra avere una volontà propria. Tono leggero, ironico, ritmo veloce. Temi: sopravvivere al lavoro, amicizia forzata, creatività contro regole senza senso.
+
+🏠 COMMEDIA CONVIVENZA
+
+Dopo aver perso il lavoro, tre adulti che non si conoscono finiscono per condividere un grande appartamento ereditato da un parente lontano, scoprendo troppo tardi che nessuno di loro sa davvero vivere con altre persone. Ogni episodio nasce da tentativi maldestri di organizzare la vita domestica, gestire bollette, ospiti indesiderati e relazioni sentimentali che complicano tutto. Tono brillante, dialoghi veloci. Temi: compromesso, crescita personale, caos quotidiano.
+
+🧠 COMMEDIA TECNOLOGICA
+
+In una startup tecnologica sempre sull’orlo del fallimento, un gruppo di sviluppatori geniali ma socialmente disastrosi cerca di creare l’app che cambierà il mondo, mentre bug inspiegabili, clienti esigenti e investitori confusi rendono ogni giorno un disastro diverso. Tono sarcastico, ritmo veloce, situazioni imbarazzanti. Temi: ambizione vs realtà, amicizia tra disadattati, fallire con stile.
+
+👨‍👩‍👧 COMMEDIA FAMIGLIA MODERNA
+
+Una famiglia allargata è costretta a vivere sotto lo stesso tetto dopo una serie di eventi sfortunati. Generazioni diverse, abitudini opposte e segreti imbarazzanti trasformano ogni situazione quotidiana in una piccola catastrofe comica. Tono caldo, ironico, situazioni riconoscibili ma esagerate. Temi: convivenza, differenze generazionali, amore imperfetto.
+
+🚓 COMMEDIA INVESTIGATIVA LEGGERA
+
+Due investigatori privati di poco successo, pieni di entusiasmo ma privi di talento, accettano casi sempre più improbabili pur di pagare l’affitto. Le loro indagini finiscono regolarmente in equivoci, inseguimenti inutili e conclusioni sbagliate che però, per pura fortuna, risolvono il caso. Tono leggero, surreale ma umano. Temi: amicizia, fortuna vs competenza, ottimismo ostinato.</pre>
+        </div>
+    </div>
+</div>

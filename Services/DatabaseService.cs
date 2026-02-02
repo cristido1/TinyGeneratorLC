@@ -1491,6 +1491,34 @@ public sealed class DatabaseService
         return serie.Id;
     }
 
+    public void InsertSeriesCharacters(int serieId, IEnumerable<SeriesCharacter> characters)
+    {
+        if (serieId <= 0 || characters == null) return;
+        var list = characters.Where(c => c != null).ToList();
+        if (list.Count == 0) return;
+        using var context = CreateDbContext();
+        foreach (var ch in list)
+        {
+            ch.SerieId = serieId;
+        }
+        context.SeriesCharacters.AddRange(list);
+        context.SaveChanges();
+    }
+
+    public void InsertSeriesEpisodes(int serieId, IEnumerable<SeriesEpisode> episodes)
+    {
+        if (serieId <= 0 || episodes == null) return;
+        var list = episodes.Where(e => e != null).ToList();
+        if (list.Count == 0) return;
+        using var context = CreateDbContext();
+        foreach (var ep in list)
+        {
+            ep.SerieId = serieId;
+        }
+        context.SeriesEpisodes.AddRange(list);
+        context.SaveChanges();
+    }
+
     public void UpdateSeries(Series serie)
     {
         if (serie == null) return;
@@ -3335,6 +3363,15 @@ HAVING COUNT(se.id) >= 2";
     {
         using var context = CreateDbContext();
         return context.Logs.Any(l =>
+            !l.Examined &&
+            (l.Category == "ModelResponse" || l.Category == "ModelCompletion") &&
+            l.AgentName != null && l.AgentName != "");
+    }
+
+    public int GetPendingModelResponseLogsCount()
+    {
+        using var context = CreateDbContext();
+        return context.Logs.Count(l =>
             !l.Examined &&
             (l.Category == "ModelResponse" || l.Category == "ModelCompletion") &&
             l.AgentName != null && l.AgentName != "");
@@ -7318,6 +7355,46 @@ WHERE Id = @modelId;";
                 var gm = conn.QuerySingleOrDefault<bool?>("SELECT generated_mixed_audio FROM stories WHERE id = @id", new { id = gid }) ?? false;
                 list[i] = (list[i].Id, list[i].Title, list[i].Agent, list[i].AvgScore, list[i].Timestamp, gm);
             } catch { }
+        }
+        return list;
+    }
+
+    public List<(long Id, string Title, string Agent, double AvgScore, string Timestamp, bool GeneratedMixedAudio)> GetStoriesByEvaluation()
+    {
+        using var conn = CreateConnection();
+        conn.Open();
+        var sql = @"
+            SELECT 
+                s.id AS Id,
+                COALESCE(s.title, '') AS Title,
+                COALESCE(a.name, '') AS Agent,
+                AVG(se.total_score) AS AvgScore,
+                COALESCE(s.ts, '') AS Timestamp
+            FROM stories s
+            INNER JOIN stories_evaluations se ON se.story_id = s.id
+            LEFT JOIN agents a ON s.agent_id = a.id
+            LEFT JOIN models m ON s.model_id = m.Id
+            WHERE s.deleted = 0
+            GROUP BY s.id
+            ORDER BY AvgScore DESC";
+        var list = conn.Query(sql).Select(r => (
+            Id: (long)r.Id,
+            Title: (string)r.Title,
+            Agent: (string)r.Agent,
+            AvgScore: (double)r.AvgScore,
+            Timestamp: (string)r.Timestamp,
+            GeneratedMixedAudio: ((IDictionary<string, object>)r).ContainsKey("GeneratedMixedAudio") ?
+                Convert.ToBoolean(((IDictionary<string, object>)r)["GeneratedMixedAudio"]) : false
+        )).ToList();
+        foreach (var i in Enumerable.Range(0, list.Count))
+        {
+            try
+            {
+                var gid = list[i].Id;
+                var gm = conn.QuerySingleOrDefault<bool?>("SELECT generated_mixed_audio FROM stories WHERE id = @id", new { id = gid }) ?? false;
+                list[i] = (list[i].Id, list[i].Title, list[i].Agent, list[i].AvgScore, list[i].Timestamp, gm);
+            }
+            catch { }
         }
         return list;
     }

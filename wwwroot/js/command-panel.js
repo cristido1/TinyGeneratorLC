@@ -225,6 +225,11 @@
             const visibleCommands = cmds.filter(c => {
                 // Support both camelCase (SignalR default) and PascalCase
                 const status = (c.status || c.Status || '').toLowerCase();
+                const meta = c.metadata || c.Metadata || {};
+                const isTransparent = (meta.transparent || meta.Transparent) === '1';
+                if (isTransparent && status !== 'failed') {
+                    return false;
+                }
                 if (status === 'queued' || status === 'running') return true;
                 if (status === 'completed' || status === 'failed' || status === 'cancelled') {
                     const completedAtStr = c.completedAt || c.CompletedAt;
@@ -274,12 +279,13 @@
                 const retryCount = c.retryCount || c.RetryCount || 0;
                 const stepInfo = stepDesc ? ` (${stepDesc})` : ((currentStep && maxStep) ? ` Step ${currentStep}/${maxStep}` : '');
                 const retryInfo = (retryCount > 0) ? ` (Retry ${retryCount})` : '';
-                const agent = c.agentName || c.AgentName || 'N/A';
-                const op = c.operationName || c.OperationName || c.threadScope || c.ThreadScope || 'N/A';
+                const metadata = c.metadata || c.Metadata || {};
+                const op = metadata.operation || metadata.Operation || c.operationName || c.OperationName || c.threadScope || c.ThreadScope || 'N/A';
+                const agent = c.agentName || c.AgentName || metadata.agentName || metadata.AgentName || metadata.agentRole || metadata.AgentRole || 'N/A';
                 const statusDisplay = c.status || c.Status || '?';
                 const runId = c.runId || c.RunId || '';
 
-                let modelShort = c.modelName || c.ModelName || '';
+                let modelShort = c.modelName || c.ModelName || metadata.modelName || metadata.ModelName || '';
                 if (modelShort && modelShort.includes('/')) {
                     modelShort = modelShort.substring(modelShort.lastIndexOf('/') + 1);
                 }
@@ -288,7 +294,6 @@
                 }
 
                 // Extract storyId from metadata if present
-                const metadata = c.metadata || c.Metadata || {};
                 const storyId = metadata.storyId || metadata.StoryId;
                 const storyIdBadge = storyId ? ` <span style="
                     background: rgba(0,0,0,0.1);
@@ -311,6 +316,24 @@
                         </div>
                     </div>
                 ` : '';
+
+                const taskName = metadata.taskName || metadata.TaskName || '';
+                const failureKind = metadata.failureKind || metadata.FailureKind || '';
+                const detail = metadata.detail || metadata.Detail || metadata.message || metadata.Message || '';
+                const filter = metadata.filter || metadata.Filter || '';
+                const candidateCount = metadata.candidateCount || metadata.CandidateCount || '';
+                const storyTitle = metadata.storyTitle || metadata.StoryTitle || '';
+                const autoInfoParts = [];
+                if (taskName) autoInfoParts.push(`Task: ${taskName}`);
+                if (failureKind) autoInfoParts.push(`Motivo: ${failureKind}`);
+                if (detail) autoInfoParts.push(`Dettagli: ${detail}`);
+                if (filter) autoInfoParts.push(`Filtro: ${filter}`);
+                if (candidateCount) autoInfoParts.push(`Candidati: ${candidateCount}`);
+                if (storyTitle) autoInfoParts.push(`Titolo: ${storyTitle}`);
+                const autoInfo = autoInfoParts.length
+                    ? `<div style="font-size:11px; color:#444; margin-top:4px; user-select:text;">${escapeHtml(autoInfoParts.join(' | '))}</div>`
+                    : '';
+
 
                 const canCancel = (status === 'queued' || status === 'running') && runId;
                 const cancelButton = canCancel ? `
@@ -340,6 +363,7 @@
                         <div style="font-size:11px; color:#555; margin-top:4px;">
                             👤 ${agent} ${modelShort ? '• 🧠 ' + modelShort : ''}
                         </div>
+                        ${autoInfo}
                         ${errorMsg}
                     </div>
                 `;

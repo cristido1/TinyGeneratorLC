@@ -34,6 +34,9 @@ public sealed class StoryMainCommands
                     "evaluator" or "story_evaluator" or "writer_evaluator" => new EvaluateStoryCommand(_service),
                     "revisor" => new ReviseStoryCommand(_service),
                     "formatter" => new TagStoryCommand(_service),
+                    "ambient_expert" => new AddAmbientTagsToStoryStateCommand(_service),
+                    "fx_expert" => new AddFxTagsToStoryStateCommand(_service),
+                    "music_expert" => new AddMusicTagsToStoryStateCommand(_service),
                     _ => new StoriesService.NotImplementedCommand($"agent_call:{agentType ?? "unknown"}")
                 };
             case "function_call":
@@ -42,17 +45,28 @@ public sealed class StoryMainCommands
                 {
                     "evaluate_story" => new EvaluateStoryCommand(_service),
                     "tag_story" => new TagStoryCommand(_service),
-                    "generate_tts_audio" or "tts_audio" or "build_tts_audio" or "generate_voice_tts" or "generate_voices" => new GenerateTtsAudioCommand(_service),
-                    "generate_ambience_audio" or "ambience_audio" or "generate_ambient" or "ambient_sounds" => new GenerateAmbienceAudioCommand(_service),
                     "add_ambient_tags_to_story" => new AddAmbientTagsToStoryStateCommand(_service),
                     "add_fx_tags_to_story" => new AddFxTagsToStoryStateCommand(_service),
                     "add_music_tags_to_story" => new AddMusicTagsToStoryStateCommand(_service),
                     "add_voice_tags_to_story" => new TagStoryCommand(_service),
-                    "generate_fx_audio" or "fx_audio" or "generate_fx" or "sound_effects" => new GenerateFxAudioCommand(_service),
-                    "generate_music" or "music_audio" or "generate_music_audio" => new GenerateMusicCommand(_service),
                     "generate_audio_master" or "audio_master" or "mix_audio" or "mix_final" or "final_mix" => new MixFinalAudioCommand(_service),
                     "assign_voices" or "voice_assignment" => new StoriesService.AssignVoicesCommand(_service),
                     "prepare_tts_schema" => new PrepareTtsSchemaCommand(_service),
+                    "generate_tts_audio" or "tts_audio" or "build_tts_audio" or "generate_voice_tts" or "generate_voices" => new GenerateTtsAudioCommand(_service),
+                    "generate_ambience_audio" or "ambience_audio" or "generate_ambient" or "ambient_sounds" => new GenerateAmbienceAudioCommand(_service),
+                    "generate_fx_audio" or "fx_audio" or "generate_fx" or "sound_effects" => new GenerateFxAudioCommand(_service),
+                    "generate_music" or "music_audio" or "generate_music_audio" => new GenerateMusicCommand(_service),
+                    _ => new StoriesService.FunctionCallCommand(_service, status)
+                };
+            case "service_call":
+                var serviceName = status.FunctionName?.ToLowerInvariant();
+                return serviceName switch
+                {
+                    "prepare_tts_schema" => new PrepareTtsSchemaCommand(_service),
+                    "generate_tts_audio" or "tts_audio" or "build_tts_audio" or "generate_voice_tts" or "generate_voices" => new GenerateTtsAudioCommand(_service),
+                    "generate_ambience_audio" or "ambience_audio" or "generate_ambient" or "ambient_sounds" => new GenerateAmbienceAudioCommand(_service),
+                    "generate_fx_audio" or "fx_audio" or "generate_fx" or "sound_effects" => new GenerateFxAudioCommand(_service),
+                    "generate_music" or "music_audio" or "generate_music_audio" => new GenerateMusicCommand(_service),
                     _ => new StoriesService.FunctionCallCommand(_service, status)
                 };
             default:
@@ -401,6 +415,19 @@ public sealed class StoryMainCommands
                 overallSuccess = false;
             }
 
+            if (overallSuccess && _service.IsTtsSchemaAutoLaunchEnabled())
+            {
+                try
+                {
+                    var refreshed = _service.GetStoryById(context.Story.Id) ?? context.Story;
+                    _service.EnqueueNextStatusCommand(refreshed, "tts_schema_completed", priority: 3);
+                }
+                catch
+                {
+                    // best-effort autolaunch
+                }
+            }
+
             return (overallSuccess, sb.ToString());
         }
     }
@@ -449,6 +476,18 @@ public sealed class StoryMainCommands
                 return (false, cleanupMessage ?? "Impossibile cancellare i rumori ambientali esistenti");
             }
 
+            var runId = _service.CurrentDispatcherRunId;
+            if (!string.IsNullOrWhiteSpace(runId))
+            {
+                var (success, message) = await _service.GenerateAmbienceAudioInternalAsync(context, runId);
+                if (success)
+                {
+                    var story = _service.GetStoryById(context.Story.Id) ?? context.Story;
+                    _service.ApplyStatusTransitionWithCleanup(story, "ambient_generated", runId);
+                }
+                return (success, message);
+            }
+
             return await _service.StartAmbienceAudioGenerationAsync(context);
         }
     }
@@ -472,6 +511,18 @@ public sealed class StoryMainCommands
                 return (false, cleanupMessage ?? "Impossibile cancellare gli effetti sonori esistenti");
             }
 
+            var runId = _service.CurrentDispatcherRunId;
+            if (!string.IsNullOrWhiteSpace(runId))
+            {
+                var (success, message) = await _service.GenerateFxAudioInternalAsync(context, runId);
+                if (success)
+                {
+                    var story = _service.GetStoryById(context.Story.Id) ?? context.Story;
+                    _service.ApplyStatusTransitionWithCleanup(story, "fx_generated", runId);
+                }
+                return (success, message);
+            }
+
             return await _service.StartFxAudioGenerationAsync(context);
         }
     }
@@ -484,7 +535,7 @@ public sealed class StoryMainCommands
 
         public bool RequireStoryText => false;
         public bool EnsureFolder => true;
-        public bool HandlesStatusTransition => false;
+        public bool HandlesStatusTransition => true;
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
@@ -493,6 +544,18 @@ public sealed class StoryMainCommands
             if (!cleanupOk)
             {
                 return (false, cleanupMessage ?? "Impossibile cancellare la musica esistente");
+            }
+
+            var runId = _service.CurrentDispatcherRunId;
+            if (!string.IsNullOrWhiteSpace(runId))
+            {
+                var (success, message) = await _service.GenerateMusicInternalAsync(context, runId);
+                if (success)
+                {
+                    var story = _service.GetStoryById(context.Story.Id) ?? context.Story;
+                    _service.ApplyStatusTransitionWithCleanup(story, "music_generated", runId);
+                }
+                return (success, message);
             }
 
             return await _service.StartMusicGenerationAsync(context);

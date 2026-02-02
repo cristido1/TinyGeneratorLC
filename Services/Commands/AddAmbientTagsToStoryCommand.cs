@@ -51,7 +51,7 @@ namespace TinyGenerator.Services.Commands
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
         {
             var effectiveRunId = string.IsNullOrWhiteSpace(runId)
-                ? $"add_ambient_tags_to_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
+                ? (_storiesService?.CurrentDispatcherRunId ?? $"add_ambient_tags_to_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}")
                 : runId;
 
             _logger?.Start(effectiveRunId);

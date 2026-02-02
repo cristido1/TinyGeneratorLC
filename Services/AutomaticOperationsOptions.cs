@@ -14,9 +14,7 @@ namespace TinyGenerator.Services
         public AutomaticEvaluationOptions EvaluateRevised { get; set; } = new()
         {
             Enabled = true,
-            Priority = 2,
-            AutolaunchNextCommand = true,
-            AutolaunchEvaluationLimit = 60
+            Priority = 2
         };
 
         public AutomaticDeleteOptions AutoDeleteLowRated { get; set; } = new()
@@ -33,16 +31,11 @@ namespace TinyGenerator.Services
             Priority = 5
         };
 
-        public AutomaticOperationOptions AutoFinalMixPipeline { get; set; } = new()
+        public AutoCompleteAudioPipelineOptions AutoCompleteAudioPipeline { get; set; } = new()
         {
             Enabled = true,
-            Priority = 7
-        };
-
-        public AutomaticOperationOptions AutoCompleteAudioPipeline { get; set; } = new()
-        {
-            Enabled = true,
-            Priority = 8
+            Priority = 8,
+            MinAverageScore = 60
         };
 
         public AutoStateDrivenSeriesEpisodeOptions AutoStateDrivenSeriesEpisode { get; set; } = new()
@@ -64,10 +57,6 @@ namespace TinyGenerator.Services
 
     public sealed class AutomaticEvaluationOptions : AutomaticOperationOptions
     {
-        public bool AutolaunchNextCommand { get; set; } = true;
-        public double AutolaunchEvaluationLimit { get; set; } = 60;
-        public bool AutolaunchTtsSchemaAfterTagged { get; set; } = true;
-        public double AutolaunchTtsSchemaThreshold { get; set; } = 70;
     }
 
     public sealed class AutomaticDeleteOptions : AutomaticOperationOptions
@@ -82,5 +71,10 @@ namespace TinyGenerator.Services
         public int TargetMinutes { get; set; } = 20;
         public int WordsPerMinute { get; set; } = 150;
         public int WriterAgentId { get; set; } = 0;
+    }
+
+    public sealed class AutoCompleteAudioPipelineOptions : AutomaticOperationOptions
+    {
+        public double MinAverageScore { get; set; } = 60;
     }
 }

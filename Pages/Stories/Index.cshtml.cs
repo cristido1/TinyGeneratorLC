@@ -292,27 +292,42 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
-    public IActionResult OnPostCloneFromRevised(long id)
-    {
-        var runId = QueueStoryCommand(
-            id,
-            "clone_revised_story",
-            ctx =>
-            {
-                var result = _stories.TryCloneStoryFromRevised(id);
-                return Task.FromResult(new CommandResult(result.Success, result.Message));
-            },
-            "Clonazione da revisione accodata.",
-            threadScopeOverride: $"story/clone_revised/{id}",
-            metadata: new Dictionary<string, string>
-            {
-                ["operation"] = "clone_revised_story",
-                ["storyId"] = id.ToString()
-            });
+        public IActionResult OnPostCloneFromRevised(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "clone_revised_story",
+                ctx =>
+                {
+                    var result = _stories.TryCloneStoryFromRevised(id);
+                    return Task.FromResult(new CommandResult(result.Success, result.Message));
+                },
+                "Clonazione da revisione accodata.",
+                threadScopeOverride: $"story/clone_revised/{id}",
+                metadata: new Dictionary<string, string>
+                {
+                    ["operation"] = "clone_revised_story",
+                    ["storyId"] = id.ToString()
+                });
 
-        TempData["StatusMessage"] = $"Clonazione accodata (run {runId}).";
-        return RedirectToPage();
-    }
+            TempData["StatusMessage"] = $"Clonazione accodata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostCompleteStory(long id)
+        {
+            var runId = _stories.EnqueueAllNextStatusCommand(id, trigger: "manual_complete_story", priority: 3);
+            if (string.IsNullOrWhiteSpace(runId))
+            {
+                TempData["ErrorMessage"] = "Nessuna operazione disponibile o pipeline già in corso.";
+            }
+            else
+            {
+                TempData["StatusMessage"] = $"Pipeline stati accodata (run {runId}).";
+            }
+
+            return RedirectToPage();
+        }
 
         // Allow manual evaluation input (for stories created without an associated model/agent)
         public IActionResult OnPostManualEvaluate(long id, double score, string overall)
@@ -1563,4 +1578,5 @@ namespace TinyGenerator.Pages.Stories
         }
     }
 }
+
 

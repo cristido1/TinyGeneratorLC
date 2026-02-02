@@ -1,0 +1,343 @@
+############################################################
+PIPELINE AI — GENERAZIONE AUTOMATICA STRUTTURA SERIE
+############################################################
+
+OBIETTIVO
+Generare la struttura completa di una serie TV usando più agenti AI specializzati.
+
+Gli agenti NON producono JSON.
+Producono output con TAG strutturati tra parentesi quadre [].
+Un parser converte i TAG nel JSON finale.
+
+############################################################
+STRUTTURA JSON FINALE (TARGET)
+############################################################
+
+{
+  "series": { ... },
+  "characters": [ ... ],
+  "season_arc": { ... },
+  "episodes": [ ... ]
+}
+
+############################################################
+FORMATO TAG GENERALE
+############################################################
+
+Ogni informazione deve essere scritta così:
+
+[TAG] contenuto
+
+Liste:
+
+[TAG]
+- elemento 1
+- elemento 2
+
+############################################################
+ELENCO AGENTI (RUOLI)
+############################################################
+
+1) serie_bible_agent  
+2) serie_character_agent  
+3) serie_season_agent  
+4) serie_episode_agent  
+5) serie_audio_agent (opzionale)  
+6) serie_validator_agent  
+
+############################################################
+PIPELINE COMANDI
+############################################################
+
+COMANDO PRINCIPALE
+
+GenerateNewSerie(prompt)
+
+DESCRIZIONE  
+Avvia l'intera pipeline di generazione serie.
+
+INPUT  
+prompt: string → descrizione creativa ad alto livello
+
+OUTPUT  
+json finale completo conforme allo schema
+
+------------------------------------------------------------
+
+STEP 1
+
+call serie_bible_agent(prompt)
+
+INPUT  
+prompt: descrizione creativa
+
+OUTPUT TAG ATTESI  
+tutti i tag SERIES_* + SEASON_*
+
+------------------------------------------------------------
+
+STEP 2
+
+call serie_character_agent(bible_tags)
+
+INPUT  
+tutti i tag generati da serie_bible_agent
+
+OUTPUT TAG ATTESI  
+blocchi [CHARACTER], [RELATIONSHIP], [CHARACTER_SEASON_ARC]
+
+------------------------------------------------------------
+
+STEP 3
+
+call serie_season_agent(bible_tags, character_tags)
+
+INPUT  
+tag serie + tag personaggi
+
+OUTPUT TAG ATTESI  
+blocchi [EPISODE] (struttura base episodi)
+
+------------------------------------------------------------
+
+STEP 4 (loop per episodio)
+
+call serie_episode_agent(episode_tag, bible_tags, character_tags)
+
+INPUT  
+singolo episodio base  
+arco stagionale  
+personaggi
+
+OUTPUT TAG ATTESI  
+[EPISODE_STRUCTURE]  
+[BEAT] x3  
+[CAST]  
+[LOCATIONS]  
+[SETUP]  
+[PAYOFF]
+
+------------------------------------------------------------
+
+STEP 5 (opzionale)
+
+call serie_audio_agent(episode_structure_tags)
+
+OUTPUT  
+[AMBIENCE]  
+[FX]  
+[MUSIC_CUES]
+
+------------------------------------------------------------
+
+STEP 6
+
+call serie_validator_agent(all_tags)
+
+OUTPUT  
+[VALIDATION_OK]  
+oppure  
+[VALIDATION_ERROR] descrizione
+
+############################################################
+PROMPT PER OGNI AGENTE
+############################################################
+
+### serie_bible_agent
+
+Sei uno showrunner professionista.
+Definisci la bibbia di una nuova serie TV.
+
+REGOLE:
+- Evita cliché
+- Il conflitto deve sostenere una stagione intera
+- I temi devono generare conflitti
+
+USA SOLO TAG. NON testo libero.
+
+TAG RICHIESTI:
+[SERIES_TITLE]
+[SERIES_GENRE]
+[SERIES_TONE]
+[SERIES_AUDIENCE]
+[SERIES_RATING]
+[SERIES_PREMISE]
+[SERIES_THEMES]
+[SERIES_FORBIDDEN_TOPICS]
+[SETTING_PLACE]
+[SETTING_TIME]
+[SETTING_TECH_LEVEL]
+[SETTING_WORLD_RULES]
+[FORMAT_EPISODE_DURATION]
+[FORMAT_SEASON_EPISODES]
+[FORMAT_STRUCTURE]
+[FORMAT_SERIALIZED_LEVEL]
+[CANON_FACTS]
+[RECURRING_LOCATIONS]
+[SEASON_LOGLINE]
+[SEASON_MAIN_ANTAGONISM]
+[SEASON_MID_TWIST]
+[SEASON_FINALE_PAYOFF]
+
+------------------------------------------------------------
+
+### serie_character_agent
+
+Sei una writers’ room specializzata in personaggi seriali.
+
+REGOLE:
+- Ogni personaggio deve avere conflitto interno ed esterno
+- Difetti che ostacolano obiettivi
+- Relazioni significative
+
+TAG:
+[CHARACTER]
+ID:
+NAME:
+ROLE:
+BIO_SHORT:
+EXTERNAL_GOAL:
+INTERNAL_NEED:
+FLAWS:
+SKILLS:
+LIMITS:
+VOICE_STYLE:
+
+[RELATIONSHIP]
+FROM:
+TO:
+TYPE:
+NOTES:
+
+[CHARACTER_SEASON_ARC]
+ID:
+FROM:
+TO:
+KEY_TURNS:
+
+------------------------------------------------------------
+
+### serie_season_agent
+
+Sei lo showrunner della stagione.
+
+TAG:
+[EPISODE]
+NUMBER:
+TITLE:
+LOGLINE:
+A_PLOT:
+B_PLOT:
+THEME:
+
+------------------------------------------------------------
+
+### serie_episode_agent
+
+Sei uno story editor.
+
+TAG:
+[EPISODE_STRUCTURE]
+NUMBER:
+
+[BEAT]
+TYPE: INCITING_INCIDENT | TURNING_POINT | CLIMAX
+SUMMARY:
+
+[CAST]
+- char_X
+
+[LOCATIONS]
+- ...
+
+[SETUP]
+- ...
+
+[PAYOFF]
+- ...
+
+------------------------------------------------------------
+
+### serie_audio_agent (opzionale)
+
+[AMBIENCE]
+- ...
+
+[FX]
+- ...
+
+[MUSIC_CUES]
+- ...
+
+------------------------------------------------------------
+
+### serie_validator_agent
+
+Verifica:
+
+✔ Tag obbligatori presenti  
+✔ ID personaggi unici  
+✔ Episodi coerenti con numero stagione  
+✔ Theme episodio ∈ SERIES_THEMES  
+✔ Ogni episodio ha 3 BEAT  
+✔ CAST usa ID esistenti  
+
+Output:
+[VALIDATION_OK]  
+oppure  
+[VALIDATION_ERROR] descrizione
+
+############################################################
+PARSER → JSON
+############################################################
+
+Il parser deve mappare:
+
+[SERIES_TITLE] → series.title  
+[SERIES_GENRE] → series.genre[]  
+[CHARACTER] → characters[]  
+[EPISODE] → episodes[]  
+
+e così via.
+
+############################################################
+COME SCRIVERE IL PROMPT GenerateNewSerie(prompt)
+############################################################
+
+Il prompt deve contenere:
+
+✔ Concept forte  
+✔ Tipo di mondo  
+✔ Conflitto centrale  
+✔ Tono emotivo  
+✔ Temi umani  
+
+NON deve contenere:
+
+✘ Episodi  
+✘ Struttura tecnica  
+✘ Nomi personaggi  
+
+Deve ispirare, non progettare.
+
+############################################################
+ESEMPI DI PROMPT
+############################################################
+
+THRILLER AI  
+Una serie thriller ambientata in un futuro vicino dove le decisioni pubbliche sono gestite da un’IA nazionale. Eventi misteriosi mostrano che il sistema sta “correggendo” la società in modo spietato. Tono teso, realistico. Temi: controllo, libero arbitrio.
+
+SCI-FI SURVIVAL  
+Una colonia spaziale perde contatto con la Terra e scopre che nessuno verrà a salvarli. Devono costruire una nuova società su un pianeta ostile. Tono realistico, drammatico. Temi: leadership, fiducia.
+
+MISTERY MEMORIA  
+In una città compaiono persone che nessuno ricorda ma che sostengono di aver sempre vissuto lì. Un’insegnante indaga su un fenomeno che altera la memoria collettiva. Tono inquietante. Temi: identità, verità.
+
+POLITICO  
+Un nuovo partito vince promettendo ordine. Giornalisti e funzionari scoprono che il governo sta smantellando la democrazia. Tono realistico. Temi: potere, compromesso morale.
+
+SCI-FI MILITARE  
+Dopo la distruzione della Terra, una flotta militare in fuga deve decidere se cercare sopravvissuti o prepararsi a una guerra contro un nemico sconosciuto. Tono duro, militare. Temi: sacrificio, comando.
+
+CYBERPUNK NOIR  
+In una città dove i ricordi si possono modificare, un’investigatrice scopre un caso che mette in dubbio la propria identità. Tono noir. Temi: identità, realtà.

@@ -177,43 +177,62 @@ Per dataset molto grandi (>10k record):
 6) PULSANTI DATATABLES (ESTENSIONE BUTTONS)
 
 OBBLIGATORI:
-- Pulsante **Colonne** (ColVis) per selezione colonne visibili
-- Pulsante **Nuovo** : per la creazione di un nuovo record
-- Posizione: in alto a sinistra
-- Stile: coerente con Bootstrap 5
-- Css: "btn btn-sm btn-outline-secondary me-1"
-- Style : per fare in modo che i pulsanti siano larghissimi va aggiunto alla pagina questo style .btn-group-vertical>.btn, .btn-group>.btn { flex: none; }
+- Pulsante **Colonne** (ColVis) per selezione colonne visibili (con **stateSave: true**)
+- Pulsante **Refresh** (sempre presente)
+- Tutti i pulsanti globali della pagina (Nuovo, Test, Batch, ecc.) DEVONO stare nei **Buttons** di DataTables (barra in alto a sinistra)
+- Posizione: in alto a sinistra (slot `B` del DOM layout)
+- Stile: Bootstrap 5, **sfondo chiaro** (pulsanti "bianchi")
 
 OPZIONALI (solo se richiesti):
 - Export (Excel, CSV, PDF)
 - Copy
 - Print
 
+REGOLE DI STILE (IMPORTANTISSIME):
+- DataTables applica spesso `flex: 1 1 auto` ai bottoni, rendendoli larghissimi.
+- Per OGNI button in `buttons: [...]` usare SEMPRE:
+  `attr: { style: 'width: auto; flex: 0 0 auto;' }`
+  altrimenti i pulsanti diventano larghissimi.
+- Aggiungere alla pagina questo CSS per sicurezza:
+  `.btn-group-vertical>.btn, .btn-group>.btn { flex: none; }`
+
+SFONDO CHIARO (richiesto):
+- Usare `btn btn-sm btn-light border` come base.
+- Se vuoi mantenere semantica colore senza cambiare lo sfondo:
+  - `btn-light border text-primary` (azioni positive/nuovo)
+  - `btn-light border text-warning` (warning)
+  - `btn-light border text-danger` (distruttive)
+  - `btn-light border` (neutre)
+
 ESEMPIO CONFIGURAZIONE:
 ```javascript
 buttons: [
   {
     text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Record',
-    className: 'btn btn-sm btn-primary',
-    attr: {
-      style: 'width: auto; flex: 0 0 auto;' // Impedisce allargamento
-    },
+    className: 'btn btn-sm btn-light border text-primary',
+    attr: { style: 'width: auto; flex: 0 0 auto;' },
     action: function() {
       window.location.href = '/Path/Create';
     }
   },
   {
     extend: 'colvis',
-    text: 'Colonne',
-    className: 'btn btn-sm btn-secondary' // NON outline per migliore visibilità
+    text: '<i class="bi bi-justify me-1"></i> Colonne',
+    className: 'btn btn-sm btn-light border',
+    attr: { style: 'width: auto; flex: 0 0 auto;' }
+  },
+  {
+    text: '<i class="bi bi-arrow-clockwise me-1"></i> Refresh',
+    className: 'btn btn-sm btn-light border',
+    attr: { style: 'width: auto; flex: 0 0 auto;' },
+    action: function() { location.reload(); }
   }
 ]
 ```
 
 NOTA SUI PULSANTI:
-- DataTables applica `flex: 1 1 auto` ai pulsanti di default, causando allargamento
-- Usare `attr: { style: 'width: auto; flex: 0 0 auto;' }` per dimensione contenuto
-- Evitare `btn-outline-*` per pulsante Colonne (testo poco leggibile su grigio)
+- L'attributo `attr: { style: 'width: auto; flex: 0 0 auto;' }` è **OBBLIGATORIO** per evitare pulsanti larghissimi.
+- I pulsanti devono avere **sfondo chiaro**.
 
 7) PERSISTENZA STATO (STATE SAVE)
 
@@ -234,36 +253,35 @@ Stato salvato in localStorage con chiave automatica basata su table ID.
 8) RIGA DI DETTAGLIO ESPANDIBILE (CHILD ROW)
 
 IMPLEMENTAZIONE OBBLIGATORIA:
-- Riga espandibile con icona +/- nella prima colonna
-- Caricamento lazy via AJAX quando viene espansa
-- Rendering come Bootstrap 5 card
-- NO markup legacy o `<tr>` grezzi per il dettaglio
+- Colonna di controllo `dt-control` nella **prima colonna** (freccetta standard DataTables)
+- Toggle espansione con `row.child()` (pattern ufficiale DataTables)
+- Rendering come Bootstrap 5 card (o contenuto equivalente), con `white-space: pre-wrap;` sui testi lunghi
+- Vietato usare `<tr>` extra + `colspan` per simulare il dettaglio: altera le larghezze colonne e crea errori di conteggio
 
 ESEMPIO STRUTTURA:
 ```javascript
-// Colonna dettaglio
-{
-  className: 'dt-control',
-  orderable: false,
-  data: null,
-  defaultContent: ''
-}
+// Markup server-side (Razor): aggiungi una colonna vuota in header e cella dt-control
+// <th></th>
+// <td class="dt-control"></td>
+// e metti un identificativo sul TR
+// <tr data-item-id="@item.Id">...</tr>
 
-// Event handler
+// Event handler (pattern ufficiale)
 table.on('click', 'td.dt-control', function(e) {
-  let tr = e.target.closest('tr');
-  let row = table.row(tr);
-  
+  const tr = e.target.closest('tr');
+  const row = table.row(tr);
+  const id = tr.getAttribute('data-item-id');
+
   if (row.child.isShown()) {
     row.child.hide();
-  } else {
-    // Lazy load via AJAX
-    fetch(`/api/details/${row.data().id}`)
-      .then(r => r.json())
-      .then(data => {
-        row.child(formatDetail(data)).show();
-      });
+    return;
   }
+
+  // Lazy load via fetch/AJAX (consigliato)
+  fetch(`/api/details/${id}`)
+    .then(r => r.json())
+    .then(data => row.child(formatDetail(data), 'child-row').show())
+    .catch(() => row.child('<div class="text-muted p-2">Errore caricamento dettaglio</div>').show());
 });
 
 function formatDetail(data) {
@@ -277,6 +295,10 @@ function formatDetail(data) {
   `;
 }
 ```
+
+NOTA ICONA FRECCETTA (evitare duplicati):
+- Con Bootstrap5 skin di DataTables, la freccetta viene spesso resa via CSS (`td.dt-control:before`).
+- Non inserire una seconda icona manuale nella cella `dt-control` (altrimenti vedi due icone).
 
 NOTA CHILD ROW:
 - Usare `white-space: pre-wrap;` per preservare ritorni a capo del testo originale
@@ -292,6 +314,23 @@ Usare UN SOLO dropdown per riga (bottone "Azioni"):
   - Azioni POST: `<form method="post">` con `@Html.AntiForgeryToken()`
   - Azioni distruttive: usare conferma JavaScript (SweetAlert2 opzionale)
 
+FORMATO BOOTSTRAP 5 (da copiare):
+```html
+<div class="dropdown">
+  <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><a class="dropdown-item" href="...">Edit</a></li>
+    <li><hr class="dropdown-divider"></li>
+    <li>
+      <form method="post" action="..." class="m-0" onsubmit="return confirm('Confermi?');">
+        @Html.AntiForgeryToken()
+        <button type="submit" class="dropdown-item text-danger">Elimina</button>
+      </form>
+    </li>
+  </ul>
+</div>
+```
+
 I metadati delle azioni DEVONO essere centralizzati nel PageModel:
 ```csharp
 public record RowAction(string Id, string Title, string Method, 
@@ -303,7 +342,7 @@ public List<RowAction> GetActionsForItem(Item item) { ... }
 DataTables passa il dato della riga, il rendering mantiene il dropdown HTML.
 
 10) CSS CUSTOM OBBLIGATORIO
-Pulsanti bianchi.
+Pulsanti bianchi / sfondo chiaro.
 Applicare CSS minimale per modernizzare DataTables:
 
 ```css
@@ -342,6 +381,12 @@ Applicare CSS minimale per modernizzare DataTables:
   font-size: 0.875rem;
   padding: 0.375rem 0.75rem;
 }
+
+/* Impedisce che i bottoni DataTables diventino larghissimi */
+.btn-group-vertical>.btn, .btn-group>.btn { flex: none; }
+
+/* Stile richiesto: sfondo chiaro */
+.dt-buttons .btn.btn-light { background: #f8f9fa; }
 
 /* Search box allineato */
 .dataTables_filter input {
@@ -394,28 +439,25 @@ document.addEventListener('DOMContentLoaded', function() {
     // Filtro
     searching: true,
     
-    // Pulsanti
+    // Pulsanti (tutti in alto a sinistra)
     buttons: [
       {
         extend: 'colvis',
-        text: 'Colonne',
-        className: 'btn btn-sm btn-outline-secondary',
+        text: '<i class="bi bi-justify me-1"></i> Colonne',
+        className: 'btn btn-sm btn-light border',
         attr: { style: 'width: auto; flex: 0 0 auto;' },
+      }
+      {
+        text: '<i class="bi bi-arrow-clockwise me-1"></i> Refresh',
+        className: 'btn btn-sm btn-light border',
+        attr: { style: 'width: auto; flex: 0 0 auto;' },
+        action: function() { location.reload(); }
       }
     ],
     
-    // Colonne (includi colonna dettaglio se necessaria)
-    columns: [
-      {
-        className: 'dt-control',
-        orderable: false,
-        data: null,
-        defaultContent: ''
-      },
-      { data: 'name' },
-      { data: 'date' },
-      { data: 'status' }
-    ],
+    // Colonne
+    // Se la tabella è renderizzata server-side (tbody già presente), NON serve definire columns/data qui.
+    // Se usi Ajax/data objects, puoi definire columns: [...] come da DataTables.
     
     // Responsive (opzionale)
     responsive: false,
@@ -434,9 +476,21 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
   
-  // Event handler per dettaglio (se implementato)
+  // Event handler per dettaglio (obbligatorio se hai dt-control)
   table.on('click', 'td.dt-control', function(e) {
-    // Implementazione lazy load dettaglio
+    const tr = e.target.closest('tr');
+    const row = table.row(tr);
+    const id = tr.getAttribute('data-item-id');
+    if (!id) return;
+
+    if (row.child.isShown()) {
+      row.child.hide();
+      return;
+    }
+
+    fetch(`/api/details/${id}`)
+      .then(r => r.json())
+      .then(data => row.child(formatDetail(data)).show());
   });
 });
 ```
@@ -517,3 +571,29 @@ ISTRUZIONI PER L'ASSISTENTE AI
 - Non semplificare eliminando funzionalità
 - Non convertire in SPA
 - Fornire codice concreto, non teoria
+
+CHECKLIST FINALE (prima di considerare la pagina "OK")
+1) Scripts / timing
+  - jQuery disponibile prima di DataTables
+  - script DataTables caricati in sequenza (no parallelo)
+
+2) Layout DataTables
+  - dom esattamente: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>"
+  - stateSave: true
+
+3) Buttons (barra in alto a sinistra)
+  - Tutti i pulsanti globali sono in `buttons: [...]` (no toolbar custom separata)
+  - Sempre presenti: Colonne (colvis) + Refresh
+  - Tutti i bottoni hanno `attr: { style: 'width: auto; flex: 0 0 auto;' }`
+  - Stile richiesto: sfondo chiaro (base: `btn btn-sm btn-light border`)
+  - CSS presente: `.btn-group-vertical>.btn, .btn-group>.btn { flex: none; }`
+
+4) Azioni di riga
+  - Un solo dropdown Bootstrap 5 per riga (bottone "Azioni")
+  - GET come `<a class="dropdown-item">`, POST come `<form>` con AntiForgery
+
+5) Child row (dettaglio espandibile)
+  - Prima colonna `dt-control` (freccetta standard DataTables)
+  - Toggle con `row.child()` su click `td.dt-control`
+  - Niente `<tr>` extra con `colspan` (vietato)
+  - Testi lunghi nel dettaglio con `white-space: pre-wrap;`

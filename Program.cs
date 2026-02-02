@@ -113,6 +113,9 @@ builder.Services.Configure<StateDrivenStoryGenerationOptions>(builder.Configurat
 builder.Services.AddSingleton<TextValidationService>();
 // TTS schema generation options (pause/gap between phrases)
 builder.Services.Configure<TtsSchemaGenerationOptions>(builder.Configuration.GetSection("TtsSchemaGeneration"));
+// Audio mix options (final mix volumes)
+builder.Services.Configure<AudioMixOptions>(builder.Configuration.GetSection("AudioMix"));
+builder.Services.Configure<SeriesGenerationOptions>(builder.Configuration.GetSection("Serie"));
 // Audio generation options (autolaunch followups)
 builder.Services.Configure<AudioGenerationOptions>(builder.Configuration.GetSection("AudioGeneration"));
 // Automatic operations (auto enqueue when system idle)
@@ -155,6 +158,7 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetService<SentimentMappingService>(),
     ttsSchemaOptions: sp.GetService<IOptionsMonitor<TtsSchemaGenerationOptions>>(),
     audioGenerationOptions: sp.GetService<IOptionsMonitor<AudioGenerationOptions>>(),
+    audioMixOptions: sp.GetService<IOptionsMonitor<AudioMixOptions>>(),
     narratorVoiceOptions: sp.GetService<IOptionsMonitor<NarratorVoiceOptions>>(),
     idleAutoOptions: sp.GetService<IOptionsMonitor<AutomaticOperationsOptions>>(),
     scopeFactory: sp.GetService<IServiceScopeFactory>(),

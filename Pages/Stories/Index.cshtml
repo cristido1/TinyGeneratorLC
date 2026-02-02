@@ -1,7 +1,27 @@
 @page
 @model TinyGenerator.Pages.Stories.IndexModel
+@using TinyGenerator.Models
 @{
     ViewData["Title"] = "Storie";
+}
+
+@functions {
+    private string GetStatusCaption(StoryStatus status)
+        => status == null ? string.Empty
+            : !string.IsNullOrWhiteSpace(status.CaptionToExecute) ? status.CaptionToExecute
+            : !string.IsNullOrWhiteSpace(status.Description) ? status.Description
+            : status.Code ?? $"Status {status.Id}";
+
+    private string? GetActionConfirmPrompt(string actionId)
+        => actionId switch
+        {
+            "delete" => "Eliminare la storia?",
+            "clone_revised" => "Creare una versione migliorata da story_revised?",
+            "regen_ambient_tags" => "Rigenerare i tag RUMORI?",
+            "regen_fx_tags" => "Rigenerare i tag FX?",
+            "regen_music_tags" => "Rigenerare i tag MUSICA?",
+            _ => "Confermi l'esecuzione di questa azione?"
+        };
 }
 
 <form method="post" style="display:none;">
@@ -11,6 +31,22 @@
 <!-- Hidden form for TestTtsSchema handler -->
 <form id="testTtsSchemaForm" method="post" asp-page-handler="TestTtsSchema" style="display:none;">
     <input type="number" id="testTtsStoryIdInput" name="storyId" value="32" min="1" />
+</form>
+
+<form id="batchSummarizeForm" method="post" asp-page-handler="BatchSummarize" style="display:none;">
+    @Html.AntiForgeryToken()
+</form>
+<form id="deleteLowRatedForm" method="post" asp-page-handler="DeleteLowRated" style="display:none;">
+    @Html.AntiForgeryToken()
+</form>
+<form id="deleteAllEvaluationsForm" method="post" asp-page-handler="DeleteAllEvaluations" style="display:none;">
+    @Html.AntiForgeryToken()
+</form>
+<form id="ensureTagStatusForm" method="post" asp-page-handler="EnsureTagStatusConsistency" style="display:none;">
+    @Html.AntiForgeryToken()
+</form>
+<form id="realignCreatorModelIdsForm" method="post" asp-page-handler="RealignCreatorModelIds" style="display:none;">
+    @Html.AntiForgeryToken()
 </form>
 
 @if (TempData["ErrorMessage"] != null)
@@ -23,50 +59,8 @@
 }
 
 <div class="page-wrapper">
-    <div class="d-flex mb-2 align-items-center toolbar-row">
-        <!-- Buttons moved into DataTables buttons area. External buttons container: will be moved via JS. -->
-        <div class="me-auto"></div>
-        <div id="externalButtons" class="d-none">
-            <a class="btn btn-sm btn-success ms-2" asp-page="Create"><i class="bi bi-plus-lg"></i> Nuova storia</a>
-            <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="testTtsSchema()"><i class="bi bi-box"></i> Test TTS</button>
-            <form method="post" asp-page-handler="BatchSummarize" onsubmit="return confirm('Avviare la generazione batch dei riassunti per tutte le storie con valutazione >= 60?')" style="display:inline-block; margin-left:8px;">
-                <button type="submit" class="btn btn-sm btn-outline-info ms-2"><i class="bi bi-file-text"></i> Riassunti Batch</button>
-            </form>
-            <form method="post" asp-page-handler="DeleteLowRated" onsubmit="return confirm('Eliminare tutte le storie con valutazione media <50 e almeno 2 valutazioni? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
-                <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-trash"></i> Elimina storie scadenti</button>
-            </form>
-            <form method="post" asp-page-handler="DeleteAllEvaluations" onsubmit="return confirm('Cancellare TUTTE le valutazioni per TUTTE le storie (incluse coerenza e valutazioni azione/ritmo)? Questa operazione è irreversibile.')" style="display:inline-block; margin-left:8px;">
-                <button type="submit" class="btn btn-sm btn-outline-danger ms-2"><i class="bi bi-eraser"></i> Cancella tutte le valutazioni</button>
-            </form>
-            <form method="post" asp-page-handler="EnsureTagStatusConsistency" onsubmit="return confirm('Allineare gli stati delle storie mancanti di story_tags? Le storie senza tag torneranno indietro agli step appropriati.')" style="display:inline-block; margin-left:8px;">
-                <button type="submit" class="btn btn-sm btn-outline-warning ms-2"><i class="bi bi-arrow-counterclockwise"></i> Verifica story_tags</button>
-            </form>
-            <form method="post" asp-page-handler="RealignCreatorModelIds" onsubmit="return confirm('Allineare model_id delle storie al model_id configurato dell\'agente (agent_id)? Non modifica agent_id. Operazione consigliata solo se hai storie con agent/modello incoerenti.')" style="display:inline-block; margin-left:8px;">
-                <button type="submit" class="btn btn-sm btn-outline-warning ms-2"><i class="bi bi-wrench-adjustable"></i> Allinea model_id</button>
-            </form>
-            <div class="dropdown ms-2 d-inline-block">
-                <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                    <i class="bi bi-check2-all"></i> Valuta tutti
-                </button>
-                <ul class="dropdown-menu" id="bulkEvaluateMenu">
-                    @if (Model.Evaluators != null && Model.Evaluators.Any())
-                    {
-                        foreach (var ev in Model.Evaluators)
-                        {
-                            <li><button class="dropdown-item" type="button" onclick="bulkEvaluate(@ev.Id)">@ev.Name (@ev.Role)</button></li>
-                        }
-                    }
-                    else
-                    {
-                        <li><span class="dropdown-item text-muted">Nessun evaluator attivo</span></li>
-                    }
-                </ul>
-            </div>
-            <button class="btn btn-sm btn-outline-secondary ms-2" id="refreshBtn">Refresh</button>
-        </div>
-    </div>
 
-        <div style="height: calc(100vh - 200px); width:100%; overflow-x:auto; overflow-y:auto;">
+    <div class="container-fluid">
         <style>
             /* Grigietto pager styles */
             #pager { padding: 8px 12px; text-align: right; }
@@ -85,9 +79,16 @@
             }
             #pager .page-item.disabled .page-link { opacity: 0.6; }
         </style>
+        @{
+            var orderedStatuses = (Model.Statuses ?? new List<StoryStatus>())
+                .OrderBy(st => st.Step)
+                .ThenBy(st => st.Id)
+                .ToList();
+        }
         <table class="table table-striped table-hover" id="storiesTable">
             <thead class="table-light">
                 <tr>
+                    <th data-col="rowdetail"></th>
                     <th data-col="id">Id</th>
                     <th data-col="timestamp">Timestamp</th>
                     <th data-col="serie">Serie</th>
@@ -104,14 +105,14 @@
                     <th data-col="score">Score</th>
                     <th data-col="eval">Valutazione</th>
                     <th data-col="approved">Approved</th>
-                    <th data-col="details">Dettagli</th>
                     <th data-col="actions">Azioni</th>
                 </tr>
             </thead>
             <tbody>
                 @foreach(var s in Model.Stories)
                 {
-                    <tr>
+                    <tr data-story-id="@s.Id">
+                        <td class="dt-control text-center align-middle" data-col="rowdetail"></td>
                         <td data-col="id">@s.Id</td>
                         <td data-col="timestamp">@((DateTime.TryParse(s.Timestamp, out var _dt)) ? _dt.ToString("dd/MM/yyyy HH:mm") : s.Timestamp)</td>
                         <td data-col="serie">@(!string.IsNullOrWhiteSpace(s.SerieName) ? s.SerieName : "-")</td>
@@ -141,130 +142,95 @@
                         <td data-col="score">@s.Score</td>
                         <td data-col="eval">@((s.Evaluations!=null && s.Evaluations.Any()) ? (s.Evaluations.Average(e=>e.TotalScore)*100.0/40.0).ToString("F1") + "/100" : "-")</td>
                         <td data-col="approved">@(s.Approved ? "✅" : "❌")</td>
-                        <td data-col="details">
-                            <button type="button" class="btn btn-sm btn-outline-secondary toggle-evals" data-story-id="@s.Id">Valutazioni</button>
-                        </td>
                         <td data-col="actions">
+                            @{
+                                var currentStep = s.StatusStep ?? 0;
+                                var completedStatuses = orderedStatuses.Where(st => st.Step <= currentStep).ToList();
+                                var nextStatus = orderedStatuses.FirstOrDefault(st => st.Step > currentStep);
+                                var rawActions = Model.GetActionsForStory(s)?.ToList() ?? new List<object>();
+                                rawActions = rawActions.Where(a =>
+                                {
+                                    var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? string.Empty;
+                                    var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? string.Empty;
+                                    if (id == "start_chain" || id == "clone_revised") return false;
+                                    if (id == "final_mix_play" || id == "tts_playlist") return false;
+                                    if (!string.IsNullOrWhiteSpace(title) &&
+                                        (title.Equals("Ascolta mix finale", StringComparison.OrdinalIgnoreCase) ||
+                                         title.Equals("Ascolta sequenza tts", StringComparison.OrdinalIgnoreCase)))
+                                    {
+                                        return false;
+                                    }
+                                    return true;
+                                }).ToList();
+
+                                var orderedActions = new List<object>();
+                                object? detailsAction = rawActions.FirstOrDefault(a => string.Equals(a.GetType().GetProperty("id")?.GetValue(a)?.ToString(), "details", StringComparison.OrdinalIgnoreCase));
+                                object? editAction = rawActions.FirstOrDefault(a => string.Equals(a.GetType().GetProperty("id")?.GetValue(a)?.ToString(), "edit", StringComparison.OrdinalIgnoreCase));
+                                object? deleteAction = rawActions.FirstOrDefault(a => string.Equals(a.GetType().GetProperty("id")?.GetValue(a)?.ToString(), "delete", StringComparison.OrdinalIgnoreCase));
+                                void TryAddPriority(ref object? action)
+                                {
+                                    if (action != null)
+                                    {
+                                        orderedActions.Add(action);
+                                        rawActions.Remove(action);
+                                        action = null;
+                                    }
+                                }
+                                TryAddPriority(ref detailsAction);
+                                TryAddPriority(ref editAction);
+                                TryAddPriority(ref deleteAction);
+                                orderedActions.AddRange(rawActions);
+                            }
                             <div class="dropdown">
-                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Azioni</button>
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    @{
-                                        // Build action lists, remove listen commands, and pin detail/edit/delete first
-                                        var rawActions = Model.GetActionsForStory(s)?.ToList() ?? new List<object>();
-                                        // Filter out listen commands by id or title
-                                        rawActions = rawActions.Where(a => {
-                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
-                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
-                                            if (id == "final_mix_play" || id == "tts_playlist") return false;
-                                            if (!string.IsNullOrWhiteSpace(title) && (title.Equals("Ascolta mix finale", StringComparison.OrdinalIgnoreCase) || title.Equals("Ascolta sequenza tts", StringComparison.OrdinalIgnoreCase))) return false;
-                                            return true;
-                                        }).ToList();
-
-                                        // Extract pinned actions
-                                        object? detailsAction = rawActions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "") == "details");
-                                        if (detailsAction != null) rawActions.Remove(detailsAction);
-                                        object? editAction = rawActions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "") == "edit");
-                                        if (editAction != null) rawActions.Remove(editAction);
-                                        object? deleteAction = rawActions.FirstOrDefault(a => (a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "") == "delete");
-                                        if (deleteAction != null) rawActions.Remove(deleteAction);
-
-                                        // Render pinned actions first: Details, Edit, Delete
-                                        foreach (var pinned in new[] { detailsAction, editAction, deleteAction })
+                                    @foreach (var action in orderedActions)
+                                    {
+                                        var actionId = action.GetType().GetProperty("id")?.GetValue(action)?.ToString() ?? string.Empty;
+                                        var title = action.GetType().GetProperty("title")?.GetValue(action)?.ToString() ?? string.Empty;
+                                        var method = action.GetType().GetProperty("method")?.GetValue(action)?.ToString() ?? "GET";
+                                        var url = action.GetType().GetProperty("url")?.GetValue(action)?.ToString() ?? "#";
+                                        var confirm = action.GetType().GetProperty("confirm")?.GetValue(action) as bool? ?? false;
+                                        var confirmMessage = confirm ? GetActionConfirmPrompt(actionId) ?? "Confermi?" : null;
+                                        if (method.Equals("POST", StringComparison.OrdinalIgnoreCase))
                                         {
-                                            if (pinned == null) continue;
-                                            var a = pinned;
-                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
-                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
-                                            var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "GET";
-                                            var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
-                                            var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
-
-                                            var iconClass = id switch
-                                            {
-                                                "details" => "bi bi-eye",
-                                                "edit" => "bi bi-pencil",
-                                                "delete" => "bi bi-trash-fill",
-                                                _ => "bi bi-gear"
-                                            };
-
-                                            var isDelete = id == "delete";
-                                            var itemClass = isDelete ? "dropdown-item text-danger" : "dropdown-item";
-                                            var iconExtraClass = isDelete ? " text-danger" : "";
-
-                                            if (method == "GET")
-                                            {
-                                                var targetAttr = id == "edit" ? string.Empty : " target=\"_blank\"";
-                                                <li><a class="@itemClass" href="@url"@Html.Raw(targetAttr)><i class="@iconClass me-3@iconExtraClass"></i>&nbsp;@title</a></li>
-                                            }
-                                            else
-                                            {
-                                                <li>
-                                                    <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
-                                                        @Html.AntiForgeryToken()
-                                                        <button type="submit" class="@itemClass"><i class="@iconClass me-3@iconExtraClass"></i>&nbsp;@title</button>
-                                                    </form>
-                                                </li>
-                                            }
+                                            <li>
+                                                <form method="post" action="@url" class="m-0">
+                                                    @Html.AntiForgeryToken()
+                                                    <button type="submit" class="dropdown-item" @(confirmMessage != null ? $"onclick=\"return confirm('{confirmMessage}')\"" : string.Empty)>
+                                                        @title
+                                                    </button>
+                                                </form>
+                                            </li>
                                         }
-
-                                        if (detailsAction != null || editAction != null || deleteAction != null)
+                                        else
                                         {
-                                            <li><hr class="dropdown-divider" /></li>
+                                            <li><a class="dropdown-item" href="@url">@title</a></li>
                                         }
+                                    }
 
-                                        // Render remaining actions
-                                        foreach(var a in rawActions)
-                                        {
-                                            var id = a.GetType().GetProperty("id")?.GetValue(a)?.ToString() ?? "";
-                                            var title = a.GetType().GetProperty("title")?.GetValue(a)?.ToString() ?? "";
-                                            var method = a.GetType().GetProperty("method")?.GetValue(a)?.ToString() ?? "GET";
-                                            var url = a.GetType().GetProperty("url")?.GetValue(a)?.ToString() ?? "";
-                                            var confirm = a.GetType().GetProperty("confirm")?.GetValue(a);
-                                            var iconClass = id switch
-                                            {
-                                                "revise" => "bi bi-spellcheck",
-                                                "clone_revised" => "bi bi-stars",
-                                                "prepare_tts_schema" => "bi bi-magic",
-                                                "add_tags" => "bi bi-tags",
-                                                "regen_ambient_tags" => "bi bi-cloud-haze2",
-                                                "regen_fx_tags" => "bi bi-lightning-charge-fill",
-                                                "regen_music_tags" => "bi bi-music-note-beamed",
-                                                "gen_tts" => "bi bi-volume-up-fill",
-                                                "gen_ambience" => "bi bi-cloud-fill",
-                                                "gen_fx" => "bi bi-lightning-charge-fill",
-                                                "gen_music" => "bi bi-music-note-beamed",
-                                                "mix_final" => "bi bi-play-circle-fill",
-                                                "final_mix_play" => "bi bi-play-btn",
-                                                "tts_playlist" => "bi bi-list-music",
-                                                "details" => "bi bi-eye",
-                                                "edit" => "bi bi-pencil",
-                                                "advance" => "bi bi-arrow-right-circle",
-                                                "delete" => "bi bi-trash-fill",
-                                                _ => "bi bi-gear"
-                                            };
-                                            if (method == "GET")
-                                            {
-                                                var targetAttr = id == "edit" ? string.Empty : " target=\"_blank\"";
-                                                <li><a class="dropdown-item" href="@url"@Html.Raw(targetAttr)><i class="@iconClass me-2"></i>@title</a></li>
-                                            }
-                                            else
-                                            {
-                                                <li>
-                                                    <form method="post" action="@url" class="m-0" onsubmit="return @((confirm!=null && confirm.ToString()=="True")?"confirm('Confermi?')":"true")">
-                                                        @Html.AntiForgeryToken()
-                                                        <button type="submit" class="dropdown-item"><i class="@iconClass me-2"></i>@title</button>
-                                                    </form>
-                                                </li>
-                                            }
-                                        }
+                                    <li><hr class="dropdown-divider" /></li>
+                                    <li>
+                                        <form method="post" asp-page-handler="CompleteStory" class="m-0">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="id" value="@s.Id" />
+                                            <button type="submit" class="dropdown-item text-success" @(nextStatus == null ? "disabled" : string.Empty)>Completa storia</button>
+                                        </form>
+                                    </li>
+                                    @if (!string.IsNullOrWhiteSpace(s.StoryRevised) && (s.Evaluations?.Count ?? 0) >= 2)
+                                    {
+                                        <li>
+                                            <form method="post" asp-page-handler="CloneFromRevised" class="m-0" onsubmit="return confirm('Creare una versione migliorata da story_revised?');">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="id" value="@s.Id" />
+                                                <button type="submit" class="dropdown-item">Crea versione migliorata</button>
+                                            </form>
+                                        </li>
                                     }
                                 </ul>
                             </div>
-                        </td>
-                    </tr>
-                    <tr class="story-evals-row d-none" data-story-id="@s.Id" data-detail-row>
-                        <td class="detail-cell">
-                            <div class="p-3 bg-light border rounded">
+
+                            <template id="evalsTpl-@s.Id">
                                 @if (s.Evaluations != null && s.Evaluations.Any())
                                 {
                                     foreach (var e in s.Evaluations)
@@ -276,11 +242,8 @@
                                 {
                                     <div class="text-muted">Nessuna valutazione</div>
                                 }
-                            </div>
+                            </template>
                         </td>
-                        @for (int _i = 1; _i < 18; _i++) {
-                            <td></td>
-                        }
                     </tr>
                 }
             </tbody>
@@ -288,12 +251,27 @@
         
 
         <style>
-            /* Ensure detail rows visually span the table while keeping correct TD count for DataTables */
-            tr[data-detail-row] td { padding: 0; border: none; }
-            tr[data-detail-row] td.detail-cell { display: block; width: 100%; padding: .75rem; }
-            tr[data-detail-row] td:not(.detail-cell) { display: none; }
-            /* Remove outer border wrapper previously used */
-            .stories-table-wrapper { border: none; }
+            /* Child row container for DataTables row.child() */
+            .story-evals-child { padding: .75rem; }
+            .story-evals-child > .inner {
+                padding: 1rem;
+                background: #f8f9fa;
+                border: 1px solid rgba(0,0,0,.125);
+                border-radius: .5rem;
+                max-width: 100%;
+                overflow-x: auto;
+                white-space: normal;
+                word-break: break-word;
+            }
+
+            /* DataTables details-control column: let DataTables Bootstrap CSS render the arrow via :before */
+            td.dt-control {
+                width: 34px;
+                min-width: 34px;
+                max-width: 34px;
+                padding: 0.25rem 0.25rem;
+                user-select: none;
+            }
         </style>
 
         <div id="pager" data-page-index="@Model.PageIndex" data-page-size="@Model.PageSize" data-total-count="@Model.TotalCount" data-search="@Model.Search" data-order-by="@Model.OrderBy" style="display:none;"></div>
@@ -377,6 +355,15 @@
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/js/shared/list-ui.js"></script>
     <script>
+        const evaluatorAgents = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
+            Model.Evaluators.Select(ev => new
+            {
+                id = ev.Id,
+                name = ev.Name ?? string.Empty,
+                role = ev.Role ?? string.Empty
+            })
+        ));
+
         function bulkEvaluate(agentId) {
             const form = document.getElementById('bulkEvaluateForm');
             const input = document.getElementById('bulkEvaluateAgentId');
@@ -385,65 +372,178 @@
             form.submit();
         }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            document.querySelectorAll('.toggle-evals').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const id = btn.getAttribute('data-story-id');
-                    const row = document.querySelector(`tr.story-evals-row[data-story-id="${id}"]`);
-                    if (!row) return;
-                    const isHidden = row.classList.contains('d-none');
-                    row.classList.toggle('d-none', !isHidden);
-                    btn.textContent = isHidden ? 'Nascondi' : 'Valutazioni';
-                });
-            });
-        });
+        function testTtsSchema() {
+            const form = document.getElementById('testTtsSchemaForm');
+            form?.submit();
+        }
+
+        function submitHiddenForm(formId, confirmMessage) {
+            const form = document.getElementById(formId);
+            if (!form) return;
+            if (confirmMessage && !window.confirm(confirmMessage)) return;
+            form.submit();
+        }
+
+        // handled via DataTables row.child() toggle (see initStoriesTable)
     </script>
     
     <script>
         (function initStoriesTable(){
             if (typeof jQuery === 'undefined') { document.addEventListener('DOMContentLoaded', initStoriesTable); return; }
             var scripts = ['/lib/datatables/js/jquery.dataTables.min.js','/lib/datatables/js/dataTables.bootstrap5.min.js','/lib/datatables/js/dataTables.buttons.min.js','/lib/datatables/js/buttons.bootstrap5.min.js','/lib/datatables/js/buttons.colVis.min.js'];
-            var i=0; function load(u,cb){var s=document.createElement('script');s.src=u;s.onload=cb;s.onerror=cb;document.head.appendChild(s);} function next(){ if(i<scripts.length) load(scripts[i++], next); else init(); } next();
-            function init(){ jQuery(document).ready(function($){ if(typeof $.fn.DataTable==='undefined'){ console.error('DataTables not loaded'); return; }
-                var pageLen = @Model.PageSize;
-                var table = $('#storiesTable').DataTable({
+            var i=0;
+            function load(url, cb) {
+                var script = document.createElement('script');
+                script.src = url;
+                script.onload = cb;
+                script.onerror = cb;
+                document.head.appendChild(script);
+            }
+            function nextScript() {
+                if (i < scripts.length) {
+                    load(scripts[i++], nextScript);
+                } else {
+                    init();
+                }
+            }
+            nextScript();
+
+            function init(){ jQuery(document).ready(function($){
+                if (typeof $.fn.DataTable === 'undefined') {
+                    console.error('DataTables non caricato');
+                    return;
+                }
+
+                const pageLen = @Model.PageSize;
+                const evaluatorCollection = evaluatorAgents && evaluatorAgents.length
+                    ? evaluatorAgents.map(ev => ({
+                        text: `${ev.name} (${ev.role})`,
+                        action: function() { bulkEvaluate(ev.id); }
+                    }))
+                    : [{
+                        text: 'Nessun evaluator attivo',
+                        enabled: false
+                    }];
+
+                const table = $('#storiesTable').DataTable({
                     dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>rt<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>",
                     stateSave: true,
+                    stateDuration: -1,
+                    stateSaveCallback: function (settings, data) {
+                        try {
+                            localStorage.setItem('storiesTableState', JSON.stringify(data));
+                        } catch (e) {
+                            console.warn('Impossibile salvare lo stato della tabella', e);
+                        }
+                    },
+                    stateLoadCallback: function () {
+                        try {
+                            const data = localStorage.getItem('storiesTableState');
+                            return data ? JSON.parse(data) : null;
+                        } catch (e) {
+                            console.warn('Impossibile caricare lo stato della tabella', e);
+                            return null;
+                        }
+                    },
                     paging: true,
                     pageLength: pageLen || 10,
                     lengthChange: true,
                     lengthMenu: [[10,25,50,100],[10,25,50,100]],
-                    order: [[1,'desc']],
+                    order: [[2,'desc']],
                     columnDefs: [
-                        { orderable: false, targets: [10,16,17] },
-                        { targets: 0, width: '6rem', className: 'text-nowrap' }
+                        { orderable: false, targets: [0,11,17] }
                     ],
                     buttons: [
                         {
-                            text: '<i class="bi bi-arrow-clockwise"></i> Refresh',
-                            className: 'btn btn-sm btn-secondary',
-                            action: function(e, dt, node, config) { location.reload(); }
+                            text: '<i class="bi bi-plus-lg me-1"></i> Nuova storia',
+                            className: 'btn btn-sm btn-light border text-primary',
+                            action: function() { window.location.href = '/Stories/Create'; },
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            extend: 'colvis',
+                            text: '<i class="bi bi-justify me-1"></i> Colonne',
+                            className: 'btn btn-sm btn-light border',
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            text: '<i class="bi bi-box me-1"></i> Test TTS',
+                            className: 'btn btn-sm btn-light border',
+                            action: function() { testTtsSchema(); },
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            text: '<i class="bi bi-file-text me-1"></i> Riassunti Batch',
+                            className: 'btn btn-sm btn-light border text-info',
+                            action: function() { submitHiddenForm('batchSummarizeForm', 'Avviare la generazione batch dei riassunti per tutte le storie con valutazione >= 60?'); },
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            text: '<i class="bi bi-trash me-1"></i> Elimina storie scadenti',
+                            className: 'btn btn-sm btn-light border text-danger',
+                            action: function() { submitHiddenForm('deleteLowRatedForm', 'Eliminare tutte le storie con valutazione media <50 e almeno 2 valutazioni? Questa operazione è irreversibile.'); },
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            text: '<i class="bi bi-eraser me-1"></i> Cancella tutte le valutazioni',
+                            className: 'btn btn-sm btn-light border text-danger',
+                            action: function() { submitHiddenForm('deleteAllEvaluationsForm', 'Cancellare TUTTE le valutazioni per TUTTE le storie (incluse coerenza e valutazioni azione/ritmo)? Questa operazione è irreversibile.'); },
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            text: '<i class="bi bi-arrow-counterclockwise me-1"></i> Verifica story_tags',
+                            className: 'btn btn-sm btn-light border text-warning',
+                            action: function() { submitHiddenForm('ensureTagStatusForm', 'Allineare gli stati delle storie mancanti di story_tags? Le storie senza tag torneranno indietro agli step appropriati.'); },
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            text: '<i class="bi bi-wrench-adjustable me-1"></i> Allinea model_id',
+                            className: 'btn btn-sm btn-light border text-warning',
+                            action: function() { submitHiddenForm('realignCreatorModelIdsForm', 'Allineare model_id delle storie al model_id configurato dell\'agente (agent_id)? Non modifica agent_id. Operazione consigliata solo se hai storie con agent/modello incoerenti.'); },
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            extend: 'collection',
+                            text: '<i class="bi bi-check2-all me-1"></i> Valuta tutti',
+                            className: 'btn btn-sm btn-light border',
+                            collectionLayout: 'fixed two-column',
+                            buttons: evaluatorCollection,
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
+                        },
+                        {
+                            text: '<i class="bi bi-arrow-clockwise me-1"></i> Refresh',
+                            className: 'btn btn-sm btn-light border',
+                            action: function() { location.reload(); },
+                            attr: { style: 'width: auto; flex: 0 0 auto;' }
                         }
                     ]
                 });
 
-                // wire column visibility menu to ListUI if present
-                try { window.ListUI && window.ListUI.init && window.ListUI.init({ tableSelector: '#storiesTable', colsMenuId: 'colVisMenu' }); } catch(e){}
+                // Expandable row details (DataTables official row.child() pattern)
+                // Using child rows avoids distorting column widths when details expand.
+                $('#storiesTable tbody').on('click', 'td.dt-control', function(e){
+                    e.preventDefault();
+                    e.stopPropagation();
 
-                // move external top buttons into DataTables Buttons container
-                try {
-                    var external = $('#externalButtons');
-                    if (external.length) {
-                        external.removeClass('d-none');
-                        var dtBtns = $('#storiesTable_wrapper .dt-buttons');
-                        if (dtBtns.length) dtBtns.append(external);
-                        else $('.dt-buttons').append(external);
-                        // rebind refresh
-                        $('#refreshBtn').off('click').on('click', function(){ location.reload(); });
+                    const $td = $(this);
+                    const $tr = $td.closest('tr');
+                    const row = table.row($tr);
+                    if (!row) return;
+
+                    const storyId = $tr.data('story-id');
+
+                    if (row.child.isShown()) {
+                        row.child.hide();
+                        return;
                     }
-                } catch(e) {}
 
-                // Preserve existing detail toggle behaviour (already bound by list-ui)
+                    const tpl = document.getElementById('evalsTpl-' + storyId);
+                    const bodyHtml = (tpl && tpl.innerHTML) ? tpl.innerHTML : '<div class=\"text-muted\">Nessuna valutazione</div>';
+                    const childHtml = '<div class=\"story-evals-child\"><div class=\"inner\">' + bodyHtml + '</div></div>';
+                    row.child(childHtml, 'story-child-row').show();
+                });
+
+                try { window.ListUI && window.ListUI.init && window.ListUI.init({ tableSelector: '#storiesTable', colsMenuId: 'colVisMenu' }); } catch(e){}
             }); }
         })();
     </script>

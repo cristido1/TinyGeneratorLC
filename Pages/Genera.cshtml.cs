@@ -297,7 +297,8 @@ public class GeneraModel : PageModel
             metadata: new Dictionary<string, string>
             {
                 ["operation"] = "full_story_pipeline",
-                ["prompt"] = Prompt.Length > 100 ? Prompt.Substring(0, 100) + "..." : Prompt
+                ["prompt"] = Prompt.Length > 100 ? Prompt.Substring(0, 100) + "..." : Prompt,
+                ["transparent"] = "1"
             }
         );
 

@@ -325,115 +325,6 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        private async Task<bool> RunFullPipelineOnStoryAsync(long storyId, string writerName, CancellationToken ct)
-        {
-            await LogAndNotifyAsync($"🎯 Esecuzione pipeline audio sulla storia {storyId} ({writerName})...");
-
-            // Get story folder
-            var story = _database.GetStoryById(storyId);
-            if (story == null)
-            {
-                await LogAndNotifyAsync($"❌ Storia {storyId} non trovata", "error");
-                return false;
-            }
-
-            // Build folder name for audio files
-            var storyFolderName = story.Folder;
-            if (string.IsNullOrEmpty(storyFolderName))
-            {
-                storyFolderName = storyId.ToString("D5");
-            }
-            
-            // Ensure the folder exists
-            var storyFolderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", storyFolderName);
-            Directory.CreateDirectory(storyFolderPath);
-
-            var audioPipelineTotalSteps = Math.Max(1, _tuning.FullStoryPipeline.AudioPipelineTotalSteps);
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 1: Genera TTS Schema
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(1, audioPipelineTotalSteps, "📄 Generazione TTS schema...");
-            await LogAndNotifyAsync("📄 Generazione TTS schema...");
-            var (ttsSchemaOk, ttsSchemaMsg) = await _storiesService.GenerateTtsSchemaJsonAsync(storyId);
-            if (!ttsSchemaOk)
-            {
-                await LogAndNotifyAsync($"❌ TTS Schema fallito: {ttsSchemaMsg}", "error");
-                return false;
-            }
-            await LogAndNotifyAsync("✅ TTS Schema generato", "success");
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 2: Normalizza nomi personaggi
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(2, audioPipelineTotalSteps, "👤 Normalizzazione nomi personaggi...");
-            await LogAndNotifyAsync("👤 Normalizzazione nomi personaggi...");
-            var (normCharOk, normCharMsg) = await _storiesService.NormalizeCharacterNamesAsync(storyId);
-            if (!normCharOk)
-            {
-                await LogAndNotifyAsync($"⚠️ Normalizzazione personaggi: {normCharMsg}", "warning");
-                // Continue anyway
-            }
-            else
-            {
-                await LogAndNotifyAsync("✅ Nomi personaggi normalizzati", "success");
-            }
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 3: Assegna voci ai personaggi
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(3, audioPipelineTotalSteps, "🎤 Assegnazione voci ai personaggi...");
-            await LogAndNotifyAsync("🎤 Assegnazione voci ai personaggi...");
-            var (assignVoicesOk, assignVoicesMsg) = await _storiesService.AssignVoicesAsync(storyId);
-            if (!assignVoicesOk)
-            {
-                await LogAndNotifyAsync($"⚠️ Assegnazione voci: {assignVoicesMsg}", "warning");
-                // Continue anyway - some characters may already have voices
-            }
-            else
-            {
-                await LogAndNotifyAsync($"✅ {assignVoicesMsg}", "success");
-            }
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 4: Normalizza sentimenti
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(4, audioPipelineTotalSteps, "💭 Normalizzazione sentimenti...");
-            await LogAndNotifyAsync("💭 Normalizzazione sentimenti...");
-            var (normSentOk, normSentMsg) = await _storiesService.NormalizeSentimentsAsync(storyId);
-            if (!normSentOk)
-            {
-                await LogAndNotifyAsync($"⚠️ Normalizzazione sentimenti: {normSentMsg}", "warning");
-                // Continue anyway
-            }
-            else
-            {
-                await LogAndNotifyAsync("✅ Sentimenti normalizzati", "success");
-            }
-
-            // ═══════════════════════════════════════════════════════════════
-            // STEP 5: Genera TTS audio
-            // ═══════════════════════════════════════════════════════════════
-            ct.ThrowIfCancellationRequested();
-            await BroadcastAudioPipelineStepAsync(5, audioPipelineTotalSteps, "🔊 Accodamento generazione audio TTS...");
-            await LogAndNotifyAsync("🔊 Accodamento generazione audio TTS...");
-
-            var enqueue = _storiesService.TryEnqueueGenerateTtsAudioCommand(storyId, trigger: "full_pipeline", priority: 3);
-            if (!enqueue.Enqueued)
-            {
-                await LogAndNotifyAsync($"❌ {enqueue.Message}", "error");
-                return false;
-            }
-
-            await LogAndNotifyAsync($"✅ Generazione audio TTS accodata (run {enqueue.RunId}). Seguiranno musica/ambience/fx in coda.", "success");
-            await LogAndNotifyAsync($"[DEBUG] RunFullPipelineOnStoryAsync returning true");
-            return true;
-        }
-
         private async Task LogAndNotifyAsync(string message, string extraClass = "")
         {
             var runId = _generationId.ToString();
@@ -500,7 +391,5 @@ namespace TinyGenerator.Services.Commands
             return true;
         }
 
-        private Task<bool> RunFullPipelineOnStoryAsync(long storyId, string writerName, CancellationToken ct)
-            => EnqueueFullAudioPipelineForStoryAsync(storyId, writerName, ct);
     }
 }

@@ -1,0 +1,85 @@
+﻿Comandi con impostazioni mancanti nel nuovo schema Commands.ByCommand
+
+Legenda: manca Policy / ResponseValidation / Tuning per quel comando (senza aggiungere nuovi parametri).
+
+- add_ambient_tags_to_story: manca ResponseValidation, Tuning
+- add_fx_tags_to_story: manca ResponseValidation, Tuning
+- add_music_tags_to_story: manca ResponseValidation, Tuning
+- add_voice_tags_to_story: manca ResponseValidation, Tuning
+- advance_status: manca ResponseValidation, Tuning
+- AmbientExpert: manca Policy, ResponseValidation
+- assign_voices: manca ResponseValidation, Tuning
+- auto_idle_attempt: manca ResponseValidation, Tuning
+- BatchSummarizeStories: manca ResponseValidation, Tuning
+- bulk_evaluate: manca ResponseValidation, Tuning
+- bulk_evaluate_coherence: manca ResponseValidation, Tuning
+- bulk_evaluate_story: manca ResponseValidation, Tuning
+- clone_revised_story: manca ResponseValidation, Tuning
+- continuity_validator: manca ResponseValidation, Tuning
+- create_story: manca Policy, Tuning
+- delete_ambience: manca ResponseValidation, Tuning
+- delete_final_mix: manca ResponseValidation, Tuning
+- delete_fx: manca ResponseValidation, Tuning
+- delete_music: manca ResponseValidation, Tuning
+- delete_story_tagged: manca ResponseValidation, Tuning
+- delete_tts: manca ResponseValidation, Tuning
+- evaluate_action_pacing: manca ResponseValidation, Tuning
+- evaluate_coherence: manca ResponseValidation, Tuning
+- evaluate_story: manca ResponseValidation, Tuning
+- ExecuteMultiStepTask: manca ResponseValidation, Tuning
+- full_story_pipeline: manca ResponseValidation, Tuning
+- FullStoryPipeline: manca ResponseValidation
+- FxExpert: manca Policy, ResponseValidation
+- generate_ambience_audio: manca ResponseValidation, Tuning
+- generate_character_image: manca ResponseValidation, Tuning
+- generate_character_images: manca ResponseValidation, Tuning
+- generate_fx_audio: manca ResponseValidation, Tuning
+- generate_music: manca ResponseValidation, Tuning
+- generate_new_serie: manca ResponseValidation, Tuning
+- generate_tts_audio: manca ResponseValidation, Tuning
+- generate_tts_schema: manca ResponseValidation, Tuning
+- GenerateNextChunk: manca ResponseValidation
+- GenerateSeriesEpisode: manca ResponseValidation, Tuning
+- json_score: manca Policy, Tuning
+- log_analyzer: manca ResponseValidation, Tuning
+- memory_embedding_worker: manca ResponseValidation, Tuning
+- mix_final_audio: manca ResponseValidation, Tuning
+- MusicExpert: manca Policy, ResponseValidation
+- normalize_characters: manca ResponseValidation, Tuning
+- normalize_sentiments: manca ResponseValidation, Tuning
+- PlannedStory: manca Policy, ResponseValidation
+- prepare_tts_schema: manca ResponseValidation, Tuning
+- recap_builder: manca ResponseValidation, Tuning
+- regen_ambient_tags: manca ResponseValidation, Tuning
+- regen_fx_tags: manca ResponseValidation, Tuning
+- regen_music_tags: manca ResponseValidation, Tuning
+- response_checker_tool_reminder: manca Policy, Tuning
+- response_checker_validation: manca Policy, Tuning
+- revise_story: manca ResponseValidation, Tuning
+- scan_audio_masters: manca ResponseValidation, Tuning
+- series_episode: manca ResponseValidation, Tuning
+- StartMultiStepStory: manca ResponseValidation, Tuning
+- state_compressor: manca ResponseValidation, Tuning
+- state_delta_builder: manca ResponseValidation, Tuning
+- state_driven_next_chunk: manca ResponseValidation, Tuning
+- state_driven_series_episode: manca ResponseValidation, Tuning
+- state_driven_series_episode_auto: manca ResponseValidation, Tuning
+- state_updater: manca ResponseValidation, Tuning
+- StateDrivenEpisodeAuto: manca ResponseValidation, Tuning
+- StateDrivenNextChunk: manca ResponseValidation, Tuning
+- story/add_ambient_tags_to_story: manca Policy, Tuning
+- story/add_voice_tags_to_story: manca Policy, Tuning
+- story_multi_step: manca ResponseValidation, Tuning
+- SummarizeStory: manca ResponseValidation, Tuning
+- test_base: manca Policy, Tuning
+- test_music: manca Policy, Tuning
+- test_story_evaluation: manca ResponseValidation, Tuning
+- test_tts_schema: manca ResponseValidation, Tuning
+- thread_chat: manca Policy, Tuning
+- TransformStoryRawToTagged: manca ResponseValidation
+- update_model_stats: manca ResponseValidation, Tuning
+
+Controlli deterministici per comando:
+- Attualmente non esiste una sezione per-command dedicata ai controlli deterministici.
+- I controlli sono distribuiti in sezioni globali/specialistiche (es. StoryTaggingPipeline, StateDrivenStoryGeneration).
+- Per i comandi che usano quei controlli, in Commands.ByCommand manca quindi il blocco relativo (da introdurre in futuro).

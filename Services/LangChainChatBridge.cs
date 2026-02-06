@@ -172,10 +172,11 @@ namespace TinyGenerator.Services
                     lastPrimaryResponseLogId,
                     ct).ConfigureAwait(false);
 
+                var responseValidation = BuildResponseValidation(lastPrimaryResponseLogId, validation);
+                ApplyResponseValidation(responseValidation);
+
                 if (validation.IsValid)
                 {
-                    MarkPrimaryModelResponseResult(lastPrimaryResponseLogId, "SUCCESS", null, examined: true);
-
                     // Track primary model success (best-effort)
                     try
                     {
@@ -203,7 +204,6 @@ namespace TinyGenerator.Services
                 }
 
                 lastValidationError = string.IsNullOrWhiteSpace(validation.Reason) ? "Validation failed" : validation.Reason;
-                MarkPrimaryModelResponseResult(lastPrimaryResponseLogId, "FAILED", lastValidationError, examined: true);
 
                 if (!validation.NeedsRetry)
                 {
@@ -352,6 +352,11 @@ namespace TinyGenerator.Services
 
         private long? TryGetLatestPrimaryModelResponseLogId()
         {
+            return TryGetLatestPrimaryModelResponseLogId(_modelId);
+        }
+
+        private long? TryGetLatestPrimaryModelResponseLogId(string modelId)
+        {
             try
             {
                 if (_services == null) return null;
@@ -367,11 +372,11 @@ namespace TinyGenerator.Services
                 var agentName = LogScope.CurrentAgentName;
                 if (!string.IsNullOrWhiteSpace(agentName))
                 {
-                    return db.TryGetLatestModelResponseLogId(threadId.Value, agentName: agentName, modelName: _modelId);
+                    return db.TryGetLatestModelResponseLogId(threadId.Value, agentName: agentName, modelName: modelId);
                 }
 
                 // Some commands do not set CurrentAgentName in scope: fall back to a thread+model lookup.
-                return db.TryGetLatestModelResponseLogId(threadId.Value, agentName: null, modelName: _modelId);
+                return db.TryGetLatestModelResponseLogId(threadId.Value, agentName: null, modelName: modelId);
             }
             catch
             {
@@ -379,32 +384,54 @@ namespace TinyGenerator.Services
             }
         }
 
-        private void MarkPrimaryModelResponseResult(long? logId, string result, string? failReason, bool examined)
+        private static ResponseValidation BuildResponseValidation(long? logId, ValidationResult validation)
         {
-            try
+            if (logId is null || logId.Value <= 0)
             {
-                if (_services == null) return;
-                var db = _services.GetService<DatabaseService>();
-                if (db == null) return;
+                throw new InvalidOperationException("ResponseValidation requires a persisted response log id. Ensure response logging is enabled and logs are flushed before validation.");
+            }
 
-                if (logId.HasValue && logId.Value > 0)
+            var errors = new List<string>();
+            if (!validation.IsValid)
+            {
+                if (!string.IsNullOrWhiteSpace(validation.Reason))
                 {
-                    db.UpdateModelResponseResultById(logId.Value, result, failReason, examined);
-                    return;
+                    errors.Add(validation.Reason.Trim());
                 }
 
-                var threadId = TryGetEffectiveModelTrafficThreadId();
-                if (threadId is null || threadId.Value <= 0) return;
-                var agentName = LogScope.CurrentAgentName;
-                if (string.IsNullOrWhiteSpace(agentName)) return;
+                if (validation.ViolatedRules != null && validation.ViolatedRules.Count > 0)
+                {
+                    errors.Add($"Regole violate: {string.Join(", ", validation.ViolatedRules)}");
+                }
+            }
 
-                // Fallback: mark latest response for this agent (avoids corrupting response_checker rows).
-                db.UpdateLatestModelResponseResultForAgent(threadId.Value, agentName, result, failReason, examined);
-            }
-            catch
+            if (!validation.IsValid && errors.Count == 0)
             {
-                // best-effort
+                errors.Add("Validation failed");
             }
+
+            return new ResponseValidation(logId.Value, validation.IsValid, errors);
+        }
+
+        private void ApplyResponseValidation(ResponseValidation validation)
+        {
+            if (_services == null)
+            {
+                throw new InvalidOperationException("ResponseValidation requires IServiceProvider to update logs.");
+            }
+
+            var db = _services.GetService<DatabaseService>();
+            if (db == null)
+            {
+                throw new InvalidOperationException("ResponseValidation requires DatabaseService to update logs.");
+            }
+
+            var result = validation.Successed ? "SUCCESS" : "FAILED";
+            var failReason = validation.Successed
+                ? null
+                : (validation.ErrorMessages.Count > 0 ? string.Join(" | ", validation.ErrorMessages) : "Validation failed");
+
+            db.UpdateModelResponseResultById(validation.LogId, result, failReason, examined: true);
         }
 
         private ResponseValidationOptions? TryGetResponseValidationOptions()
@@ -482,6 +509,7 @@ namespace TinyGenerator.Services
             long? primaryResponseLogId,
             CancellationToken ct)
         {
+            _ = primaryResponseLogId;
             var parsed = ParseChatResponseWithFinishReason(responseJson);
             var hasToolCalls = parsed.ToolCalls != null && parsed.ToolCalls.Count > 0;
             var textContent = parsed.TextContent;
@@ -604,13 +632,6 @@ namespace TinyGenerator.Services
                     agentName: LogScope.CurrentAgentName,
                     modelName: _modelId,
                     ct: ct).ConfigureAwait(false);
-
-                // If response_checker invalidates the response, mark the ORIGINAL model response log row as FAILED.
-                // We must do this here because the checker invocation produces its own ModelResponse log row.
-                if (!result.IsValid)
-                {
-                    MarkPrimaryModelResponseResult(primaryResponseLogId, "FAILED", result.Reason, examined: true);
-                }
 
                 _logger?.Log(
                     "Information",
@@ -845,6 +866,20 @@ namespace TinyGenerator.Services
                         ct.ThrowIfCancellationRequested();
                         lastResponseJson = await candidateBridge.CallModelWithToolsOnceAsync(attemptMessages, tools, ct).ConfigureAwait(false);
 
+                        try
+                        {
+                            if (_logger != null)
+                            {
+                                await _logger.FlushAsync().ConfigureAwait(false);
+                            }
+                        }
+                        catch
+                        {
+                            // best-effort: continue even if flush fails
+                        }
+
+                        var fallbackLogId = TryGetLatestPrimaryModelResponseLogId(candidateBridge._modelId);
+
                         lastValidation = await ValidateResponseJsonAsync(
                             attemptMessages,
                             tools,
@@ -852,8 +887,11 @@ namespace TinyGenerator.Services
                             options,
                             enableChecker,
                             rules,
-                            primaryResponseLogId: null,
+                            primaryResponseLogId: fallbackLogId,
                             ct).ConfigureAwait(false);
+
+                        var responseValidation = BuildResponseValidation(fallbackLogId, lastValidation);
+                        ApplyResponseValidation(responseValidation);
 
                         if (lastValidation.IsValid)
                         {
@@ -1119,6 +1157,28 @@ namespace TinyGenerator.Services
                 {
                     _logger?.Log("Error", "LangChainBridge", 
                         $"Model request failed with status {response.StatusCode}: {responseContent}");
+
+                    try
+                    {
+                        if (_logger != null)
+                        {
+                            await _logger.FlushAsync().ConfigureAwait(false);
+                        }
+                    }
+                    catch
+                    {
+                        // best-effort
+                    }
+
+                    var failureValidation = new ValidationResult
+                    {
+                        IsValid = false,
+                        NeedsRetry = false,
+                        Reason = $"HTTP {(int)response.StatusCode}: {responseContent}"
+                    };
+                    var failureLogId = TryGetLatestPrimaryModelResponseLogId();
+                    var responseValidation = BuildResponseValidation(failureLogId, failureValidation);
+                    ApplyResponseValidation(responseValidation);
                     
                     // Check if the error indicates the model doesn't support tools
                     if (responseContent.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))

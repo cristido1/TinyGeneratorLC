@@ -1,0 +1,30 @@
+﻿Proposte uniformazione naming comandi in appsettings (target: snake_case)
+
+Regole proposte:
+- usare solo lowercase + underscore
+- eliminare duplicati semantici con varianti CamelCase/PascalCase
+- allineare il nome al valore operationName usato nel dispatcher
+
+Proposte di rinomina:
+- BatchSummarizeStories -> batch_summarize_stories
+- SummarizeStory -> summarize_story
+- TransformStoryRawToTagged -> transform_story_raw_to_tagged
+- ExecuteMultiStepTask -> execute_multi_step_task
+- StartMultiStepStory -> start_multi_step_story
+- FullStoryPipeline -> full_story_pipeline
+- GenerateSeriesEpisode -> generate_series_episode
+- GenerateNextChunk -> generate_next_chunk
+- StateDrivenNextChunk -> state_driven_next_chunk
+- StateDrivenEpisodeAuto -> state_driven_episode_auto
+- AmbientExpert -> add_ambient_tags_to_story
+- FxExpert -> add_fx_tags_to_story
+- MusicExpert -> add_music_tags_to_story
+- PlannedStory -> planned_story
+- json_score (già coerente)
+- test_base (già coerente)
+
+Duplicati da consolidare (stessa semantica, nomi diversi):
+- FullStoryPipeline / full_story_pipeline
+- GenerateSeriesEpisode / series_episode
+- StateDrivenNextChunk / state_driven_next_chunk
+- StateDrivenEpisodeAuto / state_driven_series_episode_auto

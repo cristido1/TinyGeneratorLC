@@ -108,13 +108,47 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<MemoryEmbeddingBac
 // Command dispatcher (background command queue with configurable parallelism)
 builder.Services.Configure<CommandDispatcherOptions>(builder.Configuration.GetSection("CommandDispatcher"));
 // Command policies/tuning/validation configuration
-// New preferred layout: Commands:{ Tuning, ResponseValidation, Policies }
+// Preferred layout: Commands:{ Defaults, ByCommand }
 var commandsRoot = builder.Configuration.GetSection("Commands");
-if (commandsRoot.Exists())
+var byCommandSection = commandsRoot.GetSection("ByCommand");
+if (commandsRoot.Exists() && byCommandSection.Exists())
 {
-    builder.Services.Configure<CommandTuningOptions>(commandsRoot.GetSection("Tuning"));
-    builder.Services.Configure<ResponseValidationOptions>(commandsRoot.GetSection("ResponseValidation"));
-    builder.Services.Configure<CommandPoliciesOptions>(commandsRoot.GetSection("Policies"));
+    builder.Services.Configure<CommandPoliciesOptions>(options =>
+    {
+        commandsRoot.GetSection("Defaults:Policy").Bind(options.Default);
+        foreach (var command in byCommandSection.GetChildren())
+        {
+            var policySection = command.GetSection("Policy");
+            if (!policySection.Exists()) continue;
+            var policy = new CommandExecutionPolicy();
+            policySection.Bind(policy);
+            options.Commands[command.Key] = policy;
+        }
+    });
+
+    builder.Services.Configure<ResponseValidationOptions>(options =>
+    {
+        commandsRoot.GetSection("Defaults:ResponseValidation").Bind(options);
+        foreach (var command in byCommandSection.GetChildren())
+        {
+            var rvSection = command.GetSection("ResponseValidation");
+            if (!rvSection.Exists()) continue;
+            var policy = new ResponseValidationCommandPolicy();
+            rvSection.Bind(policy);
+            options.CommandPolicies[command.Key] = policy;
+        }
+    });
+
+    builder.Services.Configure<CommandTuningOptions>(options =>
+    {
+        byCommandSection.GetSection("AmbientExpert:Tuning").Bind(options.AmbientExpert);
+        byCommandSection.GetSection("FxExpert:Tuning").Bind(options.FxExpert);
+        byCommandSection.GetSection("MusicExpert:Tuning").Bind(options.MusicExpert);
+        byCommandSection.GetSection("TransformStoryRawToTagged:Tuning").Bind(options.TransformStoryRawToTagged);
+        byCommandSection.GetSection("GenerateNextChunk:Tuning").Bind(options.GenerateNextChunk);
+        byCommandSection.GetSection("PlannedStory:Tuning").Bind(options.PlannedStory);
+        byCommandSection.GetSection("FullStoryPipeline:Tuning").Bind(options.FullStoryPipeline);
+    });
 }
 else
 {

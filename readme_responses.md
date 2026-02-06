@@ -32,6 +32,7 @@ Configurazione: sezione `ToolCalling` in `appsettings.json`.
 - applicazione regole generiche (`Rules`) e policy per operazione (`CommandPolicies`).
 - opzionale “checker” su alcune operazioni (`EnableCheckerByDefault` + override per comando).
 - fallback modelli (se `EnableFallback=true` e ruolo disponibile).
+- per ogni verifica crea un oggetto `ResponseValidation` con `LogId`, `Successed` e lista errori, usato per aggiornare la voce di log della response.
 
 Configurazione: sezione `ResponseValidation` in `appsettings.json`.
 

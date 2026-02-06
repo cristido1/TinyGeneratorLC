@@ -1,5 +1,7 @@
 ## Piano multistep per generazione `tts_schema`
 
+Nota importante (stato attuale del progetto): questo piano e' **legacy** e presuppone tool-calls. Con `ToolCalling:Enabled=false` (default) i tool non vengono esposti ai modelli, quindi questo flusso non e' attivo finche' non viene migrato a output TAG-only e/o a un flusso deterministico senza tool-calls.
+
 Obiettivo: costruire lo schema TTS lavorando chunk per chunk, assicurando copertura quasi completa del testo ad ogni step prima di procedere.
 
 ### Flusso proposto

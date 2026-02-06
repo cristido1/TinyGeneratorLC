@@ -70,7 +70,8 @@ public sealed class GenerateNewSerieCommand
                 requiredTags: RequiredBibleTags,
                 _options.Bible,
                 runId,
-                ct);
+                ct,
+                validateText: ValidateBibleOutput);
             if (!bibleResult.Success)
             {
                 return new CommandResult(false, bibleResult.Error ?? "Serie bible fallita");
@@ -85,7 +86,8 @@ public sealed class GenerateNewSerieCommand
                 requiredTags: RequiredCharacterTags,
                 _options.Characters,
                 runId,
-                ct);
+                ct,
+                validateText: ValidateCharactersOutput);
             if (!charactersResult.Success)
             {
                 return new CommandResult(false, charactersResult.Error ?? "Serie characters fallita");
@@ -100,7 +102,8 @@ public sealed class GenerateNewSerieCommand
                 requiredTags: RequiredSeasonTags,
                 _options.Episodes,
                 runId,
-                ct);
+                ct,
+                validateText: ValidateSeasonOutput);
             if (!seasonResult.Success)
             {
                 return new CommandResult(false, seasonResult.Error ?? "Serie season fallita");
@@ -125,7 +128,8 @@ public sealed class GenerateNewSerieCommand
                     requiredTags: RequiredEpisodeStructureTags,
                     _options.Episodes,
                     runId,
-                    ct);
+                    ct,
+                    validateText: t => ValidateEpisodeStructureOutput(t, episode.Number));
                 if (!epResult.Success)
                 {
                     return new CommandResult(false, epResult.Error ?? $"Serie episode fallita (episodio {episode.Number})");
@@ -193,7 +197,8 @@ public sealed class GenerateNewSerieCommand
         IReadOnlyCollection<string> requiredTags,
         SeriesGenerationOptions.SeriesRoleOptions options,
         string runId,
-        CancellationToken ct)
+        CancellationToken ct,
+        Func<string, string?>? validateText = null)
     {
         var maxAttempts = Math.Max(1, options.MaxAttempts);
         var delayMs = Math.Max(0, options.RetryDelaySeconds) * 1000;
@@ -212,6 +217,18 @@ public sealed class GenerateNewSerieCommand
                 lastText = response.Text;
                 if (HasRequiredTags(lastText ?? string.Empty, requiredTags, out var missingTags))
                 {
+                    if (validateText != null)
+                    {
+                        var extraError = validateText(lastText ?? string.Empty);
+                        if (!string.IsNullOrWhiteSpace(extraError))
+                        {
+                            lastError = extraError;
+                            _logger?.Append(runId, $"[{roleCode}] {lastError}");
+                            _logger?.MarkLatestModelResponseResult("FAILED", lastError, true);
+                            currentPrompt = BuildRetryPrompt(prompt, roleCode, lastError, new List<string>());
+                            goto WaitBeforeRetry;
+                        }
+                    }
                     _logger?.MarkLatestModelResponseResult("SUCCESS", null, true);
                     return response;
                 }
@@ -228,6 +245,8 @@ public sealed class GenerateNewSerieCommand
                 _logger?.Append(runId, $"[{roleCode}] Errore: {lastError}");
                 _logger?.MarkLatestModelResponseResult("FAILED", lastError, true);
             }
+
+        WaitBeforeRetry:
 
             if (attempt < maxAttempts && delayMs > 0)
             {
@@ -901,8 +920,26 @@ public sealed class GenerateNewSerieCommand
     {
         "SERIES_TITLE",
         "SERIES_GENRE",
+        "SERIES_TONE",
+        "SERIES_AUDIENCE",
+        "SERIES_RATING",
         "SERIES_PREMISE",
-        "SEASON_LOGLINE"
+        "SERIES_THEMES",
+        "SERIES_FORBIDDEN_TOPICS",
+        "SETTING_PLACE",
+        "SETTING_TIME",
+        "SETTING_TECH_LEVEL",
+        "SETTING_WORLD_RULES",
+        "FORMAT_EPISODE_DURATION",
+        "FORMAT_SEASON_EPISODES",
+        "FORMAT_STRUCTURE",
+        "FORMAT_SERIALIZED_LEVEL",
+        "CANON_FACTS",
+        "RECURRING_LOCATIONS",
+        "SEASON_LOGLINE",
+        "SEASON_MAIN_ANTAGONISM",
+        "SEASON_MID_TWIST",
+        "SEASON_FINALE_PAYOFF"
     };
 
     private static readonly IReadOnlyCollection<string> RequiredCharacterTags = new[]
@@ -921,7 +958,10 @@ public sealed class GenerateNewSerieCommand
     {
         "EPISODE_STRUCTURE",
         "BEAT",
-        "CAST"
+        "CAST",
+        "LOCATIONS",
+        "SETUP",
+        "PAYOFF"
     };
 
     private static readonly IReadOnlyCollection<string> RequiredValidatorTags = new[]
@@ -929,6 +969,149 @@ public sealed class GenerateNewSerieCommand
         "VALIDATION_OK",
         "VALIDATION_ERROR"
     };
+
+    private static string? ValidateBibleOutput(string text)
+    {
+        var blocks = ParseTagBlocks(text);
+        foreach (var tag in RequiredBibleTags)
+        {
+            var block = blocks.FirstOrDefault(b => b.Tag.Equals(tag, StringComparison.OrdinalIgnoreCase));
+            if (block == null || block.Lines.Count == 0 || block.Lines.All(l => string.IsNullOrWhiteSpace(l)))
+            {
+                return $"Output bible incompleto: tag [{tag}] mancante o vuoto";
+            }
+        }
+
+        if (GetListTag(blocks, "SERIES_GENRE").Count == 0)
+        {
+            return "Output bible incompleto: [SERIES_GENRE] deve contenere almeno 1 valore";
+        }
+        if (GetListTag(blocks, "SERIES_THEMES").Count == 0)
+        {
+            return "Output bible incompleto: [SERIES_THEMES] deve contenere almeno 1 valore";
+        }
+
+        return null;
+    }
+
+    private static string? ValidateCharactersOutput(string text)
+    {
+        var blocks = ParseTagBlocks(text);
+        var characterKvs = blocks.Where(b => b.Tag.Equals("CHARACTER", StringComparison.OrdinalIgnoreCase))
+            .Select(b => ParseKeyValues(b.Lines))
+            .ToList();
+
+        if (characterKvs.Count == 0)
+        {
+            return "Output characters incompleto: nessun blocco [CHARACTER]";
+        }
+
+        var ids = new List<string>();
+        foreach (var kv in characterKvs)
+        {
+            if (!kv.TryGetValue("ID", out var id) || string.IsNullOrWhiteSpace(id))
+            {
+                return "Output characters incompleto: ogni [CHARACTER] deve avere ID:";
+            }
+            if (!kv.TryGetValue("NAME", out var name) || string.IsNullOrWhiteSpace(name))
+            {
+                return "Output characters incompleto: ogni [CHARACTER] deve avere NAME:";
+            }
+            ids.Add(id.Trim());
+        }
+
+        var dupId = ids.GroupBy(x => x, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1)?.Key;
+        if (!string.IsNullOrWhiteSpace(dupId))
+        {
+            return $"Output characters non valido: ID personaggio duplicato: {dupId}";
+        }
+
+        var idSet = new HashSet<string>(ids, StringComparer.OrdinalIgnoreCase);
+        foreach (var rel in blocks.Where(b => b.Tag.Equals("RELATIONSHIP", StringComparison.OrdinalIgnoreCase)))
+        {
+            var kv = ParseKeyValues(rel.Lines);
+            if (!kv.TryGetValue("FROM", out var from) || string.IsNullOrWhiteSpace(from)) return "Output relationship incompleto: FROM:";
+            if (!kv.TryGetValue("TO", out var to) || string.IsNullOrWhiteSpace(to)) return "Output relationship incompleto: TO:";
+            if (!idSet.Contains(from.Trim())) return $"Output relationship non valido: FROM id sconosciuto: {from}";
+            if (!idSet.Contains(to.Trim())) return $"Output relationship non valido: TO id sconosciuto: {to}";
+        }
+
+        foreach (var arc in blocks.Where(b => b.Tag.Equals("CHARACTER_SEASON_ARC", StringComparison.OrdinalIgnoreCase)))
+        {
+            var kv = ParseKeyValues(arc.Lines);
+            if (!kv.TryGetValue("ID", out var id) || string.IsNullOrWhiteSpace(id)) return "Output season arc incompleto: ID:";
+            if (!idSet.Contains(id.Trim())) return $"Output season arc non valido: ID sconosciuto: {id}";
+        }
+
+        return null;
+    }
+
+    private static string? ValidateSeasonOutput(string text)
+    {
+        var blocks = ParseTagBlocks(text);
+        var episodes = blocks.Where(b => b.Tag.Equals("EPISODE", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (episodes.Count == 0)
+        {
+            return "Output season incompleto: nessun blocco [EPISODE]";
+        }
+
+        var numbers = new HashSet<int>();
+        foreach (var ep in episodes)
+        {
+            var kv = ParseKeyValues(ep.Lines);
+            if (!kv.TryGetValue("NUMBER", out var n) || string.IsNullOrWhiteSpace(n)) return "Output season incompleto: EPISODE senza NUMBER:";
+            var number = TryParseInt(n);
+            if (number <= 0) return "Output season non valido: EPISODE NUMBER deve essere un intero > 0";
+            if (!numbers.Add(number)) return $"Output season non valido: EPISODE NUMBER duplicato: {number}";
+
+            if (!kv.TryGetValue("TITLE", out var title) || string.IsNullOrWhiteSpace(title)) return $"Output season incompleto: EPISODE {number} senza TITLE:";
+            if (!kv.TryGetValue("LOGLINE", out var logline) || string.IsNullOrWhiteSpace(logline)) return $"Output season incompleto: EPISODE {number} senza LOGLINE:";
+            if (!kv.TryGetValue("A_PLOT", out var a) || string.IsNullOrWhiteSpace(a)) return $"Output season incompleto: EPISODE {number} senza A_PLOT:";
+            if (!kv.TryGetValue("B_PLOT", out var b) || string.IsNullOrWhiteSpace(b)) return $"Output season incompleto: EPISODE {number} senza B_PLOT:";
+            if (!kv.TryGetValue("THEME", out var th) || string.IsNullOrWhiteSpace(th)) return $"Output season incompleto: EPISODE {number} senza THEME:";
+        }
+
+        return null;
+    }
+
+    private static string? ValidateEpisodeStructureOutput(string text, int expectedEpisodeNumber)
+    {
+        var blocks = ParseTagBlocks(text);
+        var map = ParseEpisodeStructures(blocks);
+        if (!map.TryGetValue(expectedEpisodeNumber, out var structure))
+        {
+            return $"Output episode_structure incompleto: [EPISODE_STRUCTURE] NUMBER deve essere {expectedEpisodeNumber}";
+        }
+
+        if (structure.Beats.Count < 3)
+        {
+            return $"Output episode_structure incompleto: episodio {expectedEpisodeNumber} deve avere almeno 3 [BEAT]";
+        }
+
+        if (structure.Beats.Any(b => string.IsNullOrWhiteSpace(b.Type) || string.IsNullOrWhiteSpace(b.Summary)))
+        {
+            return $"Output episode_structure incompleto: ogni [BEAT] deve avere TYPE e SUMMARY (episodio {expectedEpisodeNumber})";
+        }
+
+        if (structure.Cast.Count == 0)
+        {
+            return $"Output episode_structure incompleto: [CAST] vuoto (episodio {expectedEpisodeNumber})";
+        }
+        if (structure.Locations.Count == 0)
+        {
+            return $"Output episode_structure incompleto: [LOCATIONS] vuoto (episodio {expectedEpisodeNumber})";
+        }
+        if (structure.Setup.Count == 0)
+        {
+            return $"Output episode_structure incompleto: [SETUP] vuoto (episodio {expectedEpisodeNumber})";
+        }
+        if (structure.Payoff.Count == 0)
+        {
+            return $"Output episode_structure incompleto: [PAYOFF] vuoto (episodio {expectedEpisodeNumber})";
+        }
+
+        return null;
+    }
 
     private sealed record SeriesBuildResult(Series Series, List<SeriesCharacter> Characters, List<SeriesEpisode> Episodes);
 

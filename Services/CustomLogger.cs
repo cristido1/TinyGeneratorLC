@@ -75,6 +75,8 @@ namespace TinyGenerator.Services
                 return;
 
             var scope = LogScope.Current;
+            var effectiveAgentName = string.IsNullOrWhiteSpace(agentNameOverride) ? LogScope.CurrentAgentName : agentNameOverride;
+            var currentAgentRole = LogScope.CurrentAgentRole;
 
             // Derive a default Result if not provided, to track SUCCESS/FAILED consistently.
             // IMPORTANT: do not derive results for model request/response logs: their payloads may contain
@@ -123,6 +125,23 @@ namespace TinyGenerator.Services
                 }
             }
 
+            // Enforce Result for agent responses (excluding response_checker).
+            // This keeps SUCCESS/FAILED mandatory on response logs, even when no explicit result was provided.
+            var isResponseChecker = IsResponseCheckerAgent(currentAgentRole, effectiveAgentName);
+            var isAgentResponseLog = !isResponseChecker && IsAgentResponseLog(category, chatText, effectiveAgentName);
+            if (isAgentResponseLog)
+            {
+                if (string.IsNullOrWhiteSpace(scope))
+                {
+                    throw new InvalidOperationException("Agent response log missing ThreadScope (LogScope.Current). Ensure LogScope.Push(...) wraps agent responses.");
+                }
+
+                if (string.IsNullOrWhiteSpace(derivedResult))
+                {
+                    derivedResult = "SUCCESS";
+                }
+            }
+
             // Use explicit threadId if provided; otherwise use the allocator-backed id from LogScope.
             // Fallback to managed thread id only when logging outside a CommandDispatcher scope.
             int effectiveThreadId = explicitThreadId
@@ -140,7 +159,7 @@ namespace TinyGenerator.Services
                 ThreadId = effectiveThreadId,
                 StoryId = LogScope.CurrentStoryId,
                 ThreadScope = scope,
-                AgentName = string.IsNullOrWhiteSpace(agentNameOverride) ? LogScope.CurrentAgentName : agentNameOverride,
+                AgentName = effectiveAgentName,
                 ModelName = modelName,
                 Context = null,
                 ChatText = chatText,
@@ -161,8 +180,45 @@ namespace TinyGenerator.Services
             if (shouldFlush)
             {
                 // fire-and-forget flush; if semaphore is busy, FlushAsync will return quickly and postpone
-                _ = Task.Run(() => FlushAsync());
+                _ = Task.Run(() => TryFlushAsync());
             }
+        }
+
+        private static bool IsResponseCheckerAgent(string? agentRole, string? agentName)
+        {
+            if (!string.IsNullOrWhiteSpace(agentRole) &&
+                string.Equals(agentRole.Trim(), "response_checker", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(agentName) &&
+                string.Equals(agentName.Trim(), "Response Checker", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsAgentResponseLog(string? category, string? chatText, string? agentName)
+        {
+            if (string.IsNullOrWhiteSpace(agentName)) return false;
+
+            var cat = (category ?? string.Empty).Trim();
+            if (string.Equals(cat, "ModelResponse", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cat, "ModelCompletion", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.Equals(cat, "ModelPrompt", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cat, "ModelRequest", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return !string.IsNullOrWhiteSpace(chatText);
         }
 
         /// <summary>
@@ -304,7 +360,7 @@ namespace TinyGenerator.Services
         {
             if (_disposed) return;
 
-            var effectiveThreadId = LogScope.CurrentThreadId ?? Environment.CurrentManagedThreadId;
+            var effectiveThreadId = TryGetEffectiveThreadIdForModelTraffic();
             if (effectiveThreadId <= 0) return;
 
             try
@@ -321,11 +377,35 @@ namespace TinyGenerator.Services
             }
         }
 
+        private static int TryGetEffectiveThreadIdForModelTraffic()
+        {
+            try
+            {
+                var opId = LogScope.CurrentOperationId;
+                if (opId.HasValue && opId.Value > 0 && opId.Value <= int.MaxValue)
+                {
+                    return (int)opId.Value;
+                }
+
+                var threadId = LogScope.CurrentThreadId;
+                if (threadId.HasValue && threadId.Value > 0)
+                {
+                    return threadId.Value;
+                }
+
+                return Environment.CurrentManagedThreadId;
+            }
+            catch
+            {
+                return Environment.CurrentManagedThreadId;
+            }
+        }
+
         private async Task OnTimerAsync()
         {
             try
             {
-                await FlushAsync().ConfigureAwait(false);
+                await TryFlushAsync().ConfigureAwait(false);
             }
             catch
             {
@@ -337,10 +417,31 @@ namespace TinyGenerator.Services
         {
             if (_disposed) return;
 
-            // Try acquire semaphore immediately; if not available, postpone
-            if (!await _writeLock.WaitAsync(0).ConfigureAwait(false))
+            // Force flush: wait for the write lock so callers can rely on logs being persisted.
+            await FlushCoreAsync(waitForLock: true).ConfigureAwait(false);
+        }
+
+        private async Task TryFlushAsync()
+        {
+            if (_disposed) return;
+            await FlushCoreAsync(waitForLock: false).ConfigureAwait(false);
+        }
+
+        private async Task FlushCoreAsync(bool waitForLock)
+        {
+            if (_disposed) return;
+
+            if (waitForLock)
             {
-                return;
+                await _writeLock.WaitAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                // Best-effort: if lock is busy, postpone.
+                if (!await _writeLock.WaitAsync(0).ConfigureAwait(false))
+                {
+                    return;
+                }
             }
 
             List<LogEntry>? toWrite = null;

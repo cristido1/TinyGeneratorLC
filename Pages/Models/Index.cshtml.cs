@@ -17,6 +17,7 @@ namespace TinyGenerator.Pages.Models
         private readonly LangChainTestService _testService;
         private readonly IOllamaManagementService _ollamaService;
         private readonly ICommandDispatcher _commandDispatcher;
+        private readonly JsonScoreTestService _jsonScoreTester;
         private readonly ILogger<IndexModel>? _logger;
         private readonly ICustomLogger? _customLogger;
 
@@ -56,6 +57,7 @@ namespace TinyGenerator.Pages.Models
             // CostController removed
             IOllamaManagementService ollamaService,
             ICommandDispatcher commandDispatcher,
+            JsonScoreTestService jsonScoreTester,
             ILogger<IndexModel>? logger = null,
             ICustomLogger? customLogger = null)
         {
@@ -64,6 +66,7 @@ namespace TinyGenerator.Pages.Models
 
             _ollamaService = ollamaService ?? throw new ArgumentNullException(nameof(ollamaService));
             _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
+            _jsonScoreTester = jsonScoreTester ?? throw new ArgumentNullException(nameof(jsonScoreTester));
             _logger = logger;
             _customLogger = customLogger;
         }
@@ -234,6 +237,49 @@ namespace TinyGenerator.Pages.Models
             }
 
             return Task.FromResult<IActionResult>(new JsonResult(new { runIds }));
+        }
+
+        public IActionResult OnPostRunJsonScore()
+        {
+            try
+            {
+                var handle = _jsonScoreTester.EnqueueJsonScoreForMissingModels();
+                return new JsonResult(new { runId = handle.RunId });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+        }
+
+        public IActionResult OnPostRunJsonScoreModel()
+        {
+            if (ModelId == null && string.IsNullOrWhiteSpace(Model))
+            {
+                return BadRequest(new { error = "ModelId o Model richiesto" });
+            }
+
+            try
+            {
+                var modelName = Model;
+                if (string.IsNullOrWhiteSpace(modelName) && ModelId.HasValue)
+                {
+                    var info = _database.ListModels().FirstOrDefault(m => m.Id == ModelId.Value);
+                    modelName = info?.Name ?? string.Empty;
+                }
+
+                if (string.IsNullOrWhiteSpace(modelName))
+                {
+                    return BadRequest(new { error = "Modello non trovato" });
+                }
+
+                var handle = _jsonScoreTester.EnqueueJsonScoreForModel(modelName);
+                return new JsonResult(new { runId = handle.RunId });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
         }
 
         public async Task<IActionResult> OnPostPurgeDisabledOllamaAsync()

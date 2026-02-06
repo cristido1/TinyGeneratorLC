@@ -562,9 +562,12 @@ namespace TinyGenerator.Services
         {
             if (string.IsNullOrWhiteSpace(text)) return text ?? string.Empty;
 
+            // Legacy compatibility: normalize old tag name to the single supported one.
+            text = Regex.Replace(text, @"\[\s*SENTIMENTO\s*:", "[EMOZIONE:", RegexOptions.IgnoreCase);
+
             return Regex.Replace(
                 text,
-                @"(?<!^)(?<!\r)(?<!\n)(\[(?:NARRATORE|PERSONAGGIO:|EMOZIONE:|SENTIMENTO:|RUMORI|RUMORE|AMBIENTE|FX|MUSIC)\b)",
+                @"(?<!^)(?<!\r)(?<!\n)(\[(?:NARRATORE|PERSONAGGIO:|EMOZIONE:|RUMORI|RUMORE|AMBIENTE|FX|MUSIC)\b)",
                 "\n$1",
                 RegexOptions.IgnoreCase);
         }

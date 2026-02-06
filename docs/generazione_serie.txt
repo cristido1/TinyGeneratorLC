@@ -45,6 +45,10 @@ ELENCO AGENTI (RUOLI)
 5) serie_audio_agent (opzionale)  
 6) serie_validator_agent  
 
+NOTA IMPLEMENTAZIONE
+- Attualmente `GenerateNewSerie` usa i ruoli 1,2,3,4,6.
+- Lo step 5 (`serie_audio_agent`) e' documentato come estensione ma NON e' ancora invocato dal comando.
+
 ############################################################
 PIPELINE COMANDI
 ############################################################
@@ -60,7 +64,8 @@ INPUT
 prompt: string → descrizione creativa ad alto livello
 
 OUTPUT  
-json finale completo conforme allo schema
+Il comando persiste i dati in DB (tabelle `series`, `series_characters`, `series_episodes`) e ritorna un messaggio di esito.
+La struttura episodio e' serializzata in JSON dentro `series_episodes.trama`.
 
 ------------------------------------------------------------
 
@@ -122,6 +127,8 @@ OUTPUT TAG ATTESI
 STEP 5 (opzionale)
 
 call serie_audio_agent(episode_structure_tags)
+
+NOTA: step non integrato nel comando al momento.
 
 OUTPUT  
 [AMBIENCE]  

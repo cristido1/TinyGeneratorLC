@@ -44,7 +44,7 @@ Questo documento descrive cosa avviene durante l'esecuzione di un `writer` all'i
    - In scenari dove vengono eseguiti più writer in parallelo, il `StoryGeneratorService`:
      - Lancia più writer agents con la stessa istruzione e contesto (o con prompt variants).
      - Raccoglie le loro uscite e le valida (applica `ValidateWriterResponseAsync` a ciascuna).
-     - Eventualmente esegue un passaggio di valutazione (evaluator agents) per assegnare punteggi qualitativi/quantitativi (es. formato JSON di valutazione) e seleziona la migliore versione.
+   - Eventualmente esegue un passaggio di valutazione (evaluator agents) per assegnare punteggi qualitativi/quantitativi (output strutturati via TAG) e seleziona la migliore versione.
      - Regole di selezione tipiche: score >= soglia (es. 7/10), preferire output senza errori di coerenza, combinare parti se utile.
 
 7. Persistenza
@@ -58,7 +58,7 @@ Questo documento descrive cosa avviene durante l'esecuzione di un `writer` all'i
 
 - Quando si usa il `response_checker` LLM
   - Per evitare falsi negativi causati da valutazioni LLM non deterministiche, il flusso principale di validazione writer applica prima la soglia semantica.
-  - Il `response_checker` viene usato per controlli testuali avanzati o come delegato per produrre una valutazione strutturata (JSON) solo nel percorso writer — non viene usato come validator predefinito per tutti i task.
+   - Il `response_checker` viene usato per controlli testuali avanzati o come delegato per produrre una valutazione strutturata (TAG) nel percorso writer — non viene usato come validator predefinito per tutti i task.
 
 - Retry e fallback
   - Numero massimo di iterazioni e strategie di fallback sono controllati dall'orchestratore (`ReActLoopOrchestrator` e `MultiStepOrchestrationService`).
@@ -81,9 +81,3 @@ Questo documento descrive cosa avviene durante l'esecuzione di un `writer` all'i
 - `StoryGeneratorService` (o file equivalente) — orchestrazione di più writer agents e scelta della versione finale della storia.
 
 ---
-
-Se vuoi, posso:
-- Generare un esempio pratico: dato un `stepInstruction` e un `modelOutput`, mostrarti il calcolo del punteggio semantico e la decisione di validazione.
-- Aggiungere un piccolo script di test che simuli chiamate a `ValidateWriterResponseAsync` con testi di esempio.
-
-Dimmi quale preferisci e procedo.

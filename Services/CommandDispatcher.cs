@@ -25,6 +25,7 @@ namespace TinyGenerator.Services
         public TaskCompletionSource<CommandResult> Completion { get; }
         public long OperationNumber { get; }
         public string? AgentName { get; }
+        public string? AgentRole { get; }
         public int Priority { get; }
         public long EnqueueSequence { get; }
         public CancellationTokenSource Cancellation { get; }
@@ -39,7 +40,8 @@ namespace TinyGenerator.Services
             int priority,
             long enqueueSequence,
             CancellationTokenSource cancellation,
-            string? agentName = null)
+            string? agentName = null,
+            string? agentRole = null)
         {
             RunId = runId;
             OperationName = operationName;
@@ -50,6 +52,7 @@ namespace TinyGenerator.Services
             Priority = priority;
             EnqueueSequence = enqueueSequence;
             AgentName = agentName;
+            AgentRole = agentRole;
             Cancellation = cancellation;
             Completion = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
@@ -75,6 +78,7 @@ namespace TinyGenerator.Services
         private readonly Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? _hubContext;
         private readonly NumeratorService? _numerator;
         private readonly IServiceProvider _services;
+        private readonly CommandPoliciesOptions _policies;
         private readonly List<Task> _workers = new();
         private CancellationTokenSource? _cts;
         private long _counter;
@@ -87,13 +91,20 @@ namespace TinyGenerator.Services
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
-        public CommandDispatcher(IOptions<CommandDispatcherOptions>? options, ICustomLogger? logger = null, Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? hubContext = null, NumeratorService? numerator = null, IServiceProvider? services = null)
+        public CommandDispatcher(
+            IOptions<CommandDispatcherOptions>? options,
+            IOptions<CommandPoliciesOptions>? policies,
+            ICustomLogger? logger = null,
+            Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? hubContext = null,
+            NumeratorService? numerator = null,
+            IServiceProvider? services = null)
         {
             _parallelism = Math.Max(1, options?.Value?.MaxParallelCommands ?? 2);
             _logger = logger;
             _hubContext = hubContext;
             _numerator = numerator;
             _services = services ?? throw new ArgumentNullException(nameof(services));
+            _policies = policies?.Value ?? new CommandPoliciesOptions();
         }
 
         public CommandHandle Enqueue(
@@ -116,8 +127,9 @@ namespace TinyGenerator.Services
             var opNumber = LogScope.GenerateOperationId();
             var enqueueSeq = Interlocked.Increment(ref _enqueueCounter);
             var agentName = metadata != null && metadata.TryGetValue("agentName", out var an) ? an : null;
+            var agentRole = metadata != null && metadata.TryGetValue("agentRole", out var ar) ? ar : null;
             var commandCts = new CancellationTokenSource();
-            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, priority, enqueueSeq, commandCts, agentName);
+            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, priority, enqueueSeq, commandCts, agentName, agentRole);
 
             lock (_queueLock)
             {
@@ -234,7 +246,7 @@ namespace TinyGenerator.Services
                 }
             }
 
-            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName, threadId: allocatedThreadId, storyId: allocatedStoryId);
+            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName, agentRole: workItem.AgentRole, threadId: allocatedThreadId, storyId: allocatedStoryId);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workItem.Cancellation.Token);
             var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, linkedCts.Token);
             var startMessage = $"[{workItem.RunId}] START {workItem.OperationName}";
@@ -253,8 +265,70 @@ namespace TinyGenerator.Services
                 }
                 await BroadcastCommandsAsync().ConfigureAwait(false);
 
-                linkedCts.Token.ThrowIfCancellationRequested();
-                var result = await workItem.Handler(ctx).ConfigureAwait(false);
+                var policy = _policies.Resolve(workItem.OperationName, workItem.Metadata);
+                var maxAttempts = Math.Max(1, policy.MaxAttempts);
+                CommandResult result;
+
+                for (int attempt = 1; attempt <= maxAttempts; attempt++)
+                {
+                    linkedCts.Token.ThrowIfCancellationRequested();
+
+                    try
+                    {
+                        result = await workItem.Handler(ctx).ConfigureAwait(false);
+
+                        if (result.Success)
+                        {
+                            goto Completed;
+                        }
+
+                        if (!policy.RetryOnFailureResult || attempt == maxAttempts)
+                        {
+                            goto Completed;
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        result = new CommandResult(false, ex.Message);
+
+                        if (!policy.RetryOnException || attempt == maxAttempts)
+                        {
+                            goto Completed;
+                        }
+                    }
+
+                    // Retry path
+                    try
+                    {
+                        if (_active.TryGetValue(workItem.RunId, out var retryState))
+                        {
+                            retryState.RetryCount = attempt;
+                        }
+                        UpdateRetry(workItem.RunId, attempt);
+
+                        var baseDelay = Math.Max(0, policy.RetryDelayBaseSeconds);
+                        if (baseDelay > 0)
+                        {
+                            var delaySeconds = policy.ExponentialBackoff
+                                ? Math.Min(policy.RetryDelayMaxSeconds, baseDelay * (int)Math.Pow(2, Math.Max(0, attempt - 1)))
+                                : Math.Min(policy.RetryDelayMaxSeconds, baseDelay);
+                            if (delaySeconds > 0)
+                            {
+                                _logger?.Log("Warning", "Command", $"[{workItem.RunId}] RETRY {workItem.OperationName} attempt {attempt + 1}/{maxAttempts} in {delaySeconds}s");
+                                await Task.Delay(TimeSpan.FromSeconds(delaySeconds), linkedCts.Token).ConfigureAwait(false);
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                }
+
+                // Unreachable, but required by compiler
+                result = new CommandResult(false, "Failed");
+
+Completed:
                 var finalMessage = result.Message ?? (result.Success ? "OK" : "FAILED");
                 var endLevel = result.Success ? "Information" : "Error";
                 _logger?.Log(endLevel, "Command", $"[{workItem.RunId}] END {workItem.OperationName} => {finalMessage}");

@@ -107,7 +107,9 @@ namespace TinyGenerator.Services.Commands
 
                 var currentModelName = modelInfo.Name;
 
-                var systemPrompt = BuildSystemPrompt(musicAgent);
+                var systemPrompt = TaggingResponseFormat.AppendToSystemPrompt(
+                    BuildSystemPrompt(musicAgent),
+                    StoryTaggingService.TagTypeMusic);
                 var rowsBuild = StoryTaggingService.BuildStoryRows(sourceText);
                 var storyRows = string.IsNullOrWhiteSpace(story.StoryRows) ? rowsBuild.StoryRows : story.StoryRows;
                 if (string.IsNullOrWhiteSpace(storyRows))
@@ -420,28 +422,8 @@ namespace TinyGenerator.Services.Commands
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
 
-                    messages.Add(new ConversationMessage
-                    {
-                        Role = "system",
-                        Content =
-                            "FORMATO RISPOSTA OBBLIGATORIO:\n" +
-                            "- Restituisci SOLO righe nel formato: ID emozione [secondi]\n" +
-                            "- Non usare tag [MUSIC] o parentesi diverse dalle [secondi]\n" +
-                            "- Non riscrivere il testo, non aggiungere spiegazioni\n" +
-                            "- Gli ID sono quelli del testo numerato fornito\n" +
-                            "- Se non c'è musica per una riga, non restituire quella riga\n"
-                    });
-
-                    // Add error feedback for retry attempts
-                    if (attempt > 1 && !string.IsNullOrWhiteSpace(lastError))
-                    {
-                        hadCorrections = true;
-                        messages.Add(new ConversationMessage 
-                        { 
-                            Role = "system", 
-                            Content = $"{lastError} Questo è il tentativo {attempt} di {maxAttempts}." 
-                        });
-                    }
+                    // IMPORTANT: the response format requirements are appended to the agent system prompt
+                    // (single system message). Do not add extra system messages here.
 
                     messages.Add(new ConversationMessage { Role = "user", Content = chunkText });
 

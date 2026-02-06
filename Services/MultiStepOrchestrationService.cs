@@ -831,7 +831,8 @@ namespace TinyGenerator.Services
                 threadId,
                 execution.CurrentStep,
                 execution.MaxStep,
-                executorAgent.Name);
+                executorAgent.Name,
+                agentRole: executorAgent.Role);
 
             // Check if stepInstruction contains {{PROMPT}} tag
             string fullPrompt;
@@ -1119,7 +1120,7 @@ namespace TinyGenerator.Services
                 try
                 {
                     var skills = ParseSkills(executorAgent.Skills);
-                    if (skills.Count > 0 && !_checkerService.ContainsToolCalls(output))
+                    if (skills.Count > 0 && executorToolSchemas.Any() && !_checkerService.ContainsToolCalls(output))
                     {
                         // Build a short reminder to return to the agent on retry
                         var toolSchemas = executorToolSchemas;

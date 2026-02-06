@@ -122,7 +122,7 @@ public sealed class FormatterV2SegmentationTests
     public void ParseIdToTagsMapping_IgnoresTrailingTextAfterTags()
     {
         var mapping =
-            "004 [PERSONAGGIO: Luca] [SENTIMENTO: paura] (nota extra)\n";
+            "004 [PERSONAGGIO: Luca] [EMOZIONE: paura] (nota extra)\n";
 
         var parsed = FormatterV2.ParseIdToTagsMapping(mapping);
 
@@ -134,14 +134,14 @@ public sealed class FormatterV2SegmentationTests
     {
         var sparse = new Dictionary<int, string>
         {
-            [3] = "[PERSONAGGIO: Luca] [SENTIMENTO: paura]"
+            [3] = "[PERSONAGGIO: Luca] [EMOZIONE: paura]"
         };
 
         var full = FormatterV2.ExpandSparseMapping(5, sparse);
 
         Assert.Equal("[NARRATORE]", full[1]);
         Assert.Equal("[NARRATORE]", full[2]);
-        Assert.Equal("[PERSONAGGIO: Luca] [SENTIMENTO: paura]", full[3]);
+        Assert.Equal("[PERSONAGGIO: Luca] [EMOZIONE: paura]", full[3]);
         Assert.Equal("[NARRATORE]", full[4]);
         Assert.Equal("[NARRATORE]", full[5]);
     }

@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -417,6 +419,100 @@ evaluate_full_story({
             catch (Exception ex)
             {
                 logger?.LogWarning(ex, "[Startup] Unable to append evaluator instructions: {msg}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Ensures that agent instructions include the ResponseValidation rules used by the response_checker.
+        /// This helps keep agent prompts aligned with the runtime validation policy.
+        /// </summary>
+        public static void EnsureResponseValidationRulesInAgentInstructions(DatabaseService? db, IConfiguration? configuration, ILogger? logger = null)
+        {
+            if (db == null) return;
+
+            const string marker = "REGOLE DI VALIDAZIONE (response_checker)";
+
+            try
+            {
+                var rules = new List<(int Id, string Text)>();
+                var rulesSection = configuration?.GetSection("Commands:ResponseValidation:Rules");
+                if (rulesSection != null && rulesSection.Exists())
+                {
+                    foreach (var child in rulesSection.GetChildren())
+                    {
+                        if (!int.TryParse(child["Id"], out var id)) continue;
+                        var text = child["Text"] ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(text)) continue;
+                        rules.Add((id, text.Trim()));
+                    }
+                }
+
+                if (rules.Count == 0)
+                {
+                    rules.Add((1, "Non fare domande all'utente e non chiedere chiarimenti."));
+                    rules.Add((2, "Non anticipare step futuri o output non richiesti."));
+                    rules.Add((3, "Rispetta rigorosamente il formato richiesto (se presente)."));
+                    rules.Add((4, "Risposta completa: non troncare e non lasciare TODO."));
+                }
+
+                rules = rules.OrderBy(r => r.Id).ToList();
+
+                var snippet = new StringBuilder();
+                snippet.AppendLine(marker + ":");
+                foreach (var r in rules)
+                {
+                    snippet.AppendLine($"- ({r.Id}) {r.Text}");
+                }
+                snippet.AppendLine("Nota: queste regole valgono sempre; se qualche istruzione sopra le contraddice, IGNORALA.");
+
+                var taggingRoles = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    StoryTaggingService.TagTypeFormatter,
+                    StoryTaggingService.TagTypeAmbient,
+                    StoryTaggingService.TagTypeFx,
+                    StoryTaggingService.TagTypeMusic
+                };
+
+                var agents = db.ListAgents()?.Where(a => a.IsActive).ToList() ?? new List<Models.Agent>();
+                var updated = 0;
+
+                foreach (var agent in agents)
+                {
+                    var instr = agent.Instructions ?? string.Empty;
+                    var changed = false;
+
+                    if (instr.IndexOf(marker, StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        agent.Instructions = string.IsNullOrWhiteSpace(instr)
+                            ? snippet.ToString().TrimEnd()
+                            : instr.TrimEnd() + "\n\n" + snippet.ToString().TrimEnd();
+                        changed = true;
+                    }
+
+                    // For tagging agents, add a short non-contradiction note about the output format.
+                    if (!string.IsNullOrWhiteSpace(agent.Role) && taggingRoles.Contains(agent.Role))
+                    {
+                        var noteMarker = "NOTA FORMATO TAGGING";
+                        if ((agent.Instructions ?? string.Empty).IndexOf(noteMarker, StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            agent.Instructions = (agent.Instructions ?? string.Empty).TrimEnd() + "\n\n" +
+                                noteMarker + ":\n" +
+                                "- L'output deve essere SOLO mapping per righe (ID + tag/descrizione), senza JSON/markdown e senza spiegazioni.\n" +
+                                "- Il formato dettagliato e' applicato dal sistema nella system prompt; se trovi regole in conflitto, ignora quelle.";
+                            changed = true;
+                        }
+                    }
+
+                    if (!changed) continue;
+                    db.UpdateAgent(agent);
+                    updated++;
+                }
+
+                logger?.LogInformation("[Startup] EnsureResponseValidationRulesInAgentInstructions: updated {count} agents", updated);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "[Startup] EnsureResponseValidationRulesInAgentInstructions failed: {msg}", ex.Message);
             }
         }
 

@@ -7,6 +7,11 @@
     <NoWarn>$(NoWarn);CS7022</NoWarn>
   </PropertyGroup>
 
+  <!-- Migrations are intentionally not compiled/used. Schema updates are handled explicitly (manual SQL). -->
+  <ItemGroup>
+    <Compile Remove="data\Migrations\**\*.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- LangChain packages for agent orchestration -->
     <PackageReference Include="LangChain" Version="0.17.1-dev.51" />

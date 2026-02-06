@@ -40,7 +40,7 @@ public class ModelFallbackService
         var query = _context.ModelRoles
             .Include(mr => mr.Model)
             .Include(mr => mr.Role)
-            .Where(mr => mr.RoleId == role.Id && mr.Enabled);
+            .Where(mr => mr.RoleId == role.Id && mr.Enabled && !mr.IsPrimary);
 
         // Exclude the currently failing model if provided
         if (excludeModelId.HasValue)
@@ -56,6 +56,44 @@ public class ModelFallbackService
 
         _logger?.Log("Info", "ModelFallback", $"Found {fallbacks.Count} fallback models for role '{roleCode}' (excluding model {excludeModelId})");
         return fallbacks;
+    }
+
+    /// <summary>
+    /// Record usage for the primary model of a role. This auto-creates a ModelRole row with is_primary=1 if missing.
+    /// Primary rows are excluded from fallback selection.
+    /// </summary>
+    public void RecordPrimaryModelUsage(string roleCode, int modelId, bool success)
+    {
+        if (string.IsNullOrWhiteSpace(roleCode) || modelId <= 0)
+        {
+            return;
+        }
+
+        var role = _context.Roles.FirstOrDefault(r => r.Ruolo == roleCode);
+        if (role == null)
+        {
+            _logger?.Log("Warning", "ModelFallback", $"Role '{roleCode}' not found in database. Cannot record primary usage.");
+            return;
+        }
+
+        var mr = _context.ModelRoles.FirstOrDefault(x => x.RoleId == role.Id && x.ModelId == modelId && x.IsPrimary);
+        if (mr == null)
+        {
+            var now = DateTime.UtcNow.ToString("o");
+            mr = new ModelRole
+            {
+                ModelId = modelId,
+                RoleId = role.Id,
+                IsPrimary = true,
+                Enabled = true,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _context.ModelRoles.Add(mr);
+            _context.SaveChanges();
+        }
+
+        RecordModelRoleUsage(mr.Id, success);
     }
 
     /// <summary>

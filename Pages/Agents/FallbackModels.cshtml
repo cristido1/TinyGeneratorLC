@@ -62,6 +62,11 @@
         padding: 1rem;
         background: white;
     }
+
+    /* Success-rate highlighting (applies only when the model role has results) */
+    .fallback-rate-good { color: var(--bs-success); }
+    .fallback-rate-mid { color: var(--bs-warning); }
+    .fallback-rate-bad { color: var(--bs-danger); }
 </style>
 
 <div class="mb-3">
@@ -125,6 +130,7 @@
                 <th></th>
                 <th data-col="model">Model</th>
                 <th data-col="role">Role</th>
+                <th data-col="primary">Primary</th>
                 <th data-col="use">Use</th>
                 <th data-col="success">Success</th>
                 <th data-col="failed">Failed</th>
@@ -137,43 +143,41 @@
         <tbody>
             @foreach (var mr in Model.ModelRoles)
             {
-                <tr data-id="@mr.Id">
+                var hasResults = mr.UseCount > 0;
+                var pct = mr.SuccessRate * 100.0;
+                var level = !hasResults
+                    ? string.Empty
+                    : (pct > 80.0 ? "good" : (pct >= 60.0 ? "mid" : "bad"));
+                var textClass = level == "good"
+                    ? "fallback-rate-good"
+                    : (level == "mid" ? "fallback-rate-mid" : (level == "bad" ? "fallback-rate-bad" : string.Empty));
+                var roleBadgeClass = level == "good"
+                    ? "bg-success"
+                    : (level == "mid" ? "bg-warning text-dark" : (level == "bad" ? "bg-danger" : "bg-secondary"));
+                var toggleLabel = mr.Enabled ? "Disabilita" : "Abilita";
+                <tr data-id="@mr.Id" data-enabled="@(mr.Enabled ? "true" : "false")">
                     <td class="dt-control"></td>
-                    <td data-col="model"><strong>@mr.Model?.Name</strong></td>
-                    <td data-col="role"><span class="badge bg-secondary">@mr.Role?.Ruolo</span></td>
+                    <td data-col="model"><strong class="@textClass">@mr.Model?.Name</strong></td>
+                    <td data-col="role"><span class="badge @roleBadgeClass">@mr.Role?.Ruolo</span></td>
+                    <td data-col="primary">@(mr.IsPrimary ? "Yes" : "No")</td>
                     <td data-col="use">@mr.UseCount</td>
                     <td data-col="success" class="text-success">@mr.UseSuccessed</td>
                     <td data-col="failed" class="text-danger">@mr.UseFailed</td>
-                    <td data-col="rate">@((mr.SuccessRate * 100).ToString("0.0"))%</td>
+                    <td data-col="rate"><span class="@textClass">@((mr.SuccessRate * 100).ToString("0.0"))%</span></td>
                     <td data-col="lastuse">@Model.FormatLastUse(mr.LastUse)</td>
                     <td data-col="enabled">@(mr.Enabled ? "Yes" : "No")</td>
                     <td data-col="actions">
                         <div class="dropdown">
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
                             <ul class="dropdown-menu dropdown-menu-end">
-                                @foreach (var action in Model.GetActionsForModelRole(mr))
+                                <li>
+                                    <button type="button" class="dropdown-item" data-action="toggle-enabled">@toggleLabel</button>
+                                </li>
+                                @if (!mr.IsPrimary)
                                 {
-                                    if (action.Method == "GET")
-                                    {
-                                        <li>
-                                            <a class="dropdown-item js-nav" href="@action.Url" data-url="@action.Url">@action.Title</a>
-                                        </li>
-                                    }
-                                    else if (action.Method == "POST")
-                                    {
-                                        <li>
-                                            <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Confermi eliminazione?')" : "true")">
-                                                @Html.AntiForgeryToken()
-                                                <button type="submit" class="dropdown-item">@action.Title</button>
-                                            </form>
-                                        </li>
-                                    }
-                                    else if (action.Method == "CLIENT")
-                                    {
-                                        <li>
-                                            <button type="button" class="dropdown-item" data-action="@action.Id">@action.Title</button>
-                                        </li>
-                                    }
+                                    <li>
+                                        <button type="button" class="dropdown-item" data-action="delete">Elimina</button>
+                                    </li>
                                 }
                             </ul>
                         </div>
@@ -241,7 +245,7 @@
                 pageLength: 25,
                 lengthChange: true,
                 lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
-                order: [[6, 'desc']],
+                order: [[7, 'desc']],
                 ordering: true,
                 searching: true,
                 columnDefs: [
@@ -322,21 +326,43 @@
             }
 
             function buildRowHtml(row) {
-                return '<tr data-id="' + row.id + '">' +
+                var useCount = parseInt(row.useCount || '0', 10) || 0;
+                var pct = row.successRate === null || row.successRate === undefined || row.successRate === '' ? NaN : parseFloat(row.successRate);
+                var level = '';
+                if (useCount > 0 && !isNaN(pct)) {
+                    level = pct > 80 ? 'good' : (pct >= 60 ? 'mid' : 'bad');
+                }
+
+                var textClass = level === 'good'
+                    ? 'fallback-rate-good'
+                    : (level === 'mid' ? 'fallback-rate-mid' : (level === 'bad' ? 'fallback-rate-bad' : ''));
+
+                var roleBadgeClass = level === 'good'
+                    ? 'bg-success'
+                    : (level === 'mid' ? 'bg-warning text-dark' : (level === 'bad' ? 'bg-danger' : 'bg-secondary'));
+
+                var toggleLabel = row.enabled ? 'Disabilita' : 'Abilita';
+                var deleteLi = row.isPrimary
+                    ? ''
+                    : '<li><button type="button" class="dropdown-item" data-action="delete">Elimina</button></li>';
+
+                return '<tr data-id="' + row.id + '" data-enabled="' + (row.enabled ? 'true' : 'false') + '">' +
                     '<td class="dt-control"></td>' +
-                    '<td data-col="model"><strong>' + escapeHtml(row.modelName) + '</strong></td>' +
-                    '<td data-col="role"><span class="badge bg-secondary">' + escapeHtml(row.roleName) + '</span></td>' +
+                    '<td data-col="model"><strong class="' + escapeHtml(textClass) + '">' + escapeHtml(row.modelName) + '</strong></td>' +
+                    '<td data-col="role"><span class="badge ' + escapeHtml(roleBadgeClass) + '">' + escapeHtml(row.roleName) + '</span></td>' +
+                    '<td data-col="primary">' + (row.isPrimary ? 'Yes' : 'No') + '</td>' +
                     '<td data-col="use">' + escapeHtml(row.useCount) + '</td>' +
                     '<td data-col="success" class="text-success">' + escapeHtml(row.useSuccessed) + '</td>' +
                     '<td data-col="failed" class="text-danger">' + escapeHtml(row.useFailed) + '</td>' +
-                    '<td data-col="rate">' + escapeHtml(row.successRate) + '%</td>' +
+                    '<td data-col="rate"><span class="' + escapeHtml(textClass) + '">' + escapeHtml(row.successRate) + '%</span></td>' +
                     '<td data-col="lastuse">' + escapeHtml(row.lastUse) + '</td>' +
                     '<td data-col="enabled">' + (row.enabled ? 'Yes' : 'No') + '</td>' +
                     '<td data-col="actions">' +
                         '<div class="dropdown">' +
                             '<button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>' +
                             '<ul class="dropdown-menu dropdown-menu-end">' +
-                                '<li><button type="button" class="dropdown-item" data-action="delete">Elimina</button></li>' +
+                                '<li><button type="button" class="dropdown-item" data-action="toggle-enabled">' + escapeHtml(toggleLabel) + '</button></li>' +
+                                deleteLi +
                             '</ul>' +
                         '</div>' +
                     '</td>' +
@@ -391,32 +417,71 @@
             if (tableElement && tableElement.tBodies.length > 0) {
                 tableElement.tBodies[0].addEventListener('click', async function (ev) {
                     var target = ev.target;
-                    if (!target || target.getAttribute('data-action') !== 'delete') return;
+                    if (!target) return;
+
+                    var action = target.getAttribute('data-action') || '';
+                    if (action !== 'delete' && action !== 'toggle-enabled') return;
+
                     var rowEl = target.closest('tr');
                     if (!rowEl) return;
                     var id = parseInt(rowEl.getAttribute('data-id') || '0', 10);
                     if (!id) return;
-                    if (!confirm('Confermi eliminazione?')) return;
-                    clearMessage();
 
                     try {
-                        var resp = await fetch('?handler=Delete', {
-                            method: 'POST',
-                            headers: getHeaders(),
-                            body: JSON.stringify({ id: id }),
-                            credentials: 'same-origin'
-                        });
-                        if (!resp.ok) {
-                            var errText = await resp.text();
-                            throw new Error(errText || 'Errore eliminazione');
-                        }
-                        var result = await resp.json();
-                        if (!result.ok) throw new Error(result.error || 'Errore eliminazione');
+                        if (action === 'delete') {
+                            if (!confirm('Confermi eliminazione?')) return;
+                            clearMessage();
 
-                        table.row(rowEl).remove().draw(false);
-                        showMessage('success', 'Fallback model eliminato.');
+                            var resp = await fetch('?handler=Delete', {
+                                method: 'POST',
+                                headers: getHeaders(),
+                                body: JSON.stringify({ id: id }),
+                                credentials: 'same-origin'
+                            });
+                            if (!resp.ok) {
+                                var errText = await resp.text();
+                                throw new Error(errText || 'Errore eliminazione');
+                            }
+                            var result = await resp.json();
+                            if (!result.ok) throw new Error(result.error || 'Errore eliminazione');
+
+                            table.row(rowEl).remove().draw(false);
+                            showMessage('success', 'Fallback model eliminato.');
+                            return;
+                        }
+
+                        if (action === 'toggle-enabled') {
+                            clearMessage();
+
+                            var currentEnabled = (rowEl.getAttribute('data-enabled') || '').toLowerCase() === 'true';
+                            var newEnabled = !currentEnabled;
+
+                            var respToggle = await fetch('?handler=ToggleEnabled', {
+                                method: 'POST',
+                                headers: getHeaders(),
+                                body: JSON.stringify({ id: id, enabled: newEnabled }),
+                                credentials: 'same-origin'
+                            });
+                            if (!respToggle.ok) {
+                                var errTextToggle = await respToggle.text();
+                                throw new Error(errTextToggle || 'Errore aggiornamento');
+                            }
+                            var resultToggle = await respToggle.json();
+                            if (!resultToggle.ok) throw new Error(resultToggle.error || 'Errore aggiornamento');
+
+                            var effectiveEnabled = !!resultToggle.enabled;
+                            rowEl.setAttribute('data-enabled', effectiveEnabled ? 'true' : 'false');
+
+                            var enabledCell = rowEl.querySelector('td[data-col=\"enabled\"]');
+                            if (enabledCell) enabledCell.textContent = effectiveEnabled ? 'Yes' : 'No';
+
+                            var toggleBtn = rowEl.querySelector('button[data-action=\"toggle-enabled\"]');
+                            if (toggleBtn) toggleBtn.textContent = effectiveEnabled ? 'Disabilita' : 'Abilita';
+
+                            showMessage('success', effectiveEnabled ? 'Modello abilitato.' : 'Modello disabilitato.');
+                        }
                     } catch (err) {
-                        showMessage('danger', err.message || 'Errore eliminazione');
+                        showMessage('danger', err.message || 'Errore operazione');
                     }
                 });
             }

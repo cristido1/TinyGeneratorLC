@@ -109,7 +109,9 @@ namespace TinyGenerator.Services.Commands
 
                 var currentModelName = modelInfo.Name;
 
-                var systemPrompt = BuildSystemPrompt(fxAgent);
+                var systemPrompt = TaggingResponseFormat.AppendToSystemPrompt(
+                    BuildSystemPrompt(fxAgent),
+                    StoryTaggingService.TagTypeFx);
                 var rowsBuild = StoryTaggingService.BuildStoryRows(sourceText);
                 var storyRows = string.IsNullOrWhiteSpace(story.StoryRows) ? rowsBuild.StoryRows : story.StoryRows;
                 if (string.IsNullOrWhiteSpace(storyRows))
@@ -430,30 +432,8 @@ namespace TinyGenerator.Services.Commands
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
 
-                    messages.Add(new ConversationMessage
-                    {
-                        Role = "system",
-                        Content =
-                            "FORMATO RISPOSTA OBBLIGATORIO:\n" +
-                            "- Restituisci SOLO righe nel formato: ID descrizione [secondi]\n" +
-                            "- Oppure: ID [secondi] descrizione\n" +
-                            "- I secondi devono essere tra parentesi quadre: [2], [2s], [2 sec], [2sec]\n" +
-                            "- Non usare tag [FX] o parentesi diverse dalle [secondi]\n" +
-                            "- Non riscrivere il testo, non aggiungere spiegazioni\n" +
-                            "- Gli ID sono quelli del testo numerato fornito\n" +
-                            "- Se non c'è un FX per una riga, non restituire quella riga\n"
-                    });
-
-                    // Add error feedback for retry attempts
-                    if (attempt > 1 && !string.IsNullOrWhiteSpace(lastError))
-                    {
-                        hadCorrections = true;
-                        messages.Add(new ConversationMessage 
-                        { 
-                            Role = "system", 
-                            Content = $"{lastError} Questo è il tentativo {attempt} di {maxAttempts}." 
-                        });
-                    }
+                    // IMPORTANT: the response format requirements are appended to the agent system prompt
+                    // (single system message). Do not add extra system messages here.
 
                     messages.Add(new ConversationMessage { Role = "user", Content = chunkText });
 

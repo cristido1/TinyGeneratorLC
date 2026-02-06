@@ -1,4 +1,4 @@
-@page
+﻿@page
 @model TinyGenerator.Pages.Models.IndexModel
 @{
     ViewData["Title"] = "Models";
@@ -66,7 +66,7 @@
     </div>
 
     <div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
-        <table class="table table-sm table-striped mb-0" id="modelsTable">
+        <table class="table table-sm table-hover mb-0" id="modelsTable">
             <thead class="table-light">
                 <tr>
                     <th data-col="name">Name</th>
@@ -84,6 +84,7 @@
                     <th data-col="music">Music</th>
                     <th data-col="fx">FX</th>
                     <th data-col="ambient">Ambient</th>
+                    <th data-col="jsonscore">Json</th>
                     <th data-col="notools">NoTools</th>
                     <th data-col="duration">Duration</th>
                     <th data-col="costin">Cost In</th>
@@ -125,7 +126,8 @@
                         <td data-col="music">@(hasResults ? m.MusicScore.ToString("0.0") : "-")</td>
                         <td data-col="fx">@(hasResults ? m.FxScore.ToString("0.0") : "-")</td>
                         <td data-col="ambient">@(hasResults ? m.AmbientScore.ToString("0.0") : "-")</td>
-                        <td data-col="notools">@(m.NoTools ? "✓" : "")</td>
+                        <td data-col="jsonscore">@(m.JsonScore.HasValue ? m.JsonScore.Value.ToString("0.0") : "-")</td>
+                        <td data-col="notools">@(m.NoTools ? "âœ“" : "")</td>
                         <td data-col="duration">@((m.TestDurationSeconds.HasValue) ? m.TestDurationSeconds.Value.ToString("0.00") : "-")</td>
                         <td data-col="costin">@m.CostInPerToken.ToString("0.00000")</td>
                         <td data-col="costout">@m.CostOutPerToken.ToString("0.00000")</td>
@@ -135,7 +137,16 @@
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
                                 <ul class="dropdown-menu dropdown-menu-end">
                                     <li><a class="dropdown-item" href="/Models/Edit?id=@m.Id">Edit</a></li>
-                                    <li><a class="dropdown-item" href="/Chat?model=@Uri.EscapeDataString(m.Name)">💬 Chat</a></li>
+                                    <li><a class="dropdown-item" href="/Chat?model=@Uri.EscapeDataString(m.Name)">ðŸ’¬ Chat</a></li>
+                                    <li>
+                                        <form method="post" action="?handler=RunJsonScoreModel" class="m-0 js-ajax-command">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="ModelId" value="@m.Id" />
+    <input type="hidden" name="Model" value="@m.Name" />
+    <input type="hidden" name="ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
+    <button type="submit" class="dropdown-item">🧪 JSON score</button>
+</form>
+                                    </li>
                                     <li><hr class="dropdown-divider"></li>
                                     <li>
                                         <form method="post" action="?handler=DeleteModel" class="m-0" onsubmit="return confirm('Sei sicuro di voler eliminare il modello @m.Name?');">
@@ -143,7 +154,7 @@
                                             <input type="hidden" name="ModelId" value="@m.Id" />
                                             <input type="hidden" name="Model" value="@m.Name" />
                                             <input type="hidden" name="ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
-                                            <button type="submit" class="dropdown-item text-danger">🗑️ Elimina</button>
+                                            <button type="submit" class="dropdown-item text-danger">ðŸ—‘ï¸ Elimina</button>
                                         </form>
                                     </li>
                                     <li><hr class="dropdown-divider"></li>
@@ -151,13 +162,13 @@
                                     @foreach (var g in Model.TestGroups ?? new System.Collections.Generic.List<string>())
                                     {
                                         <li>
-                                            <form method="post" action="?handler=RunGroup" class="m-0">
+                                            <form method="post" action="?handler=RunGroup" class="m-0 js-ajax-command">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="ModelId" value="@m.Id" />
                                                 <input type="hidden" name="Model" value="@m.Name" />
                                                 <input type="hidden" name="Group" value="@g" />
                                                 <input type="hidden" name="ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
-                                                <button type="submit" class="dropdown-item">▶️ @g</button>
+                                                <button type="submit" class="dropdown-item">â–¶ï¸ @g</button>
                                             </form>
                                         </li>
                                     }
@@ -173,6 +184,41 @@
 
 <script>
 (function initModelsTable() {
+    // Some handlers return JsonResult; if called via a normal form submit the browser navigates to the JSON.
+    // Intercept the submit and call via fetch to keep the user on the page.
+    (function wireAjaxCommandForms() {
+        if (window.__modelsAjaxCommandFormsWired) return;
+        window.__modelsAjaxCommandFormsWired = true;
+
+        document.addEventListener('submit', function(e) {
+            try {
+                var form = e.target;
+                if (!form || !form.classList || !form.classList.contains('js-ajax-command')) return;
+                e.preventDefault();
+
+                var action = form.getAttribute('action') || window.location.href;
+                var fd = new FormData(form);
+
+                fetch(action, { method: 'POST', body: fd })
+                    .then(function(resp) {
+                        if (resp.ok) return resp.json();
+                        return resp.text().then(function(t) { throw new Error(t || resp.statusText); });
+                    })
+                    .then(function(data) {
+                        var msg = 'Comando avviato';
+                        if (data && data.runId) msg = 'Comando avviato (' + data.runId + ')';
+                        if (data && Array.isArray(data.runIds) && data.runIds.length) msg = 'Comandi avviati (' + data.runIds.join(', ') + ')';
+                        alert(msg);
+                    })
+                    .catch(function(err) {
+                        alert('Errore avvio comando: ' + (err && err.message ? err.message : err));
+                    });
+            } catch (err) {
+                console.warn(err);
+            }
+        }, true);
+    })();
+
     if (typeof jQuery === 'undefined') {
         setTimeout(initModelsTable, 50);
         return;
@@ -198,15 +244,13 @@
             if (typeof $.fn.DataTable === 'undefined') { console.error('DataTables not loaded'); return; }
 
             var table = $('#modelsTable').DataTable({
-                dom: "<'row mb-2'<'col-sm-12'B>>" +
-                     "<'row mb-2'<'col-sm-6'l><'col-sm-6 text-end'f>>" +
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
                      "rt" +
                      "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
                 stateSave: true,
                 paging: true,
                 pageLength: 25,
-                lengthChange: true,
-                lengthMenu: [[10,25,50,100],[10,25,50,100]],
+                lengthChange: false,
                 order: [[0,'asc']],
                 ordering: true,
                 searching: true,
@@ -214,63 +258,102 @@
                 buttons: [
                     {
                         text: '<i class="bi bi-plus-circle me-1"></i>Nuovo',
-                        className: 'btn btn-sm btn-primary me-1',
+                        className: 'btn btn-sm btn-light border text-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function() { window.location.href = '/Models/Edit'; }
                     },
                     {
+                        text: '<i class="bi bi-code-slash me-1"></i>JSON score',
+                        className: 'btn btn-sm btn-light border text-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            fetch('?handler=RunJsonScore', { method: 'POST' })
+                                .then(function(resp) { return resp.ok ? resp.json() : resp.text().then(function(t){ throw new Error(t); }); })
+                                .then(function(data) {
+                                    var msg = data.runId ? ('Comando avviato (' + data.runId + ')') : 'Comando avviato';
+                                    alert(msg);
+                                })
+                                .catch(function(err) { alert('Errore avvio jsonScore: ' + err.message); });
+                        }
+                    },
+                    {
                         text: '<i class="bi bi-play-fill me-1"></i>Group',
-                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function() {
                             var group = $('#modelsGroupSelect').val() || '';
                             $('#modelsActions_Group').val(group);
                             var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false';
                             $('#modelsActions_ShowDisabled').val(show);
-                            var f = $('#modelsActionsForm');
-                            f.attr('action', '?handler=RunAll');
-                            f.submit();
+                            var f = document.getElementById('modelsActionsForm');
+                            var fd = new FormData(f);
+                            fetch('?handler=RunAll', { method: 'POST', body: fd })
+                                .then(function(resp) { return resp.ok ? resp.json() : resp.text().then(function(t){ throw new Error(t); }); })
+                                .then(function(data) {
+                                    var msg = (data && Array.isArray(data.runIds) && data.runIds.length)
+                                        ? ('Comandi avviati (' + data.runIds.join(', ') + ')')
+                                        : 'Comando avviato';
+                                    alert(msg);
+                                })
+                                .catch(function(err) { alert('Errore avvio gruppo: ' + err.message); });
                         }
                     },
                     {
                         text: '<i class="bi bi-collection-play me-1"></i>All',
-                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function() {
                             $('#modelsActions_Group').val('');
                             var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false';
                             $('#modelsActions_ShowDisabled').val(show);
-                            var f = $('#modelsActionsForm');
-                            f.attr('action', '?handler=RunAll');
-                            f.submit();
+                            var f = document.getElementById('modelsActionsForm');
+                            var fd = new FormData(f);
+                            fetch('?handler=RunAll', { method: 'POST', body: fd })
+                                .then(function(resp) { return resp.ok ? resp.json() : resp.text().then(function(t){ throw new Error(t); }); })
+                                .then(function(data) {
+                                    var msg = (data && Array.isArray(data.runIds) && data.runIds.length)
+                                        ? ('Comandi avviati (' + data.runIds.join(', ') + ')')
+                                        : 'Comando avviato';
+                                    alert(msg);
+                                })
+                                .catch(function(err) { alert('Errore avvio gruppo: ' + err.message); });
                         }
                     },
                     {
                         text: '<i class="bi bi-trash3 me-1"></i>Purge',
-                        className: 'btn btn-sm btn-warning me-1',
+                        className: 'btn btn-sm btn-light border text-danger',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function() { var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false'; $('#modelsActions_ShowDisabled').val(show); var f = $('#modelsActionsForm'); f.attr('action', '?handler=PurgeDisabledOllama'); f.submit(); }
                     },
                     {
                         text: '<i class="bi bi-arrow-repeat me-1"></i>Ctx',
-                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function() { var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false'; $('#modelsActions_ShowDisabled').val(show); var f = $('#modelsActionsForm'); f.attr('action', '?handler=RefreshContexts'); f.submit(); }
                     },
                     {
                         text: '<i class="bi bi-search me-1"></i>Discover',
-                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function() { var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false'; $('#modelsActions_ShowDisabled').val(show); var f = $('#modelsActionsForm'); f.attr('action', '?handler=AddOllamaModels'); f.submit(); }
                     },
                     {
                         text: '<i class="bi bi-calculator me-1"></i>Recalc',
-                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function() { var show = $('#modelsShowDisabledCheckbox').prop('checked') ? 'true' : 'false'; $('#modelsActions_ShowDisabled').val(show); var f = $('#modelsActionsForm'); f.attr('action', '?handler=RecalculateScores'); f.submit(); }
                     },
                     {
                         text: '<i class="bi bi-arrow-clockwise me-1"></i>Refresh',
-                        className: 'btn btn-sm btn-outline-secondary me-1',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function() { location.reload(); }
                     },
                     { 
                         extend: 'colvis', 
                         text: '<i class="bi bi-layout-three-columns me-1"></i>Colonne', 
-                        className: 'btn btn-sm btn-outline-secondary' 
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' }
                     }
                 ],
                 language: {
@@ -324,3 +407,6 @@
     }
 })();
 </script>
+
+
+

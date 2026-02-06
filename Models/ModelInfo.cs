@@ -36,6 +36,8 @@ public class ModelInfo
     public double FxScore { get; set; }
     public double AmbientScore { get; set; }
     public double TotalScore { get; set; }
+    // Accuracy nel rispettare uno schema JSON di risposta (1-10, null se non testato)
+    public double? JsonScore { get; set; }
     // Free-form note for the model (shown in grid and edit form)
     public string? Note { get; set; }
     // Estimated speed score (1-10). Nullable when unknown.

@@ -196,6 +196,10 @@ public class TinyGeneratorDbContext : DbContext
             .HasForeignKey(mr => mr.RoleId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        modelBuilder.Entity<Role>()
+            .HasIndex(r => r.Ruolo)
+            .IsUnique();
+
         modelBuilder.Entity<ModelStatsRecord>()
             .HasKey(s => new { s.ModelName, s.Operation });
 

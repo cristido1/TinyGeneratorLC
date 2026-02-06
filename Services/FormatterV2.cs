@@ -16,7 +16,7 @@ namespace TinyGenerator.Services
         private static readonly HashSet<char> SplitAfterChars = new(new[] { ',', ';', ':' });
 
         // We keep this strict: the goal is *not* to rewrite text, only to classify.
-        // Removes ONLY the tags we insert/expect. This is used for integrity checks.
+        // Removes ONLY the tags we insert/expect (plus legacy aliases). Used for integrity checks.
         private static readonly Regex StripTagsRegex = new(
             @"\[(?:NARRATORE|PERSONAGGIO:[^\]]+|EMOZIONE:[^\]]+|SENTIMENTO:[^\]]+)\]",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -466,11 +466,10 @@ namespace TinyGenerator.Services
                 return true;
             }
 
-            // Allow either:
-            // - [PERSONAGGIO: X] [SENTIMENTO: y]
+            // Allow:
             // - [PERSONAGGIO: X] [EMOZIONE: y]
             // - [PERSONAGGIO: X]
-            // (emotion can be normalized later or handled downstream)
+            // (legacy aliases can be normalized later)
             if (!tags.Contains("[PERSONAGGIO:", StringComparison.OrdinalIgnoreCase))
             {
                 return false;
@@ -481,7 +480,7 @@ namespace TinyGenerator.Services
 
         private static string NormalizeTags(string tags)
         {
-            // Normalize SENTIMENTO -> EMOZIONE for compatibility with existing pipeline.
+            // Normalize legacy aliases (SENTIMENTO -> EMOZIONE).
             return Regex.Replace(
                 tags,
                 @"\[\s*SENTIMENTO\s*:\s*(?<v>[^\]]+?)\s*\]",

@@ -101,7 +101,9 @@ namespace TinyGenerator.Services.Commands
 
                 var currentModelName = modelInfo.Name;
 
-                var systemPrompt = BuildSystemPrompt(ambientAgent);
+                var systemPrompt = TaggingResponseFormat.AppendToSystemPrompt(
+                    BuildSystemPrompt(ambientAgent),
+                    StoryTaggingService.TagTypeAmbient);
                 var rowsBuild = StoryTaggingService.BuildStoryRows(sourceText);
                 var storyRows = string.IsNullOrWhiteSpace(story.StoryRows) ? rowsBuild.StoryRows : story.StoryRows;
                 if (string.IsNullOrWhiteSpace(storyRows))
@@ -413,30 +415,6 @@ namespace TinyGenerator.Services.Commands
                     {
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
-
-                    messages.Add(new ConversationMessage
-                    {
-                        Role = "system",
-                        Content =
-                            "FORMATO RISPOSTA OBBLIGATORIO:\n" +
-                            "- Restituisci SOLO righe nel formato: ID descrizione dei rumori\n" +
-                            "- Non usare parentesi o tag [RUMORI]\n" +
-                            "- Non riscrivere il testo, non aggiungere spiegazioni\n" +
-                            "- Gli ID sono quelli del testo numerato fornito\n" +
-                            "- Se non c'è un rumore per una riga, non restituire quella riga\n"
-                    });
-
-                    // Add error feedback for retry attempts
-                    if (attempt > 1 && !string.IsNullOrWhiteSpace(lastError))
-                    {
-                        hadCorrections = true;
-                        messages.Add(new ConversationMessage 
-                        { 
-                            Role = "system", 
-                            Content = $"{lastError} Questo è il tentativo {attempt} di {maxAttempts}." 
-                        });
-                    }
-
                     messages.Add(new ConversationMessage { Role = "user", Content = chunkText });
 
                     // Keep the last request/response around for diagnostics.

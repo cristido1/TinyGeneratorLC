@@ -475,6 +475,26 @@ public sealed class GenerateNextChunkCommand
                 ct).ConfigureAwait(false);
 
             var primary = response ?? string.Empty;
+
+            // Track primary model usage for this role (best-effort)
+            try
+            {
+                if (_scopeFactory != null && writerAgent.ModelId.HasValue && writerAgent.ModelId.Value > 0)
+                {
+                    using var trackScope = _scopeFactory.CreateScope();
+                    var trackingFallbackService = trackScope.ServiceProvider.GetService<ModelFallbackService>();
+                    if (trackingFallbackService != null)
+                    {
+                        var roleCodeForTracking = string.IsNullOrWhiteSpace(writerAgent.Role) ? "writer" : writerAgent.Role;
+                        trackingFallbackService.RecordPrimaryModelUsage(roleCodeForTracking, writerAgent.ModelId.Value, success: !string.IsNullOrWhiteSpace(primary));
+                    }
+                }
+            }
+            catch
+            {
+                // ignore tracking errors
+            }
+
             if (!string.IsNullOrWhiteSpace(primary))
             {
                 return primary;

@@ -16,22 +16,6 @@ namespace TinyGenerator.Services.Commands
 {
     public sealed class AddVoiceTagsToStoryCommand
     {
-        private const string FormatterV2SystemPrompt =
-            "Sei un agente di classificazione.\n\n" +
-            "Ti verranno fornite righe numerate. Ogni riga è una porzione di testo originale.\n\n" +
-            "COMPITO:\nIndica SOLO le righe dove parla qualcuno (dialogo).\nPer quelle righe, restituisci il tag del personaggio e la sua emozione.\n\n" +
-            "TAG POSSIBILI:\n[PERSONAGGIO: Nome] [EMOZIONE: emozione]\n\n" +
-            "REGOLE OBBLIGATORIE:\n" +
-            "- NON riscrivere il testo\n" +
-            "- NON restituire il testo\n" +
-            "- NON spiegare\n" +
-            "- NON commentare\n" +
-            "- NON aggiungere contenuti\n" +
-            "- Restituisci un mapping ID → TAG nel formato: ID TAG\n" +
-            "- Restituisci SOLO le righe dove parla qualcuno (non tutte le righe)\n" +
-            "- Non includere alcun altro tag oltre a PERSONAGGIO ed EMOZIONE\n\n" +
-            "Esempio:\n004 [PERSONAGGIO: Luca] [EMOZIONE: paura]";
-
         private readonly CommandTuningOptions _tuning;
 
         private readonly long _storyId;
@@ -111,7 +95,9 @@ namespace TinyGenerator.Services.Commands
                     return Fail(effectiveRunId, $"Model not found for formatter agent {formatterAgent.Name}");
                 }
 
-                var systemPrompt = BuildSystemPrompt(formatterAgent);
+                var systemPrompt = TaggingResponseFormat.AppendToSystemPrompt(
+                    BuildSystemPrompt(formatterAgent),
+                    StoryTaggingService.TagTypeFormatter);
                 var promptHash = string.IsNullOrWhiteSpace(systemPrompt)
                     ? null
                     : ComputeSha256(systemPrompt);
@@ -437,9 +423,6 @@ namespace TinyGenerator.Services.Commands
                         messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
                     }
 
-                    // Always append strict formatter-v2 rules to prevent the model from rewriting text.
-                    messages.Add(new ConversationMessage { Role = "system", Content = FormatterV2SystemPrompt });
-
                     // IMPORTANT: on retries we resend the original request, without echoing the model's previous answer.
                     var userContent =
                         (dialogueLines.Count > 0
@@ -452,7 +435,9 @@ namespace TinyGenerator.Services.Commands
                     messages.Add(new ConversationMessage { Role = "user", Content = userContent });
 
                     string responseJson;
-                    using (LogScope.Push("formatter", operationId: null, stepNumber: null, maxStep: null, agentName: formatterAgentName))
+                    // Keep the current operation scope (so ResponseValidation policies key correctly)
+                    // while still showing the right agent name in logs.
+                    using (LogScope.Push(LogScope.Current ?? "story/add_voice_tags_to_story", operationId: null, stepNumber: null, maxStep: null, agentName: formatterAgentName, agentRole: "formatter"))
                     {
                         responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
                     }

@@ -18,6 +18,9 @@ public class ModelRole
     [Column("role_id")]
     public int RoleId { get; set; }
 
+    [Column("is_primary")]
+    public bool IsPrimary { get; set; } = false;
+
     [Column("enabled")]
     public bool Enabled { get; set; } = true;
 

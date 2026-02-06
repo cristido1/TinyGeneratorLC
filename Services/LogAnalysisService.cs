@@ -88,6 +88,7 @@ namespace TinyGenerator.Services
             string responseJson;
             try
             {
+                using var analyzerScope = LogScope.Push(scope, null, null, null, agent.Name, agentRole: "log_analyzer");
                 responseJson = await bridge.CallModelWithToolsAsync(
                     messages,
                     new List<Dictionary<string, object>>(),
@@ -167,6 +168,7 @@ namespace TinyGenerator.Services
             string responseJson;
             try
             {
+                using var analyzerScope = LogScope.Push("log_analyzer_failure", null, null, null, agent.Name, agentRole: "log_analyzer");
                 responseJson = await bridge.CallModelWithToolsAsync(
                     messages,
                     new List<Dictionary<string, object>>(),

@@ -834,6 +834,29 @@ public sealed class DatabaseService
     }
 
     /// <summary>
+    /// Restituisce i modelli che non hanno ancora un punteggio jsonScore (abilitati o meno).
+    /// </summary>
+    public List<ModelInfo> ListModelsWithoutJsonScore()
+    {
+        using var context = CreateDbContext();
+        try
+        {
+            return context.Models.AsNoTracking()
+                .Where(m => m.JsonScore == null)
+                .OrderBy(m => m.Name)
+                .ToList();
+        }
+        catch (Exception)
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var cols = SelectModelColumns();
+            var sql = $"SELECT {cols} FROM models WHERE JsonScore IS NULL";
+            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
+        }
+    }
+
+    /// <summary>
     /// Returns a paged, optionally filtered and ordered list of models with total count.
     /// This helper implements server-side filtering, sorting and paging for model lists.
     /// </summary>
@@ -1823,6 +1846,100 @@ CREATE TABLE system_reports (
             Console.WriteLine("[DB] ? Migration AddDeletedToStories applied");
         }
 
+        // === Roles & ModelRoles hygiene ===
+        // Some installations used non-idempotent seeding before a UNIQUE constraint existed.
+        // This block deduplicates roles.ruolo, updates model_roles.role_id, adds model_roles.is_primary,
+        // and finally enforces uniqueness on roles.ruolo.
+        try
+        {
+            var hasRoles = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='roles'") > 0;
+            var hasModelRoles = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='model_roles'") > 0;
+            if (hasRoles)
+            {
+                if (hasModelRoles)
+                {
+                    var hasIsPrimary = conn.ExecuteScalar<int>(
+                        "SELECT COUNT(*) FROM pragma_table_info('model_roles') WHERE name='is_primary'");
+                    if (hasIsPrimary == 0)
+                    {
+                        Console.WriteLine("[DB] Applying migration: AddIsPrimaryToModelRoles");
+                        conn.Execute("ALTER TABLE model_roles ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0");
+                        Console.WriteLine("[DB] ✓ Migration AddIsPrimaryToModelRoles applied");
+                    }
+                }
+
+                // Deduplicate roles BEFORE adding the unique index.
+                var dupCount = conn.ExecuteScalar<long>(@"
+SELECT COUNT(*)
+FROM (
+  SELECT ruolo
+  FROM roles
+  GROUP BY ruolo
+  HAVING COUNT(*) > 1
+) t");
+
+                if (dupCount > 0 && hasModelRoles)
+                {
+                    Console.WriteLine($"[DB] Deduplicating roles table ({dupCount} duplicated role keys)...");
+                    conn.Execute(@"
+CREATE TEMP TABLE IF NOT EXISTS __roles_dedup_keep AS
+SELECT ruolo, MIN(id) AS keep_id
+FROM roles
+GROUP BY ruolo
+HAVING COUNT(*) > 1;
+
+CREATE TEMP TABLE IF NOT EXISTS __roles_dedup_map AS
+SELECT r.id AS old_id, k.keep_id AS keep_id
+FROM roles r
+JOIN __roles_dedup_keep k ON k.ruolo = r.ruolo
+WHERE r.id <> k.keep_id;
+
+UPDATE model_roles
+SET role_id = (SELECT keep_id FROM __roles_dedup_map WHERE old_id = model_roles.role_id)
+WHERE role_id IN (SELECT old_id FROM __roles_dedup_map);
+
+DELETE FROM roles
+WHERE id IN (SELECT old_id FROM __roles_dedup_map);
+
+DROP TABLE __roles_dedup_map;
+DROP TABLE __roles_dedup_keep;
+");
+                    Console.WriteLine("[DB] ✓ roles dedup completed");
+                }
+
+                // Ensure unique index exists.
+                var hasUniqueIndex = conn.ExecuteScalar<long>(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='IX_roles_ruolo'") > 0;
+                if (!hasUniqueIndex)
+                {
+                    // Re-check duplicates defensively; creating UNIQUE index would fail if duplicates remain.
+                    var remaining = conn.ExecuteScalar<long>(@"
+SELECT COUNT(*)
+FROM (
+  SELECT ruolo
+  FROM roles
+  GROUP BY ruolo
+  HAVING COUNT(*) > 1
+) t");
+
+                    if (remaining == 0)
+                    {
+                        Console.WriteLine("[DB] Applying migration: AddUniqueIndexRolesRuolo");
+                        conn.Execute("CREATE UNIQUE INDEX IF NOT EXISTS IX_roles_ruolo ON roles(ruolo)");
+                        Console.WriteLine("[DB] ✓ Migration AddUniqueIndexRolesRuolo applied");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[DB] Warning: cannot create UNIQUE index IX_roles_ruolo, still {remaining} duplicates present");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: roles/model_roles hygiene failed: {ex.Message}");
+        }
+
         // Best-effort: normalize deleted flag to 0 for existing rows
         try
         {
@@ -1841,7 +1958,8 @@ CREATE TABLE system_reports (
         {
             Console.WriteLine("[DB] Applying migration: AddSummaryToStories");
             conn.Execute("ALTER TABLE stories ADD COLUMN summary TEXT");
-            conn.Execute("INSERT OR IGNORE INTO __EFMigrationsHistory (MigrationId, ProductVersion) VALUES ('20251227082500_AddSummaryToStories', '10.0.0')");
+            // EF migrations metadata is intentionally not used in this project.
+            // Keep database changes explicit (manual SQL) and avoid touching __EFMigrationsHistory.
             Console.WriteLine("[DB] ✓ Migration AddSummaryToStories applied");
         }
 
@@ -2038,14 +2156,23 @@ Output only the summary text, nothing else. No introductions, no formatting, jus
                     ("continuity_validator", "ContinuityValidator"),
                     ("state_updater", "StateUpdater"),
                     ("state_compressor", "StateCompressor"),
-                    ("recap_builder", "RecapBuilder")
+                    ("recap_builder", "RecapBuilder"),
+
+                    // Series generation (GenerateNewSerie)
+                    ("serie_bible_agent", "GenerateNewSerie"),
+                    ("serie_character_agent", "GenerateNewSerie"),
+                    ("serie_season_agent", "GenerateNewSerie"),
+                    ("serie_episode_agent", "GenerateNewSerie"),
+                    ("serie_audio_agent", "GenerateNewSerie"),
+                    ("serie_validator_agent", "GenerateNewSerie")
                 };
 
                 foreach (var role in newRoles)
                 {
                     conn.Execute(@"
-INSERT OR IGNORE INTO roles (ruolo, comando_collegato, created_at, updated_at)
-VALUES (@ruolo, @comando, @created_at, @updated_at)",
+INSERT INTO roles (ruolo, comando_collegato, created_at, updated_at)
+SELECT @ruolo, @comando, @created_at, @updated_at
+WHERE NOT EXISTS (SELECT 1 FROM roles WHERE ruolo = @ruolo)",
                         new
                         {
                             ruolo = role.Role,
@@ -2062,21 +2189,21 @@ VALUES (@ruolo, @comando, @created_at, @updated_at)",
                     "CanonExtractor",
                     "canon_extractor",
                     "Estrai eventi canonici da un episodio.",
-                    "Leggi l'episodio completo e restituisci SOLO un JSON array di eventi canonici ordinati. Ogni evento deve includere: order, title, summary, characters, location, outcome. Nessun testo extra.",
+                    "Leggi l'episodio completo e restituisci SOLO TAG tra parentesi quadre (no JSON). Struttura: [CANON_EVENTS] contiene più blocchi [EVENT] con [ORDER], [TITLE], [SUMMARY], [CHARACTERS] (lista), [LOCATION], [OUTCOME]. Nessun testo extra.",
                     "Narrative Engine: CanonExtractor (long-story pipeline)"
                 ),
                 (
                     "StateDeltaBuilder",
                     "state_delta_builder",
                     "Costruisci il delta di stato a partire da eventi canonici.",
-                    "Usa stato compatto + eventi per produrre SOLO un JSON object con: delta (object), open_threads (array), last_major_event (string). Nessun testo extra.",
+                    "Usa stato compatto + eventi per aggiornare lo stato. Restituisci SOLO TAG (no JSON): [WORLD_STATE] stato aggiornato (testo compatto) [/WORLD_STATE], [OPEN_THREADS] lista thread aperti (uno per riga) [/OPEN_THREADS], [LAST_MAJOR_EVENT] evento maggiore (breve) [/LAST_MAJOR_EVENT]. Nessun testo extra.",
                     "Narrative Engine: StateDeltaBuilder (long-story pipeline)"
                 ),
                 (
                     "ContinuityValidator",
                     "continuity_validator",
                     "Verifica coerenza narrativa.",
-                    "Valida coerenza tra stato compatto ed eventi. Restituisci SOLO un JSON object con issues (array di {severity, description}). Nessun testo extra.",
+                    "Valida coerenza tra stato compatto ed eventi. Restituisci SOLO TAG (no JSON): [ISSUES] contiene più [ISSUE] con [SEVERITY] (low|medium|high) e [DESCRIPTION]. Nessun testo extra.",
                     "Narrative Engine: ContinuityValidator (long-story pipeline)"
                 ),
                 (
@@ -2090,7 +2217,7 @@ VALUES (@ruolo, @comando, @created_at, @updated_at)",
                     "StateCompressor",
                     "state_compressor",
                     "Comprimi lo stato in state_summary_compact.",
-                    "Genera SOLO un JSON object compatto (state_summary_compact) entro ~1200-1500 parole includendo situazione, eventi maggiori, risorse, personaggi chiave, thread urgenti, vincoli hard. Nessun testo extra.",
+                    "Comprimi lo stato. Restituisci SOLO TAG (no JSON): [STATE_SUMMARY_COMPACT] testo compatto (entro ~1200-1500 parole) che include situazione, eventi maggiori, risorse, personaggi chiave, thread urgenti, vincoli hard [/STATE_SUMMARY_COMPACT]. Nessun testo extra.",
                     "Narrative Engine: StateCompressor (long-story pipeline)"
                 ),
                 (
@@ -5348,6 +5475,21 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
             }
         }
 
+        // Migration: Add json_score column to models if not exists
+        var hasJsonScore = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='JsonScore'");
+        if (hasJsonScore == 0)
+        {
+            Console.WriteLine("[DB] Adding JsonScore column to models");
+            try
+            {
+                conn.Execute("ALTER TABLE models ADD COLUMN JsonScore REAL DEFAULT NULL");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to add JsonScore column to models: {ex.Message}");
+            }
+        }
+
         // Migration: Rename test_code to test_group if needed
         var hasTestCode = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('model_test_runs') WHERE name='test_code'");
         var hasTestGroup = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('model_test_runs') WHERE name='test_group'");
@@ -6065,7 +6207,8 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             "MusicScore", 
             "FxScore", 
             "AmbientScore",
-            "TotalScore"
+            "TotalScore",
+            "JsonScore"
         });
     }
 
@@ -6167,6 +6310,89 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         context.SaveChanges();
     }
 
+    public long? TryGetLatestModelResponseLogId(int threadId, string? agentName = null, string? modelName = null)
+    {
+        if (threadId <= 0) return null;
+
+        var agent = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim();
+        var model = string.IsNullOrWhiteSpace(modelName) ? null : modelName.Trim();
+
+        using var context = CreateDbContext();
+        var q = context.Logs.Where(l =>
+            l.ThreadId == threadId &&
+            (l.Category == "ModelCompletion" || l.Category == "ModelResponse") &&
+            l.Id.HasValue);
+
+        if (!string.IsNullOrWhiteSpace(agent))
+        {
+            q = q.Where(l => l.AgentName != null && l.AgentName != "" && l.AgentName.Trim() == agent);
+        }
+
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            q = q.Where(l => l.ModelName != null && l.ModelName != "" && l.ModelName.Trim() == model);
+        }
+
+        var latest = q.OrderByDescending(l => l.Id).Select(l => l.Id).FirstOrDefault();
+        return latest;
+    }
+
+    public void UpdateModelResponseResultById(long logId, string result, string? failReason, bool examined)
+    {
+        if (logId <= 0) return;
+        if (string.IsNullOrWhiteSpace(result)) return;
+
+        using var context = CreateDbContext();
+        var log = context.Logs.FirstOrDefault(l => l.Id.HasValue && l.Id.Value == logId);
+        if (log == null) return;
+
+        log.Result = result.Trim().ToUpperInvariant();
+        if (string.Equals(log.Result, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            log.ResultFailReason = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(failReason))
+        {
+            log.ResultFailReason = failReason.Trim();
+        }
+
+        log.Examined = examined;
+        context.SaveChanges();
+    }
+
+    public void UpdateLatestModelResponseResultForAgent(int threadId, string agentName, string result, string? failReason, bool examined)
+    {
+        if (threadId <= 0) return;
+        if (string.IsNullOrWhiteSpace(agentName)) return;
+        if (string.IsNullOrWhiteSpace(result)) return;
+
+        var agent = agentName.Trim();
+
+        using var context = CreateDbContext();
+        var log = context.Logs
+            .Where(l =>
+                l.ThreadId == threadId &&
+                (l.Category == "ModelCompletion" || l.Category == "ModelResponse") &&
+                l.AgentName != null && l.AgentName != "" && l.AgentName.Trim() == agent)
+            .OrderByDescending(l => l.Id)
+            .FirstOrDefault();
+
+        if (log == null) return;
+
+        log.Result = result.Trim().ToUpperInvariant();
+        if (string.Equals(log.Result, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            log.ResultFailReason = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(failReason))
+        {
+            log.ResultFailReason = failReason.Trim();
+        }
+
+        log.Examined = examined;
+        context.SaveChanges();
+    }
+
     public void DeleteLogAnalysesByThread(string threadId)
     {
         if (string.IsNullOrWhiteSpace(threadId)) return;
@@ -6188,7 +6414,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         // Get distinct thread IDs from logs that are not analyzed
         var pendingThreads = context.Logs
             .Where(l => l.ThreadId.HasValue && l.ThreadId.Value > 0 && !l.Analized)
-            .Select(l => l.ThreadId.Value)
+            .Select(l => l.ThreadId.GetValueOrDefault())
             .Distinct()
             .OrderByDescending(t => t)
             .Take(max)
@@ -6404,6 +6630,21 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         }
 
         UpsertModel(existing);
+    }
+
+    public void UpdateModelJsonScore(int modelId, double? jsonScore, string? lastResults = null)
+    {
+        using var ctx = CreateDbContext();
+        var model = ctx.Models.FirstOrDefault(m => m.Id == modelId);
+        if (model == null) return;
+
+        model.JsonScore = jsonScore;
+        if (!string.IsNullOrWhiteSpace(lastResults))
+        {
+            model.LastTestResults = lastResults;
+        }
+        model.UpdatedAt = DateTime.UtcNow.ToString("o");
+        ctx.SaveChanges();
     }
 
     /// <summary>

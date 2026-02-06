@@ -71,8 +71,6 @@ L’agente NON deve:
 
 Esempio:
 
-003 [PERSONAGGIO: Luca] [SENTIMENTO: rabbia]
-
 003 [PERSONAGGIO: Luca] [EMOZIONE: rabbia]
 
 Una riga per ID.

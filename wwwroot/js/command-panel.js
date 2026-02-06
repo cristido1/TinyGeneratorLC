@@ -1,4 +1,4 @@
-// Global command panel subscribed to ProgressHub (SignalR)
+﻿// Global command panel subscribed to ProgressHub (SignalR)
 // Shows real-time command queue across all pages. Draggable.
 (function () {
     // Wait for SignalR to be loaded
@@ -119,14 +119,14 @@
                     align-items: center;
                     cursor: move;
                 ">
-                    <span style="flex:1;">⚙️ Comandi in esecuzione / coda</span>
+                    <span style="flex:1;"><i class="bi bi-gear-fill me-1"></i>Comandi in esecuzione / coda</span>
                     <span class="badge" id="cmd-count" style="
                         background: rgba(255,255,255,0.25);
                         padding: 3px 8px;
                         border-radius: 10px;
                         font-size: 12px;
                     ">0</span>
-                    <span id="cmd-connection-status" style="margin-left:8px; font-size:10px;">🔴</span>
+                    <span id="cmd-connection-status" style="margin-left:8px; font-size:12px; color:#dc2626;">●</span>
                 </div>
                 <div class="command-panel-body" style="
                     max-height: 300px;
@@ -210,7 +210,8 @@
         });
 
         function updateConnectionStatus(connected) {
-            statusEl.textContent = connected ? '🟢' : '🔴';
+            statusEl.textContent = '●';
+            statusEl.style.color = connected ? '#16a34a' : '#dc2626';
             statusEl.title = connected ? 'Connesso' : 'Disconnesso';
         }
 
@@ -253,24 +254,24 @@
                 const status = (c.status || c.Status || '').toLowerCase();
                 let bgColor = '#fff3cd'; // queued
                 let borderColor = '#ffc107';
-                let statusIcon = '⏳';
+                let statusIcon = '<i class="bi bi-hourglass-split me-1"></i>';
 
                 if (status === 'running') {
                     bgColor = '#cce5ff';
                     borderColor = '#007bff';
-                    statusIcon = '▶️';
+                    statusIcon = '<i class="bi bi-play-fill me-1"></i>';
                 } else if (status === 'completed') {
                     bgColor = '#d4edda';
                     borderColor = '#28a745';
-                    statusIcon = '✅';
+                    statusIcon = '<i class="bi bi-check-circle-fill me-1"></i>';
                 } else if (status === 'failed') {
                     bgColor = '#f8d7da';
                     borderColor = '#dc3545';
-                    statusIcon = '❌';
+                    statusIcon = '<i class="bi bi-x-circle-fill me-1"></i>';
                 } else if (status === 'cancelled') {
                     bgColor = '#e2e3e5';
                     borderColor = '#6c757d';
-                    statusIcon = '🚫';
+                    statusIcon = '<i class="bi bi-slash-circle me-1"></i>';
                 }
 
                 const currentStep = c.currentStep || c.CurrentStep;
@@ -301,18 +302,27 @@
                     border-radius: 3px;
                     font-size: 10px;
                     font-weight: normal;
-                " title="ID Storia">📖 ${storyId}</span>` : '';
+                " title="ID Storia"><i class="bi bi-journal-text me-1"></i>${storyId}</span>` : '';
 
                 const errorMessage = c.errorMessage || c.ErrorMessage;
                 const errorMsg = errorMessage ? `
                     <div style="color:#dc3545; font-size:11px; margin-top:6px; user-select: text; cursor: text;">
+                        
                         <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:6px;">
-                            <div style="flex:1;">⚠️ ${escapeHtml(errorMessage)}</div>
+                        
+                            <div style="flex:1;"><i class="bi bi-exclamation-triangle-fill me-1"></i>${escapeHtml(errorMessage)}</div>
+                        
+                        
                             <button onclick="copyToClipboard('${escapeHtml(errorMessage).replace(/'/g, "\\'")}', event)" style="
+                        
                                 background: #dc3545; color: #fff; border: none; padding: 2px 6px; 
+                        
                                 border-radius: 3px; font-size: 10px; cursor: pointer; white-space: nowrap;
+                        
                                 flex-shrink: 0; padding-top: 0px; padding-bottom: 0px; line-height: 1.2;
-                            ">📋 Copia</button>
+                        
+                            "><i class="bi bi-clipboard me-1"></i>Copia</button>
+                        
                         </div>
                     </div>
                 ` : '';
@@ -334,12 +344,23 @@
                     ? `<div style="font-size:11px; color:#444; margin-top:4px; user-select:text;">${escapeHtml(autoInfoParts.join(' | '))}</div>`
                     : '';
 
+                const progressParts = [];
+                if (modelShort) progressParts.push(`<i class="bi bi-cpu me-1"></i>${modelShort}`);
+                if (currentStep && maxStep) progressParts.push(`Domanda ${currentStep}/${maxStep}`);
+                if (stepDesc) progressParts.push(stepDesc);
+                const progressInfo = progressParts.length
+                    ? `<div style="font-size:11px; color:#111; margin-top:4px; user-select:text;">${progressParts.join(' • ')}</div>`
+                    : '';
+
 
                 const canCancel = (status === 'queued' || status === 'running') && runId;
                 const cancelButton = canCancel ? `
                     <button onclick="cancelCommand('${runId.replace(/'/g, "\\'")}', event)" style="
+                        
                         background: #dc3545; color: #fff; border: none; padding: 2px 6px;
+                        
                         border-radius: 3px; font-size: 10px; cursor: pointer; white-space: nowrap;
+                        
                         line-height: 1.2;
                     ">Annulla</button>
                 ` : '';
@@ -361,8 +382,10 @@
                             </div>
                         </div>
                         <div style="font-size:11px; color:#555; margin-top:4px;">
-                            👤 ${agent} ${modelShort ? '• 🧠 ' + modelShort : ''}
+                            <span><i class="bi bi-person-fill me-1"></i>${agent || 'N/A'}</span>
+                            ${modelShort ? `<span class="ms-2"><i class="bi bi-cpu me-1"></i>${modelShort}</span>` : ''}
                         </div>
+                        ${progressInfo}
                         ${autoInfo}
                         ${errorMsg}
                     </div>
@@ -419,10 +442,15 @@
                     updateConnectionStatus(false);
                     // Try to reconnect after a delay
                     if (reconnectAttempts < 5) {
+                        
                         reconnectAttempts++;
+                        
                         setTimeout(() => {
+                        
                             isConnecting = false;
+                        
                             ensureConnection();
+                        
                         }, 5000 * reconnectAttempts);
                     }
                 });
@@ -440,7 +468,9 @@
                 if (reconnectAttempts < 5) {
                     reconnectAttempts++;
                     setTimeout(() => {
+                        
                         isConnecting = false;
+                        
                         ensureConnection();
                     }, 3000 * reconnectAttempts);
                 }
@@ -478,3 +508,8 @@
         setInterval(pollCommands, 10000);
     }
 })();
+
+
+
+
+

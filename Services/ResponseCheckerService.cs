@@ -4,8 +4,10 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
+using TinyGenerator.Services.Text;
 
 namespace TinyGenerator.Services
 {
@@ -208,53 +210,57 @@ namespace TinyGenerator.Services
             // For non-plot steps, include semantic score in prompt; for plot steps already validated above
             var semanticInfo = semanticScore.HasValue && !isPlotStep ? $"Semantic Alignment Score: {semanticScore.Value:F2} (0-1 scale)" : string.Empty;
 
-            var sb = new StringBuilder();
+            // IMPORTANT: when invoking response_checker, append response-format instructions to the SYSTEM message,
+            // not to a subsequent user prompt.
+            var checkerSystemSb = new StringBuilder();
             // Include agent-level prompt/instructions if present so DB-managed instructions are honored
             if (!string.IsNullOrWhiteSpace(checkerAgent.Prompt))
             {
-                sb.AppendLine("=== Agent Prompt ===");
-                sb.AppendLine(checkerAgent.Prompt);
-                sb.AppendLine();
+                checkerSystemSb.AppendLine("=== Agent Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.Prompt);
+                checkerSystemSb.AppendLine();
             }
             if (!string.IsNullOrWhiteSpace(checkerAgent.Instructions))
             {
-                sb.AppendLine("=== Agent Instructions ===");
-                sb.AppendLine(checkerAgent.Instructions);
-                sb.AppendLine();
+                checkerSystemSb.AppendLine("=== Agent Instructions ===");
+                checkerSystemSb.AppendLine(checkerAgent.Instructions);
+                checkerSystemSb.AppendLine();
             }
 
-            sb.AppendLine("You are a Response Checker. Validate if the writer's output meets the requirements.");
-            sb.AppendLine();
-            sb.AppendLine("**Step Instruction:**");
-            sb.AppendLine(stepInstruction);
-            sb.AppendLine();
-            sb.AppendLine("**Writer Output:**");
-            sb.AppendLine(modelOutput);
-            sb.AppendLine();
-            sb.AppendLine("**Validation Criteria:");
-            sb.AppendLine(criteriaJson);
+            checkerSystemSb.AppendLine("You are a Response Checker. Validate if the writer's output meets the requirements.");
+            checkerSystemSb.AppendLine();
+            checkerSystemSb.AppendLine("**Your Task:");
+            checkerSystemSb.AppendLine("Check if the output:");
+            checkerSystemSb.AppendLine("1. Adheres to the step requirements");
+            checkerSystemSb.AppendLine("2. Contains no questions or requests for clarification");
+            checkerSystemSb.AppendLine("3. Does not anticipate future steps");
+            checkerSystemSb.AppendLine("4. Is complete (not truncated)");
+            checkerSystemSb.AppendLine("5. Meets minimum length if specified");
+            checkerSystemSb.AppendLine();
+            checkerSystemSb.AppendLine("=== OUTPUT RICHIESTO (OBBLIGATORIO) ===");
+            checkerSystemSb.AppendLine("Restituisci SOLO TAG tra parentesi quadre (no JSON) con questa struttura:");
+            checkerSystemSb.AppendLine("[IS_VALID]true|false");
+            checkerSystemSb.AppendLine("[NEEDS_RETRY]true|false");
+            checkerSystemSb.AppendLine("[REASON]Spiega brevemente. Se non valido, cita almeno una REGOLA n violata.");
+            checkerSystemSb.AppendLine("[VIOLATED_RULES]1,2  // vuoto se valido");
+
+            var checkerUserSb = new StringBuilder();
+            checkerUserSb.AppendLine("**Step Instruction:**");
+            checkerUserSb.AppendLine(stepInstruction);
+            checkerUserSb.AppendLine();
+            checkerUserSb.AppendLine("**Writer Output:**");
+            checkerUserSb.AppendLine(modelOutput);
+            checkerUserSb.AppendLine();
+            checkerUserSb.AppendLine("**Validation Criteria:");
+            checkerUserSb.AppendLine(criteriaJson);
             if (!string.IsNullOrEmpty(semanticInfo))
             {
-                sb.AppendLine();
-                sb.AppendLine(semanticInfo);
+                checkerUserSb.AppendLine();
+                checkerUserSb.AppendLine(semanticInfo);
             }
-            sb.AppendLine();
-            sb.AppendLine("**Your Task:");
-            sb.AppendLine("Check if the output:");
-            sb.AppendLine("1. Adheres to the step requirements");
-            sb.AppendLine("2. Contains no questions or requests for clarification");
-            sb.AppendLine("3. Does not anticipate future steps");
-            sb.AppendLine("4. Is complete (not truncated)");
-            sb.AppendLine("5. Meets minimum length if specified");
-            sb.AppendLine();
-            sb.AppendLine("Return ONLY a JSON object with this structure:");
-            sb.AppendLine("{");
-            sb.AppendLine("  \"is_valid\": true or false,");
-            sb.AppendLine("  \"reason\": \"brief explanation\",");
-            sb.AppendLine("  \"needs_retry\": true or false");
-            sb.AppendLine("}");
 
-            var prompt = sb.ToString();
+            var checkerSystemMessage = checkerSystemSb.ToString();
+            var prompt = checkerUserSb.ToString();
 
             try
             {
@@ -271,11 +277,17 @@ namespace TinyGenerator.Services
                     null,
                     LogScope.CurrentStepNumber,
                     LogScope.CurrentMaxStep,
-                    "Response Checker");
+                    "Response Checker",
+                    agentRole: "response_checker");
 
                 var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
                 var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
-                var loop = new ReActLoopOrchestrator(orchestrator, _logger, maxIterations: 5, modelBridge: bridge);
+                var loop = new ReActLoopOrchestrator(
+                    orchestrator,
+                    _logger,
+                    maxIterations: 5,
+                    modelBridge: bridge,
+                    systemMessage: checkerSystemMessage);
 
                 var result = await loop.ExecuteAsync(prompt);
 
@@ -441,42 +453,44 @@ namespace TinyGenerator.Services
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var prompt = new StringBuilder();
+            // IMPORTANT: when invoking response_checker, append response-format instructions to the SYSTEM message.
+            var checkerSystemSb = new StringBuilder();
             // Include agent-level prompt/instructions if present
             if (!string.IsNullOrWhiteSpace(checkerAgent.Prompt))
             {
-                prompt.AppendLine("=== Agent Prompt ===");
-                prompt.AppendLine(checkerAgent.Prompt);
-                prompt.AppendLine();
+                checkerSystemSb.AppendLine("=== Agent Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.Prompt);
+                checkerSystemSb.AppendLine();
             }
             if (!string.IsNullOrWhiteSpace(checkerAgent.Instructions))
             {
-                prompt.AppendLine("=== Agent Instructions ===");
-                prompt.AppendLine(checkerAgent.Instructions);
-                prompt.AppendLine();
+                checkerSystemSb.AppendLine("=== Agent Instructions ===");
+                checkerSystemSb.AppendLine(checkerAgent.Instructions);
+                checkerSystemSb.AppendLine();
             }
 
-            prompt.AppendLine("You are a response_checker helping another agent that MUST call functions instead of replying with free text.");
-            prompt.AppendLine($"Attempt: {attempt + 1}/2.");
-            prompt.AppendLine("Provide a SHORT assistant reply to the primary model that reminds it to use the tools, and if possible suggest the first tool to call.");
-            prompt.AppendLine("Return ONLY the assistant reply text, no JSON, no extra explanations.");
-            prompt.AppendLine();
+            checkerSystemSb.AppendLine("You are a response_checker helping another agent that MUST call functions instead of replying with free text.");
+            checkerSystemSb.AppendLine($"Attempt: {attempt + 1}/2.");
+            checkerSystemSb.AppendLine("Provide a SHORT assistant reply to the primary model that reminds it to use the tools, and if possible suggest the first tool to call.");
+            checkerSystemSb.AppendLine("Return ONLY the assistant reply text, no JSON, no extra explanations.");
+
+            var checkerUserSb = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(systemMessage))
             {
-                prompt.AppendLine("=== System message ===");
-                prompt.AppendLine(systemMessage);
-                prompt.AppendLine();
+                checkerUserSb.AppendLine("=== System message ===");
+                checkerUserSb.AppendLine(systemMessage);
+                checkerUserSb.AppendLine();
             }
-            prompt.AppendLine("=== User prompt ===");
-            prompt.AppendLine(userPrompt);
-            prompt.AppendLine();
-            prompt.AppendLine("=== Model response (incorrect - no tool calls) ===");
-            prompt.AppendLine(modelResponse);
-            prompt.AppendLine();
-            prompt.AppendLine("=== Available tools ===");
+            checkerUserSb.AppendLine("=== User prompt ===");
+            checkerUserSb.AppendLine(userPrompt);
+            checkerUserSb.AppendLine();
+            checkerUserSb.AppendLine("=== Model response (incorrect - no tool calls) ===");
+            checkerUserSb.AppendLine(modelResponse);
+            checkerUserSb.AppendLine();
+            checkerUserSb.AppendLine("=== Available tools ===");
             foreach (var t in toolNames)
             {
-                prompt.AppendLine($"- {t}");
+                checkerUserSb.AppendLine($"- {t}");
             }
 
             try
@@ -495,13 +509,19 @@ namespace TinyGenerator.Services
                     null,
                     LogScope.CurrentStepNumber,
                     LogScope.CurrentMaxStep,
-                    "Response Checker");
+                    "Response Checker",
+                    agentRole: "response_checker");
 
                 var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
                 var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
-                var loop = new ReActLoopOrchestrator(orchestrator, _logger, maxIterations: 3, modelBridge: bridge);
+                var loop = new ReActLoopOrchestrator(
+                    orchestrator,
+                    _logger,
+                    maxIterations: 3,
+                    modelBridge: bridge,
+                    systemMessage: checkerSystemSb.ToString());
 
-                var result = await loop.ExecuteAsync(prompt.ToString());
+                var result = await loop.ExecuteAsync(checkerUserSb.ToString());
                 var reply = result.FinalResponse;
                 if (string.IsNullOrWhiteSpace(reply))
                 {
@@ -526,6 +546,32 @@ namespace TinyGenerator.Services
         {
             try
             {
+                // Preferred: TAG output parsing.
+                if (BracketTagParser.TryGetTagContent(response, "IS_VALID", out var isValidText))
+                {
+                    var isValidTag = BracketTagParser.TryParseBool(isValidText, out var parsedValid) && parsedValid;
+
+                    var needsRetry = !isValidTag;
+                    if (BracketTagParser.TryGetTagContent(response, "NEEDS_RETRY", out var needsRetryText)
+                        && BracketTagParser.TryParseBool(needsRetryText, out var parsedRetry))
+                    {
+                        needsRetry = parsedRetry;
+                    }
+
+                    var reasonTag = BracketTagParser.GetTagContentOrNull(response, "REASON") ?? "Validation completed";
+                    var violated = BracketTagParser.ParseIntList(BracketTagParser.GetTagContentOrNull(response, "VIOLATED_RULES"));
+                    var violatedRules = violated.Count > 0 ? violated.ToList() : null;
+
+                    return new ValidationResult
+                    {
+                        IsValid = isValidTag,
+                        Reason = reasonTag,
+                        NeedsRetry = needsRetry,
+                        SemanticScore = semanticScore,
+                        ViolatedRules = violatedRules
+                    };
+                }
+
                 // First, try to extract from Ollama response format (if present)
                 if (response.Contains("\"message\"") && response.Contains("\"content\""))
                 {
@@ -560,6 +606,7 @@ namespace TinyGenerator.Services
                     var validFlag = false;
                     string? validReason = null;
                     bool? retryFlag = null;
+                    List<int>? violatedRules = null;
 
                     if (root.TryGetProperty("is_valid", out var isValidProp))
                         validFlag = isValidProp.GetBoolean();
@@ -582,12 +629,34 @@ namespace TinyGenerator.Services
                     else if (root.TryGetProperty("needsRetry", out retryProp))
                         retryFlag = retryProp.GetBoolean();
 
+                    if (root.TryGetProperty("violated_rules", out var violatedProp) && violatedProp.ValueKind == JsonValueKind.Array)
+                    {
+                        try
+                        {
+                            var tmp = new List<int>();
+                            foreach (var item in violatedProp.EnumerateArray())
+                            {
+                                if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var n))
+                                    tmp.Add(n);
+                                else if (item.ValueKind == JsonValueKind.String && int.TryParse(item.GetString(), out var ns))
+                                    tmp.Add(ns);
+                            }
+                            if (tmp.Count > 0) violatedRules = tmp;
+                        }
+                        catch
+                        {
+                            // best-effort
+                        }
+                    }
+
                     return new ValidationResult
                     {
                         IsValid = validFlag,
                         Reason = validReason ?? "Validation completed",
                         NeedsRetry = retryFlag ?? !validFlag,
                         SemanticScore = semanticScore
+                        ,
+                        ViolatedRules = violatedRules
                     };
                 }
 
@@ -643,6 +712,132 @@ namespace TinyGenerator.Services
                 NeedsRetry = true,
                 SemanticScore = semanticScore
             };
+        }
+
+        /// <summary>
+        /// Generic rule-based validation via the response_checker agent.
+        /// Designed for central interception of agent responses.
+        /// </summary>
+        public async Task<ValidationResult> ValidateGenericResponseAsync(
+            string instruction,
+            string modelOutput,
+            IReadOnlyList<ResponseValidationRule> rules,
+            string? agentName = null,
+            string? modelName = null,
+            CancellationToken ct = default)
+        {
+            var checkerAgent = _database.ListAgents()
+                .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                    a.Role.Equals("response_checker", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+
+            if (checkerAgent == null)
+            {
+                return new ValidationResult
+                {
+                    IsValid = true,
+                    Reason = "No response_checker agent configured; skipping LLM validation.",
+                    NeedsRetry = false
+                };
+            }
+
+            var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
+            var checkerModelName = modelInfo?.Name;
+            if (string.IsNullOrWhiteSpace(checkerModelName))
+            {
+                return new ValidationResult
+                {
+                    IsValid = true,
+                    Reason = "Response checker has no model configured; skipping LLM validation.",
+                    NeedsRetry = false
+                };
+            }
+
+            // IMPORTANT: when invoking response_checker, append response-format instructions to the SYSTEM message.
+            var checkerSystemSb = new StringBuilder();
+            if (!string.IsNullOrWhiteSpace(checkerAgent.Prompt))
+            {
+                checkerSystemSb.AppendLine("=== Agent Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.Prompt);
+                checkerSystemSb.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(checkerAgent.Instructions))
+            {
+                checkerSystemSb.AppendLine("=== Agent Instructions ===");
+                checkerSystemSb.AppendLine(checkerAgent.Instructions);
+                checkerSystemSb.AppendLine();
+            }
+
+            checkerSystemSb.AppendLine("Sei un Response Checker. Devi validare l'output di un agente rispetto alle regole.");
+            if (!string.IsNullOrWhiteSpace(agentName) || !string.IsNullOrWhiteSpace(modelName))
+            {
+                checkerSystemSb.AppendLine($"Agente: {agentName ?? "(unknown)"} | Modello: {modelName ?? "(unknown)"}");
+            }
+            checkerSystemSb.AppendLine();
+            checkerSystemSb.AppendLine("=== OUTPUT RICHIESTO (OBBLIGATORIO) ===");
+            checkerSystemSb.AppendLine("Restituisci SOLO TAG tra parentesi quadre (no JSON) con questa struttura:");
+            checkerSystemSb.AppendLine("[IS_VALID]true|false");
+            checkerSystemSb.AppendLine("[NEEDS_RETRY]true|false");
+            checkerSystemSb.AppendLine("[REASON]Spiega brevemente. Se non valido, cita almeno una REGOLA n violata.");
+            checkerSystemSb.AppendLine("[VIOLATED_RULES]1,2  // vuoto se valido");
+
+            var checkerUserSb = new StringBuilder();
+            checkerUserSb.AppendLine("=== ISTRUZIONE / CONTESTO ===");
+            checkerUserSb.AppendLine(instruction);
+            checkerUserSb.AppendLine();
+            checkerUserSb.AppendLine("=== OUTPUT DELL'AGENTE ===");
+            checkerUserSb.AppendLine(modelOutput);
+            checkerUserSb.AppendLine();
+            checkerUserSb.AppendLine("=== REGOLE ===");
+            if (rules != null && rules.Count > 0)
+            {
+                foreach (var r in rules.OrderBy(r => r.Id))
+                {
+                    checkerUserSb.AppendLine($"REGOLA {r.Id}: {r.Text}");
+                }
+            }
+            else
+            {
+                checkerUserSb.AppendLine("(Nessuna regola configurata)");
+            }
+
+            try
+            {
+                // Keep the existing operation scope so the checker request/response is visible
+                // in the same log thread, but override agent identity to avoid confusion.
+                var parentScope = LogScope.Current ?? "response_checker_generic_validation";
+                using var checkerScope = LogScope.Push(
+                    parentScope,
+                    null,
+                    LogScope.CurrentStepNumber,
+                    LogScope.CurrentMaxStep,
+                    "Response Checker",
+                    agentRole: "response_checker");
+
+                var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
+                var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
+                var loop = new ReActLoopOrchestrator(
+                    orchestrator,
+                    _logger,
+                    maxIterations: 5,
+                    modelBridge: bridge,
+                    systemMessage: checkerSystemSb.ToString());
+                var result = await loop.ExecuteAsync(checkerUserSb.ToString(), ct);
+
+                _logger.Log("Information", "ResponseChecker", $"Checker raw response (generic): {result.FinalResponse}");
+                return ParseValidationResponse(result.FinalResponse, semanticScore: null);
+            }
+            catch (Exception ex)
+            {
+                _logger.Log("Error", "ResponseChecker", $"Generic checker invocation failed: {ex.Message}", ex.ToString());
+                return new ValidationResult
+                {
+                    IsValid = false,
+                    Reason = $"Validation error: {ex.Message}",
+                    NeedsRetry = true
+                };
+            }
         }
 
         public async Task<double?> CalculateSemanticAlignmentAsync(string text1, string text2)

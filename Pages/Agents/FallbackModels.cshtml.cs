@@ -42,6 +42,7 @@ namespace TinyGenerator.Pages.Agents
                     id = mr.Id,
                     modelName = mr.Model?.Name ?? string.Empty,
                     roleName = mr.Role?.Ruolo ?? string.Empty,
+                    isPrimary = mr.IsPrimary,
                     useCount = mr.UseCount,
                     useSuccessed = mr.UseSuccessed,
                     useFailed = mr.UseFailed,
@@ -98,6 +99,7 @@ namespace TinyGenerator.Pages.Agents
                         id = hydrated.Id,
                         modelName = hydrated.Model?.Name ?? string.Empty,
                         roleName = hydrated.Role?.Ruolo ?? string.Empty,
+                        isPrimary = hydrated.IsPrimary,
                         useCount = hydrated.UseCount,
                         useSuccessed = hydrated.UseSuccessed,
                         useFailed = hydrated.UseFailed,
@@ -123,6 +125,7 @@ namespace TinyGenerator.Pages.Agents
             var description =
                 $"Modello: {mr.Model?.Name ?? "-"}\n" +
                 $"Ruolo: {mr.Role?.Ruolo ?? "-"}\n" +
+                $"Primary: {(mr.IsPrimary ? "Yes" : "No")}\n" +
                 $"Istruzioni: {(string.IsNullOrWhiteSpace(mr.Instructions) ? "-" : mr.Instructions)}\n" +
                 $"Top-P: {(mr.TopP.HasValue ? mr.TopP.Value.ToString("0.00") : "-")}\n" +
                 $"Top-K: {(mr.TopK.HasValue ? mr.TopK.Value.ToString() : "-")}\n" +
@@ -153,6 +156,26 @@ namespace TinyGenerator.Pages.Agents
             _context.SaveChanges();
 
             return new JsonResult(new { ok = true });
+        }
+
+        public IActionResult OnPostToggleEnabled([FromBody] ToggleEnabledRequest input)
+        {
+            if (input is null || input.Id <= 0)
+            {
+                return new JsonResult(new { ok = false, error = "Invalid id" }) { StatusCode = 400 };
+            }
+
+            var entity = _context.ModelRoles.Find(input.Id);
+            if (entity == null)
+            {
+                return new JsonResult(new { ok = false, error = "Not found" }) { StatusCode = 404 };
+            }
+
+            entity.Enabled = input.Enabled;
+            entity.UpdatedAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            _context.SaveChanges();
+
+            return new JsonResult(new { ok = true, enabled = entity.Enabled });
         }
 
         public string FormatLastUse(string? lastUse)
@@ -229,10 +252,21 @@ namespace TinyGenerator.Pages.Agents
             public int Id { get; set; }
         }
 
+        public class ToggleEnabledRequest
+        {
+            public int Id { get; set; }
+            public bool Enabled { get; set; }
+        }
+
         public record RowAction(string Id, string Title, string Method, string Url, bool Confirm = false);
 
         public List<RowAction> GetActionsForModelRole(ModelRole modelRole)
         {
+            if (modelRole.IsPrimary)
+            {
+                return new List<RowAction>();
+            }
+
             return new List<RowAction>
             {
                 new("delete", "Elimina", "CLIENT", string.Empty, true)

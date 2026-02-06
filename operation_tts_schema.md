@@ -1,8 +1,10 @@
 # Operazione `tts_schema` — Descrizione dettagliata
 
+Nota importante (stato attuale del progetto): questo documento descrive un flusso **legacy** basato su tool-calls. Con la configurazione di default `ToolCalling:Enabled=false`, i tool non vengono esposti ai modelli e quindi questa operazione, cosi' come descritta qui, non e' attiva. Se serve riabilitarla, va prima migrata a output TAG-only e/o a un flusso deterministico senza tool-calls.
+
 Questo documento descrive in dettaglio cosa viene eseguito dall'applicazione durante un'operazione di tipo `tts_schema`. Si basa sull'implementazione presente in `Services/ResponseCheckerService.cs`, `Services/MultiStepOrchestrationService.cs` e `Skills/TtsSchemaTool.cs`.
 
-**Scopo dell'operazione**
+**Scopo dell'operazione (legacy)**
 - Convertire un segmento di storia (chunk) in una sequenza di chiamate strumentali (`tool_calls`) per la generazione TTS: principalmente `add_narration` e `add_phrase`.
 - Assicurare che la maggior parte del testo sorgente sia coperta da queste chiamate (soglia predefinita 90%).
 - Validare la correttezza strutturale dei `tool_calls` (parametri obbligatori come `text`, `character`) e segnalare errori/warning.
@@ -11,7 +13,7 @@ Questo documento descrive in dettaglio cosa viene eseguito dall'applicazione dur
 **Flusso ad alto livello**
 - L'orchestratore esegue più step per generare lo schema TTS a partire da chunk di testo.
 - Per ogni step:
-  - Il modello produce un output (idealmente un JSON strutturato contenente `tool_calls`, oppure la chiamata diretta alle funzioni tramite il plugin `TtsSchemaTool`).
+  - Il modello produce un output (idealmente un payload strutturato contenente `tool_calls`, oppure la chiamata diretta alle funzioni tramite il plugin `TtsSchemaTool`).
   - Viene eseguita una validazione deterministica del passo (senza chiamare automaticamente un `response_checker` LLM):
     - Se il task è `tts_schema`, viene invocata `ValidateTtsSchemaResponse(...)` per analizzare il risultato e calcolare la copertura testuale.
     - In altri task vengono applicate verifiche basiche (es. output non vuoto).

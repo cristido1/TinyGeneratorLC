@@ -118,11 +118,15 @@ namespace TinyGenerator.Services
             if (context == null) return null;
 
             var scope = $"tests/{SanitizeIdentifier(group)}/{SanitizeIdentifier(model)}";
+            var maxSteps = context.Tests?.Count ?? 0;
             var metadata = new Dictionary<string, string>
             {
                 ["runId"] = context.RunId.ToString(),
-                ["model"] = context.ModelName,
-                ["group"] = context.Group
+                // Command panel uses these keys for display (see wwwroot/js/command-panel.js)
+                ["modelName"] = context.ModelName,
+                ["group"] = context.Group,
+                ["stepCurrent"] = "0",
+                ["stepMax"] = maxSteps.ToString()
             };
 
             return _commandDispatcher.Enqueue(
@@ -190,6 +194,13 @@ namespace TinyGenerator.Services
             var tests = context.Tests ?? new List<TestDefinition>();
             var testFolder = context.TestFolder;
 
+            // Real-time progress in the command panel (queued/running commands list)
+            // The panel displays: modelName + currentStep/maxStep + stepDescription.
+            var runIdText = runId.ToString();
+            var orderedTests = tests.OrderBy(t => t.Priority).ToList();
+            var totalTests = orderedTests.Count;
+            _commandDispatcher.UpdateStep(runIdText, 0, totalTests, stepDescription: "score parziale 0/10");
+
             if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
             {
                 try
@@ -214,10 +225,35 @@ namespace TinyGenerator.Services
             var testStartUtc = DateTime.UtcNow;
 
             int idx = 0;
-            foreach (var test in tests.OrderBy(t => t.Priority).ToList())
+            int passedSoFar = 0;
+            int completedSoFar = 0;
+            foreach (var test in orderedTests)
             {
                 idx++;
+
+                // Show what is currently executing.
+                var scoreBefore = completedSoFar > 0
+                    ? (int)Math.Round((double)passedSoFar / completedSoFar * 10)
+                    : 0;
+                _commandDispatcher.UpdateStep(runIdText, idx, totalTests, stepDescription: $"score parziale {scoreBefore}/10");
+
                 await ExecuteTestAsync(runId, idx, test, model, modelInfo, string.Empty, null, testFolder);
+
+                // After the step completes, refresh partial score from DB (source of truth).
+                try
+                {
+                    var countsNow = _database.GetRunStepCounts(runId);
+                    passedSoFar = countsNow.passed;
+                    completedSoFar = countsNow.total;
+                    var scoreNow = completedSoFar > 0
+                        ? (int)Math.Round((double)passedSoFar / completedSoFar * 10)
+                        : 0;
+                    _commandDispatcher.UpdateStep(runIdText, idx, totalTests, stepDescription: $"score parziale {scoreNow}/10 ({passedSoFar}/{completedSoFar})");
+                }
+                catch
+                {
+                    // Best-effort: avoid breaking the test run if progress update fails
+                }
             }
 
             var testEndUtc = DateTime.UtcNow;

@@ -107,8 +107,22 @@ builder.Services.AddSingleton<IMemoryEmbeddingBackfillScheduler>(sp => sp.GetReq
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MemoryEmbeddingBackfillService>());
 // Command dispatcher (background command queue with configurable parallelism)
 builder.Services.Configure<CommandDispatcherOptions>(builder.Configuration.GetSection("CommandDispatcher"));
-// Command tuning (attempts, chunking sizes, thresholds)
-builder.Services.Configure<CommandTuningOptions>(builder.Configuration.GetSection("CommandTuning"));
+// Command policies/tuning/validation configuration
+// New preferred layout: Commands:{ Tuning, ResponseValidation, Policies }
+var commandsRoot = builder.Configuration.GetSection("Commands");
+if (commandsRoot.Exists())
+{
+    builder.Services.Configure<CommandTuningOptions>(commandsRoot.GetSection("Tuning"));
+    builder.Services.Configure<ResponseValidationOptions>(commandsRoot.GetSection("ResponseValidation"));
+    builder.Services.Configure<CommandPoliciesOptions>(commandsRoot.GetSection("Policies"));
+}
+else
+{
+    // Legacy sections
+    builder.Services.Configure<CommandTuningOptions>(builder.Configuration.GetSection("CommandTuning"));
+    builder.Services.Configure<ResponseValidationOptions>(builder.Configuration.GetSection("ResponseValidation"));
+    builder.Services.Configure<CommandPoliciesOptions>(builder.Configuration.GetSection("CommandPolicies"));
+}
 builder.Services.Configure<StateDrivenStoryGenerationOptions>(builder.Configuration.GetSection("StateDrivenStoryGeneration"));
 builder.Services.AddSingleton<TextValidationService>();
 // TTS schema generation options (pause/gap between phrases)
@@ -123,9 +137,11 @@ builder.Services.Configure<AutomaticOperationsOptions>(builder.Configuration.Get
 builder.Services.Configure<StoryTaggingPipelineOptions>(builder.Configuration.GetSection("StoryTaggingPipeline"));
 // Narrator voice options (default voice id)
 builder.Services.Configure<NarratorVoiceOptions>(builder.Configuration.GetSection("NarratorVoice"));
+// ResponseValidationOptions configured above (Commands:ResponseValidation preferred)
 builder.Services.AddSingleton<CommandDispatcher>(sp =>
     new CommandDispatcher(
         sp.GetService<IOptions<CommandDispatcherOptions>>(),
+        sp.GetService<IOptions<CommandPoliciesOptions>>(),
         sp.GetService<ICustomLogger>(),
         sp.GetService<IHubContext<TinyGenerator.Hubs.ProgressHub>>(),
         sp.GetService<NumeratorService>(),
@@ -168,6 +184,7 @@ builder.Services.AddSingleton<SystemReportService>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
 builder.Services.AddTransient<LangChainTestService>();
+builder.Services.AddSingleton<JsonScoreTestService>();
 
 // === LangChain Services (NEW) ===
 // Tool factory for creating LangChain tools and orchestrators
@@ -193,7 +210,8 @@ builder.Services.AddSingleton<LangChainKernelFactory>(sp =>
         sp.GetService<ICustomLogger>(),
         sp.GetRequiredService<LangChainToolFactory>(),
         sp.GetService<IOllamaMonitorService>(),
-        sp.GetService<LlamaService>());
+        sp.GetService<LlamaService>(),
+        sp);
     return factory;
 });
 
@@ -283,19 +301,27 @@ app.Lifetime.ApplicationStarted.Register(() =>
 });
 
 // Apply EF Core migrations automatically at startup
-try
+var enableEfMigrations = builder.Configuration.GetValue<bool?>("Database:EnableEfMigrations") ?? false;
+if (enableEfMigrations)
 {
-    logger?.LogInformation("[Startup] Applying EF Core migrations...");
-    using (var scope = app.Services.CreateScope())
+    try
     {
-        var dbContext = scope.ServiceProvider.GetRequiredService<TinyGenerator.Data.TinyGeneratorDbContext>();
-        dbContext.Database.Migrate();
-        logger?.LogInformation("[Startup] EF Core migrations applied successfully");
+        logger?.LogInformation("[Startup] Applying EF Core migrations...");
+        using (var scope = app.Services.CreateScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<TinyGenerator.Data.TinyGeneratorDbContext>();
+            dbContext.Database.Migrate();
+            logger?.LogInformation("[Startup] EF Core migrations applied successfully");
+        }
+    }
+    catch (Exception ex)
+    {
+        logger?.LogError(ex, "[Startup] Failed to apply EF Core migrations: {msg}", ex.Message);
     }
 }
-catch (Exception ex)
+else
 {
-    logger?.LogError(ex, "[Startup] Failed to apply EF Core migrations: {msg}", ex.Message);
+    logger?.LogInformation("[Startup] EF Core migrations are disabled (Database:EnableEfMigrations=false)");
 }
 
 // Ensure the global ServiceLocator points to the DI DatabaseService so legacy/static code
@@ -309,14 +335,24 @@ catch (Exception ex)
 var dbInit = app.Services.GetService<TinyGenerator.Services.DatabaseService>();
 StartupTasks.InitializeDatabaseIfNeeded(dbInit, logger);
 
-// Apply any pending manual migrations (for when EF migrations are disabled)
-try
+// Apply any pending manual migrations (explicit opt-in)
+var enableManualMigrations = builder.Configuration.GetValue<bool?>("Database:EnableManualMigrations") ?? false;
+if (enableManualMigrations)
 {
-    dbInit?.ApplyPendingManualMigrations();
+    try
+    {
+        logger?.LogInformation("[Startup] Applying manual migrations...");
+        dbInit?.ApplyPendingManualMigrations();
+        logger?.LogInformation("[Startup] Manual migrations applied");
+    }
+    catch (Exception ex)
+    {
+        logger?.LogWarning(ex, "[Startup] Failed to apply manual migrations: {msg}", ex.Message);
+    }
 }
-catch (Exception ex)
+else
 {
-    logger?.LogWarning(ex, "[Startup] Failed to apply manual migrations: {msg}", ex.Message);
+    logger?.LogInformation("[Startup] Manual migrations are disabled (Database:EnableManualMigrations=false)");
 }
 
 // Ensure series_folder structure exists and backfill series.folder values (best-effort)
@@ -395,6 +431,8 @@ _ = Task.Run(() => StartupTasks.SeedTtsVoicesIfNeededAsync(db, tts, builder.Conf
 StartupTasks.NormalizeTestPromptsIfNeeded(db, logger);
 // Ensure evaluator agents have an example evaluate_full_story call in instructions
 StartupTasks.EnsureEvaluatorInstructions(db, logger);
+// Ensure agent instructions include the ResponseValidation rules used by response_checker
+StartupTasks.EnsureResponseValidationRulesInAgentInstructions(db, builder.Configuration, logger);
 
 // Clean up old logs if log count exceeds threshold
 // Automatically delete logs older than 7 days if total count > 1000

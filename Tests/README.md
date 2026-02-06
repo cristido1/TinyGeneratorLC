@@ -1,6 +1,8 @@
 # TinyGenerator LangChain Tests
 
-Comprehensive test suite for the LangChain C# migration from Semantic Kernel. All tests use xUnit and validate the ReAct loop orchestration, tool management, and schema generation without requiring a live model endpoint.
+Comprehensive test suite for the LangChain C# migration from Semantic Kernel.
+
+Nota di policy (runtime): l'applicazione usa output TAG-only e ha `ToolCalling:Enabled=false` di default. Questa suite testa anche l'infrastruttura tool-calling **legacy/retrocompatibilita'** (schema, parsing, orchestrazione) usando mock deterministici.
 
 ## Test Files
 
@@ -119,7 +121,7 @@ Tests validate the explicit iteration pattern that fixes Semantic Kernel's broke
 ```
 
 ### Tool Schema Format
-All tools use OpenAI-compatible function calling schema:
+All tools use OpenAI-compatible function calling schema (legacy/tests):
 ```json
 {
   "type": "function",

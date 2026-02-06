@@ -29,6 +29,7 @@ namespace TinyGenerator.Services
         private readonly Dictionary<int, HybridLangChainOrchestrator> _agentOrchestrators;
         private readonly IOllamaMonitorService? _ollamaMonitor;
         private readonly LlamaService? _llamaService;
+        private readonly IServiceProvider? _services;
         private readonly object _providerSwitchLock = new();
         private string? _lastLocalProvider;
         private string? _lastLocalModelName;
@@ -39,7 +40,8 @@ namespace TinyGenerator.Services
             ICustomLogger? logger = null,
             LangChainToolFactory? toolFactory = null,
             IOllamaMonitorService? ollamaMonitor = null,
-            LlamaService? llamaService = null)
+            LlamaService? llamaService = null,
+            IServiceProvider? services = null)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _database = database ?? throw new ArgumentNullException(nameof(database));
@@ -48,6 +50,7 @@ namespace TinyGenerator.Services
             _agentOrchestrators = new Dictionary<int, HybridLangChainOrchestrator>();
             _ollamaMonitor = ollamaMonitor;
             _llamaService = llamaService;
+            _services = services;
         }
 
         /// <summary>
@@ -64,6 +67,14 @@ namespace TinyGenerator.Services
             try
             {
                 _logger?.Log("Info", "LangChainKernelFactory", $"Creating orchestrator for model: {model}, agentId: {agentId}");
+
+                // Global kill-switch: never expose tools/function-calling to models.
+                // This keeps LLM outputs TAG/text-only and avoids function-calling failure modes.
+                if (!_config.GetValue<bool>("ToolCalling:Enabled", false))
+                {
+                    _logger?.Log("Info", "LangChainKernelFactory", "ToolCalling disabled: creating empty orchestrator (no tools)");
+                    return new HybridLangChainOrchestrator(_logger);
+                }
 
                 HybridLangChainOrchestrator orchestrator;
 
@@ -345,7 +356,7 @@ namespace TinyGenerator.Services
                 var noTopKModels = _config.GetSection("OpenAI:NoTopKModels").Get<string[]>() ?? Array.Empty<string>();
                 var noRepeatLastNModels = _config.GetSection("OpenAI:NoRepeatLastNModels").Get<string[]>() ?? Array.Empty<string>();
                 var noNumPredictModels = _config.GetSection("OpenAI:NoNumPredictModels").Get<string[]>() ?? Array.Empty<string>();
-                var bridge = new LangChainChatBridge(endpoint, model, apiKey, null, _logger, forceOllama, beforeCall, afterCall, logAsLlama, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels);
+                var bridge = new LangChainChatBridge(endpoint, model, apiKey, null, _logger, forceOllama, beforeCall, afterCall, logAsLlama, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels, _services);
                 if (temperature.HasValue) bridge.Temperature = temperature.Value;
                 if (topP.HasValue) bridge.TopP = topP.Value;
                 if (repeatPenalty.HasValue) bridge.RepeatPenalty = repeatPenalty.Value;
@@ -442,6 +453,8 @@ namespace TinyGenerator.Services
             var schemas = new List<Dictionary<string, object>>();
             try
             {
+                if (!_config.GetValue<bool>("ToolCalling:Enabled", false)) return schemas;
+
                 var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
                 if (modelInfo == null) return schemas;
 

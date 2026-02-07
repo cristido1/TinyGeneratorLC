@@ -165,6 +165,7 @@ namespace TinyGenerator.Services.Commands
                             i + 1,
                             chunks.Count,
                             effectiveRunId,
+                            ambientAgent.Name,
                             ct);
                     }
                     catch (Exception ex) when (_scopeFactory != null)
@@ -359,6 +360,7 @@ namespace TinyGenerator.Services.Commands
                         chunkIndex,
                         chunkCount,
                         runId,
+                        agent.Name,
                         ct);
                 },
                 validateResult: s => !string.IsNullOrWhiteSpace(s),
@@ -391,6 +393,7 @@ namespace TinyGenerator.Services.Commands
             int chunkIndex,
             int chunkCount,
             string runId,
+            string? agentName,
             CancellationToken ct)
         {
             string? lastError = null;
@@ -401,7 +404,6 @@ namespace TinyGenerator.Services.Commands
             var minTagsRequired = Math.Max(0, _tuning.AmbientExpert.MinAmbientTagsPerChunkRequirement);
             var retryDelayBaseSeconds = Math.Max(0, _tuning.AmbientExpert.RetryDelayBaseSeconds);
             var diagnoseOnFinalFailure = _tuning.AmbientExpert.DiagnoseOnFinalFailure;
-            var hadCorrections = false;
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -420,7 +422,13 @@ namespace TinyGenerator.Services.Commands
                     // Keep the last request/response around for diagnostics.
                     lastRequestMessages = messages;
 
-                    var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
+                    string responseJson;
+                    // Preserve current operation scope while exposing ambient_expert identity
+                    // so bridge metrics can resolve role/model and persist on model_roles.
+                    using (LogScope.Push(LogScope.Current ?? "story/add_ambient_tags_to_story", operationId: null, stepNumber: null, maxStep: null, agentName: agentName, agentRole: "ambient_expert"))
+                    {
+                        responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true);
+                    }
                     var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
                     var cleaned = textContent?.Trim() ?? string.Empty;
                     lastAssistantText = cleaned;
@@ -430,7 +438,6 @@ namespace TinyGenerator.Services.Commands
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Empty response on attempt {attempt}", "warn");
                         _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota");
                         lastError = "Il testo ritornato è vuoto.";
-                        hadCorrections = true;
                         continue;
                     }
 
@@ -440,7 +447,6 @@ namespace TinyGenerator.Services.Commands
                     {
                         _logger?.MarkLatestModelResponseResult("FAILED", "Nessuna riga valida nel formato richiesto");
                         lastError = "Non ho trovato righe valide nel formato \"ID descrizione\".";
-                        hadCorrections = true;
                         continue;
                     }
 
@@ -449,14 +455,13 @@ namespace TinyGenerator.Services.Commands
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough ambient tags: {tagCount} found, minimum {minTagsRequired} required", "warn");
                         _logger?.MarkLatestModelResponseResult("FAILED", $"Hai inserito solo {tagCount} tag. Devi inserirne almeno {minTagsRequired}.");
                         lastError = $"Hai inserito solo {tagCount} tag [RUMORI]. Devi inserire ALMENO {minTagsRequired} tag di questo tipo per arricchire l'atmosfera della scena, non ripetere gli stessi tag.";
-                        hadCorrections = true;
                         continue;
                     }
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalAmbient={tagCount}");
                     _logger?.MarkLatestModelResponseResult(
-                        hadCorrections ? "FAILED" : "SUCCESS",
-                        hadCorrections ? "Risposta corretta dopo retry" : null);
+                        "SUCCESS",
+                        null);
                     return cleaned;
                 }
                 catch (Exception ex)
@@ -557,12 +562,19 @@ namespace TinyGenerator.Services.Commands
             if (!string.IsNullOrWhiteSpace(originalSystemPrompt))
             {
                 diagMessages.Add(new ConversationMessage { Role = "system", Content = originalSystemPrompt });
+                diagMessages.Add(new ConversationMessage
+                {
+                    Role = "user",
+                    Content = "ISTRUZIONI DIAGNOSTICHE:\n" + auditSystem + "\n\n" + sb
+                });
+            }
+            else
+            {
+                diagMessages.Add(new ConversationMessage { Role = "system", Content = auditSystem });
+                diagMessages.Add(new ConversationMessage { Role = "user", Content = sb.ToString() });
             }
 
-            diagMessages.Add(new ConversationMessage { Role = "system", Content = auditSystem });
-            diagMessages.Add(new ConversationMessage { Role = "user", Content = sb.ToString() });
-
-            var responseJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct).ConfigureAwait(false);
+            var responseJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true).ConfigureAwait(false);
             var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
             return string.IsNullOrWhiteSpace(textContent) ? null : textContent.Trim();
         }

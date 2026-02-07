@@ -119,9 +119,21 @@ if (commandsRoot.Exists() && byCommandSection.Exists())
         foreach (var command in byCommandSection.GetChildren())
         {
             var policySection = command.GetSection("Policy");
-            if (!policySection.Exists()) continue;
             var policy = new CommandExecutionPolicy();
-            policySection.Bind(policy);
+            if (policySection.Exists())
+            {
+                policySection.Bind(policy);
+            }
+
+            // Backward compatibility: allow Commands:ByCommand:<key>:timeoutSec
+            // in addition to Commands:ByCommand:<key>:Policy:TimeoutSec
+            var directTimeout = command.GetValue<int?>("timeoutSec");
+            if (directTimeout.HasValue && directTimeout.Value > 0)
+            {
+                policy.TimeoutSec = directTimeout.Value;
+            }
+
+            if (!policySection.Exists() && !directTimeout.HasValue) continue;
             options.Commands[command.Key] = policy;
         }
     });
@@ -141,13 +153,29 @@ if (commandsRoot.Exists() && byCommandSection.Exists())
 
     builder.Services.Configure<CommandTuningOptions>(options =>
     {
-        byCommandSection.GetSection("AmbientExpert:Tuning").Bind(options.AmbientExpert);
-        byCommandSection.GetSection("FxExpert:Tuning").Bind(options.FxExpert);
-        byCommandSection.GetSection("MusicExpert:Tuning").Bind(options.MusicExpert);
-        byCommandSection.GetSection("TransformStoryRawToTagged:Tuning").Bind(options.TransformStoryRawToTagged);
-        byCommandSection.GetSection("GenerateNextChunk:Tuning").Bind(options.GenerateNextChunk);
-        byCommandSection.GetSection("PlannedStory:Tuning").Bind(options.PlannedStory);
-        byCommandSection.GetSection("FullStoryPipeline:Tuning").Bind(options.FullStoryPipeline);
+        void BindTuning(string preferredKey, string legacyKey, object target)
+        {
+            var preferred = byCommandSection.GetSection($"{preferredKey}:Tuning");
+            if (preferred.Exists())
+            {
+                preferred.Bind(target);
+                return;
+            }
+
+            var legacy = byCommandSection.GetSection($"{legacyKey}:Tuning");
+            if (legacy.Exists())
+            {
+                legacy.Bind(target);
+            }
+        }
+
+        BindTuning("add_ambient_tags_to_story", "AmbientExpert", options.AmbientExpert);
+        BindTuning("add_fx_tags_to_story", "FxExpert", options.FxExpert);
+        BindTuning("add_music_tags_to_story", "MusicExpert", options.MusicExpert);
+        BindTuning("transform_story_raw_to_tagged", "TransformStoryRawToTagged", options.TransformStoryRawToTagged);
+        BindTuning("generate_next_chunk", "GenerateNextChunk", options.GenerateNextChunk);
+        BindTuning("planned_story", "PlannedStory", options.PlannedStory);
+        BindTuning("full_story_pipeline", "FullStoryPipeline", options.FullStoryPipeline);
     });
 }
 else
@@ -215,10 +243,13 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     storyTaggingOptions: sp.GetService<IOptionsMonitor<StoryTaggingPipelineOptions>>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 builder.Services.AddSingleton<SystemReportService>();
+builder.Services.AddSingleton<CommandModelExecutionService>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
 builder.Services.AddTransient<LangChainTestService>();
 builder.Services.AddSingleton<JsonScoreTestService>();
+builder.Services.AddSingleton<InstructionScoreTestService>();
+builder.Services.AddSingleton<IntelligenceScoreTestService>();
 
 // === LangChain Services (NEW) ===
 // Tool factory for creating LangChain tools and orchestrators

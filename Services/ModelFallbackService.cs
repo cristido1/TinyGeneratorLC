@@ -15,6 +15,14 @@ namespace TinyGenerator.Services;
 /// </summary>
 public class ModelFallbackService
 {
+    public sealed record ModelRolePerformanceDelta(
+        long PromptTokens,
+        long OutputTokens,
+        long PromptTimeNs,
+        long GenTimeNs,
+        long LoadTimeNs,
+        long TotalTimeNs);
+
     private readonly TinyGeneratorDbContext _context;
     private readonly ICustomLogger? _logger;
 
@@ -76,7 +84,11 @@ public class ModelFallbackService
             return;
         }
 
-        var mr = _context.ModelRoles.FirstOrDefault(x => x.RoleId == role.Id && x.ModelId == modelId && x.IsPrimary);
+        var mr = _context.ModelRoles
+            .Where(x => x.RoleId == role.Id && x.ModelId == modelId)
+            .OrderByDescending(x => x.IsPrimary)
+            .ThenBy(x => x.Id)
+            .FirstOrDefault();
         if (mr == null)
         {
             var now = DateTime.UtcNow.ToString("o");
@@ -92,6 +104,8 @@ public class ModelFallbackService
             _context.ModelRoles.Add(mr);
             _context.SaveChanges();
         }
+
+        EnsureSinglePrimaryForRole(role.Id, modelId);
 
         RecordModelRoleUsage(mr.Id, success);
     }
@@ -124,6 +138,111 @@ public class ModelFallbackService
 
         _logger?.Log("Info", "ModelFallback", 
             $"Recorded usage for ModelRole {modelRoleId} (model={mr.ModelId}, role={mr.RoleId}): success={success}, total={mr.UseCount}, rate={mr.SuccessRate:P1}");
+    }
+
+    /// <summary>
+    /// Aggregate model performance counters (tokens/durations) on model_roles for a specific role+model pair.
+    /// If the row does not exist, it is auto-created as primary+enabled.
+    /// </summary>
+    public void RecordPrimaryModelPerformance(string roleCode, int modelId, ModelRolePerformanceDelta delta)
+    {
+        if (string.IsNullOrWhiteSpace(roleCode) || modelId <= 0)
+        {
+            return;
+        }
+
+        var hasAnyDelta = delta.PromptTokens > 0 ||
+                          delta.OutputTokens > 0 ||
+                          delta.PromptTimeNs > 0 ||
+                          delta.GenTimeNs > 0 ||
+                          delta.LoadTimeNs > 0 ||
+                          delta.TotalTimeNs > 0;
+        if (!hasAnyDelta)
+        {
+            return;
+        }
+
+        var role = _context.Roles.FirstOrDefault(r => r.Ruolo == roleCode);
+        if (role == null)
+        {
+            _logger?.Log("Warning", "ModelFallback", $"Role '{roleCode}' not found in database. Cannot record performance.");
+            return;
+        }
+
+        // Prefer an existing primary row; fallback to any row for same model+role.
+        var mr = _context.ModelRoles
+            .Where(x => x.RoleId == role.Id && x.ModelId == modelId)
+            .OrderByDescending(x => x.IsPrimary)
+            .ThenBy(x => x.Id)
+            .FirstOrDefault();
+
+        if (mr == null)
+        {
+            var now = DateTime.UtcNow.ToString("o");
+            mr = new ModelRole
+            {
+                ModelId = modelId,
+                RoleId = role.Id,
+                IsPrimary = true,
+                Enabled = true,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _context.ModelRoles.Add(mr);
+            _context.SaveChanges();
+        }
+
+        EnsureSinglePrimaryForRole(role.Id, modelId);
+
+        mr.TotalPromptTokens += Math.Max(0, delta.PromptTokens);
+        mr.TotalOutputTokens += Math.Max(0, delta.OutputTokens);
+        mr.TotalPromptTimeNs += Math.Max(0, delta.PromptTimeNs);
+        mr.TotalGenTimeNs += Math.Max(0, delta.GenTimeNs);
+        mr.TotalLoadTimeNs += Math.Max(0, delta.LoadTimeNs);
+        mr.TotalTotalTimeNs += Math.Max(0, delta.TotalTimeNs);
+        mr.UpdatedAt = DateTime.UtcNow.ToString("o");
+        _context.SaveChanges();
+    }
+
+    private void EnsureSinglePrimaryForRole(int roleId, int primaryModelId)
+    {
+        if (roleId <= 0 || primaryModelId <= 0)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow.ToString("o");
+        var rows = _context.ModelRoles
+            .Where(x => x.RoleId == roleId)
+            .OrderBy(x => x.Id)
+            .ToList();
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        var primaryRow = rows.FirstOrDefault(x => x.ModelId == primaryModelId);
+        if (primaryRow == null)
+        {
+            return;
+        }
+
+        var changed = false;
+        foreach (var row in rows)
+        {
+            var shouldBePrimary = row.Id == primaryRow.Id;
+            if (row.IsPrimary != shouldBePrimary)
+            {
+                row.IsPrimary = shouldBePrimary;
+                row.UpdatedAt = now;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            _context.SaveChanges();
+        }
     }
 
     /// <summary>

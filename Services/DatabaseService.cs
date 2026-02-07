@@ -834,7 +834,7 @@ public sealed class DatabaseService
     }
 
     /// <summary>
-    /// Restituisce i modelli che non hanno ancora un punteggio jsonScore (abilitati o meno).
+    /// Restituisce i modelli abilitati che non hanno ancora un punteggio jsonScore.
     /// </summary>
     public List<ModelInfo> ListModelsWithoutJsonScore()
     {
@@ -842,7 +842,7 @@ public sealed class DatabaseService
         try
         {
             return context.Models.AsNoTracking()
-                .Where(m => m.JsonScore == null)
+                .Where(m => m.Enabled && m.JsonScore == null)
                 .OrderBy(m => m.Name)
                 .ToList();
         }
@@ -851,7 +851,53 @@ public sealed class DatabaseService
             using var conn = CreateDapperConnection();
             conn.Open();
             var cols = SelectModelColumns();
-            var sql = $"SELECT {cols} FROM models WHERE JsonScore IS NULL";
+            var sql = $"SELECT {cols} FROM models WHERE JsonScore IS NULL AND Enabled = 1";
+            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Restituisce i modelli abilitati che non hanno ancora un punteggio instructionScore.
+    /// </summary>
+    public List<ModelInfo> ListModelsWithoutInstructionScore()
+    {
+        using var context = CreateDbContext();
+        try
+        {
+            return context.Models.AsNoTracking()
+                .Where(m => m.Enabled && m.InstructionScore == null)
+                .OrderBy(m => m.Name)
+                .ToList();
+        }
+        catch (Exception)
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var cols = SelectModelColumns();
+            var sql = $"SELECT {cols} FROM models WHERE InstructionScore IS NULL AND Enabled = 1";
+            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Restituisce i modelli abilitati che non hanno ancora un punteggio intelligenceScore.
+    /// </summary>
+    public List<ModelInfo> ListModelsWithoutIntelligenceScore()
+    {
+        using var context = CreateDbContext();
+        try
+        {
+            return context.Models.AsNoTracking()
+                .Where(m => m.Enabled && m.IntelliScore == null)
+                .OrderBy(m => m.Name)
+                .ToList();
+        }
+        catch (Exception)
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var cols = SelectModelColumns();
+            var sql = $"SELECT {cols} FROM models WHERE intelliScore IS NULL AND Enabled = 1";
             return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
         }
     }
@@ -1760,504 +1806,7 @@ public sealed class DatabaseService
         using var conn = CreateDapperConnection();
         conn.Open();
 
-        // Persistent numerator state (threadid + story_id)
-        // Keeps counters stable across restarts and independent from deletions.
-        try
-        {
-            conn.Execute(@"CREATE TABLE IF NOT EXISTS numerators_state (
-    key TEXT PRIMARY KEY,
-    value INTEGER NOT NULL
-);");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DB] Warning: failed to ensure numerators_state table: {ex.Message}");
-        }
-
-        // Ensure story_id exists in Log table (for correlating logs to a story creation/execution)
-        var checkLogStoryId = conn.ExecuteScalar<int>(
-            "SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name='story_id'");
-        if (checkLogStoryId == 0)
-        {
-            Console.WriteLine("[DB] Applying migration: AddStoryIdToLog");
-            conn.Execute("ALTER TABLE Log ADD COLUMN story_id INTEGER");
-            Console.WriteLine("[DB] ✓ Migration AddStoryIdToLog applied");
-        }
-
-        // Ensure model_name exists in Log table (tracks model used for request/response)
-        var checkLogModelName = conn.ExecuteScalar<int>(
-            "SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name='model_name'");
-        if (checkLogModelName == 0)
-        {
-            Console.WriteLine("[DB] Applying migration: AddModelNameToLog");
-            conn.Execute("ALTER TABLE Log ADD COLUMN model_name TEXT");
-            Console.WriteLine("[DB] ✓ Migration AddModelNameToLog applied");
-        }
-
-        // Ensure system_reports table exists
-        var hasSystemReports = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='system_reports'");
-        if (hasSystemReports == 0)
-        {
-            Console.WriteLine("[DB] Creating system_reports table");
-            conn.Execute(@"
-CREATE TABLE system_reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    status TEXT NOT NULL,
-    deleted INTEGER NOT NULL DEFAULT 0,
-    deleted_at TEXT NULL,
-    deleted_by TEXT NULL,
-    title TEXT NULL,
-    message TEXT NULL,
-    failure_reason TEXT NULL,
-    agent_name TEXT NULL,
-    agent_role TEXT NULL,
-    model_name TEXT NULL,
-    story_id INTEGER NULL,
-    series_id INTEGER NULL,
-    series_episode INTEGER NULL,
-    operation_type TEXT NULL,
-    execution_time_ms INTEGER NULL,
-    retry_count INTEGER NULL,
-    raw_log_ref TEXT NULL
-)");
-            Console.WriteLine("[DB] Created system_reports table");
-        }
-
-        // Ensure story_id exists in stories table (preallocated story numbering independent from DB row id)
-        var checkStoriesStoryId = conn.ExecuteScalar<int>(
-            "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='story_id'");
-        if (checkStoriesStoryId == 0)
-        {
-            Console.WriteLine("[DB] Applying migration: AddStoryIdToStories");
-            conn.Execute("ALTER TABLE stories ADD COLUMN story_id INTEGER");
-            Console.WriteLine("[DB] ✓ Migration AddStoryIdToStories applied");
-        }
-
-
-        // Ensure deleted flag exists in stories table
-        var checkStoriesDeleted = conn.ExecuteScalar<int>(
-            "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='deleted'");
-        if (checkStoriesDeleted == 0)
-        {
-            Console.WriteLine("[DB] Applying migration: AddDeletedToStories");
-            conn.Execute("ALTER TABLE stories ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
-            Console.WriteLine("[DB] ? Migration AddDeletedToStories applied");
-        }
-
-        // === Roles & ModelRoles hygiene ===
-        // Some installations used non-idempotent seeding before a UNIQUE constraint existed.
-        // This block deduplicates roles.ruolo, updates model_roles.role_id, adds model_roles.is_primary,
-        // and finally enforces uniqueness on roles.ruolo.
-        try
-        {
-            var hasRoles = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='roles'") > 0;
-            var hasModelRoles = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='model_roles'") > 0;
-            if (hasRoles)
-            {
-                if (hasModelRoles)
-                {
-                    var hasIsPrimary = conn.ExecuteScalar<int>(
-                        "SELECT COUNT(*) FROM pragma_table_info('model_roles') WHERE name='is_primary'");
-                    if (hasIsPrimary == 0)
-                    {
-                        Console.WriteLine("[DB] Applying migration: AddIsPrimaryToModelRoles");
-                        conn.Execute("ALTER TABLE model_roles ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0");
-                        Console.WriteLine("[DB] ✓ Migration AddIsPrimaryToModelRoles applied");
-                    }
-                }
-
-                // Deduplicate roles BEFORE adding the unique index.
-                var dupCount = conn.ExecuteScalar<long>(@"
-SELECT COUNT(*)
-FROM (
-  SELECT ruolo
-  FROM roles
-  GROUP BY ruolo
-  HAVING COUNT(*) > 1
-) t");
-
-                if (dupCount > 0 && hasModelRoles)
-                {
-                    Console.WriteLine($"[DB] Deduplicating roles table ({dupCount} duplicated role keys)...");
-                    conn.Execute(@"
-CREATE TEMP TABLE IF NOT EXISTS __roles_dedup_keep AS
-SELECT ruolo, MIN(id) AS keep_id
-FROM roles
-GROUP BY ruolo
-HAVING COUNT(*) > 1;
-
-CREATE TEMP TABLE IF NOT EXISTS __roles_dedup_map AS
-SELECT r.id AS old_id, k.keep_id AS keep_id
-FROM roles r
-JOIN __roles_dedup_keep k ON k.ruolo = r.ruolo
-WHERE r.id <> k.keep_id;
-
-UPDATE model_roles
-SET role_id = (SELECT keep_id FROM __roles_dedup_map WHERE old_id = model_roles.role_id)
-WHERE role_id IN (SELECT old_id FROM __roles_dedup_map);
-
-DELETE FROM roles
-WHERE id IN (SELECT old_id FROM __roles_dedup_map);
-
-DROP TABLE __roles_dedup_map;
-DROP TABLE __roles_dedup_keep;
-");
-                    Console.WriteLine("[DB] ✓ roles dedup completed");
-                }
-
-                // Ensure unique index exists.
-                var hasUniqueIndex = conn.ExecuteScalar<long>(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='IX_roles_ruolo'") > 0;
-                if (!hasUniqueIndex)
-                {
-                    // Re-check duplicates defensively; creating UNIQUE index would fail if duplicates remain.
-                    var remaining = conn.ExecuteScalar<long>(@"
-SELECT COUNT(*)
-FROM (
-  SELECT ruolo
-  FROM roles
-  GROUP BY ruolo
-  HAVING COUNT(*) > 1
-) t");
-
-                    if (remaining == 0)
-                    {
-                        Console.WriteLine("[DB] Applying migration: AddUniqueIndexRolesRuolo");
-                        conn.Execute("CREATE UNIQUE INDEX IF NOT EXISTS IX_roles_ruolo ON roles(ruolo)");
-                        Console.WriteLine("[DB] ✓ Migration AddUniqueIndexRolesRuolo applied");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[DB] Warning: cannot create UNIQUE index IX_roles_ruolo, still {remaining} duplicates present");
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DB] Warning: roles/model_roles hygiene failed: {ex.Message}");
-        }
-
-        // Best-effort: normalize deleted flag to 0 for existing rows
-        try
-        {
-            conn.Execute("UPDATE stories SET deleted = 0 WHERE deleted IS NULL");
-        }
-        catch
-        {
-            // ignore
-        }
-
-        // Check if summary column exists
-        var checkSummary = conn.ExecuteScalar<int>(
-            "SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='summary'");
-        
-        if (checkSummary == 0)
-        {
-            Console.WriteLine("[DB] Applying migration: AddSummaryToStories");
-            conn.Execute("ALTER TABLE stories ADD COLUMN summary TEXT");
-            // EF migrations metadata is intentionally not used in this project.
-            // Keep database changes explicit (manual SQL) and avoid touching __EFMigrationsHistory.
-            Console.WriteLine("[DB] ✓ Migration AddSummaryToStories applied");
-        }
-
-        // Migration: add Narrative Engine long-story fields to series table
-        try
-        {
-            var seriesColumns = new (string Name, string SqlType)[]
-            {
-                ("serie_state_summary", "TEXT"),
-                ("last_major_event", "TEXT"),
-                ("cosa_non_deve_mai_succedere", "TEXT"),
-                ("temi_obbligatori", "TEXT"),
-                ("livello_tecnologico_medio", "TEXT"),
-                ("world_rules_locked", "INTEGER NOT NULL DEFAULT 0")
-            };
-
-            foreach (var col in seriesColumns)
-            {
-                var exists = conn.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('series') WHERE name='{col.Name}'");
-                if (exists == 0)
-                {
-                    Console.WriteLine($"[DB] Adding {col.Name} column to series");
-                    conn.Execute($"ALTER TABLE series ADD COLUMN {col.Name} {col.SqlType}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DB] Warning: failed to add Narrative Engine columns to series: {ex.Message}");
-        }
-
-        // Migration: create series_state table if missing
-        try
-        {
-            var hasSeriesState = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='series_state'") > 0;
-            if (!hasSeriesState)
-            {
-                Console.WriteLine("[DB] Migration: creating series_state table");
-                conn.Execute(@"
-CREATE TABLE IF NOT EXISTS series_state (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    serie_id INTEGER NOT NULL,
-    is_current INTEGER NOT NULL DEFAULT 0,
-    state_version INTEGER NOT NULL DEFAULT 1,
-    state_summary TEXT,
-    world_state_json TEXT,
-    open_threads_json TEXT,
-    last_major_event TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    created_by TEXT,
-    source_episode_id INTEGER,
-    FOREIGN KEY (serie_id) REFERENCES series(id) ON DELETE CASCADE
-);");
-            }
-
-            conn.Execute(@"CREATE UNIQUE INDEX IF NOT EXISTS idx_series_state_current ON series_state(serie_id) WHERE is_current = 1");
-            conn.Execute(@"CREATE INDEX IF NOT EXISTS idx_series_state_serie ON series_state(serie_id)");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DB] Warning: unable to create series_state table: {ex.Message}");
-        }
-
-        // Migration: add state-driven fields to series_episodes table
-        try
-        {
-            var episodeColumns = new (string Name, string SqlType)[]
-            {
-                ("state_in_json", "TEXT"),
-                ("state_out_json", "TEXT"),
-                ("delta_json", "TEXT"),
-                ("canon_events", "TEXT"),
-                ("open_threads_out", "TEXT"),
-                ("recap_text", "TEXT")
-            };
-
-            foreach (var col in episodeColumns)
-            {
-                var exists = conn.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('series_episodes') WHERE name='{col.Name}'");
-                if (exists == 0)
-                {
-                    Console.WriteLine($"[DB] Adding {col.Name} column to series_episodes");
-                    conn.Execute($"ALTER TABLE series_episodes ADD COLUMN {col.Name} {col.SqlType}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DB] Warning: failed to add state-driven columns to series_episodes: {ex.Message}");
-        }
-
-        // Migration: add extended character fields to series_characters table
-        try
-        {
-            var characterColumns = new (string Name, string SqlType)[]
-            {
-                ("ruolo_narrativo", "TEXT"),
-                ("arco_personale", "TEXT"),
-                ("stato_attuale", "TEXT"),
-                ("stato_attuale_json", "TEXT"),
-                ("alleanza_relazione", "TEXT"),
-                ("last_seen_episode_number", "INTEGER")
-            };
-
-            foreach (var col in characterColumns)
-            {
-                var exists = conn.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('series_characters') WHERE name='{col.Name}'");
-                if (exists == 0)
-                {
-                    Console.WriteLine($"[DB] Adding {col.Name} column to series_characters");
-                    conn.Execute($"ALTER TABLE series_characters ADD COLUMN {col.Name} {col.SqlType}");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DB] Warning: failed to add extended columns to series_characters: {ex.Message}");
-        }
-
-        // Ensure qwen2.5:7b-instruct model exists
-        var qwenModelExists = conn.ExecuteScalar<int>(
-            "SELECT COUNT(*) FROM models WHERE name = 'qwen2.5:7b-instruct'");
-        
-        if (qwenModelExists == 0)
-        {
-            Console.WriteLine("[DB] Adding qwen2.5:7b-instruct model");
-            conn.Execute(@"INSERT INTO models (Name, Provider, MaxContext, CreatedAt, UpdatedAt, Note)
-                VALUES ('qwen2.5:7b-instruct', 'ollama', 128000, datetime('now'), datetime('now'), 
-                'Qwen 2.5 7B Instruct - Excellent for summarization with 128k context')");
-            Console.WriteLine("[DB] ✓ qwen2.5:7b-instruct model added");
-        }
-
-        // Check if summarizer agent exists
-        var summarizerExists = conn.ExecuteScalar<int>(
-            "SELECT COUNT(*) FROM agents WHERE role = 'summarizer' AND name = 'Story Summarizer'");
-        
-        if (summarizerExists == 0)
-        {
-            Console.WriteLine("[DB] Creating Story Summarizer agent");
-            
-            // Get model_id for qwen2.5:7b-instruct
-            var modelId = conn.ExecuteScalar<int>(
-                "SELECT id FROM models WHERE name = 'qwen2.5:7b-instruct' LIMIT 1");
-            
-            conn.Execute(@"INSERT INTO agents (
-                name, role, model_id, skills, prompt, instructions, is_active, 
-                created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict
-            ) VALUES (
-                'Story Summarizer',
-                'summarizer',
-                @modelId,
-                '[]',
-                'You are a professional story summarizer. Read the complete story and generate a concise summary.',
-                'Read the entire story carefully and create a summary of 3-5 sentences that captures:
-1. Main characters and their roles
-2. The central conflict or problem
-3. Key events in chronological order
-4. The resolution (without major spoilers)
-
-The summary should be:
-- Concise but informative (3-5 sentences max)
-- Engaging and encouraging readers to read the full story
-- Written in the same language as the story (Italian for Italian stories)
-- Free of spoilers for major plot twists
-- Focused on the narrative arc
-
-Output only the summary text, nothing else. No introductions, no formatting, just the summary.',
-                1,
-                datetime('now'),
-                datetime('now'),
-                'Summarizer agent using Qwen 2.5 7B with 128k context window',
-                0.3,
-                0.8,
-                NULL,
-                NULL,
-                NULL,
-                NULL
-            )", new { modelId });
-            
-            Console.WriteLine("[DB] ✓ Story Summarizer agent created");
-        }
-
-        // Seed Narrative Engine long-story roles and agents (if missing)
-        try
-        {
-            var hasRolesTable = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='roles'") > 0;
-            if (hasRolesTable)
-            {
-                var now = DateTime.UtcNow.ToString("o");
-                var newRoles = new (string Role, string Command)[]
-                {
-                    ("canon_extractor", "CanonExtractor"),
-                    ("state_delta_builder", "StateDeltaBuilder"),
-                    ("continuity_validator", "ContinuityValidator"),
-                    ("state_updater", "StateUpdater"),
-                    ("state_compressor", "StateCompressor"),
-                    ("recap_builder", "RecapBuilder"),
-
-                    // Series generation (GenerateNewSerie)
-                    ("serie_bible_agent", "GenerateNewSerie"),
-                    ("serie_character_agent", "GenerateNewSerie"),
-                    ("serie_season_agent", "GenerateNewSerie"),
-                    ("serie_episode_agent", "GenerateNewSerie"),
-                    ("serie_audio_agent", "GenerateNewSerie"),
-                    ("serie_validator_agent", "GenerateNewSerie")
-                };
-
-                foreach (var role in newRoles)
-                {
-                    conn.Execute(@"
-INSERT INTO roles (ruolo, comando_collegato, created_at, updated_at)
-SELECT @ruolo, @comando, @created_at, @updated_at
-WHERE NOT EXISTS (SELECT 1 FROM roles WHERE ruolo = @ruolo)",
-                        new
-                        {
-                            ruolo = role.Role,
-                            comando = role.Command,
-                            created_at = now,
-                            updated_at = now
-                        });
-                }
-            }
-
-            var newAgents = new (string Name, string Role, string Prompt, string Instructions, string Notes)[]
-            {
-                (
-                    "CanonExtractor",
-                    "canon_extractor",
-                    "Estrai eventi canonici da un episodio.",
-                    "Leggi l'episodio completo e restituisci SOLO TAG tra parentesi quadre (no JSON). Struttura: [CANON_EVENTS] contiene più blocchi [EVENT] con [ORDER], [TITLE], [SUMMARY], [CHARACTERS] (lista), [LOCATION], [OUTCOME]. Nessun testo extra.",
-                    "Narrative Engine: CanonExtractor (long-story pipeline)"
-                ),
-                (
-                    "StateDeltaBuilder",
-                    "state_delta_builder",
-                    "Costruisci il delta di stato a partire da eventi canonici.",
-                    "Usa stato compatto + eventi per aggiornare lo stato. Restituisci SOLO TAG (no JSON): [WORLD_STATE] stato aggiornato (testo compatto) [/WORLD_STATE], [OPEN_THREADS] lista thread aperti (uno per riga) [/OPEN_THREADS], [LAST_MAJOR_EVENT] evento maggiore (breve) [/LAST_MAJOR_EVENT]. Nessun testo extra.",
-                    "Narrative Engine: StateDeltaBuilder (long-story pipeline)"
-                ),
-                (
-                    "ContinuityValidator",
-                    "continuity_validator",
-                    "Verifica coerenza narrativa.",
-                    "Valida coerenza tra stato compatto ed eventi. Restituisci SOLO TAG (no JSON): [ISSUES] contiene più [ISSUE] con [SEVERITY] (low|medium|high) e [DESCRIPTION]. Nessun testo extra.",
-                    "Narrative Engine: ContinuityValidator (long-story pipeline)"
-                ),
-                (
-                    "StateUpdater",
-                    "state_updater",
-                    "Aggiorna lo stato logico senza LLM.",
-                    "Questo agente non dovrebbe chiamare un modello: merge logico del delta sullo stato precedente.",
-                    "Narrative Engine: StateUpdater (long-story pipeline)"
-                ),
-                (
-                    "StateCompressor",
-                    "state_compressor",
-                    "Comprimi lo stato in state_summary_compact.",
-                    "Comprimi lo stato. Restituisci SOLO TAG (no JSON): [STATE_SUMMARY_COMPACT] testo compatto (entro ~1200-1500 parole) che include situazione, eventi maggiori, risorse, personaggi chiave, thread urgenti, vincoli hard [/STATE_SUMMARY_COMPACT]. Nessun testo extra.",
-                    "Narrative Engine: StateCompressor (long-story pipeline)"
-                ),
-                (
-                    "RecapBuilder",
-                    "recap_builder",
-                    "Crea il recap episodio.",
-                    "Usa gli eventi canonici per creare un recap sintetico. Output SOLO testo recap (no titoli).",
-                    "Narrative Engine: RecapBuilder (long-story pipeline)"
-                )
-            };
-
-            foreach (var agent in newAgents)
-            {
-                var exists = conn.ExecuteScalar<long>(
-                    "SELECT COUNT(*) FROM agents WHERE role = @role AND name = @name",
-                    new { role = agent.Role, name = agent.Name });
-                if (exists > 0) continue;
-
-                conn.Execute(@"
-INSERT INTO agents (
-    name, role, model_id, skills, prompt, instructions, is_active,
-    created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict
-) VALUES (
-    @name, @role, NULL, '[]', @prompt, @instructions, 1,
-    datetime('now'), datetime('now'), @notes, NULL, NULL, NULL, NULL, NULL, NULL
-)",
-                    new
-                    {
-                        name = agent.Name,
-                        role = agent.Role,
-                        prompt = agent.Prompt,
-                        instructions = agent.Instructions,
-                        notes = agent.Notes
-                    });
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DB] Warning: failed to seed Narrative Engine roles/agents: {ex.Message}");
-        }
+       
     }
 
     // ╔══════════════════════════════════════════════════════════════╗
@@ -5490,6 +5039,98 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
             }
         }
 
+        // Migration: Add instruction_score column to models if not exists
+        var hasInstructionScore = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='InstructionScore'");
+        if (hasInstructionScore == 0)
+        {
+            Console.WriteLine("[DB] Adding InstructionScore column to models");
+            try
+            {
+                conn.Execute("ALTER TABLE models ADD COLUMN InstructionScore REAL DEFAULT NULL");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to add InstructionScore column to models: {ex.Message}");
+            }
+        }
+
+        // Migration: Add intelliScore column to models if not exists
+        var hasIntelliScore = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE lower(name)='intelliscore'");
+        if (hasIntelliScore == 0)
+        {
+            Console.WriteLine("[DB] Adding intelliScore column to models");
+            try
+            {
+                conn.Execute("ALTER TABLE models ADD COLUMN intelliScore INTEGER DEFAULT NULL");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to add intelliScore column to models: {ex.Message}");
+            }
+        }
+
+        // Migration: Add intelliTime column to models if not exists
+        var hasIntelliTime = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE lower(name)='intellitime'");
+        if (hasIntelliTime == 0)
+        {
+            Console.WriteLine("[DB] Adding intelliTime column to models");
+            try
+            {
+                conn.Execute("ALTER TABLE models ADD COLUMN intelliTime INTEGER DEFAULT NULL");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to add intelliTime column to models: {ex.Message}");
+            }
+        }
+
+        // Backfill new intelligence columns from legacy columns if present
+        try
+        {
+            var hasLegacyIntelligenceScore = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='IntelligenceScore'");
+            if (hasLegacyIntelligenceScore > 0)
+            {
+                conn.Execute("UPDATE models SET intelliScore = CAST(ROUND(IntelligenceScore, 0) AS INTEGER) WHERE intelliScore IS NULL AND IntelligenceScore IS NOT NULL");
+            }
+
+            var hasLegacyIntelligenceTime = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='IntelligenceTime'");
+            if (hasLegacyIntelligenceTime > 0)
+            {
+                conn.Execute("UPDATE models SET intelliTime = CAST(ROUND(IntelligenceTime, 0) AS INTEGER) WHERE intelliTime IS NULL AND IntelligenceTime IS NOT NULL");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to backfill intelliScore/intelliTime: {ex.Message}");
+        }
+
+        // Migration: add cumulative performance columns to model_roles
+        try
+        {
+            var hasModelRolesTable = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='model_roles'");
+            if (hasModelRolesTable > 0)
+            {
+                static void EnsureModelRoleColumn(IDbConnection connection, string columnName, string sqlType)
+                {
+                    var exists = connection.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('model_roles') WHERE lower(name)=lower('{columnName}')");
+                    if (exists > 0) return;
+
+                    connection.Execute($"ALTER TABLE model_roles ADD COLUMN {columnName} {sqlType} DEFAULT 0");
+                }
+
+                EnsureModelRoleColumn(conn, "total_prompt_tokens", "INTEGER");
+                EnsureModelRoleColumn(conn, "total_output_tokens", "INTEGER");
+                EnsureModelRoleColumn(conn, "total_prompt_time_ns", "INTEGER");
+                EnsureModelRoleColumn(conn, "total_gen_time_ns", "INTEGER");
+                EnsureModelRoleColumn(conn, "total_load_time_ns", "INTEGER");
+                EnsureModelRoleColumn(conn, "total_total_time_ns", "INTEGER");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add model_roles performance columns: {ex.Message}");
+        }
+
         // Migration: Rename test_code to test_group if needed
         var hasTestCode = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('model_test_runs') WHERE name='test_code'");
         var hasTestGroup = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('model_test_runs') WHERE name='test_group'");
@@ -6208,7 +5849,10 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             "FxScore", 
             "AmbientScore",
             "TotalScore",
-            "JsonScore"
+            "JsonScore",
+            "InstructionScore",
+            "intelliScore as IntelliScore",
+            "intelliTime as IntelliTime"
         });
     }
 
@@ -6639,6 +6283,37 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         if (model == null) return;
 
         model.JsonScore = jsonScore;
+        if (!string.IsNullOrWhiteSpace(lastResults))
+        {
+            model.LastTestResults = lastResults;
+        }
+        model.UpdatedAt = DateTime.UtcNow.ToString("o");
+        ctx.SaveChanges();
+    }
+
+    public void UpdateModelInstructionScore(int modelId, double? instructionScore, string? lastResults = null)
+    {
+        using var ctx = CreateDbContext();
+        var model = ctx.Models.FirstOrDefault(m => m.Id == modelId);
+        if (model == null) return;
+
+        model.InstructionScore = instructionScore;
+        if (!string.IsNullOrWhiteSpace(lastResults))
+        {
+            model.LastTestResults = lastResults;
+        }
+        model.UpdatedAt = DateTime.UtcNow.ToString("o");
+        ctx.SaveChanges();
+    }
+
+    public void UpdateModelIntelligenceScore(int modelId, int? intelliScore, int? intelliTimeSeconds, string? lastResults = null)
+    {
+        using var ctx = CreateDbContext();
+        var model = ctx.Models.FirstOrDefault(m => m.Id == modelId);
+        if (model == null) return;
+
+        model.IntelliScore = intelliScore;
+        model.IntelliTime = intelliTimeSeconds;
         if (!string.IsNullOrWhiteSpace(lastResults))
         {
             model.LastTestResults = lastResults;

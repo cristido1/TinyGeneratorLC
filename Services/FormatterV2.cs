@@ -168,28 +168,42 @@ namespace TinyGenerator.Services
                 var line = (raw ?? string.Empty).Trim();
                 if (line.Length == 0) continue;
 
+                // Accept optional bullet prefix: "- 054: [PERSONAGGIO: ...] [EMOZIONE: ...]"
+                if (line.StartsWith("-", StringComparison.Ordinal))
+                {
+                    line = line.Substring(1).TrimStart();
+                    if (line.Length == 0) continue;
+                }
+
                 // Accept lines like:
                 //   004 [PERSONAGGIO: Luca] [EMOZIONE: paura] (testo extra da ignorare)
+                //   004: [PERSONAGGIO: Luca] [EMOZIONE: paura]
                 // Also allow IDs with more than 3 digits.
                 int i = 0;
                 while (i < line.Length && char.IsDigit(line[i])) i++;
-                if (i == 0 || i >= line.Length) continue;
+                if (i == 0) continue;
                 if (!int.TryParse(line.Substring(0, i), out var id)) continue;
 
-                if (i >= line.Length || !char.IsWhiteSpace(line[i])) continue;
-                while (i < line.Length && char.IsWhiteSpace(line[i])) i++;
+                var rest = line.Substring(i).TrimStart();
+                // Accept optional delimiter between ID and tag payload.
+                if (rest.StartsWith(":", StringComparison.Ordinal))
+                {
+                    rest = rest.Substring(1).TrimStart();
+                }
+                if (rest.Length == 0) continue;
 
                 var tagParts = new List<string>(capacity: 2);
-                while (i < line.Length)
+                int pos = 0;
+                while (pos < rest.Length)
                 {
-                    while (i < line.Length && char.IsWhiteSpace(line[i])) i++;
-                    if (i >= line.Length || line[i] != '[') break;
+                    while (pos < rest.Length && char.IsWhiteSpace(rest[pos])) pos++;
+                    if (pos >= rest.Length || rest[pos] != '[') break;
 
-                    int close = line.IndexOf(']', i + 1);
+                    int close = rest.IndexOf(']', pos + 1);
                     if (close < 0) break;
 
-                    tagParts.Add(line.Substring(i, close - i + 1));
-                    i = close + 1;
+                    tagParts.Add(rest.Substring(pos, close - pos + 1));
+                    pos = close + 1;
                 }
 
                 if (tagParts.Count == 0) continue;

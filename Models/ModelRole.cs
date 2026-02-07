@@ -51,6 +51,26 @@ public class ModelRole
     [Column("updated_at")]
     public string? UpdatedAt { get; set; }
 
+    // Cumulative token counters
+    [Column("total_prompt_tokens")]
+    public long TotalPromptTokens { get; set; } = 0;
+
+    [Column("total_output_tokens")]
+    public long TotalOutputTokens { get; set; } = 0;
+
+    // Cumulative timings (nanoseconds)
+    [Column("total_prompt_time_ns")]
+    public long TotalPromptTimeNs { get; set; } = 0;
+
+    [Column("total_gen_time_ns")]
+    public long TotalGenTimeNs { get; set; } = 0;
+
+    [Column("total_load_time_ns")]
+    public long TotalLoadTimeNs { get; set; } = 0;
+
+    [Column("total_total_time_ns")]
+    public long TotalTotalTimeNs { get; set; } = 0;
+
     // Navigation properties
     [ForeignKey("ModelId")]
     public ModelInfo? Model { get; set; }
@@ -61,4 +81,24 @@ public class ModelRole
     // Computed property for success rate
     [NotMapped]
     public double SuccessRate => UseCount > 0 ? (double)UseSuccessed / UseCount : 0.0;
+
+    [NotMapped]
+    public double AvgGenTps => TotalGenTimeNs > 0
+        ? TotalOutputTokens / (TotalGenTimeNs / 1_000_000_000.0)
+        : 0.0;
+
+    [NotMapped]
+    public double AvgPromptTps => TotalPromptTimeNs > 0
+        ? TotalPromptTokens / (TotalPromptTimeNs / 1_000_000_000.0)
+        : 0.0;
+
+    [NotMapped]
+    public double AvgE2eTps => TotalTotalTimeNs > 0
+        ? TotalOutputTokens / (TotalTotalTimeNs / 1_000_000_000.0)
+        : 0.0;
+
+    [NotMapped]
+    public double LoadRatio => TotalTotalTimeNs > 0
+        ? (double)TotalLoadTimeNs / TotalTotalTimeNs
+        : 0.0;
 }

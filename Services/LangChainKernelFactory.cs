@@ -301,7 +301,7 @@ namespace TinyGenerator.Services
                         $"llama.cpp selected: model={modelName}, ctx={ctxSize}, endpoint={endpoint}");
                     beforeCall = async ct =>
                     {
-                        _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: ensuring server restart");
+                        _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: ensuring server is ready");
                         if (_llamaService != null)
                         {
                             try
@@ -316,11 +316,8 @@ namespace TinyGenerator.Services
                             }
                         }
                     };
-                    afterCall = _ => Task.Run(() =>
-                    {
-                        _logger?.Log("Info", "llama.cpp", "llama.cpp afterCall: stopping server");
-                        _llamaService?.StopServer();
-                    });
+                    // Keep llama.cpp warm between consecutive calls; it will restart only on model/context changes.
+                    afterCall = null;
                 }
                 else if (modelInfo.Provider?.Equals("openai", StringComparison.OrdinalIgnoreCase) == true)
                 {

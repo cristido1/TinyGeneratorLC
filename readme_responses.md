@@ -34,6 +34,8 @@ Configurazione: sezione `ToolCalling` in `appsettings.json`.
 - fallback modelli (se `EnableFallback=true` e ruolo disponibile).
 - per ogni verifica crea un oggetto `ResponseValidation` con `LogId`, `Successed` e lista errori, usato per aggiornare la voce di log della response.
 
+Nota: il test `jsonscore` usa un `response_format` diverso per provider (schema JSON semplice per Ollama, `json_schema` per OpenAI/llama.cpp).
+
 Configurazione: sezione `ResponseValidation` in `appsettings.json`.
 
 ### SkipRoles

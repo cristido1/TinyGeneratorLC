@@ -69,6 +69,7 @@
         <table class="table table-sm table-hover mb-0" id="modelsTable">
             <thead class="table-light">
                 <tr>
+                    <th></th>
                     <th data-col="name">Name</th>
                     <th data-col="provider">Provider</th>
                     <th data-col="note">Note</th>
@@ -85,6 +86,9 @@
                     <th data-col="fx">FX</th>
                     <th data-col="ambient">Ambient</th>
                     <th data-col="jsonscore">Json</th>
+                    <th data-col="instructionscore">Instr</th>
+                    <th data-col="intelligencescore">Intel</th>
+                    <th data-col="intelligencetime">IntelTime(s)</th>
                     <th data-col="notools">NoTools</th>
                     <th data-col="duration">Duration</th>
                     <th data-col="costin">Cost In</th>
@@ -97,7 +101,8 @@
                 @foreach (var m in Model.Items)
                 {
                     var hasResults = m.TestDurationSeconds > 0;
-                    <tr>
+                    <tr data-model-id="@(m.Id?.ToString() ?? string.Empty)" data-model-name="@m.Name">
+                        <td class="dt-control"></td>
                         <td data-col="name">@m.Name</td>
                         <td data-col="provider">
                             @if (m.Provider?.ToLower() == "ollama")
@@ -127,6 +132,9 @@
                         <td data-col="fx">@(hasResults ? m.FxScore.ToString("0.0") : "-")</td>
                         <td data-col="ambient">@(hasResults ? m.AmbientScore.ToString("0.0") : "-")</td>
                         <td data-col="jsonscore">@(m.JsonScore.HasValue ? m.JsonScore.Value.ToString("0.0") : "-")</td>
+                        <td data-col="instructionscore">@(m.InstructionScore.HasValue ? m.InstructionScore.Value.ToString("0.0") : "-")</td>
+                        <td data-col="intelligencescore">@(m.IntelliScore.HasValue ? m.IntelliScore.Value.ToString() : "-")</td>
+                        <td data-col="intelligencetime">@(m.IntelliTime.HasValue ? m.IntelliTime.Value.ToString() : "-")</td>
                         <td data-col="notools">@(m.NoTools ? "âœ“" : "")</td>
                         <td data-col="duration">@((m.TestDurationSeconds.HasValue) ? m.TestDurationSeconds.Value.ToString("0.00") : "-")</td>
                         <td data-col="costin">@m.CostInPerToken.ToString("0.00000")</td>
@@ -145,6 +153,24 @@
     <input type="hidden" name="Model" value="@m.Name" />
     <input type="hidden" name="ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
     <button type="submit" class="dropdown-item">🧪 JSON score</button>
+</form>
+                                    </li>
+                                    <li>
+                                        <form method="post" action="?handler=RunInstructionScoreModel" class="m-0 js-ajax-command">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="ModelId" value="@m.Id" />
+    <input type="hidden" name="Model" value="@m.Name" />
+    <input type="hidden" name="ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
+    <button type="submit" class="dropdown-item">Instruction score</button>
+</form>
+                                    </li>
+                                    <li>
+                                        <form method="post" action="?handler=RunIntelligenceTestModel" class="m-0 js-ajax-command">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="ModelId" value="@m.Id" />
+    <input type="hidden" name="Model" value="@m.Name" />
+    <input type="hidden" name="ShowDisabled" value="@(Model.ShowDisabled ? "true" : "false")" />
+    <button type="submit" class="dropdown-item">Intelligence test</button>
 </form>
                                     </li>
                                     <li><hr class="dropdown-divider"></li>
@@ -251,10 +277,13 @@
                 paging: true,
                 pageLength: 25,
                 lengthChange: false,
-                order: [[0,'asc']],
+                order: [[1,'asc']],
                 ordering: true,
                 searching: true,
-                columnDefs: [ { orderable: false, targets: -1 } ],
+                columnDefs: [
+                    { className: 'dt-control', orderable: false, targets: 0 },
+                    { orderable: false, targets: -1 }
+                ],
                 buttons: [
                     {
                         text: '<i class="bi bi-plus-circle me-1"></i>Nuovo',
@@ -274,6 +303,34 @@
                                     alert(msg);
                                 })
                                 .catch(function(err) { alert('Errore avvio jsonScore: ' + err.message); });
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-list-check me-1"></i>Instruction score',
+                        className: 'btn btn-sm btn-light border text-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            fetch('?handler=RunInstructionScore', { method: 'POST' })
+                                .then(function(resp) { return resp.ok ? resp.json() : resp.text().then(function(t){ throw new Error(t); }); })
+                                .then(function(data) {
+                                    var msg = data.runId ? ('Comando avviato (' + data.runId + ')') : 'Comando avviato';
+                                    alert(msg);
+                                })
+                                .catch(function(err) { alert('Errore avvio instructionScore: ' + err.message); });
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-lightbulb me-1"></i>Intelligence test',
+                        className: 'btn btn-sm btn-light border text-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            fetch('?handler=RunIntelligenceTest', { method: 'POST' })
+                                .then(function(resp) { return resp.ok ? resp.json() : resp.text().then(function(t){ throw new Error(t); }); })
+                                .then(function(data) {
+                                    var msg = data.runId ? ('Comando avviato (' + data.runId + ')') : 'Comando avviato';
+                                    alert(msg);
+                                })
+                                .catch(function(err) { alert('Errore avvio intelligenceTest: ' + err.message); });
                         }
                     },
                     {
@@ -365,6 +422,126 @@
                     zeroRecords: "Nessun record trovato",
                     paginate: { first: "Prima", last: "Ultima", next: "Succ", previous: "Prec" }
                 }
+            });
+
+            function safeHtml(value) {
+                return String(value || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function fmtNumber(value, decimals) {
+                var num = Number(value);
+                if (!isFinite(num) || num <= 0) return '-';
+                return num.toFixed(decimals);
+            }
+
+            function fmtPercent(value) {
+                var num = Number(value);
+                if (!isFinite(num) || num <= 0) return '-';
+                return (num * 100).toFixed(1) + '%';
+            }
+
+            function fmtPctValue(value, decimals) {
+                var num = Number(value);
+                if (!isFinite(num) || num < 0) return '-';
+                return num.toFixed(decimals) + '%';
+            }
+
+            function formatRoleStatsDetail(data) {
+                if (!data || !Array.isArray(data.rows) || data.rows.length === 0) {
+                    return '<div class="card"><div class="card-body text-muted">Nessuna statistica per ruolo disponibile.</div></div>';
+                }
+
+                var rowsHtml = data.rows.map(function (r) {
+                    var primaryBadge = r.isPrimary
+                        ? '<span class="badge bg-success">Primary</span>'
+                        : '<span class="badge bg-secondary">Fallback</span>';
+                    var enabledBadge = r.enabled
+                        ? '<span class="badge bg-success">Yes</span>'
+                        : '<span class="badge bg-danger">No</span>';
+
+                    return '<tr>' +
+                        '<td>' + safeHtml(r.role) + '</td>' +
+                        '<td>' + primaryBadge + '</td>' +
+                        '<td>' + enabledBadge + '</td>' +
+                        '<td>' + safeHtml(r.useCount) + '</td>' +
+                        '<td>' + safeHtml(r.totalPromptTokens) + '</td>' +
+                        '<td>' + safeHtml(r.totalOutputTokens) + '</td>' +
+                        '<td>' + safeHtml(fmtNumber(r.avgPromptTps, 2)) + '</td>' +
+                        '<td>' + safeHtml(fmtNumber(r.avgGenTps, 2)) + '</td>' +
+                        '<td>' + safeHtml(fmtNumber(r.avgE2eTps, 2)) + '</td>' +
+                        '<td>' + safeHtml(fmtPercent(r.loadRatio)) + '</td>' +
+                        '<td>' + safeHtml(fmtPctValue(r.successRatePct, 1)) + '</td>' +
+                    '</tr>';
+                }).join('');
+
+                return '<div class="card">' +
+                    '<div class="card-body">' +
+                        '<h6 class="mb-3">Statistiche per ruolo - ' + safeHtml(data.modelName || '') + '</h6>' +
+                        '<div class="table-responsive">' +
+                            '<table class="table table-sm table-hover mb-0">' +
+                                '<thead class="table-light"><tr>' +
+                                    '<th>Ruolo</th>' +
+                                    '<th>Tipo</th>' +
+                                    '<th>Enabled</th>' +
+                                    '<th>Use</th>' +
+                                    '<th>P.Tok</th>' +
+                                    '<th>O.Tok</th>' +
+                                    '<th>Prompt TPS</th>' +
+                                    '<th>Gen TPS</th>' +
+                                    '<th>E2E TPS</th>' +
+                                    '<th>Load %</th>' +
+                                    '<th>Succ %</th>' +
+                                '</tr></thead>' +
+                                '<tbody>' + rowsHtml + '</tbody>' +
+                            '</table>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+            }
+
+            table.on('click', 'td.dt-control', function () {
+                var $tr = $(this).closest('tr');
+                var row = table.row($tr);
+
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $tr.removeClass('shown');
+                    return;
+                }
+
+                var modelId = $tr.data('model-id');
+                var modelName = $tr.data('model-name');
+                if (!modelId && !modelName) {
+                    return;
+                }
+
+                var url = '?handler=RoleStats';
+                if (modelId) {
+                    url += '&modelId=' + encodeURIComponent(modelId);
+                } else {
+                    url += '&model=' + encodeURIComponent(modelName);
+                }
+
+                fetch(url)
+                    .then(function (resp) {
+                        if (!resp.ok) {
+                            throw new Error('Errore caricamento dettaglio');
+                        }
+                        return resp.json();
+                    })
+                    .then(function (data) {
+                        row.child(formatRoleStatsDetail(data), 'child-row').show();
+                        $tr.addClass('shown');
+                    })
+                    .catch(function () {
+                        row.child('<div class="text-muted p-2">Errore caricamento dettaglio</div>', 'child-row').show();
+                        $tr.addClass('shown');
+                    });
             });
 
             // Wire up colVisMenu fallback if present

@@ -417,7 +417,6 @@ namespace TinyGenerator.Services.Commands
             var minFxTags = Math.Max(0, _tuning.FxExpert.MinFxTagsPerChunk);
             var retryDelayBaseSeconds = Math.Max(0, _tuning.FxExpert.RetryDelayBaseSeconds);
             var diagnoseOnFinalFailure = _tuning.FxExpert.DiagnoseOnFinalFailure;
-            var hadCorrections = false;
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -440,7 +439,7 @@ namespace TinyGenerator.Services.Commands
                     // Keep the last request/response around for diagnostics.
                     lastRequestMessages = messages;
 
-                    var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
+                    var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true);
                     var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
                     var cleaned = textContent?.Trim() ?? string.Empty;
                     lastAssistantText = cleaned;
@@ -450,7 +449,6 @@ namespace TinyGenerator.Services.Commands
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Empty response on attempt {attempt}", "warn");
                         _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota");
                         lastError = "Il testo ritornato è vuoto.";
-                        hadCorrections = true;
                         continue;
                     }
 
@@ -459,7 +457,6 @@ namespace TinyGenerator.Services.Commands
                     {
                         _logger?.MarkLatestModelResponseResult("FAILED", $"Formato FX non valido: {invalidLines} righe non rispettano il formato richiesto.");
                         lastError = $"Formato FX non valido: {invalidLines} righe non rispettano il formato richiesto.";
-                        hadCorrections = true;
                         continue;
                     }
                     var tagCount = tags.Count;
@@ -468,14 +465,13 @@ namespace TinyGenerator.Services.Commands
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough FX tags: {tagCount} found, minimum {minFxTags} required", "warn");
                         _logger?.MarkLatestModelResponseResult("FAILED", $"Hai inserito {tagCount} righe valide. Devi inserire ALMENO {minFxTags} effetti sonori.");
                         lastError = $"Hai inserito {tagCount} righe valide. Devi inserire ALMENO {minFxTags} effetti sonori (formato: ID descrizione [secondi]).";
-                        hadCorrections = true;
                         continue;
                     }
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalFx={tagCount}");
                     _logger?.MarkLatestModelResponseResult(
-                        hadCorrections ? "FAILED" : "SUCCESS",
-                        hadCorrections ? "Risposta corretta dopo retry" : null);
+                        "SUCCESS",
+                        null);
                     return cleaned;
                 }
                 catch (Exception ex)
@@ -558,7 +554,7 @@ namespace TinyGenerator.Services.Commands
 
             messages.Add(new ConversationMessage { Role = "user", Content = userPrompt });
 
-            var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct).ConfigureAwait(false);
+            var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true).ConfigureAwait(false);
             var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
             var cleaned = textContent?.Trim() ?? string.Empty;
 
@@ -986,7 +982,7 @@ namespace TinyGenerator.Services.Commands
                 new ConversationMessage { Role = "user", Content = sb.ToString() }
             };
 
-            var responseJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct).ConfigureAwait(false);
+            var responseJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true).ConfigureAwait(false);
             var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
             return string.IsNullOrWhiteSpace(textContent) ? null : textContent.Trim();
         }

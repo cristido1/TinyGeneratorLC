@@ -134,6 +134,12 @@
                 <th data-col="use">Use</th>
                 <th data-col="success">Success</th>
                 <th data-col="failed">Failed</th>
+                <th data-col="prompttokens">P.Tok</th>
+                <th data-col="outputtokens">O.Tok</th>
+                <th data-col="gentps">Gen TPS</th>
+                <th data-col="prompttps">Prompt TPS</th>
+                <th data-col="e2etps">E2E TPS</th>
+                <th data-col="loadratio">Load %</th>
                 <th data-col="rate">%</th>
                 <th data-col="lastuse">Last Use</th>
                 <th data-col="enabled">Enabled</th>
@@ -163,6 +169,12 @@
                     <td data-col="use">@mr.UseCount</td>
                     <td data-col="success" class="text-success">@mr.UseSuccessed</td>
                     <td data-col="failed" class="text-danger">@mr.UseFailed</td>
+                    <td data-col="prompttokens">@mr.TotalPromptTokens</td>
+                    <td data-col="outputtokens">@mr.TotalOutputTokens</td>
+                    <td data-col="gentps">@((mr.AvgGenTps > 0) ? mr.AvgGenTps.ToString("0.00") : "-")</td>
+                    <td data-col="prompttps">@((mr.AvgPromptTps > 0) ? mr.AvgPromptTps.ToString("0.00") : "-")</td>
+                    <td data-col="e2etps">@((mr.AvgE2eTps > 0) ? mr.AvgE2eTps.ToString("0.00") : "-")</td>
+                    <td data-col="loadratio">@((mr.LoadRatio > 0) ? (mr.LoadRatio * 100.0).ToString("0.0") + "%" : "-")</td>
                     <td data-col="rate"><span class="@textClass">@((mr.SuccessRate * 100).ToString("0.0"))%</span></td>
                     <td data-col="lastuse">@Model.FormatLastUse(mr.LastUse)</td>
                     <td data-col="enabled">@(mr.Enabled ? "Yes" : "No")</td>
@@ -245,7 +257,7 @@
                 pageLength: 25,
                 lengthChange: true,
                 lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
-                order: [[7, 'desc']],
+                order: [[13, 'desc']],
                 ordering: true,
                 searching: true,
                 columnDefs: [
@@ -312,7 +324,7 @@
                     .replace(/'/g, '&#39;');
             }
 
-            function showMessage(type, text) {
+                function showMessage(type, text) {
                 if (!messageBox) return;
                 messageBox.className = 'alert alert-' + type;
                 messageBox.textContent = text;
@@ -323,9 +335,15 @@
                 if (!messageBox) return;
                 messageBox.classList.add('d-none');
                 messageBox.textContent = '';
-            }
+                }
 
-            function buildRowHtml(row) {
+                function formatFloat(value, decimals) {
+                    var num = Number(value);
+                    if (!isFinite(num) || num <= 0) return '-';
+                    return num.toFixed(decimals);
+                }
+
+                function buildRowHtml(row) {
                 var useCount = parseInt(row.useCount || '0', 10) || 0;
                 var pct = row.successRate === null || row.successRate === undefined || row.successRate === '' ? NaN : parseFloat(row.successRate);
                 var level = '';
@@ -354,6 +372,12 @@
                     '<td data-col="use">' + escapeHtml(row.useCount) + '</td>' +
                     '<td data-col="success" class="text-success">' + escapeHtml(row.useSuccessed) + '</td>' +
                     '<td data-col="failed" class="text-danger">' + escapeHtml(row.useFailed) + '</td>' +
+                    '<td data-col="prompttokens">' + escapeHtml(row.totalPromptTokens) + '</td>' +
+                    '<td data-col="outputtokens">' + escapeHtml(row.totalOutputTokens) + '</td>' +
+                    '<td data-col="gentps">' + escapeHtml(formatFloat(row.avgGenTps, 2)) + '</td>' +
+                    '<td data-col="prompttps">' + escapeHtml(formatFloat(row.avgPromptTps, 2)) + '</td>' +
+                    '<td data-col="e2etps">' + escapeHtml(formatFloat(row.avgE2eTps, 2)) + '</td>' +
+                    '<td data-col="loadratio">' + (Number(row.loadRatio || 0) > 0 ? escapeHtml((Number(row.loadRatio) * 100).toFixed(1) + '%') : '-') + '</td>' +
                     '<td data-col="rate"><span class="' + escapeHtml(textClass) + '">' + escapeHtml(row.successRate) + '%</span></td>' +
                     '<td data-col="lastuse">' + escapeHtml(row.lastUse) + '</td>' +
                     '<td data-col="enabled">' + (row.enabled ? 'Yes' : 'No') + '</td>' +

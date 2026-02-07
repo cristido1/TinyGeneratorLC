@@ -105,7 +105,8 @@ namespace TinyGenerator.Services
         public async Task<string> CallModelWithToolsAsync(
             List<ConversationMessage> messages,
             List<Dictionary<string, object>> tools,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            bool skipResponseChecker = false)
         {
             var options = TryGetResponseValidationOptions();
             if (options == null || !options.Enabled)
@@ -126,6 +127,10 @@ namespace TinyGenerator.Services
             {
                 enableChecker = policy.EnableChecker.Value;
             }
+            if (skipResponseChecker)
+            {
+                enableChecker = false;
+            }
 
             var maxRetries = policy?.MaxRetries ?? options.MaxRetries;
             var askFailureReason = policy?.AskFailureReasonOnFinalFailure ?? options.AskFailureReasonOnFinalFailure;
@@ -145,7 +150,66 @@ namespace TinyGenerator.Services
             {
                 ct.ThrowIfCancellationRequested();
 
-                lastResponseJson = await CallModelWithToolsOnceAsync(messages, tools, ct).ConfigureAwait(false);
+                try
+                {
+                    lastResponseJson = await CallModelWithToolsOnceAsync(messages, tools, ct).ConfigureAwait(false);
+                    AppendAssistantResponseToHistory(messages, lastResponseJson);
+                }
+                catch (OperationCanceledException oce) when (options.EnableFallback && !string.IsNullOrWhiteSpace(agentRole))
+                {
+                    _logger?.Log("Warning", "ResponseValidation",
+                        $"Primary model '{_modelId}' cancelled/timed out for role '{agentRole}'. Trying fallback models. Details: {oce.Message}");
+
+                    if (askFailureReason)
+                    {
+                        try
+                        {
+                            await DiagnoseFailureAsync(messages, $"Primary model timeout/cancelled: {oce.Message}", CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch
+                        {
+                            // best-effort
+                        }
+                    }
+
+                    try
+                    {
+                        if (_services != null && !string.IsNullOrWhiteSpace(agentRole))
+                        {
+                            using var scope = _services.CreateScope();
+                            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
+                            var db = scope.ServiceProvider.GetService<DatabaseService>();
+                            if (fallbackService != null && db != null)
+                            {
+                                var m = db.ListModels().FirstOrDefault(x => string.Equals(x.Name, _modelId, StringComparison.OrdinalIgnoreCase));
+                                if (m != null)
+                                {
+                                    fallbackService.RecordPrimaryModelUsage(agentRole!, Convert.ToInt32(m.Id), success: false);
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // ignore tracking errors
+                    }
+
+                    var fallbackResponse = await TryFallbackAsync(
+                        agentRole!,
+                        messages,
+                        tools,
+                        options,
+                        enableChecker,
+                        rules,
+                        maxRetries,
+                        CancellationToken.None).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(fallbackResponse))
+                    {
+                        return fallbackResponse;
+                    }
+
+                    throw;
+                }
 
                 // Ensure the primary model response log row is persisted before we attempt to
                 // capture its Id and before invoking response_checker (which produces its own log rows).
@@ -455,11 +519,17 @@ namespace TinyGenerator.Services
 
         private static bool IsCheckerEnabledForOperation(ResponseValidationOptions options, string operationKey)
         {
-            if (!string.IsNullOrWhiteSpace(operationKey) && options.CommandPolicies != null &&
-                options.CommandPolicies.TryGetValue(operationKey, out var policy) &&
-                policy != null && policy.EnableChecker.HasValue)
+            if (!string.IsNullOrWhiteSpace(operationKey) && options.CommandPolicies != null)
             {
-                return policy.EnableChecker.Value;
+                foreach (var key in CommandOperationNameResolver.GetLookupKeys(operationKey))
+                {
+                    if (options.CommandPolicies.TryGetValue(key, out var policy) &&
+                        policy != null &&
+                        policy.EnableChecker.HasValue)
+                    {
+                        return policy.EnableChecker.Value;
+                    }
+                }
             }
 
             return options.EnableCheckerByDefault;
@@ -469,7 +539,16 @@ namespace TinyGenerator.Services
         {
             if (string.IsNullOrWhiteSpace(operationKey)) return null;
             if (options.CommandPolicies == null) return null;
-            return options.CommandPolicies.TryGetValue(operationKey, out var policy) ? policy : null;
+
+            foreach (var key in CommandOperationNameResolver.GetLookupKeys(operationKey))
+            {
+                if (options.CommandPolicies.TryGetValue(key, out var policy) && policy != null)
+                {
+                    return policy;
+                }
+            }
+
+            return null;
         }
 
         private string? TryResolveAgentRole()
@@ -496,6 +575,152 @@ namespace TinyGenerator.Services
             catch
             {
                 return null;
+            }
+        }
+
+        private sealed record ProviderTimingStats(
+            long PromptTokens,
+            long OutputTokens,
+            long PromptTimeNs,
+            long GenTimeNs,
+            long LoadTimeNs,
+            long TotalTimeNs)
+        {
+            public bool HasAnyValue =>
+                PromptTokens > 0 ||
+                OutputTokens > 0 ||
+                PromptTimeNs > 0 ||
+                GenTimeNs > 0 ||
+                LoadTimeNs > 0 ||
+                TotalTimeNs > 0;
+        }
+
+        private void TryRecordModelRolePerformance(string? responseJson)
+        {
+            try
+            {
+                if (_services == null || string.IsNullOrWhiteSpace(responseJson)) return;
+
+                var roleCode = TryResolveAgentRole();
+                if (string.IsNullOrWhiteSpace(roleCode)) return;
+
+                var stats = TryParseProviderTimingStats(responseJson!);
+                if (stats == null || !stats.HasAnyValue) return;
+
+                using var scope = _services.CreateScope();
+                var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
+                var db = scope.ServiceProvider.GetService<DatabaseService>();
+                if (fallbackService == null || db == null) return;
+
+                var model = db.ListModels()
+                    .FirstOrDefault(x => string.Equals(x.Name, _modelId, StringComparison.OrdinalIgnoreCase));
+                if (model?.Id is not int modelId) return;
+
+                fallbackService.RecordPrimaryModelPerformance(
+                    roleCode!,
+                    modelId,
+                    new ModelFallbackService.ModelRolePerformanceDelta(
+                        stats.PromptTokens,
+                        stats.OutputTokens,
+                        stats.PromptTimeNs,
+                        stats.GenTimeNs,
+                        stats.LoadTimeNs,
+                        stats.TotalTimeNs));
+            }
+            catch
+            {
+                // best-effort metric collection
+            }
+        }
+
+        private static ProviderTimingStats? TryParseProviderTimingStats(string responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson)) return null;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(responseJson);
+                var root = doc.RootElement;
+
+                // Primary source: Ollama timing/count fields at root level.
+                var promptTokens = TryGetLong(root, "prompt_eval_count");
+                var outputTokens = TryGetLong(root, "eval_count");
+                var promptTimeNs = TryGetLong(root, "prompt_eval_duration");
+                var genTimeNs = TryGetLong(root, "eval_duration");
+                var loadTimeNs = TryGetLong(root, "load_duration");
+                var totalTimeNs = TryGetLong(root, "total_duration");
+
+                // Optional fallback for providers exposing usage only (no timings).
+                if (outputTokens == 0 &&
+                    TryGetPropertyIgnoreCase(root, "usage", out var usage) &&
+                    usage.ValueKind == JsonValueKind.Object)
+                {
+                    promptTokens = promptTokens == 0 ? TryGetLong(usage, "prompt_tokens") : promptTokens;
+                    outputTokens = TryGetLong(usage, "completion_tokens");
+                    if (outputTokens == 0)
+                    {
+                        outputTokens = TryGetLong(usage, "output_tokens");
+                    }
+                }
+
+                var stats = new ProviderTimingStats(
+                    PromptTokens: promptTokens,
+                    OutputTokens: outputTokens,
+                    PromptTimeNs: promptTimeNs,
+                    GenTimeNs: genTimeNs,
+                    LoadTimeNs: loadTimeNs,
+                    TotalTimeNs: totalTimeNs);
+
+                return stats.HasAnyValue ? stats : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool TryGetPropertyIgnoreCase(JsonElement root, string propertyName, out JsonElement value)
+        {
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty(propertyName, out value))
+                {
+                    return true;
+                }
+
+                foreach (var property in root.EnumerateObject())
+                {
+                    if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = property.Value;
+                        return true;
+                    }
+                }
+            }
+
+            value = default;
+            return false;
+        }
+
+        private static long TryGetLong(JsonElement root, string propertyName)
+        {
+            if (!TryGetPropertyIgnoreCase(root, propertyName, out var value))
+            {
+                return 0;
+            }
+
+            try
+            {
+                return value.ValueKind switch
+                {
+                    JsonValueKind.Number => value.TryGetInt64(out var n) ? n : 0,
+                    JsonValueKind.String => long.TryParse(value.GetString(), out var s) ? s : 0,
+                    _ => 0
+                };
+            }
+            catch
+            {
+                return 0;
             }
         }
 
@@ -744,12 +969,28 @@ namespace TinyGenerator.Services
         {
             if (!string.IsNullOrWhiteSpace(validation.SystemMessageOverride))
             {
-                messages.Add(new ConversationMessage { Role = "system", Content = validation.SystemMessageOverride });
+                messages.Add(new ConversationMessage { Role = "user", Content = validation.SystemMessageOverride });
                 return;
             }
 
             var msg = $"Tentativo {attemptNumber}: la risposta non rispetta i vincoli. Motivo: {validation.Reason}. Correggi e riprova.";
-            messages.Add(new ConversationMessage { Role = "system", Content = msg });
+            messages.Add(new ConversationMessage { Role = "user", Content = msg });
+        }
+
+        private static void AppendAssistantResponseToHistory(List<ConversationMessage> messages, string? responseJson)
+        {
+            if (messages == null)
+            {
+                return;
+            }
+
+            var parsed = ParseChatResponseWithFinishReason(responseJson);
+            var assistantContent = parsed.TextContent ?? string.Empty;
+            messages.Add(new ConversationMessage
+            {
+                Role = "assistant",
+                Content = assistantContent
+            });
         }
 
         private async Task DiagnoseFailureAsync(List<ConversationMessage> messages, string lastValidationError, CancellationToken ct)
@@ -763,13 +1004,12 @@ namespace TinyGenerator.Services
                 }
                 diagMessages.Add(new ConversationMessage
                 {
-                    Role = "system",
-                    Content = "Spiega in 3-6 righe perché la tua risposta precedente ha fallito la validazione e cosa farai per correggerla. Non riscrivere la risposta finale."
-                });
-                diagMessages.Add(new ConversationMessage
-                {
                     Role = "user",
-                    Content = $"Errore di validazione: {lastValidationError}"
+                    Content =
+                        "ISTRUZIONI DIAGNOSTICHE:\n" +
+                        "Spiega in 3-6 righe perché la tua risposta precedente ha fallito la validazione e cosa farai per correggerla. " +
+                        "Non riscrivere la risposta finale.\n\n" +
+                        $"Errore di validazione: {lastValidationError}"
                 });
 
                 var diagJson = await CallModelWithToolsOnceAsync(diagMessages, new List<Dictionary<string, object>>(), ct).ConfigureAwait(false);
@@ -865,6 +1105,7 @@ namespace TinyGenerator.Services
                     {
                         ct.ThrowIfCancellationRequested();
                         lastResponseJson = await candidateBridge.CallModelWithToolsOnceAsync(attemptMessages, tools, ct).ConfigureAwait(false);
+                        AppendAssistantResponseToHistory(attemptMessages, lastResponseJson);
 
                         try
                         {
@@ -1192,6 +1433,7 @@ namespace TinyGenerator.Services
                         $"Model request failed with status {response.StatusCode}: {responseContent}");
                 }
 
+                TryRecordModelRolePerformance(responseContent);
                 return responseContent;
             }
             catch (Exception ex)

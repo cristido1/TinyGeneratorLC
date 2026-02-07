@@ -279,7 +279,8 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                 var response = await bridge.CallModelWithToolsAsync(
                     messages,
                     new List<Dictionary<string, object>>(), // No tools needed for planner
-                    ct
+                    ct,
+                    skipResponseChecker: true
                 );
 
                 return response ?? string.Empty;
@@ -339,14 +340,8 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
             var retryDelayMs = Math.Max(0, _tuning.PlannedStory.RetryDelayMilliseconds);
 
             string? lastError = null;
-            var hadCorrections = false;
-
             for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                if (attempt > 1)
-                {
-                    hadCorrections = true;
-                }
                 try
                 {
                     var beatPrompt = BuildBeatPrompt(beat, beatNumber, totalBeats, previousBeats, lastError, attempt);
@@ -380,8 +375,8 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
 
                     // Beat valido
                     _logger.MarkLatestModelResponseResult(
-                        hadCorrections ? "FAILED" : "SUCCESS",
-                        hadCorrections ? "Risposta corretta dopo retry" : null);
+                        "SUCCESS",
+                        null);
                     return beatText;
                 }
                 catch (Exception ex)
@@ -472,7 +467,8 @@ REGOLE FONDAMENTALI:
                 var response = await bridge.CallModelWithToolsAsync(
                     messages,
                     new List<Dictionary<string, object>>(), // No tools needed for beat writing
-                    ct
+                    ct,
+                    skipResponseChecker: true
                 );
 
                 return response ?? string.Empty;

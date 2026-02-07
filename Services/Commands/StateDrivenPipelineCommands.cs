@@ -985,7 +985,9 @@ internal static class StateDrivenPipelineHelpers
         string roleCode,
         string systemPrompt,
         string userPrompt,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowInternalFallback = true,
+        bool skipResponseChecker = false)
     {
         var bridge = kernelFactory.CreateChatBridge(
             modelName,
@@ -1005,7 +1007,8 @@ internal static class StateDrivenPipelineHelpers
         var response = await bridge.CallModelWithToolsAsync(
             messages,
             new List<Dictionary<string, object>>(),
-            ct).ConfigureAwait(false);
+            ct,
+            skipResponseChecker: skipResponseChecker).ConfigureAwait(false);
 
         var primary = ExtractAssistantContent(response);
         if (!string.IsNullOrWhiteSpace(primary))
@@ -1013,7 +1016,7 @@ internal static class StateDrivenPipelineHelpers
             return AgentResponse.Ok(primary);
         }
 
-        if (scopeFactory == null)
+        if (!allowInternalFallback || scopeFactory == null)
         {
             return AgentResponse.Fail("Risposta vuota dal modello");
         }
@@ -1054,7 +1057,8 @@ internal static class StateDrivenPipelineHelpers
                 var fallbackResponse = await fallbackBridge.CallModelWithToolsAsync(
                     fallbackMessages,
                     new List<Dictionary<string, object>>(),
-                    ct).ConfigureAwait(false);
+                    ct,
+                    skipResponseChecker: skipResponseChecker).ConfigureAwait(false);
 
                 return ExtractAssistantContent(fallbackResponse);
             },

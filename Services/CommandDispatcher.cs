@@ -88,6 +88,7 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, CommandState> _completed = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<CommandResult>> _completionTasks = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _commandCancellations = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, CancellationTokenSource> _timeoutCancellations = new(StringComparer.OrdinalIgnoreCase);
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
@@ -246,8 +247,14 @@ namespace TinyGenerator.Services
                 }
             }
 
+            var policy = _policies.Resolve(workItem.OperationName, workItem.Metadata);
+            var timeoutSec = Math.Max(1, policy.TimeoutSec);
+
             using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName, agentRole: workItem.AgentRole, threadId: allocatedThreadId, storyId: allocatedStoryId);
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workItem.Cancellation.Token);
+            using var timeoutCts = new CancellationTokenSource();
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+            _timeoutCancellations[workItem.RunId] = timeoutCts;
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workItem.Cancellation.Token, timeoutCts.Token);
             var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, linkedCts.Token);
             var startMessage = $"[{workItem.RunId}] START {workItem.OperationName}";
             _logger?.Log("Information", "Command", startMessage);
@@ -262,15 +269,16 @@ namespace TinyGenerator.Services
                     }
                     state.Status = "running";
                     state.StartedAt = DateTimeOffset.UtcNow;
+                    state.TimeoutSec = timeoutSec;
                 }
                 await BroadcastCommandsAsync().ConfigureAwait(false);
 
-                var policy = _policies.Resolve(workItem.OperationName, workItem.Metadata);
                 var maxAttempts = Math.Max(1, policy.MaxAttempts);
                 CommandResult result;
 
                 for (int attempt = 1; attempt <= maxAttempts; attempt++)
                 {
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
                     linkedCts.Token.ThrowIfCancellationRequested();
 
                     try
@@ -354,6 +362,30 @@ Completed:
             }
             catch (OperationCanceledException oce)
             {
+                var timedOut = timeoutCts.IsCancellationRequested
+                    && !stoppingToken.IsCancellationRequested
+                    && !workItem.Cancellation.IsCancellationRequested;
+
+                if (timedOut)
+                {
+                    var timeoutMessage = $"Timeout after {timeoutSec}s";
+                    _logger?.Log("Error", "Command", $"[{workItem.RunId}] TIMEOUT {workItem.OperationName}: {timeoutMessage}");
+                    var timeoutResult = new CommandResult(false, timeoutMessage);
+                    workItem.Completion.TrySetResult(timeoutResult);
+
+                    await TryReportFailureAsync(workItem, timeoutMessage, null, allocatedThreadId).ConfigureAwait(false);
+
+                    if (_active.TryGetValue(workItem.RunId, out var timedOutState))
+                    {
+                        timedOutState.Status = "failed";
+                        timedOutState.CompletedAt = DateTimeOffset.UtcNow;
+                        timedOutState.ErrorMessage = timeoutMessage;
+                    }
+
+                    RaiseCompleted(workItem.RunId, workItem.OperationName, timeoutResult, workItem.Metadata);
+                    return;
+                }
+
                 _logger?.Log("Warning", "Command", $"[{workItem.RunId}] CANCEL {workItem.OperationName}: {oce.Message}", oce.ToString());
                 var result = new CommandResult(false, "Operazione annullata");
                 workItem.Completion.TrySetResult(result);
@@ -399,6 +431,7 @@ Completed:
                     });
                 }
                 _completionTasks.TryRemove(workItem.RunId, out _);
+                _timeoutCancellations.TryRemove(workItem.RunId, out _);
                 if (_commandCancellations.TryRemove(workItem.RunId, out var cancelCts))
                 {
                     cancelCts.Dispose();
@@ -516,7 +549,31 @@ Completed:
                 {
                     state.StepDescription = stepDescription;
                 }
+                ResetTimeoutForRun(runId, state.TimeoutSec);
                 _ = BroadcastCommandsAsync();
+            }
+        }
+
+        private void ResetTimeoutForRun(string runId, int timeoutSec)
+        {
+            if (timeoutSec <= 0)
+            {
+                return;
+            }
+
+            if (_timeoutCancellations.TryGetValue(runId, out var timeoutCts))
+            {
+                try
+                {
+                    if (!timeoutCts.IsCancellationRequested)
+                    {
+                        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+                    }
+                }
+                catch
+                {
+                    // best-effort
+                }
             }
         }
 
@@ -639,5 +696,6 @@ Completed:
         public string? StepDescription { get; set; }
         public int RetryCount { get; set; }
         public string? ErrorMessage { get; set; }
+        public int TimeoutSec { get; set; }
     }
 }

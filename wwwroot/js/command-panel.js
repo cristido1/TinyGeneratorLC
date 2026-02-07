@@ -278,10 +278,21 @@
                 const maxStep = c.maxStep || c.MaxStep;
                 const stepDesc = c.stepDescription || c.StepDescription || '';
                 const retryCount = c.retryCount || c.RetryCount || 0;
-                const stepInfo = stepDesc ? ` (${stepDesc})` : ((currentStep && maxStep) ? ` Step ${currentStep}/${maxStep}` : '');
                 const retryInfo = (retryCount > 0) ? ` (Retry ${retryCount})` : '';
                 const metadata = c.metadata || c.Metadata || {};
                 const op = metadata.operation || metadata.Operation || c.operationName || c.OperationName || c.threadScope || c.ThreadScope || 'N/A';
+                const opLower = (op || '').toString().toLowerCase();
+                const isScoreCommand = opLower.includes('instruction_score')
+                    || opLower.includes('json_score')
+                    || opLower.includes('intelligence_score')
+                    || opLower.includes('intelligence_test');
+                const isIntelligenceTestCommand = opLower.includes('intelligence_test') || opLower.includes('intelligence_score');
+                const hasStep = currentStep !== undefined && currentStep !== null && maxStep !== undefined && maxStep !== null;
+                const scoreMatch = /(?:score\s*parziale|parziale)\s+(\d+\/10)/i.exec(stepDesc);
+                const runningScore = scoreMatch ? scoreMatch[1] : '';
+                const stepInfo = stepDesc
+                    ? ` (${stepDesc})`
+                    : (hasStep ? ` ${isScoreCommand ? `Test ${currentStep}/${maxStep}` : `Step ${currentStep}/${maxStep}`}` : '');
                 const agent = c.agentName || c.AgentName || metadata.agentName || metadata.AgentName || metadata.agentRole || metadata.AgentRole || 'N/A';
                 const statusDisplay = c.status || c.Status || '?';
                 const runId = c.runId || c.RunId || '';
@@ -346,8 +357,14 @@
 
                 const progressParts = [];
                 if (modelShort) progressParts.push(`<i class="bi bi-cpu me-1"></i>${modelShort}`);
-                if (currentStep && maxStep) progressParts.push(`Domanda ${currentStep}/${maxStep}`);
-                if (stepDesc) progressParts.push(stepDesc);
+                if (hasStep) {
+                    progressParts.push(`${isIntelligenceTestCommand ? 'Domanda' : (isScoreCommand ? 'Test' : 'Step')} ${currentStep}/${maxStep}`);
+                }
+                if (isScoreCommand && runningScore) {
+                    progressParts.push(`score running ${runningScore}`);
+                } else if (stepDesc) {
+                    progressParts.push(stepDesc);
+                }
                 const progressInfo = progressParts.length
                     ? `<div style="font-size:11px; color:#111; margin-top:4px; user-select:text;">${progressParts.join(' • ')}</div>`
                     : '';

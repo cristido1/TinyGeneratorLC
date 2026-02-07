@@ -38,6 +38,14 @@ public class ModelInfo
     public double TotalScore { get; set; }
     // Accuracy nel rispettare uno schema JSON di risposta (1-10, null se non testato)
     public double? JsonScore { get; set; }
+    // Accuracy nel seguire istruzioni complesse (1-10, null se non testato)
+    public double? InstructionScore { get; set; }
+    // Accuracy su test logico-aritmetici (1-10, null se non testato)
+    [Column("intelliScore")]
+    public int? IntelliScore { get; set; }
+    // Tempo totale di risposta sul benchmark intelligence (secondi, null se non testato)
+    [Column("intelliTime")]
+    public int? IntelliTime { get; set; }
     // Free-form note for the model (shown in grid and edit form)
     public string? Note { get; set; }
     // Estimated speed score (1-10). Nullable when unknown.

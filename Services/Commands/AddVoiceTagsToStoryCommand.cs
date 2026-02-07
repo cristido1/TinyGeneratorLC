@@ -372,7 +372,6 @@ namespace TinyGenerator.Services.Commands
             string? lastError = null;
             string? lastRequestText = null;
             string? lastMappingText = null;
-            var hadCorrections = false;
 
             var correctionRetries = Math.Max(0, _tuning.TransformStoryRawToTagged.FormatterV2CorrectionRetries);
             var maxAttempts = correctionRetries > 0
@@ -410,11 +409,6 @@ namespace TinyGenerator.Services.Commands
             {
                 ct.ThrowIfCancellationRequested();
                 _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Formatting attempt {attempt}/{maxAttempts}");
-                if (attempt > 1)
-                {
-                    hadCorrections = true;
-                }
-
                 try
                 {
                     var messages = new List<ConversationMessage>();
@@ -439,7 +433,7 @@ namespace TinyGenerator.Services.Commands
                     // while still showing the right agent name in logs.
                     using (LogScope.Push(LogScope.Current ?? "story/add_voice_tags_to_story", operationId: null, stepNumber: null, maxStep: null, agentName: formatterAgentName, agentRole: "formatter"))
                     {
-                        responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
+                        responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true);
                     }
                     var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
 
@@ -450,8 +444,8 @@ namespace TinyGenerator.Services.Commands
                         if (quoteLineIds.Count == 0)
                         {
                             _logger?.MarkLatestModelResponseResult(
-                                hadCorrections ? "FAILED" : "SUCCESS",
-                                hadCorrections ? "Risposta corretta dopo retry" : null);
+                                "SUCCESS",
+                                null);
                             return new FormatChunkResult(string.Empty, null);
                         }
 
@@ -509,8 +503,8 @@ namespace TinyGenerator.Services.Commands
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: {idToTags.Count} lines");
                     _logger?.MarkLatestModelResponseResult(
-                        hadCorrections ? "FAILED" : "SUCCESS",
-                        hadCorrections ? "Risposta corretta dopo retry" : null);
+                        "SUCCESS",
+                        null);
                     return new FormatChunkResult(mappingNormalized, null);
                 }
                 catch (Exception ex)
@@ -548,7 +542,7 @@ namespace TinyGenerator.Services.Commands
                     string diagJson;
                     using (LogScope.Push("formatter_explanation", operationId: null, stepNumber: null, maxStep: null, agentName: formatterAgentName))
                     {
-                        diagJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct);
+                        diagJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true);
                     }
 
                     var (diagText, _) = LangChainChatBridge.ParseChatResponse(diagJson);
@@ -915,4 +909,3 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
-

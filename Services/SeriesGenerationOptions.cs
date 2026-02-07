@@ -11,6 +11,9 @@ public sealed class SeriesGenerationOptions
     {
         public int MaxAttempts { get; set; } = 3;
         public int RetryDelaySeconds { get; set; } = 2;
+        public int TimeoutSec { get; set; } = 400;
         public bool DiagnoseOnFinalFailure { get; set; } = true;
+        public bool UseResponseChecker { get; set; } = false;
+        public int ExplainAfterAttempt { get; set; } = 0;
     }
 }

@@ -1158,22 +1158,17 @@ public sealed partial class StoriesService
         string evalText = string.Empty;
 
         var evalOk = false;
-        var hadCorrections = false;
         for (var attempt = 1; attempt <= maxAttemptsFinalEvaluation; attempt++)
         {
-            if (attempt > 1)
-            {
-                hadCorrections = true;
-            }
-            var evalRawJson = await chatBridge.CallModelWithToolsAsync(messages, tools: new List<Dictionary<string, object>>()).ConfigureAwait(false);
+            var evalRawJson = await chatBridge.CallModelWithToolsAsync(messages, tools: new List<Dictionary<string, object>>(), skipResponseChecker: true).ConfigureAwait(false);
             var (evalResponseText, _) = LangChainChatBridge.ParseChatResponse(evalRawJson);
             evalText = NormalizeEvaluatorOutput((evalResponseText ?? string.Empty));
             messages.Add(new ConversationMessage { Role = "assistant", Content = evalText });
                 if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 {
                     _customLogger?.MarkLatestModelResponseResult(
-                        hadCorrections ? "FAILED" : "SUCCESS",
-                        hadCorrections ? "Risposta corretta dopo retry" : null);
+                        "SUCCESS",
+                        null);
                     evalOk = true;
                     break;
                 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Options;
@@ -16,6 +17,7 @@ public sealed class IndexModel : PageModel
     private readonly ICustomLogger? _logger;
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly IOptionsMonitor<SeriesGenerationOptions>? _optionsMonitor;
+    private readonly CommandModelExecutionService? _modelExecution;
 
     [BindProperty]
     public string Prompt { get; set; } = string.Empty;
@@ -26,7 +28,8 @@ public sealed class IndexModel : PageModel
         ICommandDispatcher dispatcher,
         IServiceScopeFactory? scopeFactory = null,
         ICustomLogger? logger = null,
-        IOptionsMonitor<SeriesGenerationOptions>? optionsMonitor = null)
+        IOptionsMonitor<SeriesGenerationOptions>? optionsMonitor = null,
+        CommandModelExecutionService? modelExecution = null)
     {
         _database = database;
         _kernelFactory = kernelFactory;
@@ -34,6 +37,7 @@ public sealed class IndexModel : PageModel
         _scopeFactory = scopeFactory;
         _logger = logger;
         _optionsMonitor = optionsMonitor;
+        _modelExecution = modelExecution;
     }
 
     public void OnGet()
@@ -50,6 +54,15 @@ public sealed class IndexModel : PageModel
 
         var runId = $"generate_new_serie_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
         var prompt = Prompt.Trim();
+        var activeSeriesAgent = _database.ListAgents()
+            .FirstOrDefault(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) && a.Role.StartsWith("serie_", StringComparison.OrdinalIgnoreCase));
+        var activeAgentName = activeSeriesAgent?.Name ?? "series_orchestrator";
+        var activeAgentRole = activeSeriesAgent?.Role ?? "series_orchestrator";
+        var activeModelName = activeSeriesAgent?.ModelName;
+        if (string.IsNullOrWhiteSpace(activeModelName) && activeSeriesAgent?.ModelId is int modelId)
+        {
+            activeModelName = _database.GetModelInfoById(modelId)?.Name;
+        }
 
         _dispatcher.Enqueue(
             "generate_new_serie",
@@ -61,14 +74,19 @@ public sealed class IndexModel : PageModel
                     _kernelFactory,
                     _optionsMonitor,
                     _logger,
-                    _scopeFactory);
-                return await cmd.ExecuteAsync(ctx.CancellationToken);
+                    _scopeFactory,
+                    _dispatcher,
+                    _modelExecution);
+                return await cmd.ExecuteAsync(ctx.RunId, ctx.CancellationToken);
             },
             runId: runId,
             metadata: new Dictionary<string, string>
             {
                 ["operation"] = "generate_new_serie",
-                ["promptLength"] = prompt.Length.ToString()
+                ["promptLength"] = prompt.Length.ToString(),
+                ["agentName"] = activeAgentName,
+                ["agentRole"] = activeAgentRole,
+                ["modelName"] = activeModelName ?? "multi-model"
             },
             priority: 2);
 

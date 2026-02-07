@@ -4,7 +4,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using TinyGenerator.Data;
 using TinyGenerator.Services;
 using TinyGenerator.Models;
 
@@ -18,8 +20,11 @@ namespace TinyGenerator.Pages.Models
         private readonly IOllamaManagementService _ollamaService;
         private readonly ICommandDispatcher _commandDispatcher;
         private readonly JsonScoreTestService _jsonScoreTester;
+        private readonly InstructionScoreTestService _instructionScoreTester;
+        private readonly IntelligenceScoreTestService _intelligenceTestService;
         private readonly ILogger<IndexModel>? _logger;
         private readonly ICustomLogger? _customLogger;
+        private readonly TinyGeneratorDbContext _context;
 
         [BindProperty(SupportsGet = true)]
         public bool ShowDisabled { get; set; } = false;
@@ -58,6 +63,9 @@ namespace TinyGenerator.Pages.Models
             IOllamaManagementService ollamaService,
             ICommandDispatcher commandDispatcher,
             JsonScoreTestService jsonScoreTester,
+            InstructionScoreTestService instructionScoreTester,
+            IntelligenceScoreTestService intelligenceTestService,
+            TinyGeneratorDbContext context,
             ILogger<IndexModel>? logger = null,
             ICustomLogger? customLogger = null)
         {
@@ -67,6 +75,9 @@ namespace TinyGenerator.Pages.Models
             _ollamaService = ollamaService ?? throw new ArgumentNullException(nameof(ollamaService));
             _commandDispatcher = commandDispatcher ?? throw new ArgumentNullException(nameof(commandDispatcher));
             _jsonScoreTester = jsonScoreTester ?? throw new ArgumentNullException(nameof(jsonScoreTester));
+            _instructionScoreTester = instructionScoreTester ?? throw new ArgumentNullException(nameof(instructionScoreTester));
+            _intelligenceTestService = intelligenceTestService ?? throw new ArgumentNullException(nameof(intelligenceTestService));
+            _context = context ?? throw new ArgumentNullException(nameof(context));
             _logger = logger;
             _customLogger = customLogger;
         }
@@ -262,15 +273,22 @@ namespace TinyGenerator.Pages.Models
             try
             {
                 var modelName = Model;
+                ModelInfo? modelInfo = null;
                 if (string.IsNullOrWhiteSpace(modelName) && ModelId.HasValue)
                 {
-                    var info = _database.ListModels().FirstOrDefault(m => m.Id == ModelId.Value);
-                    modelName = info?.Name ?? string.Empty;
+                    modelInfo = _database.ListModels().FirstOrDefault(m => m.Id == ModelId.Value);
+                    modelName = modelInfo?.Name ?? string.Empty;
                 }
 
                 if (string.IsNullOrWhiteSpace(modelName))
                 {
                     return BadRequest(new { error = "Modello non trovato" });
+                }
+
+                modelInfo ??= _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase));
+                if (modelInfo == null || !modelInfo.Enabled)
+                {
+                    return BadRequest(new { error = "Il modello è disabilitato" });
                 }
 
                 var handle = _jsonScoreTester.EnqueueJsonScoreForModel(modelName);
@@ -281,6 +299,110 @@ namespace TinyGenerator.Pages.Models
                 return BadRequest(new { error = ex.Message });
             }
         }
+
+        public IActionResult OnPostRunInstructionScore()
+        {
+            try
+            {
+                var handle = _instructionScoreTester.EnqueueInstructionScoreForMissingModels();
+                return new JsonResult(new { runId = handle.RunId });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+        }
+
+        public IActionResult OnPostRunInstructionScoreModel()
+        {
+            if (ModelId == null && string.IsNullOrWhiteSpace(Model))
+            {
+                return BadRequest(new { error = "ModelId o Model richiesto" });
+            }
+
+            try
+            {
+                var modelName = Model;
+                ModelInfo? modelInfo = null;
+                if (string.IsNullOrWhiteSpace(modelName) && ModelId.HasValue)
+                {
+                    modelInfo = _database.ListModels().FirstOrDefault(m => m.Id == ModelId.Value);
+                    modelName = modelInfo?.Name ?? string.Empty;
+                }
+
+                if (string.IsNullOrWhiteSpace(modelName))
+                {
+                    return BadRequest(new { error = "Modello non trovato" });
+                }
+
+                modelInfo ??= _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase));
+                if (modelInfo == null || !modelInfo.Enabled)
+                {
+                    return BadRequest(new { error = "Il modello è disabilitato" });
+                }
+
+                var handle = _instructionScoreTester.EnqueueInstructionScoreForModel(modelName);
+                return new JsonResult(new { runId = handle.RunId });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+        }
+
+        public IActionResult OnPostRunIntelligenceTest()
+        {
+            try
+            {
+                var handle = _intelligenceTestService.EnqueueIntelligenceScoreForMissingModels();
+                return new JsonResult(new { runId = handle.RunId });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+        }
+
+        public IActionResult OnPostRunIntelligenceTestModel()
+        {
+            if (ModelId == null && string.IsNullOrWhiteSpace(Model))
+            {
+                return BadRequest(new { error = "ModelId o Model richiesto" });
+            }
+
+            try
+            {
+                var modelName = Model;
+                ModelInfo? modelInfo = null;
+                if (string.IsNullOrWhiteSpace(modelName) && ModelId.HasValue)
+                {
+                    modelInfo = _database.ListModels().FirstOrDefault(m => m.Id == ModelId.Value);
+                    modelName = modelInfo?.Name ?? string.Empty;
+                }
+
+                if (string.IsNullOrWhiteSpace(modelName))
+                {
+                    return BadRequest(new { error = "Modello non trovato" });
+                }
+
+                modelInfo ??= _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase));
+                if (modelInfo == null || !modelInfo.Enabled)
+                {
+                    return BadRequest(new { error = "Il modello è disabilitato" });
+                }
+
+                var handle = _intelligenceTestService.EnqueueIntelligenceScoreForModel(modelName);
+                return new JsonResult(new { runId = handle.RunId });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+        }
+
+        // Backward compatibility for existing UI handlers
+        public IActionResult OnPostRunIntelligenceScore() => OnPostRunIntelligenceTest();
+        public IActionResult OnPostRunIntelligenceScoreModel() => OnPostRunIntelligenceTestModel();
 
         public async Task<IActionResult> OnPostPurgeDisabledOllamaAsync()
         {
@@ -370,6 +492,61 @@ namespace TinyGenerator.Pages.Models
                 return BadRequest(new { error = ex.Message });
             }
         }
+
+        public IActionResult OnGetRoleStats(int? modelId, string? model)
+        {
+            var query = _context.ModelRoles
+                .AsNoTracking()
+                .Include(mr => mr.Role)
+                .Include(mr => mr.Model)
+                .AsQueryable();
+
+            if (modelId.HasValue && modelId.Value > 0)
+            {
+                query = query.Where(mr => mr.ModelId == modelId.Value);
+            }
+            else if (!string.IsNullOrWhiteSpace(model))
+            {
+                var normalized = model.Trim();
+                query = query.Where(mr => mr.Model != null && mr.Model.Name == normalized);
+            }
+            else
+            {
+                return BadRequest(new { error = "modelId o model richiesto" });
+            }
+
+            var rows = query
+                .OrderByDescending(mr => mr.IsPrimary)
+                .ThenByDescending(mr => mr.TotalOutputTokens)
+                .ToList();
+
+            var modelName = rows.FirstOrDefault()?.Model?.Name ?? model ?? string.Empty;
+
+            return new JsonResult(new
+            {
+                modelId = rows.FirstOrDefault()?.ModelId ?? modelId,
+                modelName,
+                rows = rows.Select(mr => new
+                {
+                    role = mr.Role?.Ruolo ?? "-",
+                    isPrimary = mr.IsPrimary,
+                    enabled = mr.Enabled,
+                    useCount = mr.UseCount,
+                    successRatePct = mr.SuccessRate * 100.0,
+                    totalPromptTokens = mr.TotalPromptTokens,
+                    totalOutputTokens = mr.TotalOutputTokens,
+                    totalPromptTimeNs = mr.TotalPromptTimeNs,
+                    totalGenTimeNs = mr.TotalGenTimeNs,
+                    totalLoadTimeNs = mr.TotalLoadTimeNs,
+                    totalTotalTimeNs = mr.TotalTotalTimeNs,
+                    avgPromptTps = mr.AvgPromptTps,
+                    avgGenTps = mr.AvgGenTps,
+                    avgE2eTps = mr.AvgE2eTps,
+                    loadRatio = mr.LoadRatio
+                })
+            });
+        }
+
         private static string SanitizeIdentifier(string value)
         {
             if (string.IsNullOrWhiteSpace(value)) return "test";

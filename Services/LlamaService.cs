@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Text;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -248,11 +249,20 @@ namespace TinyGenerator.Services
         /// </summary>
         public async Task EnsureRestartAsync(string modelName, int contextSize)
         {
+            if (string.IsNullOrWhiteSpace(modelName)) throw new ArgumentException("Model name is required.", nameof(modelName));
+            if (contextSize <= 0) contextSize = 32768;
+
             // If server is running, stop it first
             try
             {
                 if (await IsServerRunningAsync().ConfigureAwait(false))
                 {
+                    if (await IsSameModelAndContextAlreadyRunningAsync(modelName, contextSize).ConfigureAwait(false))
+                    {
+                        _logger?.Log("Info", "llama.cpp", $"Requested model/context already running (model={modelName}, ctx={contextSize}), skipping restart");
+                        return;
+                    }
+
                     if (!_llamaRestartPolicy.Equals("kill", StringComparison.OrdinalIgnoreCase))
                     {
                         _logger?.Log("Info", "llama.cpp", $"RestartPolicy={_llamaRestartPolicy} - not killing external llama-server; skipping restart");
@@ -298,6 +308,90 @@ namespace TinyGenerator.Services
                 // Let exceptions bubble up to caller if desired; swallow here to avoid crashing startup
                 throw;
             }
+        }
+
+        private async Task<bool> IsSameModelAndContextAlreadyRunningAsync(string modelName, int contextSize)
+        {
+            // Fast path when we own the process and know active model/context.
+            lock (_lock)
+            {
+                if (_llamaServer != null && !_llamaServer.HasExited)
+                {
+                    var requestedPath = BuildRequestedModelPath(modelName);
+                    if (string.Equals(_currentModelPath, requestedPath, StringComparison.OrdinalIgnoreCase) &&
+                        _currentContextSize == contextSize)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            // Best-effort for externally managed llama-server: infer loaded model from /v1/models.
+            try
+            {
+                var response = await _httpClient.GetAsync($"http://{_llamaHost}:{_llamaPort}/v1/models", CancellationToken.None).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode) return false;
+
+                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(json)) return false;
+
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+                {
+                    return false;
+                }
+
+                var requestedNames = BuildRequestedModelNames(modelName);
+                foreach (var model in data.EnumerateArray())
+                {
+                    if (!model.TryGetProperty("id", out var idEl) || idEl.ValueKind != JsonValueKind.String)
+                    {
+                        continue;
+                    }
+
+                    var id = idEl.GetString() ?? string.Empty;
+                    if (requestedNames.Any(name => id.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                // best effort
+            }
+
+            return false;
+        }
+
+        private string BuildRequestedModelPath(string modelName)
+        {
+            var fileName = modelName.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase)
+                ? modelName
+                : modelName + ".gguf";
+            return Path.Combine(_llamaModels, fileName);
+        }
+
+        private static List<string> BuildRequestedModelNames(string modelName)
+        {
+            var names = new List<string>();
+            if (string.IsNullOrWhiteSpace(modelName)) return names;
+
+            var trimmed = modelName.Trim();
+            names.Add(trimmed);
+            if (!trimmed.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
+            {
+                names.Add(trimmed + ".gguf");
+            }
+            else
+            {
+                names.Add(Path.GetFileNameWithoutExtension(trimmed));
+            }
+
+            return names
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         private void WaitForReady()

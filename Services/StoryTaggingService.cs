@@ -159,15 +159,7 @@ public sealed class StoryTaggingService
         var lines = mappingText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         foreach (var raw in lines)
         {
-            var line = (raw ?? string.Empty).Trim();
-            if (line.Length < 2) continue;
-
-            int i = 0;
-            while (i < line.Length && char.IsDigit(line[i])) i++;
-            if (i == 0 || i >= line.Length) continue;
-            if (!int.TryParse(line.Substring(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id)) continue;
-
-            var tail = line.Substring(i).TrimStart();
+            if (!TryParseLineWithIdPrefix(raw, out var id, out var tail)) continue;
             if (tail.Length == 0) continue;
 
             foreach (Match match in Regex.Matches(tail, "\\[[^\\]]+\\]"))
@@ -191,15 +183,7 @@ public sealed class StoryTaggingService
         var lines = mappingText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         foreach (var raw in lines)
         {
-            var line = (raw ?? string.Empty).Trim();
-            if (line.Length < 2) continue;
-
-            int i = 0;
-            while (i < line.Length && char.IsDigit(line[i])) i++;
-            if (i == 0 || i >= line.Length) continue;
-            if (!int.TryParse(line.Substring(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id)) continue;
-
-            var tail = line.Substring(i).TrimStart();
+            if (!TryParseLineWithIdPrefix(raw, out var id, out var tail)) continue;
             if (tail.Length == 0) continue;
 
             var matchedAny = false;
@@ -235,15 +219,7 @@ public sealed class StoryTaggingService
         var lines = mappingText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         foreach (var raw in lines)
         {
-            var line = (raw ?? string.Empty).Trim();
-            if (line.Length < 2) continue;
-
-            int i = 0;
-            while (i < line.Length && char.IsDigit(line[i])) i++;
-            if (i == 0 || i >= line.Length) continue;
-            if (!int.TryParse(line.Substring(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id)) continue;
-
-            var tail = line.Substring(i).TrimStart();
+            if (!TryParseLineWithIdPrefix(raw, out var id, out var tail)) continue;
             if (tail.Length == 0) continue;
 
             // Accept only strict formats:
@@ -302,15 +278,7 @@ public sealed class StoryTaggingService
         var lines = mappingText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         foreach (var raw in lines)
         {
-            var line = (raw ?? string.Empty).Trim();
-            if (line.Length < 2) continue;
-
-            int i = 0;
-            while (i < line.Length && char.IsDigit(line[i])) i++;
-            if (i == 0 || i >= line.Length) continue;
-            if (!int.TryParse(line.Substring(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id)) continue;
-
-            var tail = line.Substring(i).TrimStart();
+            if (!TryParseLineWithIdPrefix(raw, out var id, out var tail)) continue;
             if (tail.Length == 0) continue;
 
             var durationSeconds = (int?)null;
@@ -420,6 +388,37 @@ public sealed class StoryTaggingService
         var cleaned = text.Trim();
         cleaned = Regex.Replace(cleaned, @"^\s*-?\d+\s+", "");
         return cleaned.Trim();
+    }
+
+    private static bool TryParseLineWithIdPrefix(string? raw, out int id, out string tail)
+    {
+        id = 0;
+        tail = string.Empty;
+
+        var line = (raw ?? string.Empty).Trim();
+        if (line.Length < 2) return false;
+
+        // Accept optional bullet prefix: "- 054: text"
+        if (line.StartsWith("-", StringComparison.Ordinal))
+        {
+            line = line.Substring(1).TrimStart();
+            if (line.Length < 2) return false;
+        }
+
+        int i = 0;
+        while (i < line.Length && char.IsDigit(line[i])) i++;
+        if (i == 0) return false;
+        if (!int.TryParse(line.Substring(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out id)) return false;
+
+        var rest = line.Substring(i).TrimStart();
+        // Accept optional delimiter: "054: text"
+        if (rest.StartsWith(":", StringComparison.Ordinal))
+        {
+            rest = rest.Substring(1).TrimStart();
+        }
+
+        tail = rest;
+        return true;
     }
 
     public static string BuildStoryTagged(string storyRevised, IReadOnlyList<StoryTagEntry> tags)

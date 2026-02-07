@@ -29,7 +29,7 @@ Non aggiungere testo fuori dal JSON, niente spiegazioni, niente codice Markdown.
 Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul titolo.
 """;
 
-    private static readonly object ResponseFormatSchema = new
+    private static readonly object ResponseFormatSchemaOpenAi = new
     {
         type = "json_schema",
         json_schema = new
@@ -52,6 +52,22 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
             },
             strict = true
         }
+    };
+
+    private static readonly object ResponseFormatSchemaOllama = new
+    {
+        type = "object",
+        properties = new Dictionary<string, object>
+        {
+            ["titolo"] = new Dictionary<string, object> { ["type"] = "string" },
+            ["priorita"] = new Dictionary<string, object>
+            {
+                ["type"] = "string",
+                ["enum"] = new[] { "bassa", "media", "alta" }
+            },
+            ["completato"] = new Dictionary<string, object> { ["type"] = "boolean" }
+        },
+        required = new[] { "titolo", "priorita", "completato" }
     };
 
     private sealed record JsonTestCase(
@@ -185,7 +201,7 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
         if (modelId <= 0) return null;
 
         var model = _database.ListModels().FirstOrDefault(m => m.Id.HasValue && m.Id.Value == modelId);
-        if (model == null || !model.Id.HasValue) return null;
+        if (model == null || !model.Id.HasValue || !model.Enabled) return null;
 
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -210,11 +226,11 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
         if (ctx.Metadata != null && ctx.Metadata.TryGetValue("modelName", out var modelNameOverride))
         {
             targets = _database.ListModels()
-                .Where(m => string.Equals(m.Name, modelNameOverride, StringComparison.OrdinalIgnoreCase))
+                .Where(m => m.Enabled && string.Equals(m.Name, modelNameOverride, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (targets.Count == 0)
             {
-                return new CommandResult(false, $"Modello '{modelNameOverride}' non trovato");
+                return new CommandResult(false, $"Modello '{modelNameOverride}' non trovato o disabilitato");
             }
         }
         else
@@ -224,6 +240,8 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
             {
                 return new CommandResult(true, "Nessun modello da testare: jsonScore già presente.");
             }
+
+            targets = OrderModelsForScoreTests(targets).ToList();
         }
 
         int processed = 0;
@@ -245,6 +263,13 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
 
         return new CommandResult(true, $"jsonScore calcolato per {processed} modelli");
     }
+
+    private static IEnumerable<ModelInfo> OrderModelsForScoreTests(IEnumerable<ModelInfo> models)
+    {
+        return models
+            .OrderBy(m => string.Equals(m.Provider?.Trim(), "ollama", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase);
+    }
     private async Task<CommandResult> RunSingleModelAsync(CommandContext ctx, ModelInfo model)
     {
         if (!model.Id.HasValue)
@@ -263,7 +288,10 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
     private async Task<(int Score, string Details)> TestSingleModelAsync(ModelInfo model, CommandContext ctx)
     {
         var bridge = _kernelFactory.CreateChatBridge(model.Name, temperature: 0.1, topP: 1.0, useMaxTokens: true);
-        bridge.ResponseFormat = ResponseFormatSchema;
+        var provider = model.Provider?.Trim();
+        bridge.ResponseFormat = string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase)
+            ? ResponseFormatSchemaOllama
+            : ResponseFormatSchemaOpenAi;
         bridge.MaxResponseTokens = bridge.MaxResponseTokens ?? 256;
 
         int score = 0;
@@ -431,4 +459,3 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
         return !string.IsNullOrWhiteSpace(text) && text.Any(char.IsDigit);
     }
 }
-

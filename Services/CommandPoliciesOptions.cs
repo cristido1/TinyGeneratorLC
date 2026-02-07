@@ -20,16 +20,25 @@ public sealed class CommandPoliciesOptions
 
     public CommandExecutionPolicy Resolve(string? operationName, IReadOnlyDictionary<string, string>? metadata)
     {
-        if (!string.IsNullOrWhiteSpace(operationName) && Commands.TryGetValue(operationName.Trim(), out var byName) && byName != null)
+        if (!string.IsNullOrWhiteSpace(operationName))
         {
-            return byName;
+            foreach (var key in CommandOperationNameResolver.GetLookupKeys(operationName))
+            {
+                if (Commands.TryGetValue(key, out var byName) && byName != null)
+                {
+                    return byName;
+                }
+            }
         }
 
         if (metadata != null && metadata.TryGetValue("operation", out var op) && !string.IsNullOrWhiteSpace(op))
         {
-            if (Commands.TryGetValue(op.Trim(), out var byOp) && byOp != null)
+            foreach (var key in CommandOperationNameResolver.GetLookupKeys(op))
             {
-                return byOp;
+                if (Commands.TryGetValue(key, out var byOp) && byOp != null)
+                {
+                    return byOp;
+                }
             }
         }
 
@@ -39,6 +48,12 @@ public sealed class CommandPoliciesOptions
 
 public sealed class CommandExecutionPolicy
 {
+    /// <summary>
+    /// Maximum execution time in seconds for the whole command run.
+    /// If exceeded, the command fails with timeout.
+    /// </summary>
+    public int TimeoutSec { get; set; } = 20;
+
     /// <summary>
     /// Total attempts including the first. Use 1 to disable retries.
     /// </summary>

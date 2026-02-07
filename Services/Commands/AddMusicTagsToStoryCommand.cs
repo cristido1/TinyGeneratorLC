@@ -407,7 +407,6 @@ namespace TinyGenerator.Services.Commands
             var retryDelayBaseSeconds = Math.Max(0, _tuning.MusicExpert.RetryDelayBaseSeconds);
             var requiredTags = ComputeRequiredMusicTagsForChunk(chunkText);
             var diagnoseOnFinalFailure = _tuning.MusicExpert.DiagnoseOnFinalFailure;
-            var hadCorrections = false;
 
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -430,7 +429,7 @@ namespace TinyGenerator.Services.Commands
                     // Keep the last request/response around for diagnostics.
                     lastRequestMessages = messages;
 
-                    var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
+                    var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true);
                     var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
                     var cleaned = textContent?.Trim() ?? string.Empty;
                     lastAssistantText = cleaned;
@@ -440,7 +439,6 @@ namespace TinyGenerator.Services.Commands
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Empty response on attempt {attempt}", "warn");
                         _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota");
                         lastError = "Il testo ritornato è vuoto.";
-                        hadCorrections = true;
                         continue;
                     }
 
@@ -452,14 +450,13 @@ namespace TinyGenerator.Services.Commands
                         _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Not enough music tags: {tagCount} found, minimum {requiredTags} required", "warn");
                         _logger?.MarkLatestModelResponseResult("FAILED", $"Hai inserito solo {tagCount} righe valide. Devi inserirne almeno {requiredTags}.");
                         lastError = $"Hai inserito solo {tagCount} righe valide. Devi inserire ALMENO {requiredTags} indicazioni musicali (formato: ID emozione [secondi]).";
-                        hadCorrections = true;
                         continue;
                     }
 
                     _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalMusic={tagCount}");
                     _logger?.MarkLatestModelResponseResult(
-                        hadCorrections ? "FAILED" : "SUCCESS",
-                        hadCorrections ? "Risposta corretta dopo retry" : null);
+                        "SUCCESS",
+                        null);
                     return cleaned;
                 }
                 catch (Exception ex)
@@ -560,12 +557,19 @@ namespace TinyGenerator.Services.Commands
             if (!string.IsNullOrWhiteSpace(originalSystemPrompt))
             {
                 diagMessages.Add(new ConversationMessage { Role = "system", Content = originalSystemPrompt });
+                diagMessages.Add(new ConversationMessage
+                {
+                    Role = "user",
+                    Content = "ISTRUZIONI DIAGNOSTICHE:\n" + auditSystem + "\n\n" + sb
+                });
+            }
+            else
+            {
+                diagMessages.Add(new ConversationMessage { Role = "system", Content = auditSystem });
+                diagMessages.Add(new ConversationMessage { Role = "user", Content = sb.ToString() });
             }
 
-            diagMessages.Add(new ConversationMessage { Role = "system", Content = auditSystem });
-            diagMessages.Add(new ConversationMessage { Role = "user", Content = sb.ToString() });
-
-            var responseJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct).ConfigureAwait(false);
+            var responseJson = await bridge.CallModelWithToolsAsync(diagMessages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true).ConfigureAwait(false);
             var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
             return string.IsNullOrWhiteSpace(textContent) ? null : textContent.Trim();
         }

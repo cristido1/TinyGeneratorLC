@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
+using TinyGenerator.Services.Text;
 
 namespace TinyGenerator.Services.Commands;
 
@@ -20,6 +21,8 @@ public sealed class GenerateNewSerieCommand
     private readonly ILangChainKernelFactory _kernelFactory;
     private readonly ICustomLogger? _logger;
     private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly ICommandDispatcher? _dispatcher;
+    private readonly CommandModelExecutionService? _modelExecution;
     private readonly SeriesGenerationOptions _options;
 
     public GenerateNewSerieCommand(
@@ -28,25 +31,31 @@ public sealed class GenerateNewSerieCommand
         ILangChainKernelFactory kernelFactory,
         IOptionsMonitor<SeriesGenerationOptions>? optionsMonitor = null,
         ICustomLogger? logger = null,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        ICommandDispatcher? dispatcher = null,
+        CommandModelExecutionService? modelExecution = null)
     {
         _prompt = prompt ?? string.Empty;
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
         _logger = logger;
         _scopeFactory = scopeFactory;
+        _dispatcher = dispatcher;
+        _modelExecution = modelExecution;
         _options = optionsMonitor?.CurrentValue ?? new SeriesGenerationOptions();
     }
 
-    public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
+    public async Task<CommandResult> ExecuteAsync(string? runId = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_prompt))
         {
             return new CommandResult(false, "Prompt vuoto");
         }
 
-        var runId = $"generate_new_serie_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-        _logger?.Start(runId);
+        var effectiveRunId = string.IsNullOrWhiteSpace(runId)
+            ? $"generate_new_serie_{DateTime.UtcNow:yyyyMMddHHmmssfff}"
+            : runId.Trim();
+        _logger?.Start(effectiveRunId);
 
         try
         {
@@ -63,13 +72,14 @@ public sealed class GenerateNewSerieCommand
             if (validatorAgent == null) return new CommandResult(false, "Nessun agente attivo con ruolo serie_validator_agent");
 
             var biblePrompt = BuildBiblePrompt(_prompt);
+            ReportStep(effectiveRunId, 1, 5, "Serie Bible", bibleAgent);
             var bibleResult = await CallRoleWithRetriesAsync(
                 bibleAgent,
                 "serie_bible_agent",
                 biblePrompt,
                 requiredTags: RequiredBibleTags,
                 _options.Bible,
-                runId,
+                effectiveRunId,
                 ct,
                 validateText: ValidateBibleOutput);
             if (!bibleResult.Success)
@@ -79,13 +89,14 @@ public sealed class GenerateNewSerieCommand
             var bibleTags = bibleResult.Text!;
 
             var charactersPrompt = BuildCharactersPrompt(bibleTags);
+            ReportStep(effectiveRunId, 2, 5, "Serie Characters", characterAgent);
             var charactersResult = await CallRoleWithRetriesAsync(
                 characterAgent,
                 "serie_character_agent",
                 charactersPrompt,
                 requiredTags: RequiredCharacterTags,
                 _options.Characters,
-                runId,
+                effectiveRunId,
                 ct,
                 validateText: ValidateCharactersOutput);
             if (!charactersResult.Success)
@@ -95,13 +106,14 @@ public sealed class GenerateNewSerieCommand
             var characterTags = charactersResult.Text!;
 
             var seasonPrompt = BuildSeasonPrompt(bibleTags, characterTags);
+            ReportStep(effectiveRunId, 3, 5, "Serie Season", seasonAgent);
             var seasonResult = await CallRoleWithRetriesAsync(
                 seasonAgent,
                 "serie_season_agent",
                 seasonPrompt,
                 requiredTags: RequiredSeasonTags,
                 _options.Episodes,
-                runId,
+                effectiveRunId,
                 ct,
                 validateText: ValidateSeasonOutput);
             if (!seasonResult.Success)
@@ -117,9 +129,12 @@ public sealed class GenerateNewSerieCommand
             }
 
             var episodeStructures = new List<string>();
+            var totalSteps = 4 + baseEpisodes.Count;
+            var episodeStep = 4;
             foreach (var episode in baseEpisodes.OrderBy(e => e.Number))
             {
                 ct.ThrowIfCancellationRequested();
+                ReportStep(effectiveRunId, episodeStep, totalSteps, $"Serie Episode {episode.Number:00}", episodeAgent);
                 var episodePrompt = BuildEpisodePrompt(episode, bibleTags, characterTags);
                 var epResult = await CallRoleWithRetriesAsync(
                     episodeAgent,
@@ -127,7 +142,7 @@ public sealed class GenerateNewSerieCommand
                     episodePrompt,
                     requiredTags: RequiredEpisodeStructureTags,
                     _options.Episodes,
-                    runId,
+                    effectiveRunId,
                     ct,
                     validateText: t => ValidateEpisodeStructureOutput(t, episode.Number));
                 if (!epResult.Success)
@@ -135,16 +150,18 @@ public sealed class GenerateNewSerieCommand
                     return new CommandResult(false, epResult.Error ?? $"Serie episode fallita (episodio {episode.Number})");
                 }
                 episodeStructures.Add(epResult.Text!);
+                episodeStep++;
             }
 
             var validationPrompt = BuildValidatorPrompt(bibleTags, characterTags, seasonTags, episodeStructures);
+            ReportStep(effectiveRunId, totalSteps, totalSteps, "Serie Validator", validatorAgent);
             var validatorResult = await CallRoleWithRetriesAsync(
                 validatorAgent,
                 "serie_validator_agent",
                 validationPrompt,
                 requiredTags: RequiredValidatorTags,
                 _options.Validator,
-                runId,
+                effectiveRunId,
                 ct);
             if (!validatorResult.Success)
             {
@@ -168,7 +185,7 @@ public sealed class GenerateNewSerieCommand
             _database.InsertSeriesCharacters(serieId, result.Characters);
             _database.InsertSeriesEpisodes(serieId, result.Episodes);
 
-            _logger?.Append(runId, $"Serie creata: id={serieId}, characters={result.Characters.Count}, episodes={result.Episodes.Count}");
+            _logger?.Append(effectiveRunId, $"Serie creata: id={serieId}, characters={result.Characters.Count}, episodes={result.Episodes.Count}");
             return new CommandResult(true, $"Serie creata (id {serieId})");
         }
         catch (OperationCanceledException)
@@ -177,14 +194,17 @@ public sealed class GenerateNewSerieCommand
         }
         catch (Exception ex)
         {
-            _logger?.Append(runId, $"Errore GenerateNewSerie: {ex.Message}");
+            _logger?.Append(effectiveRunId, $"Errore GenerateNewSerie: {ex.Message}");
             return new CommandResult(false, $"Errore GenerateNewSerie: {ex.Message}");
         }
         finally
         {
-            _logger?.MarkCompleted(runId);
+            _logger?.MarkCompleted(effectiveRunId);
         }
     }
+
+    public Task<CommandResult> ExecuteAsync(CancellationToken ct)
+        => ExecuteAsync(runId: null, ct: ct);
 
     private Agent? GetActiveAgent(string role)
         => _database.ListAgents()
@@ -200,75 +220,67 @@ public sealed class GenerateNewSerieCommand
         CancellationToken ct,
         Func<string, string?>? validateText = null)
     {
-        var maxAttempts = Math.Max(1, options.MaxAttempts);
-        var delayMs = Math.Max(0, options.RetryDelaySeconds) * 1000;
-        string? lastError = null;
-        string? lastText = null;
-        var currentPrompt = prompt;
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        if (_modelExecution == null)
         {
-            ct.ThrowIfCancellationRequested();
-            _logger?.Append(runId, $"[{roleCode}] Tentativo {attempt}/{maxAttempts}");
+            return AgentResponse.Fail("CommandModelExecutionService non disponibile");
+        }
 
-            var response = await CallAgentAsync(agent, roleCode, currentPrompt, ct);
-            if (response.Success)
+        var hasDeterministicChecks = validateText != null || (requiredTags != null && requiredTags.Count > 0);
+        var effectiveUseResponseChecker = options.UseResponseChecker && !hasDeterministicChecks;
+
+        var execution = await _modelExecution.ExecuteAsync(
+            new CommandModelExecutionService.Request
             {
-                lastText = response.Text;
-                if (HasRequiredTags(lastText ?? string.Empty, requiredTags, out var missingTags))
+                CommandKey = "generate_new_serie",
+                Agent = agent,
+                RoleCode = roleCode,
+                Prompt = prompt,
+                SystemPrompt = BuildSystemPrompt(agent),
+                MaxAttempts = Math.Max(1, options.MaxAttempts),
+                RetryDelaySeconds = Math.Max(0, options.RetryDelaySeconds),
+                StepTimeoutSec = Math.Max(1, options.TimeoutSec),
+                UseResponseChecker = effectiveUseResponseChecker,
+                EnableFallback = true,
+                DiagnoseOnFinalFailure = options.DiagnoseOnFinalFailure,
+                ExplainAfterAttempt = Math.Max(0, options.ExplainAfterAttempt),
+                RunId = runId,
+                DeterministicValidator = output =>
                 {
+                    if (!HasRequiredTags(output ?? string.Empty, requiredTags, out var missingTags))
+                    {
+                        var missingText = missingTags.Count > 0 ? string.Join(", ", missingTags) : "tag richiesti";
+                        return new CommandModelExecutionService.DeterministicValidationResult(
+                            false,
+                            $"Output privo di tag richiesti per {roleCode}: {missingText}");
+                    }
+
                     if (validateText != null)
                     {
-                        var extraError = validateText(lastText ?? string.Empty);
-                        if (!string.IsNullOrWhiteSpace(extraError))
+                        var extra = validateText(output ?? string.Empty);
+                        if (!string.IsNullOrWhiteSpace(extra))
                         {
-                            lastError = extraError;
-                            _logger?.Append(runId, $"[{roleCode}] {lastError}");
-                            _logger?.MarkLatestModelResponseResult("FAILED", lastError, true);
-                            currentPrompt = BuildRetryPrompt(prompt, roleCode, lastError, new List<string>());
-                            goto WaitBeforeRetry;
+                            return new CommandModelExecutionService.DeterministicValidationResult(false, extra);
                         }
                     }
-                    _logger?.MarkLatestModelResponseResult("SUCCESS", null, true);
-                    return response;
-                }
 
-                var missingText = missingTags.Count > 0 ? string.Join(", ", missingTags) : "tag richiesti";
-                lastError = $"Output privo di tag richiesti per {roleCode}: {missingText}";
-                _logger?.Append(runId, $"[{roleCode}] {lastError}");
-                _logger?.MarkLatestModelResponseResult("FAILED", lastError, true);
-                currentPrompt = BuildRetryPrompt(prompt, roleCode, lastError, missingTags);
-            }
-            else
-            {
-                lastError = response.Error;
-                _logger?.Append(runId, $"[{roleCode}] Errore: {lastError}");
-                _logger?.MarkLatestModelResponseResult("FAILED", lastError, true);
-            }
+                    return new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                },
+                RetryPromptFactory = (originalPrompt, reason) =>
+                    BuildRetryPrompt(originalPrompt, roleCode, reason, new List<string>())
+            },
+            ct).ConfigureAwait(false);
 
-        WaitBeforeRetry:
-
-            if (attempt < maxAttempts && delayMs > 0)
-            {
-                await Task.Delay(delayMs, ct);
-            }
-        }
-
-        if (options.DiagnoseOnFinalFailure)
+        if (execution.Success && !string.IsNullOrWhiteSpace(execution.Text))
         {
-            await DiagnoseFailureAsync(agent, roleCode, prompt, lastText, runId, ct);
+            return AgentResponse.Ok(execution.Text);
         }
 
-        var fallback = await TryFallbackAsync(agent, roleCode, prompt, requiredTags, runId, ct);
-        if (fallback.Success)
-        {
-            return fallback;
-        }
-
-        return AgentResponse.Fail(lastError ?? $"Operazione {roleCode} fallita");
+        var error = execution.Error ?? $"Operazione {roleCode} fallita";
+        _logger?.Append(runId, $"[{roleCode}] Errore: {error}");
+        return AgentResponse.Fail(error);
     }
 
-    private async Task<AgentResponse> CallAgentAsync(Agent agent, string roleCode, string prompt, CancellationToken ct)
+    private async Task<AgentResponse> CallAgentAsync(Agent agent, string roleCode, string prompt, CancellationToken ct, bool useResponseChecker)
     {
         var modelName = ResolveModelName(agent);
         if (string.IsNullOrWhiteSpace(modelName))
@@ -277,15 +289,27 @@ public sealed class GenerateNewSerieCommand
         }
 
         var systemPrompt = BuildSystemPrompt(agent);
-        var response = await StateDrivenPipelineHelpers.CallModelAsync(
-            _kernelFactory,
-            _scopeFactory,
-            modelName,
-            agent,
-            roleCode,
-            systemPrompt,
-            prompt,
-            ct);
+        AgentResponse response;
+        using (LogScope.Push(
+                   LogScope.Current ?? $"series/{roleCode}",
+                   operationId: null,
+                   stepNumber: null,
+                   maxStep: null,
+                   agentName: agent.Name ?? roleCode,
+                   agentRole: roleCode))
+        {
+            response = await StateDrivenPipelineHelpers.CallModelAsync(
+                _kernelFactory,
+                _scopeFactory,
+                modelName,
+                agent,
+                roleCode,
+                systemPrompt,
+                prompt,
+                ct,
+                allowInternalFallback: false,
+                skipResponseChecker: !useResponseChecker);
+        }
 
         return response;
     }
@@ -330,7 +354,7 @@ public sealed class GenerateNewSerieCommand
                 new ConversationMessage { Role = "user", Content = sb.ToString() }
             };
 
-            var response = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
+            var response = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true);
             var text = response ?? string.Empty;
 
             if (!string.IsNullOrWhiteSpace(text))
@@ -350,7 +374,8 @@ public sealed class GenerateNewSerieCommand
         string prompt,
         IReadOnlyCollection<string> requiredTags,
         string runId,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool useResponseChecker)
     {
         if (_scopeFactory == null)
         {
@@ -364,45 +389,56 @@ public sealed class GenerateNewSerieCommand
             return AgentResponse.Fail("ModelFallbackService non disponibile");
         }
 
-        (string? fallbackResult, ModelRole? successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync<string>(
-            roleCode,
-            agent.ModelId,
-            async modelRole =>
-            {
-                var fallbackName = modelRole.Model?.Name;
-                if (string.IsNullOrWhiteSpace(fallbackName))
-                {
-                    throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
-                }
-
-                var systemPrompt = !string.IsNullOrWhiteSpace(modelRole.Instructions)
-                    ? modelRole.Instructions
-                    : BuildSystemPrompt(agent);
-
-                var bridge = _kernelFactory.CreateChatBridge(
-                    fallbackName,
-                    agent.Temperature,
-                    modelRole.TopP ?? agent.TopP,
-                    agent.RepeatPenalty,
-                    modelRole.TopK ?? agent.TopK,
-                    agent.RepeatLastN,
-                    agent.NumPredict);
-
-                var messages = new List<ConversationMessage>
-                {
-                    new ConversationMessage { Role = "system", Content = systemPrompt },
-                    new ConversationMessage { Role = "user", Content = prompt }
-                };
-
-                var response = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
-                return response ?? string.Empty;
-            },
-            validateResult: s => !string.IsNullOrWhiteSpace(s) && HasRequiredTags(s, requiredTags, out _));
-
-        if (!string.IsNullOrWhiteSpace(fallbackResult) && successfulModelRole?.Model != null)
+        foreach (var fallbackRoleCode in BuildFallbackRoleCandidates(roleCode, agent.Role))
         {
-            _logger?.Append(runId, $"[{roleCode}] Fallback model succeeded: {successfulModelRole.Model.Name}");
-            return AgentResponse.Ok(fallbackResult!);
+            _logger?.Append(runId, $"[{roleCode}] Tentativo fallback sul ruolo '{fallbackRoleCode}'");
+            (string? fallbackResult, ModelRole? successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync<string>(
+                fallbackRoleCode,
+                agent.ModelId,
+                async modelRole =>
+                {
+                    var fallbackName = modelRole.Model?.Name;
+                    if (string.IsNullOrWhiteSpace(fallbackName))
+                    {
+                        throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
+                    }
+
+                    var systemPrompt = !string.IsNullOrWhiteSpace(modelRole.Instructions)
+                        ? modelRole.Instructions
+                        : BuildSystemPrompt(agent);
+
+                    var bridge = _kernelFactory.CreateChatBridge(
+                        fallbackName,
+                        agent.Temperature,
+                        modelRole.TopP ?? agent.TopP,
+                        agent.RepeatPenalty,
+                        modelRole.TopK ?? agent.TopK,
+                        agent.RepeatLastN,
+                        agent.NumPredict);
+
+                    var messages = new List<ConversationMessage>
+                    {
+                        new ConversationMessage { Role = "system", Content = systemPrompt },
+                        new ConversationMessage { Role = "user", Content = prompt }
+                    };
+
+                    using var fallbackScopeHandle = LogScope.Push(
+                        LogScope.Current ?? $"series/{roleCode}/fallback",
+                        operationId: null,
+                        stepNumber: null,
+                        maxStep: null,
+                        agentName: agent.Name ?? roleCode,
+                        agentRole: fallbackRoleCode);
+                    var response = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: !useResponseChecker);
+                    return response ?? string.Empty;
+                },
+                validateResult: s => !string.IsNullOrWhiteSpace(s) && HasRequiredTags(s, requiredTags, out _));
+
+            if (!string.IsNullOrWhiteSpace(fallbackResult) && successfulModelRole?.Model != null)
+            {
+                _logger?.Append(runId, $"[{roleCode}] Fallback model succeeded: {successfulModelRole.Model.Name}");
+                return AgentResponse.Ok(fallbackResult!);
+            }
         }
 
         return AgentResponse.Fail("Fallback fallito");
@@ -440,6 +476,52 @@ public sealed class GenerateNewSerieCommand
         return missingTags.Count == 0;
     }
 
+    private void ReportStep(string runId, int current, int max, string phase, Agent agent)
+    {
+        var modelName = ResolveModelName(agent) ?? "n/a";
+        _dispatcher?.UpdateStep(runId, current, max, $"{phase} | {agent.Name ?? agent.Role ?? "agent"} | {modelName}");
+    }
+
+    private static List<string> BuildFallbackRoleCandidates(string roleCode, string? agentRole)
+    {
+        var candidates = new List<string>();
+        void Add(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            var trimmed = value.Trim();
+            if (!candidates.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+            {
+                candidates.Add(trimmed);
+            }
+        }
+
+        static string? TrimAgentSuffix(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            var trimmed = value.Trim();
+            if (trimmed.EndsWith("_agent", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed[..^6];
+            }
+
+            return null;
+        }
+
+        Add(roleCode);
+        Add(agentRole);
+        Add(TrimAgentSuffix(roleCode));
+        Add(TrimAgentSuffix(agentRole));
+        return candidates;
+    }
+
     private static string BuildRetryPrompt(string originalPrompt, string roleCode, string reason, List<string> missingTags)
     {
         var sb = new StringBuilder();
@@ -459,18 +541,12 @@ public sealed class GenerateNewSerieCommand
     private static HashSet<string> CollectTags(string text)
     {
         var tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (string.IsNullOrWhiteSpace(text)) return tags;
-        var lines = text.Replace("\r\n", "\n").Split('\n');
-        foreach (var raw in lines)
+        foreach (var block in ParseTagBlocks(text))
         {
-            var line = raw.Trim();
-            if (line.Length < 3) continue;
-            if (!line.StartsWith("[", StringComparison.Ordinal)) continue;
-            var end = line.IndexOf(']');
-            if (end <= 1) continue;
-            var tag = line.Substring(1, end - 1).Trim();
-            if (string.IsNullOrWhiteSpace(tag)) continue;
-            tags.Add(tag);
+            if (!string.IsNullOrWhiteSpace(block.Tag))
+            {
+                tags.Add(block.Tag.Trim());
+            }
         }
         return tags;
     }
@@ -835,7 +911,7 @@ public sealed class GenerateNewSerieCommand
         var lines = text.Replace("\r\n", "\n").Split('\n');
         foreach (var raw in lines)
         {
-            var line = raw.TrimEnd();
+            var line = raw.Trim();
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             if (line.StartsWith("[") && line.Contains("]"))
@@ -852,6 +928,25 @@ public sealed class GenerateNewSerieCommand
                 continue;
             }
 
+            // Keep common "KEY: value" field lines inside current block (ID/NAME/FROM/...),
+            // so they are not misinterpreted as new top-level tags.
+            if (current != null && FlexibleTagParser.TryParseKeyValueLine(line, out var fieldKey, out var fieldValue))
+            {
+                current.Lines.Add($"{fieldKey}: {fieldValue}");
+                continue;
+            }
+
+            if (FlexibleTagParser.TryParseTagHeaderLine(line.Trim(), out var inlineTag, out var inlineValue) && IsLikelyTopLevelTagName(inlineTag))
+            {
+                current = new TagBlock(inlineTag);
+                blocks.Add(current);
+                if (!string.IsNullOrWhiteSpace(inlineValue))
+                {
+                    current.Lines.Add(inlineValue);
+                }
+                continue;
+            }
+
             current?.Lines.Add(line.Trim());
         }
 
@@ -863,15 +958,51 @@ public sealed class GenerateNewSerieCommand
         var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in lines)
         {
-            var idx = line.IndexOf(':');
-            if (idx <= 0) continue;
-            var key = line.Substring(0, idx).Trim();
-            var value = line[(idx + 1)..].Trim();
-            if (string.IsNullOrWhiteSpace(key)) continue;
+            if (!FlexibleTagParser.TryParseKeyValueLine(line, out var key, out var value)) continue;
             dict[key] = value;
         }
         return dict;
     }
+
+    private static bool IsLikelyTopLevelTagName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        if (KnownNonTopLevelKeys.Contains(value))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static readonly HashSet<string> KnownNonTopLevelKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ID",
+        "NAME",
+        "ROLE",
+        "BIO_SHORT",
+        "EXTERNAL_GOAL",
+        "INTERNAL_NEED",
+        "FLAWS",
+        "SKILLS",
+        "LIMITS",
+        "VOICE_STYLE",
+        "FROM",
+        "TO",
+        "TYPE",
+        "NOTES",
+        "NUMBER",
+        "TITLE",
+        "LOGLINE",
+        "A_PLOT",
+        "B_PLOT",
+        "THEME",
+        "SUMMARY"
+    };
 
     private static List<string> ParseList(List<string> lines)
     {
@@ -1040,7 +1171,18 @@ public sealed class GenerateNewSerieCommand
         {
             var kv = ParseKeyValues(arc.Lines);
             if (!kv.TryGetValue("ID", out var id) || string.IsNullOrWhiteSpace(id)) return "Output season arc incompleto: ID:";
-            if (!idSet.Contains(id.Trim())) return $"Output season arc non valido: ID sconosciuto: {id}";
+            var idRef = id.Trim();
+            var fromRef = kv.TryGetValue("FROM", out var fromValue) ? fromValue?.Trim() : null;
+
+            // Flexible parser/validator:
+            // - Some models use ID as character id
+            // - Others use ID as arc id and refer the character in FROM
+            var idMatchesCharacter = !string.IsNullOrWhiteSpace(idRef) && idSet.Contains(idRef);
+            var fromMatchesCharacter = !string.IsNullOrWhiteSpace(fromRef) && idSet.Contains(fromRef!);
+            if (!idMatchesCharacter && !fromMatchesCharacter)
+            {
+                return $"Output season arc non valido: riferimento personaggio sconosciuto (ID={id}, FROM={fromRef})";
+            }
         }
 
         return null;

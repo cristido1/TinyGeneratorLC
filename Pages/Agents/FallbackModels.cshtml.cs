@@ -46,6 +46,12 @@ namespace TinyGenerator.Pages.Agents
                     useCount = mr.UseCount,
                     useSuccessed = mr.UseSuccessed,
                     useFailed = mr.UseFailed,
+                    totalPromptTokens = mr.TotalPromptTokens,
+                    totalOutputTokens = mr.TotalOutputTokens,
+                    avgGenTps = mr.AvgGenTps,
+                    avgPromptTps = mr.AvgPromptTps,
+                    avgE2eTps = mr.AvgE2eTps,
+                    loadRatio = mr.LoadRatio,
                     successRate = (mr.SuccessRate * 100).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
                     lastUse = FormatLastUse(mr.LastUse),
                     enabled = mr.Enabled
@@ -103,6 +109,12 @@ namespace TinyGenerator.Pages.Agents
                         useCount = hydrated.UseCount,
                         useSuccessed = hydrated.UseSuccessed,
                         useFailed = hydrated.UseFailed,
+                        totalPromptTokens = hydrated.TotalPromptTokens,
+                        totalOutputTokens = hydrated.TotalOutputTokens,
+                        avgGenTps = hydrated.AvgGenTps,
+                        avgPromptTps = hydrated.AvgPromptTps,
+                        avgE2eTps = hydrated.AvgE2eTps,
+                        loadRatio = hydrated.LoadRatio,
                         successRate = (hydrated.SuccessRate * 100).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
                         lastUse = FormatLastUse(hydrated.LastUse),
                         enabled = hydrated.Enabled
@@ -130,7 +142,13 @@ namespace TinyGenerator.Pages.Agents
                 $"Top-P: {(mr.TopP.HasValue ? mr.TopP.Value.ToString("0.00") : "-")}\n" +
                 $"Top-K: {(mr.TopK.HasValue ? mr.TopK.Value.ToString() : "-")}\n" +
                 $"Enabled: {(mr.Enabled ? "Yes" : "No")}\n" +
-                $"Ultimo uso: {FormatLastUse(mr.LastUse)}";
+                $"Ultimo uso: {FormatLastUse(mr.LastUse)}\n" +
+                $"Prompt tokens: {mr.TotalPromptTokens}\n" +
+                $"Output tokens: {mr.TotalOutputTokens}\n" +
+                $"Avg Gen TPS: {FormatPositiveDouble(mr.AvgGenTps, 2)}\n" +
+                $"Avg Prompt TPS: {FormatPositiveDouble(mr.AvgPromptTps, 2)}\n" +
+                $"Avg E2E TPS: {FormatPositiveDouble(mr.AvgE2eTps, 2)}\n" +
+                $"Load ratio: {FormatPositivePercent(mr.LoadRatio)}";
 
             return new JsonResult(new
             {
@@ -186,6 +204,18 @@ namespace TinyGenerator.Pages.Agents
                 return parsed.ToString("dd/MM HH:mm");
             }
             return "-";
+        }
+
+        private static string FormatPositiveDouble(double value, int decimals)
+        {
+            if (value <= 0) return "-";
+            return value.ToString($"0.{new string('0', decimals)}", CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatPositivePercent(double ratio)
+        {
+            if (ratio <= 0) return "-";
+            return (ratio * 100.0).ToString("0.0", CultureInfo.InvariantCulture) + "%";
         }
 
         private void LoadReferenceData()

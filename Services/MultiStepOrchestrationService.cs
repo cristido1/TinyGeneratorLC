@@ -767,7 +767,7 @@ namespace TinyGenerator.Services
                             {
                                 extraMessages.Add(new ConversationMessage
                                 {
-                                    Role = "system",
+                                    Role = "user",
                                     Content = validation.SystemMessageOverride
                                 });
                             }

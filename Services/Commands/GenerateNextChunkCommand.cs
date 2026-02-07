@@ -92,7 +92,6 @@ public sealed class GenerateNextChunkCommand
         string? lastValidationError = null;
         var attempts = 0;
         var maxAttempts = Math.Max(1, _tuning.GenerateNextChunk.MaxAttempts);
-        var hadCorrections = false;
 
         while (attempts < maxAttempts)
         {
@@ -121,33 +120,18 @@ public sealed class GenerateNextChunkCommand
             {
                 if (EndsInTension(output, out var reason))
                 {
-                    if (hadCorrections)
-                    {
-                        _logger?.MarkLatestModelResponseResult("FAILED", "Risposta corretta dopo retry");
-                    }
-                    else
-                    {
-                        _logger?.MarkLatestModelResponseResult("SUCCESS", null);
-                    }
+                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
                     lastValidationError = null;
                     break;
                 }
 
                 lastValidationError = reason;
-                hadCorrections = true;
                 _logger?.MarkLatestModelResponseResult("FAILED", lastValidationError);
             }
             else
             {
                 // No cliffhanger validation requested (e.g. final chunk).
-                if (hadCorrections)
-                {
-                    _logger?.MarkLatestModelResponseResult("FAILED", "Risposta corretta dopo retry");
-                }
-                else
-                {
-                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
-                }
+                _logger?.MarkLatestModelResponseResult("SUCCESS", null);
                 lastValidationError = null;
                 break;
             }
@@ -472,7 +456,8 @@ public sealed class GenerateNextChunkCommand
             var response = await bridge.CallModelWithToolsAsync(
                 messages,
                 new List<Dictionary<string, object>>(),
-                ct).ConfigureAwait(false);
+                ct,
+                skipResponseChecker: true).ConfigureAwait(false);
 
             var primary = response ?? string.Empty;
 
@@ -547,7 +532,8 @@ public sealed class GenerateNextChunkCommand
                     var fallbackResponse = await candidateBridge.CallModelWithToolsAsync(
                         fallbackMessages,
                         new List<Dictionary<string, object>>(),
-                        ct).ConfigureAwait(false);
+                        ct,
+                        skipResponseChecker: true).ConfigureAwait(false);
 
                     return fallbackResponse ?? string.Empty;
                 },

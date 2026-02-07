@@ -13,6 +13,49 @@ namespace TinyGenerator.Services
 {
     public class ResponseCheckerService
     {
+        private static readonly object CheckerResponseFormatOpenAi = new
+        {
+            type = "json_schema",
+            json_schema = new
+            {
+                name = "response_checker_validation",
+                schema = new
+                {
+                    type = "object",
+                    properties = new Dictionary<string, object>
+                    {
+                        ["is_valid"] = new Dictionary<string, object> { ["type"] = "boolean" },
+                        ["needs_retry"] = new Dictionary<string, object> { ["type"] = "boolean" },
+                        ["reason"] = new Dictionary<string, object> { ["type"] = "string" },
+                        ["violated_rules"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "array",
+                            ["items"] = new Dictionary<string, object> { ["type"] = "integer" }
+                        }
+                    },
+                    required = new[] { "is_valid", "needs_retry", "reason", "violated_rules" }
+                },
+                strict = true
+            }
+        };
+
+        private static readonly object CheckerResponseFormatOllama = new
+        {
+            type = "object",
+            properties = new Dictionary<string, object>
+            {
+                ["is_valid"] = new Dictionary<string, object> { ["type"] = "boolean" },
+                ["needs_retry"] = new Dictionary<string, object> { ["type"] = "boolean" },
+                ["reason"] = new Dictionary<string, object> { ["type"] = "string" },
+                ["violated_rules"] = new Dictionary<string, object>
+                {
+                    ["type"] = "array",
+                    ["items"] = new Dictionary<string, object> { ["type"] = "integer" }
+                }
+            },
+            required = new[] { "is_valid", "needs_retry", "reason", "violated_rules" }
+        };
+
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly DatabaseService _database;
         private readonly ICustomLogger _logger;
@@ -238,11 +281,14 @@ namespace TinyGenerator.Services
             checkerSystemSb.AppendLine("5. Meets minimum length if specified");
             checkerSystemSb.AppendLine();
             checkerSystemSb.AppendLine("=== OUTPUT RICHIESTO (OBBLIGATORIO) ===");
-            checkerSystemSb.AppendLine("Restituisci SOLO TAG tra parentesi quadre (no JSON) con questa struttura:");
-            checkerSystemSb.AppendLine("[IS_VALID]true|false");
-            checkerSystemSb.AppendLine("[NEEDS_RETRY]true|false");
-            checkerSystemSb.AppendLine("[REASON]Spiega brevemente. Se non valido, cita almeno una REGOLA n violata.");
-            checkerSystemSb.AppendLine("[VIOLATED_RULES]1,2  // vuoto se valido");
+            checkerSystemSb.AppendLine("Restituisci SOLO un oggetto JSON valido (niente testo extra, niente markdown) con questa struttura:");
+            checkerSystemSb.AppendLine("{");
+            checkerSystemSb.AppendLine("  \"is_valid\": true|false,");
+            checkerSystemSb.AppendLine("  \"needs_retry\": true|false,");
+            checkerSystemSb.AppendLine("  \"reason\": \"string\",");
+            checkerSystemSb.AppendLine("  \"violated_rules\": [1,2]");
+            checkerSystemSb.AppendLine("}");
+            checkerSystemSb.AppendLine("Se la risposta e' valida, usa violated_rules come array vuoto [].");
 
             var checkerUserSb = new StringBuilder();
             checkerUserSb.AppendLine("**Step Instruction:**");
@@ -282,6 +328,7 @@ namespace TinyGenerator.Services
 
                 var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
                 var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
+                bridge.ResponseFormat = ResolveCheckerResponseFormat(modelInfo?.Provider);
                 var loop = new ReActLoopOrchestrator(
                     orchestrator,
                     _logger,
@@ -546,31 +593,7 @@ namespace TinyGenerator.Services
         {
             try
             {
-                // Preferred: TAG output parsing.
-                if (BracketTagParser.TryGetTagContent(response, "IS_VALID", out var isValidText))
-                {
-                    var isValidTag = BracketTagParser.TryParseBool(isValidText, out var parsedValid) && parsedValid;
-
-                    var needsRetry = !isValidTag;
-                    if (BracketTagParser.TryGetTagContent(response, "NEEDS_RETRY", out var needsRetryText)
-                        && BracketTagParser.TryParseBool(needsRetryText, out var parsedRetry))
-                    {
-                        needsRetry = parsedRetry;
-                    }
-
-                    var reasonTag = BracketTagParser.GetTagContentOrNull(response, "REASON") ?? "Validation completed";
-                    var violated = BracketTagParser.ParseIntList(BracketTagParser.GetTagContentOrNull(response, "VIOLATED_RULES"));
-                    var violatedRules = violated.Count > 0 ? violated.ToList() : null;
-
-                    return new ValidationResult
-                    {
-                        IsValid = isValidTag,
-                        Reason = reasonTag,
-                        NeedsRetry = needsRetry,
-                        SemanticScore = semanticScore,
-                        ViolatedRules = violatedRules
-                    };
-                }
+                // Preferred: JSON output parsing.
 
                 // First, try to extract from Ollama response format (if present)
                 if (response.Contains("\"message\"") && response.Contains("\"content\""))
@@ -660,6 +683,32 @@ namespace TinyGenerator.Services
                     };
                 }
 
+                // Backward compatibility: legacy TAG output parsing.
+                if (BracketTagParser.TryGetTagContent(response, "IS_VALID", out var isValidText))
+                {
+                    var isValidTag = BracketTagParser.TryParseBool(isValidText, out var parsedValid) && parsedValid;
+
+                    var needsRetry = !isValidTag;
+                    if (BracketTagParser.TryGetTagContent(response, "NEEDS_RETRY", out var needsRetryText)
+                        && BracketTagParser.TryParseBool(needsRetryText, out var parsedRetry))
+                    {
+                        needsRetry = parsedRetry;
+                    }
+
+                    var reasonTag = BracketTagParser.GetTagContentOrNull(response, "REASON") ?? "Validation completed";
+                    var violated = BracketTagParser.ParseIntList(BracketTagParser.GetTagContentOrNull(response, "VIOLATED_RULES"));
+                    var violatedRules = violated.Count > 0 ? violated.ToList() : null;
+
+                    return new ValidationResult
+                    {
+                        IsValid = isValidTag,
+                        Reason = reasonTag,
+                        NeedsRetry = needsRetry,
+                        SemanticScore = semanticScore,
+                        ViolatedRules = violatedRules
+                    };
+                }
+
                 // Fallback: try to parse natural language response
                 // Look for keywords like "valid", "invalid", "meets", "fails", etc.
                 var lowerResponse = response.ToLowerInvariant();
@@ -712,6 +761,13 @@ namespace TinyGenerator.Services
                 NeedsRetry = true,
                 SemanticScore = semanticScore
             };
+        }
+
+        private static object ResolveCheckerResponseFormat(string? provider)
+        {
+            return string.Equals(provider?.Trim(), "ollama", StringComparison.OrdinalIgnoreCase)
+                ? CheckerResponseFormatOllama
+                : CheckerResponseFormatOpenAi;
         }
 
         /// <summary>
@@ -776,11 +832,14 @@ namespace TinyGenerator.Services
             }
             checkerSystemSb.AppendLine();
             checkerSystemSb.AppendLine("=== OUTPUT RICHIESTO (OBBLIGATORIO) ===");
-            checkerSystemSb.AppendLine("Restituisci SOLO TAG tra parentesi quadre (no JSON) con questa struttura:");
-            checkerSystemSb.AppendLine("[IS_VALID]true|false");
-            checkerSystemSb.AppendLine("[NEEDS_RETRY]true|false");
-            checkerSystemSb.AppendLine("[REASON]Spiega brevemente. Se non valido, cita almeno una REGOLA n violata.");
-            checkerSystemSb.AppendLine("[VIOLATED_RULES]1,2  // vuoto se valido");
+            checkerSystemSb.AppendLine("Restituisci SOLO un oggetto JSON valido (niente testo extra, niente markdown) con questa struttura:");
+            checkerSystemSb.AppendLine("{");
+            checkerSystemSb.AppendLine("  \"is_valid\": true|false,");
+            checkerSystemSb.AppendLine("  \"needs_retry\": true|false,");
+            checkerSystemSb.AppendLine("  \"reason\": \"string\",");
+            checkerSystemSb.AppendLine("  \"violated_rules\": [1,2]");
+            checkerSystemSb.AppendLine("}");
+            checkerSystemSb.AppendLine("Se la risposta e' valida, usa violated_rules come array vuoto [].");
 
             var checkerUserSb = new StringBuilder();
             checkerUserSb.AppendLine("=== ISTRUZIONE / CONTESTO ===");
@@ -817,6 +876,7 @@ namespace TinyGenerator.Services
 
                 var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
                 var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
+                bridge.ResponseFormat = ResolveCheckerResponseFormat(modelInfo?.Provider);
                 var loop = new ReActLoopOrchestrator(
                     orchestrator,
                     _logger,

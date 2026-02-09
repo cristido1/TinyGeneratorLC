@@ -11,15 +11,7 @@ using Microsoft.EntityFrameworkCore;
 // Attempt to restart local Ollama with higher priority before app startup (best-effort).
 // Small helper methods and more complex startup logic are extracted into Services/StartupTasks.cs
 
-try
-{
-    // Attempt a best-effort restart early, keep original behaviour (best-effort & non-fatal)
-    StartupTasks.TryRestartOllama();
-}
-catch (Exception ex)
-{
-    Console.WriteLine("[Startup] TryRestartOllama failed: " + ex.Message);
-}
+// REMOVED: StartupTasks.TryRestartOllama() - Linux/Mac only, replaced by OllamaMonitorService
 
 Console.WriteLine($"[Startup] Creating WebApplication builder at {DateTime.UtcNow:o}");
 var builder = WebApplication.CreateBuilder(args);
@@ -59,6 +51,15 @@ builder.Services.AddHttpClient<ImageService>(c =>
 {
     c.Timeout = TimeSpan.FromMinutes(3);
 });
+
+// AudioCraft health check client (used by ServiceHealthMonitor)
+builder.Services.AddHttpClient("AudioCraft", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(5);
+});
+
+// Service health monitor (for checking external services like AudioCraft)
+builder.Services.AddSingleton<IServiceHealthMonitor, ServiceHealthMonitor>();
 
 // Tokenizer (try to use local tokenizer library if installed; fallback inside service)
 builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_base"));
@@ -120,20 +121,32 @@ if (commandsRoot.Exists() && byCommandSection.Exists())
         {
             var policySection = command.GetSection("Policy");
             var policy = new CommandExecutionPolicy();
+            var hasPolicyData = false;
             if (policySection.Exists())
             {
                 policySection.Bind(policy);
+                hasPolicyData = true;
             }
 
-            // Backward compatibility: allow Commands:ByCommand:<key>:timeoutSec
-            // in addition to Commands:ByCommand:<key>:Policy:TimeoutSec
+            // Flat config support under Commands:ByCommand:<key>:*
+            // (kept alongside nested Policy for backward compatibility).
+            command.Bind(policy);
+
+            var flatTimeout = command.GetValue<int?>("TimeoutSec");
             var directTimeout = command.GetValue<int?>("timeoutSec");
-            if (directTimeout.HasValue && directTimeout.Value > 0)
+            if (flatTimeout.HasValue)
+            {
+                policy.TimeoutSec = flatTimeout.Value;
+                hasPolicyData = true;
+            }
+            // Backward compatibility: lowercase timeoutSec
+            else if (directTimeout.HasValue)
             {
                 policy.TimeoutSec = directTimeout.Value;
+                hasPolicyData = true;
             }
 
-            if (!policySection.Exists() && !directTimeout.HasValue) continue;
+            if (!hasPolicyData) continue;
             options.Commands[command.Key] = policy;
         }
     });
@@ -144,9 +157,25 @@ if (commandsRoot.Exists() && byCommandSection.Exists())
         foreach (var command in byCommandSection.GetChildren())
         {
             var rvSection = command.GetSection("ResponseValidation");
-            if (!rvSection.Exists()) continue;
             var policy = new ResponseValidationCommandPolicy();
-            rvSection.Bind(policy);
+            var hasRvData = false;
+            if (rvSection.Exists())
+            {
+                rvSection.Bind(policy);
+                hasRvData = true;
+            }
+
+            // Flat config support under Commands:ByCommand:<key>:*
+            command.Bind(policy);
+            if (command.GetValue<bool?>("EnableChecker").HasValue ||
+                command.GetValue<int?>("MaxRetries").HasValue ||
+                command.GetValue<bool?>("AskFailureReasonOnFinalFailure").HasValue ||
+                command.GetSection("RuleIds").Exists())
+            {
+                hasRvData = true;
+            }
+
+            if (!hasRvData) continue;
             options.CommandPolicies[command.Key] = policy;
         }
     });
@@ -155,17 +184,27 @@ if (commandsRoot.Exists() && byCommandSection.Exists())
     {
         void BindTuning(string preferredKey, string legacyKey, object target)
         {
+            var preferredRoot = byCommandSection.GetSection(preferredKey);
             var preferred = byCommandSection.GetSection($"{preferredKey}:Tuning");
             if (preferred.Exists())
             {
                 preferred.Bind(target);
-                return;
+            }
+            if (preferredRoot.Exists())
+            {
+                preferredRoot.Bind(target);
             }
 
+            // Backward compatibility for legacy keys.
+            var legacyRoot = byCommandSection.GetSection(legacyKey);
             var legacy = byCommandSection.GetSection($"{legacyKey}:Tuning");
             if (legacy.Exists())
             {
                 legacy.Bind(target);
+            }
+            if (legacyRoot.Exists())
+            {
+                legacyRoot.Bind(target);
             }
         }
 
@@ -240,7 +279,8 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     narratorVoiceOptions: sp.GetService<IOptionsMonitor<NarratorVoiceOptions>>(),
     idleAutoOptions: sp.GetService<IOptionsMonitor<AutomaticOperationsOptions>>(),
     scopeFactory: sp.GetService<IServiceScopeFactory>(),
-    storyTaggingOptions: sp.GetService<IOptionsMonitor<StoryTaggingPipelineOptions>>()));
+    storyTaggingOptions: sp.GetService<IOptionsMonitor<StoryTaggingPipelineOptions>>(),
+    healthMonitor: sp.GetService<IServiceHealthMonitor>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 builder.Services.AddSingleton<SystemReportService>();
 builder.Services.AddSingleton<CommandModelExecutionService>();
@@ -496,7 +536,7 @@ _ = Task.Run(() => StartupTasks.SeedTtsVoicesIfNeededAsync(db, tts, builder.Conf
 StartupTasks.NormalizeTestPromptsIfNeeded(db, logger);
 // Ensure evaluator agents have an example evaluate_full_story call in instructions
 StartupTasks.EnsureEvaluatorInstructions(db, logger);
-// Ensure agent instructions include the ResponseValidation rules used by response_checker
+// Remove legacy ResponseValidation snippet from agent instructions (do not inject checker rules in prompts)
 StartupTasks.EnsureResponseValidationRulesInAgentInstructions(db, builder.Configuration, logger);
 
 // Clean up old logs if log count exceeds threshold

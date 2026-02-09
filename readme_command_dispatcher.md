@@ -1,45 +1,73 @@
-# CommandDispatcher e comandi disponibili
+# Command Dispatcher e Comandi
 
-Il `CommandDispatcher` è la coda di esecuzione background usata da UI/API per avviare operazioni lunghe (generazione, valutazione, TTS, serie, ecc.).
+Il `CommandDispatcher` e' la coda di esecuzione background usata da UI/API per operazioni lunghe (generazione, valutazioni, tagging, TTS, serie, pipeline state-driven).
 
-Punti di riferimento:
-- Dispatcher: `Services/CommandDispatcher.cs`, `Services/ICommandDispatcher.cs`
-- Comandi: `Services/Commands/*.cs`
-- Enqueue “operativi” su storie: `Services/StoriesService.cs`
+Riferimenti principali:
+- Dispatcher: `Code/CommandDispatcher.cs`
+- Contratti: `Code/Interfaces/ICommandDispatcher.cs`, `Code/Interfaces/ICommandEnqueuer.cs`
+- Interfaccia comando: `Code/Interfaces/ICommand.cs`
+- Comandi: `Code/Commands/*.cs`
 
-Nota organizzativa: una parte dei comandi usati nella catena stati delle storie (es. `GenerateTtsSchemaCommand`, `AssignVoicesCommand`, `Delete*`) e' implementata come classi annidate in `StoriesService`, ma e' stata separata in file dedicati sotto `Services/Commands/` (tramite `partial class`) per mantenere un file principale piu' leggibile.
+## Regole attuali
 
-## Come funziona (in breve)
-- `Enqueue(operationName, handler, runId?, threadScope?, metadata?, priority?)` accoda un work item.
-- Scheduling:
-  - Priorità: numeri più bassi = più alta priorità.
-  - A parità di priorità: FIFO.
-- Workers in background: numero = `CommandDispatcher.MaxParallelCommands`.
-- Stato comandi:
-  - snapshot in memoria (`queued`/`running`/`completed`/`failed`/`cancelled`).
-  - broadcast SignalR (hub progress).
+- Il dispatcher accetta comandi tipizzati `ICommand`.
+- Nei comandi si usa `ICommandEnqueuer` (non `ICommandDispatcher`) per accodare altri comandi.
+- L'accodamento con `operationName + handler` e' ancora disponibile come compatibilita' tramite extension:
+  - `Code/CommandDispatcherEnqueueExtensions.cs`
+  - wrapper: `Code/Commands/DelegateCommand.cs`
+
+## API di enqueue
+
+Firma principale:
+
+```csharp
+CommandHandle Enqueue(
+    ICommand command,
+    string? runId = null,
+    string? threadScope = null,
+    IReadOnlyDictionary<string, string>? metadata = null,
+    int? priority = null);
+```
+
+Note:
+- `CommandName` e `Priority` arrivano dal comando (`ICommand`).
+- Se `priority` e' passato esplicitamente, sovrascrive quella del comando.
+
+## Scheduling e stato
+
+- Priorita': numero piu' basso = priorita' piu' alta.
+- A parita' di priorita': FIFO.
+- Parallelismo: `CommandDispatcher.MaxParallelCommands` (`appsettings`).
+- Stato tracciato: `queued`, `running`, `completed`, `failed`, `cancelled`.
+- Supporto `CancelCommand(runId)` e `WaitForCompletionAsync(runId)`.
+- Evento completamento: `CommandCompleted`.
+
+## Lifecycle ICommand
+
+`ICommand` espone:
+- `CommandName`
+- `Priority`
+- `event Progress`
+- `Start(CommandContext)`
+- `End(CommandContext, CommandResult)`
+
+L'adapter interno permette compatibilita' con comandi che implementano `ExecuteAsync(...)`.
 
 ## Metadata consigliata
-Molti consumer usano metadata per UI e logging:
-- `storyId`, `operation`, `trigger`, `agentName`, `agentRole`, `modelName`, `stepCurrent`, `stepMax`.
 
-## Lista comandi (classi in Services/Commands)
-Queste sono le entry “principali” implementate come command class:
+Campi comuni utili in UI/log:
+- `storyId`
+- `operation`
+- `trigger`
+- `agentName`
+- `agentRole`
+- `modelName`
+- `stepCurrent`
+- `stepMax`
 
-- `FullStoryPipelineCommand`: pipeline completa writer→evaluator→selezione.
-- `GenerateNextChunkCommand`: generazione chunk/step successivo.
-- `StartMultiStepStoryCommand` / `ExecuteMultiStepTaskCommand` / `ResumeMultiStepTaskCommand`: avvio/esecuzione/resume task multi-step.
-- `StartStateDrivenStoryCommand`, `StateDrivenPipelineCommands`, `GenerateStateDrivenEpisodeToDurationCommand`: pipeline state-driven.
-- `PlannedStoryCommand`: storia pianificata.
-- `SummarizeStoryCommand` + `BatchSummarizeStoriesCommand`: riassunti (singolo o batch).
-- `AddVoiceTagsToStoryCommand`, `AddAmbientTagsToStoryCommand`, `AddFxTagsToStoryCommand`, `AddMusicTagsToStoryCommand`: tagging story/audio.
-- `EnqueueNextStatusCommand`: avanza catena stati.
-- Serie: `GenerateNewSerieCommand`, `GenerateSeriesEpisodeCommand`, `GenerateSeriesEpisodeFromDbCommand`, `GenerateSeriesCharacterImagesCommand`.
+## Struttura cartelle correlata
 
-## Esempi di operationName usati a runtime
-Esempi reali (accodati da servizi) includono:
-- `TransformStoryRawToTagged` (auto-format/tagging)
-- `generate_tts_audio`
-- `generate_tts_schema`, `normalize_characters`, `assign_voices` (pipeline mix)
-
-(Per la lista completa: cerca `Enqueue(` nei `Services/*`.)
+- `Code/Commands/`: solo comandi.
+- `Code/Services/`: servizi applicativi.
+- `Code/Interfaces/`: solo interfacce.
+- `Code/Options/`: configurazioni `*Options`.

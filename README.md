@@ -51,7 +51,11 @@ Apri `http://localhost:5077`.
 
 ## Mappa rapida del repo
 
-- `Services/`: orchestrazione, dispatcher, pipeline e integrazioni (Ollama/TTS/AudioCraft).
+- `Code/`: codice applicativo principale.
+- `Code/Services/`: servizi applicativi (orchestrazione, pipeline, integrazioni Ollama/TTS/AudioCraft).
+- `Code/Commands/`: comandi eseguibili dal dispatcher.
+- `Code/Interfaces/`: contratti/interfacce (`I*`).
+- `Code/Options/`: classi di configurazione `*Options`.
 - `Skills/`: tool legacy/retrocompatibilita' (tool calling disabilitato di default via config).
 - `Pages/`: UI Razor Pages.
 - `data/`: SQLite + DbContext.

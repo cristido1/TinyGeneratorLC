@@ -19,7 +19,11 @@ public sealed class DelegateCommand : ICommand
         Priority = Math.Max(1, priority);
     }
 
-    public Task<CommandResult> Start(CommandContext context) => _handler(context);
+    public Task<CommandResult> Execute(CommandContext context) => _handler(context);
 
-    public Task End(CommandContext context, CommandResult result) => Task.CompletedTask;
+    public Task Cancel(CommandContext context)
+    {
+        context.CancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
 }

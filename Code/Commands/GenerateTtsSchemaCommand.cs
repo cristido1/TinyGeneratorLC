@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
 using TinyGenerator.Services.Commands;
@@ -26,6 +27,7 @@ public sealed partial class StoriesService
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var story = context.Story;
             var folderPath = context.FolderPath;
 
@@ -83,6 +85,7 @@ public sealed partial class StoriesService
                 }
 
                 var schema = generator.GenerateFromStoryText(story.StoryTagged, characters, voiceAssignments);
+                context.CancellationToken.ThrowIfCancellationRequested();
 
                 if (schema.Timeline.Count == 0)
                 {
@@ -106,13 +109,13 @@ public sealed partial class StoriesService
                 // This picks files from series_folder/{series.folder}/music or data/music_stories and writes music_file/musicFile.
                 try
                 {
-                    var existingJson = await File.ReadAllTextAsync(schemaPath);
+                    var existingJson = await File.ReadAllTextAsync(schemaPath, context.CancellationToken);
                     var rootNode = JsonNode.Parse(existingJson) as JsonObject;
                     if (rootNode != null)
                     {
                         _service.AssignMusicFilesFromLibrary(rootNode, story, folderPath);
                         SanitizeTtsSchemaTextFields(rootNode);
-                        await File.WriteAllTextAsync(schemaPath, rootNode.ToJsonString(SchemaJsonOptions));
+                        await File.WriteAllTextAsync(schemaPath, rootNode.ToJsonString(SchemaJsonOptions), context.CancellationToken);
                     }
                 }
                 catch (Exception exMusic)
@@ -123,10 +126,13 @@ public sealed partial class StoriesService
                 try { _service._database.UpdateStoryGeneratedTtsJson(story.Id, true); } catch { }
 
                 var normResults = new List<(string Name, bool Success, string? Message)>();
+                context.CancellationToken.ThrowIfCancellationRequested();
                 var (normCharOk, normCharMsg) = await _service.NormalizeCharacterNamesAsync(story.Id);
                 normResults.Add(("NormalizeCharacterNames", normCharOk, normCharMsg));
+                context.CancellationToken.ThrowIfCancellationRequested();
                 var (assignVoicesOk, assignVoicesMsg) = await _service.AssignVoicesAsync(story.Id);
                 normResults.Add(("AssignVoices", assignVoicesOk, assignVoicesMsg));
+                context.CancellationToken.ThrowIfCancellationRequested();
                 var (normSentOk, normSentMsg) = await _service.NormalizeSentimentsAsync(story.Id);
                 normResults.Add(("NormalizeSentiments", normSentOk, normSentMsg));
 

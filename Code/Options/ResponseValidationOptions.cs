@@ -20,6 +20,12 @@ namespace TinyGenerator.Services
         public bool AskFailureReasonOnFinalFailure { get; set; } = true;
 
         /// <summary>
+        /// If > 0, triggers a diagnostic/explanation call after this attempt number.
+        /// 0 disables early explanation and only uses final-failure diagnosis.
+        /// </summary>
+        public int ExplainAfterAttempt { get; set; } = 0;
+
+        /// <summary>
         /// If true, the bridge will attempt model fallback (via ModelFallbackService)
         /// after retries are exhausted.
         /// </summary>
@@ -30,6 +36,16 @@ namespace TinyGenerator.Services
         /// This can be overridden per operation via CommandPolicies.
         /// </summary>
         public bool EnableCheckerByDefault { get; set; } = true;
+
+        /// <summary>
+        /// Timeout for the response_checker phase (seconds). <=0 disables checker-specific timeout.
+        /// </summary>
+        public int CheckerTimeoutSec { get; set; } = 20;
+
+        /// <summary>
+        /// Global kill switch for deterministic validators supplied by commands.
+        /// </summary>
+        public bool EnableDeterministicValidation { get; set; } = true;
 
         /// <summary>
         /// Roles that must never be validated (avoid recursion / unwanted validation).
@@ -60,6 +76,21 @@ namespace TinyGenerator.Services
         /// Overrides ResponseValidationOptions.AskFailureReasonOnFinalFailure for this operation.
         /// </summary>
         public bool? AskFailureReasonOnFinalFailure { get; set; }
+
+        /// <summary>
+        /// Overrides ResponseValidationOptions.ExplainAfterAttempt for this operation.
+        /// </summary>
+        public int? ExplainAfterAttempt { get; set; }
+
+        /// <summary>
+        /// Overrides ResponseValidationOptions.CheckerTimeoutSec for this operation.
+        /// </summary>
+        public int? CheckerTimeoutSec { get; set; }
+
+        /// <summary>
+        /// Overrides ResponseValidationOptions.EnableDeterministicValidation for this operation.
+        /// </summary>
+        public bool? EnableDeterministicValidation { get; set; }
 
         /// <summary>
         /// If set, only these rule ids will be passed to response_checker for this operation.

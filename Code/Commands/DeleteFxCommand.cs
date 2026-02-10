@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Services.Commands;
 
@@ -20,6 +21,7 @@ public sealed partial class StoriesService
         {
             try
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 _service.CleanFxForRegeneration(context.Story.Id, context.FolderPath);
                 var (mixSuccess, mixMessage) = _service.DeleteFinalMixAssets(context.Story.Id, context.FolderPath);
                 string? message = mixSuccess

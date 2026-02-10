@@ -47,6 +47,7 @@ namespace TinyGenerator.Services.Commands
 
         public async Task ExecuteAsync(CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var runId = _generationId.ToString();
             var threadId = _generationId.GetHashCode();
 

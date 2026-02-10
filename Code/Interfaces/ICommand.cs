@@ -26,8 +26,12 @@ public interface ICommand
     int Priority => 2;
     event EventHandler<CommandProgressEventArgs>? Progress { add { } remove { } }
 
-    Task<CommandResult> Start(CommandContext context) => CommandExecutionFunction.Start(this, context);
-    Task End(CommandContext context, CommandResult result) => Task.CompletedTask;
+    Task<CommandResult> Execute(CommandContext context) => CommandExecutionFunction.Execute(this, context);
+    Task Cancel(CommandContext context)
+    {
+        context.CancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
 
     private static string ToSnakeCase(string value)
     {
@@ -46,7 +50,7 @@ public interface ICommand
 
 internal static class CommandExecutionFunction
 {
-    public static async Task<CommandResult> Start(object command, CommandContext context)
+    public static async Task<CommandResult> Execute(object command, CommandContext context)
     {
         var commandType = command.GetType();
 

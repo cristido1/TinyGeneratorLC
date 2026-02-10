@@ -609,7 +609,7 @@ public sealed partial class StoriesService
                 if (success)
                 {
                     // Use a small delay to ensure status update is persisted before checking next step
-                    await Task.Delay(100);
+                    await Task.Delay(100, ctx.CancellationToken);
                     TryAdvanceStatusChain(story.Id, chainId);
                 }
                 
@@ -736,6 +736,9 @@ public sealed partial class StoriesService
 
     private async Task<(bool success, string? message)> ExecuteStoryCommandAsync(StoryRecord story, IStoryCommand command, StoryStatus? targetStatus = null)
     {
+        var cancellationToken = CurrentDispatcherCancellationToken ?? CancellationToken.None;
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (command.RequireStoryText && string.IsNullOrWhiteSpace(story.StoryRaw))
             return (false, "La storia non contiene testo");
 
@@ -750,7 +753,7 @@ public sealed partial class StoriesService
             Directory.CreateDirectory(folderPath);
         }
 
-        var context = new StoryCommandContext(story, folderPath, targetStatus);
+        var context = new StoryCommandContext(story, folderPath, targetStatus, cancellationToken);
         var result = await command.ExecuteAsync(context);
 
         if (result.success && targetStatus?.Id > 0 && !command.HandlesStatusTransition)
@@ -4496,7 +4499,7 @@ public sealed partial class StoriesService
         Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context);
     }
 
-    internal sealed record StoryCommandContext(StoryRecord Story, string FolderPath, StoryStatus? TargetStatus);
+    internal sealed record StoryCommandContext(StoryRecord Story, string FolderPath, StoryStatus? TargetStatus, CancellationToken CancellationToken = default);
 
     private static readonly System.Threading.AsyncLocal<string?> _dispatcherRunId = new();
     private static readonly System.Threading.AsyncLocal<CancellationToken?> _dispatcherCancellation = new();

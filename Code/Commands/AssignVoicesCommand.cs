@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using System.Threading.Tasks;
+using System.Threading;
 using TinyGenerator.Models;
 using TinyGenerator.Services.Commands;
 
@@ -32,6 +33,7 @@ public sealed partial class StoriesService
         {
             try
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 var story = context.Story;
                 var folderPath = context.FolderPath;
 
@@ -146,6 +148,7 @@ public sealed partial class StoriesService
                 // 2. Assign voices to other characters
                 foreach (var character in schema.Characters)
                 {
+                    context.CancellationToken.ThrowIfCancellationRequested();
                     // Skip narrator (already assigned) and characters with existing voice
                     if (string.Equals(character.Name, "Narratore", StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(character.Name, "Narrator", StringComparison.OrdinalIgnoreCase))

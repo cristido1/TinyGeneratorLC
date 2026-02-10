@@ -5,7 +5,7 @@ using TinyGenerator.Models;
 
 namespace TinyGenerator.Services;
 
-public sealed class CommandModelExecutionService
+public sealed class CommandModelExecutionService : IAgentCallService
 {
     public sealed record DeterministicValidationResult(bool IsValid, string? Reason = null);
 
@@ -16,13 +16,15 @@ public sealed class CommandModelExecutionService
         public string RoleCode { get; set; } = string.Empty;
         public string Prompt { get; set; } = string.Empty;
         public string? SystemPrompt { get; set; }
-        public int MaxAttempts { get; set; } = 3;
-        public int RetryDelaySeconds { get; set; } = 2;
-        public int StepTimeoutSec { get; set; } = 0;
-        public bool UseResponseChecker { get; set; }
-        public bool EnableFallback { get; set; } = true;
-        public bool DiagnoseOnFinalFailure { get; set; } = true;
-        public int ExplainAfterAttempt { get; set; } = 0;
+        public int? MaxAttempts { get; set; }
+        public int? RetryDelaySeconds { get; set; }
+        public int? StepTimeoutSec { get; set; }
+        public bool? UseResponseChecker { get; set; }
+        public bool? EnableFallback { get; set; }
+        public bool? DiagnoseOnFinalFailure { get; set; }
+        public int? ExplainAfterAttempt { get; set; }
+        public int? CheckerTimeoutSec { get; set; }
+        public bool? EnableDeterministicValidation { get; set; }
         public string? RunId { get; set; }
         public Func<string, DeterministicValidationResult>? DeterministicValidator { get; set; }
         public Func<string, string, string>? RetryPromptFactory { get; set; }
@@ -42,17 +44,31 @@ public sealed class CommandModelExecutionService
     private readonly DatabaseService _database;
     private readonly ICustomLogger? _logger;
     private readonly IOptions<ResponseValidationOptions>? _responseValidationOptions;
+    private readonly IOptions<CommandPoliciesOptions>? _commandPoliciesOptions;
+
+    private sealed record ExecutionSettings(
+        int MaxAttempts,
+        int RetryDelaySeconds,
+        int StepTimeoutSec,
+        bool UseResponseChecker,
+        bool EnableFallback,
+        bool DiagnoseOnFinalFailure,
+        int ExplainAfterAttempt,
+        int CheckerTimeoutSec,
+        bool EnableDeterministicValidation);
 
     public CommandModelExecutionService(
         ILangChainKernelFactory kernelFactory,
         IServiceScopeFactory scopeFactory,
         DatabaseService database,
+        IOptions<CommandPoliciesOptions>? commandPoliciesOptions = null,
         IOptions<ResponseValidationOptions>? responseValidationOptions = null,
         ICustomLogger? logger = null)
     {
         _kernelFactory = kernelFactory;
         _scopeFactory = scopeFactory;
         _database = database;
+        _commandPoliciesOptions = commandPoliciesOptions;
         _responseValidationOptions = responseValidationOptions;
         _logger = logger;
     }
@@ -66,7 +82,8 @@ public sealed class CommandModelExecutionService
             return new Result { Success = false, Error = $"Agente {request.Agent.Name} senza modello configurato" };
         }
 
-        var primary = await ExecuteOnModelAsync(request, modelName, request.RoleCode, ct).ConfigureAwait(false);
+        var settings = ResolveSettings(request);
+        var primary = await ExecuteOnModelAsync(request, settings, modelName, request.RoleCode, ct).ConfigureAwait(false);
         if (primary.Success)
         {
             return new Result
@@ -79,9 +96,9 @@ public sealed class CommandModelExecutionService
             };
         }
 
-        if (request.EnableFallback)
+        if (settings.EnableFallback)
         {
-            var fallback = await TryFallbackAsync(request, ct).ConfigureAwait(false);
+            var fallback = await TryFallbackAsync(request, settings, ct).ConfigureAwait(false);
             if (fallback.Success)
             {
                 return fallback;
@@ -98,15 +115,17 @@ public sealed class CommandModelExecutionService
         };
     }
 
-    private async Task<Result> ExecuteOnModelAsync(Request request, string modelName, string roleCode, CancellationToken ct)
+    private async Task<Result> ExecuteOnModelAsync(Request request, ExecutionSettings settings, string modelName, string roleCode, CancellationToken ct)
     {
-        var maxAttempts = Math.Max(1, request.MaxAttempts);
-        var delayMs = Math.Max(0, request.RetryDelaySeconds) * 1000;
+        var maxAttempts = settings.MaxAttempts;
+        var delayMs = Math.Max(0, settings.RetryDelaySeconds) * 1000;
         var currentPrompt = request.Prompt ?? string.Empty;
         var lastError = "Risposta non valida";
         var lastOutput = string.Empty;
         var explained = false;
-        var rules = (_responseValidationOptions?.Value?.Rules ?? new List<ResponseValidationRule>()).ToList();
+        var responseValidation = _responseValidationOptions?.Value;
+        var (_, responsePolicy) = ResolveResponsePolicy(request.CommandKey, responseValidation);
+        var rules = ResolveRules(responseValidation, responsePolicy);
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -114,9 +133,9 @@ public sealed class CommandModelExecutionService
             _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt}/{maxAttempts} (model={modelName})");
 
             using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            if (request.StepTimeoutSec > 0)
+            if (settings.StepTimeoutSec > 0)
             {
-                attemptCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, request.StepTimeoutSec)));
+                attemptCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, settings.StepTimeoutSec)));
             }
             var attemptToken = attemptCts.Token;
 
@@ -132,11 +151,12 @@ public sealed class CommandModelExecutionService
                     skipResponseChecker: true,
                     attemptToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested && request.StepTimeoutSec > 0 && attemptCts.IsCancellationRequested)
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested && settings.StepTimeoutSec > 0 && attemptCts.IsCancellationRequested)
             {
-                lastError = $"Timeout fase dopo {request.StepTimeoutSec}s";
+                lastError = $"Timeout fase dopo {settings.StepTimeoutSec}s";
+                _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito: {lastError}");
                 MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
-                if (!explained && request.ExplainAfterAttempt > 0 && attempt >= request.ExplainAfterAttempt)
+                if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                     explained = true;
@@ -151,8 +171,9 @@ public sealed class CommandModelExecutionService
             catch (Exception ex)
             {
                 lastError = ex.Message;
+                _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} eccezione: {lastError}");
                 MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
-                if (!explained && request.ExplainAfterAttempt > 0 && attempt >= request.ExplainAfterAttempt)
+                if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                     explained = true;
@@ -162,12 +183,16 @@ public sealed class CommandModelExecutionService
             }
 
             lastOutput = text;
-            var deterministic = request.DeterministicValidator?.Invoke(text) ?? new DeterministicValidationResult(true, null);
+            var deterministic = settings.EnableDeterministicValidation
+                ? request.DeterministicValidator?.Invoke(text) ?? new DeterministicValidationResult(true, null)
+                : new DeterministicValidationResult(true, null);
+
             if (!deterministic.IsValid)
             {
                 lastError = string.IsNullOrWhiteSpace(deterministic.Reason) ? "Check deterministico fallito" : deterministic.Reason!;
+                _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito (deterministico): {lastError}");
                 MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
-                if (!explained && request.ExplainAfterAttempt > 0 && attempt >= request.ExplainAfterAttempt)
+                if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                     explained = true;
@@ -181,14 +206,24 @@ public sealed class CommandModelExecutionService
                 continue;
             }
 
-            if (request.UseResponseChecker)
+            if (settings.UseResponseChecker)
             {
-                var checkerResult = await ValidateWithCheckerAsync(request, text, rules, attemptToken).ConfigureAwait(false);
+                using var checkerCts = settings.CheckerTimeoutSec > 0
+                    ? CancellationTokenSource.CreateLinkedTokenSource(attemptToken)
+                    : null;
+                if (checkerCts != null)
+                {
+                    checkerCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, settings.CheckerTimeoutSec)));
+                }
+
+                var checkerToken = checkerCts?.Token ?? attemptToken;
+                var checkerResult = await ValidateWithCheckerAsync(request, text, rules, checkerToken).ConfigureAwait(false);
                 if (!checkerResult.IsValid)
                 {
                     lastError = string.IsNullOrWhiteSpace(checkerResult.Reason) ? "response_checker invalid" : checkerResult.Reason!;
+                    _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito (checker): {lastError}");
                     MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
-                    if (!explained && request.ExplainAfterAttempt > 0 && attempt >= request.ExplainAfterAttempt)
+                    if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                     {
                         await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                         explained = true;
@@ -203,6 +238,7 @@ public sealed class CommandModelExecutionService
                 }
             }
 
+            _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} riuscito");
             MarkLatestAttemptResult(modelName, request.Agent, "SUCCESS", null, examined: true);
             return new Result
             {
@@ -212,11 +248,12 @@ public sealed class CommandModelExecutionService
             };
         }
 
-        if (request.DiagnoseOnFinalFailure && !explained)
+        if (settings.DiagnoseOnFinalFailure && !explained)
         {
             await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
         }
 
+        _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Fallito dopo {maxAttempts} tentativi. Motivo finale: {lastError}");
         return new Result
         {
             Success = false,
@@ -226,7 +263,7 @@ public sealed class CommandModelExecutionService
         };
     }
 
-    private async Task<Result> TryFallbackAsync(Request request, CancellationToken ct)
+    private async Task<Result> TryFallbackAsync(Request request, ExecutionSettings settings, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
@@ -255,19 +292,21 @@ public sealed class CommandModelExecutionService
                         RoleCode = role,
                         Prompt = request.Prompt,
                         SystemPrompt = !string.IsNullOrWhiteSpace(modelRole.Instructions) ? modelRole.Instructions : request.SystemPrompt,
-                        MaxAttempts = request.MaxAttempts,
-                        RetryDelaySeconds = request.RetryDelaySeconds,
-                        StepTimeoutSec = request.StepTimeoutSec,
-                        UseResponseChecker = request.UseResponseChecker,
+                        MaxAttempts = settings.MaxAttempts,
+                        RetryDelaySeconds = settings.RetryDelaySeconds,
+                        StepTimeoutSec = settings.StepTimeoutSec,
+                        UseResponseChecker = settings.UseResponseChecker,
                         EnableFallback = false,
                         DiagnoseOnFinalFailure = false,
-                        ExplainAfterAttempt = request.ExplainAfterAttempt,
+                        ExplainAfterAttempt = settings.ExplainAfterAttempt,
+                        CheckerTimeoutSec = settings.CheckerTimeoutSec,
+                        EnableDeterministicValidation = settings.EnableDeterministicValidation,
                         RunId = request.RunId,
                         DeterministicValidator = request.DeterministicValidator,
                         RetryPromptFactory = request.RetryPromptFactory
                     };
 
-                    var result = await ExecuteOnModelAsync(req, fallbackName, role, ct).ConfigureAwait(false);
+                    var result = await ExecuteOnModelAsync(req, settings, fallbackName, role, ct).ConfigureAwait(false);
                     if (!result.Success || string.IsNullOrWhiteSpace(result.Text))
                     {
                         throw new InvalidOperationException(result.Error ?? "Fallback result invalid");
@@ -428,6 +467,76 @@ public sealed class CommandModelExecutionService
         sb.AppendLine("PROMPT ORIGINALE:");
         sb.AppendLine(originalPrompt);
         return sb.ToString();
+    }
+
+    private ExecutionSettings ResolveSettings(Request request)
+    {
+        var commandPolicy = _commandPoliciesOptions?.Value?.Resolve(request.CommandKey, null) ?? new CommandExecutionPolicy();
+        var responseValidation = _responseValidationOptions?.Value ?? new ResponseValidationOptions();
+        var (_, responsePolicy) = ResolveResponsePolicy(request.CommandKey, responseValidation);
+
+        var maxAttempts = request.MaxAttempts ?? Math.Max(1, commandPolicy.MaxAttempts);
+        var retryDelaySeconds = request.RetryDelaySeconds ?? Math.Max(0, commandPolicy.RetryDelayBaseSeconds);
+        var stepTimeoutSec = request.StepTimeoutSec ?? Math.Max(0, commandPolicy.TimeoutSec);
+        var useResponseChecker = request.UseResponseChecker
+            ?? responsePolicy?.EnableChecker
+            ?? responseValidation.EnableCheckerByDefault;
+        var enableFallback = request.EnableFallback ?? responseValidation.EnableFallback;
+        var diagnoseOnFinalFailure = request.DiagnoseOnFinalFailure ?? responseValidation.AskFailureReasonOnFinalFailure;
+        var explainAfterAttempt = request.ExplainAfterAttempt
+            ?? responsePolicy?.ExplainAfterAttempt
+            ?? responseValidation.ExplainAfterAttempt;
+        var checkerTimeoutSec = request.CheckerTimeoutSec
+            ?? responsePolicy?.CheckerTimeoutSec
+            ?? responseValidation.CheckerTimeoutSec;
+        var enableDeterministicValidation = request.EnableDeterministicValidation
+            ?? responsePolicy?.EnableDeterministicValidation
+            ?? responseValidation.EnableDeterministicValidation;
+
+        return new ExecutionSettings(
+            MaxAttempts: Math.Max(1, maxAttempts),
+            RetryDelaySeconds: Math.Max(0, retryDelaySeconds),
+            StepTimeoutSec: Math.Max(0, stepTimeoutSec),
+            UseResponseChecker: useResponseChecker,
+            EnableFallback: enableFallback,
+            DiagnoseOnFinalFailure: diagnoseOnFinalFailure,
+            ExplainAfterAttempt: Math.Max(0, explainAfterAttempt),
+            CheckerTimeoutSec: Math.Max(0, checkerTimeoutSec),
+            EnableDeterministicValidation: enableDeterministicValidation);
+    }
+
+    private static (string? MatchedKey, ResponseValidationCommandPolicy? Policy) ResolveResponsePolicy(
+        string? commandKey,
+        ResponseValidationOptions? options)
+    {
+        if (options?.CommandPolicies == null || options.CommandPolicies.Count == 0)
+        {
+            return (null, null);
+        }
+
+        foreach (var key in CommandOperationNameResolver.GetLookupKeys(commandKey))
+        {
+            if (options.CommandPolicies.TryGetValue(key, out var policy) && policy != null)
+            {
+                return (key, policy);
+            }
+        }
+
+        return (null, null);
+    }
+
+    private static IReadOnlyList<ResponseValidationRule> ResolveRules(
+        ResponseValidationOptions? options,
+        ResponseValidationCommandPolicy? policy)
+    {
+        var allRules = (options?.Rules ?? new List<ResponseValidationRule>()).ToList();
+        if (policy?.RuleIds == null || policy.RuleIds.Count == 0)
+        {
+            return allRules;
+        }
+
+        var allowed = new HashSet<int>(policy.RuleIds);
+        return allRules.Where(r => allowed.Contains(r.Id)).ToList();
     }
 
     private static string BuildSystemPrompt(Agent agent)

@@ -999,6 +999,37 @@ internal static class StateDrivenPipelineHelpers
         bool allowInternalFallback = true,
         bool skipResponseChecker = false)
     {
+        if (scopeFactory != null)
+        {
+            using var agentScope = scopeFactory.CreateScope();
+            var agentCall = agentScope.ServiceProvider.GetService<IAgentCallService>();
+            if (agentCall != null)
+            {
+                var result = await agentCall.ExecuteAsync(
+                    new CommandModelExecutionService.Request
+                    {
+                        CommandKey = roleCode,
+                        Agent = agent,
+                        RoleCode = roleCode,
+                        Prompt = userPrompt,
+                        SystemPrompt = systemPrompt,
+                        UseResponseChecker = !skipResponseChecker,
+                        EnableFallback = allowInternalFallback,
+                        DiagnoseOnFinalFailure = true,
+                        ExplainAfterAttempt = 0,
+                        RunId = LogScope.CurrentThreadId?.ToString()
+                    },
+                    ct).ConfigureAwait(false);
+
+                if (result.Success && !string.IsNullOrWhiteSpace(result.Text))
+                {
+                    return AgentResponse.Ok(result.Text!);
+                }
+
+                return AgentResponse.Fail(result.Error ?? "Risposta vuota dal modello");
+            }
+        }
+
         var bridge = kernelFactory.CreateChatBridge(
             modelName,
             agent.Temperature,

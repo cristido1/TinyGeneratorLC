@@ -36,6 +36,7 @@ namespace TinyGenerator.Services.Commands
 
         public async Task ExecuteAsync(CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var threadId = _generationId.GetHashCode();
 
             _logger.Log("Information", "MultiStep", $"Starting multi-step story generation - Agent: {_writerAgentId}, Theme: {_theme}");
@@ -141,6 +142,7 @@ namespace TinyGenerator.Services.Commands
                         ["operation"] = "story_multi_step"
                     }
                 );
+                ct.ThrowIfCancellationRequested();
 
                 _logger.Log("Information", "MultiStep", $"Enqueued ExecuteMultiStepTaskCommand");
             }

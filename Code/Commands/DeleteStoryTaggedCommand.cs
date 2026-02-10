@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Services.Commands;
 
@@ -20,6 +21,7 @@ public sealed partial class StoriesService
         {
             try
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 var storyId = context.Story.Id;
                 var cleared = _service._database.ClearStoryTagged(storyId);
                 if (!cleared)
@@ -32,7 +34,7 @@ public sealed partial class StoriesService
                 context.Story.FormatterModelId = null;
                 context.Story.FormatterPromptHash = null;
 
-                var cascadeContext = new StoryCommandContext(context.Story, context.FolderPath, null);
+                var cascadeContext = new StoryCommandContext(context.Story, context.FolderPath, null, context.CancellationToken);
                 var (ttsOk, ttsMessage) = await new DeleteTtsCommand(_service).ExecuteAsync(cascadeContext);
 
                 var message = string.IsNullOrWhiteSpace(ttsMessage)

@@ -41,6 +41,7 @@ namespace TinyGenerator.Services.Commands
 
         public async Task ExecuteAsync(CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var threadId = _generationId.GetHashCode();
 
             _logger.Log("Information", "SeriesEpisode", $"Starting series episode generation - Serie: {_serieId}, Agent: {_writerAgentId}");
@@ -197,6 +198,7 @@ namespace TinyGenerator.Services.Commands
                         ["episodeNumber"] = episodeNumber.ToString()
                     }
                 );
+                ct.ThrowIfCancellationRequested();
 
                 _logger.Log("Information", "SeriesEpisode", $"Enqueued ExecuteMultiStepTaskCommand for series episode");
             }

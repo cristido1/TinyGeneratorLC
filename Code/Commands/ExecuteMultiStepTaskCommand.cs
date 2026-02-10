@@ -29,6 +29,7 @@ namespace TinyGenerator.Services.Commands
 
         public async Task ExecuteAsync(CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var threadId = _generationId.GetHashCode();
 
             Console.WriteLine($"[DEBUG] ExecuteMultiStepTaskCommand.ExecuteAsync START - executionId={_executionId}, generationId={_generationId}");

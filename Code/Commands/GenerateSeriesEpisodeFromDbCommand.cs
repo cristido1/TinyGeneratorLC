@@ -40,6 +40,7 @@ namespace TinyGenerator.Services.Commands
 
         public async Task ExecuteAsync(CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var threadId = _generationId.GetHashCode();
 
             _logger.Log("Information", "SeriesEpisode", $"Start episode generation - Serie: {_serieId}, Episode: {_episodeId}, Agent: {_writerAgentId}");
@@ -154,6 +155,7 @@ namespace TinyGenerator.Services.Commands
                 threadId: threadId,
                 templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions
             );
+            ct.ThrowIfCancellationRequested();
 
             var executeRunId = $"{_generationId}_exec";
             var executeCommand = new DelegateCommand(

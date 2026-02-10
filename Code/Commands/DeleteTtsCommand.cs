@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Services.Commands;
 
@@ -21,9 +22,10 @@ public sealed partial class StoriesService
         {
             try
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 _service.CleanBeforeTtsAudioGeneration(context.Story.Id, context.FolderPath);
 
-                var cascadeContext = new StoryCommandContext(context.Story, context.FolderPath, null);
+                var cascadeContext = new StoryCommandContext(context.Story, context.FolderPath, null, context.CancellationToken);
                 var cascadeCommands = new IStoryCommand[]
                 {
                     new DeleteAmbienceCommand(_service),
@@ -37,6 +39,7 @@ public sealed partial class StoriesService
 
                 foreach (var cmd in cascadeCommands)
                 {
+                    context.CancellationToken.ThrowIfCancellationRequested();
                     var (ok, msg) = await cmd.ExecuteAsync(cascadeContext);
                     allOk &= ok;
                     if (!string.IsNullOrWhiteSpace(msg))

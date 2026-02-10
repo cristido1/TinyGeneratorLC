@@ -29,6 +29,7 @@ namespace TinyGenerator.Services.Commands
 
         public async Task ExecuteAsync(CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             var threadId = _generationId.GetHashCode();
 
             _logger.Log("Information", "MultiStep", $"Resuming task execution {_executionId}");

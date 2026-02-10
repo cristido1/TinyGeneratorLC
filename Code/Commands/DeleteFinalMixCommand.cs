@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Services.Commands;
 
@@ -18,6 +19,7 @@ public sealed partial class StoriesService
 
         public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_service.DeleteFinalMixAssets(context.Story.Id, context.FolderPath));
         }
     }

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
 using TinyGenerator.Services.Commands;
@@ -27,6 +28,7 @@ public sealed partial class StoriesService
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var story = context.Story;
             var folderPath = context.FolderPath;
 
@@ -117,6 +119,7 @@ public sealed partial class StoriesService
                 // Build mapping from old names to canonical names
                 foreach (var ttsChar in schema.Characters)
                 {
+                    context.CancellationToken.ThrowIfCancellationRequested();
                     var matched = StoryCharacterParser.FindCharacter(storyCharacters, ttsChar.Name);
                     if (matched != null && !ttsChar.Name.Equals(matched.Name, StringComparison.OrdinalIgnoreCase))
                     {
@@ -137,6 +140,7 @@ public sealed partial class StoriesService
 
                 foreach (var ttsChar in schema.Characters)
                 {
+                    context.CancellationToken.ThrowIfCancellationRequested();
                     var canonicalName = characterMapping.TryGetValue(ttsChar.Name, out var mapped) ? mapped : ttsChar.Name;
 
                     // Skip duplicates that would result from merging
@@ -171,6 +175,7 @@ public sealed partial class StoriesService
                 // Update character references in timeline
                 foreach (var item in schema.Timeline)
                 {
+                    context.CancellationToken.ThrowIfCancellationRequested();
                     if (item is JsonElement)
                     {
                         // Timeline items are JsonElements, need special handling
@@ -189,6 +194,7 @@ public sealed partial class StoriesService
                 var updatedTimeline = new List<object>();
                 foreach (var item in schema.Timeline)
                 {
+                    context.CancellationToken.ThrowIfCancellationRequested();
                     if (item is JsonElement jsonElement)
                     {
                         var phrase = JsonSerializer.Deserialize<TtsPhrase>(jsonElement.GetRawText(), jsonOptions);

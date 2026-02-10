@@ -190,9 +190,12 @@ namespace TinyGenerator.Services
             command.Progress += OnProgress;
             try
             {
-                var result = await command.Start(context).ConfigureAwait(false);
-                await command.End(context, result).ConfigureAwait(false);
-                return result;
+                return await command.Execute(context).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+            {
+                await command.Cancel(context).ConfigureAwait(false);
+                throw;
             }
             finally
             {

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Services.Commands;
 
@@ -27,6 +28,7 @@ public sealed partial class StoriesService
         {
             try
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 var story = context.Story;
                 var folderPath = context.FolderPath;
 
@@ -35,7 +37,7 @@ public sealed partial class StoriesService
                     return (false, "File tts_schema.json non trovato. Genera prima lo schema TTS.");
 
                 // Load TTS schema
-                var schemaJson = await File.ReadAllTextAsync(schemaPath);
+                var schemaJson = await File.ReadAllTextAsync(schemaPath, context.CancellationToken);
                 var schema = JsonSerializer.Deserialize<TtsSchema>(schemaJson, SchemaJsonOptions);
                 if (schema == null)
                     return (false, "Impossibile deserializzare tts_schema.json");
@@ -59,6 +61,7 @@ public sealed partial class StoriesService
                 };
                 var updatedJson = JsonSerializer.Serialize(schema, outputOptions);
                 await _service.SaveSanitizedTtsSchemaJsonAsync(schemaPath, updatedJson);
+                context.CancellationToken.ThrowIfCancellationRequested();
 
                 _service._logger?.LogInformation(
                     "Normalized {Normalized}/{Total} sentiments in tts_schema.json for story {StoryId}",

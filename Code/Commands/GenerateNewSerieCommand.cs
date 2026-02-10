@@ -22,7 +22,7 @@ public sealed class GenerateNewSerieCommand : ICommand
     private readonly ICustomLogger? _logger;
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly ICommandEnqueuer? _dispatcher;
-    private readonly CommandModelExecutionService? _modelExecution;
+    private readonly IAgentCallService? _modelExecution;
     private readonly SeriesGenerationOptions _options;
 
     public GenerateNewSerieCommand(
@@ -33,7 +33,7 @@ public sealed class GenerateNewSerieCommand : ICommand
         ICustomLogger? logger = null,
         IServiceScopeFactory? scopeFactory = null,
         ICommandEnqueuer? dispatcher = null,
-        CommandModelExecutionService? modelExecution = null)
+        IAgentCallService? modelExecution = null)
     {
         _prompt = prompt ?? string.Empty;
         _database = database ?? throw new ArgumentNullException(nameof(database));

@@ -22,6 +22,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             if (_service.KernelFactory == null)
             {
                 return (false, "Kernel factory non disponibile per add_ambient_tags_to_story");
@@ -36,7 +37,7 @@ public sealed partial class StoryMainCommands
                 _service.Tuning,
                 _service.ScopeFactory);
 
-            var result = await command.ExecuteAsync();
+            var result = await command.ExecuteAsync(context.CancellationToken, _service.CurrentDispatcherRunId);
             return (result.Success, result.Message);
         }
     }
@@ -53,6 +54,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             if (_service.KernelFactory == null)
             {
                 return (false, "Kernel factory non disponibile per add_fx_tags_to_story");
@@ -67,7 +69,7 @@ public sealed partial class StoryMainCommands
                 _service.Tuning,
                 _service.ScopeFactory);
 
-            var result = await command.ExecuteAsync();
+            var result = await command.ExecuteAsync(context.CancellationToken, _service.CurrentDispatcherRunId);
             return (result.Success, result.Message);
         }
     }
@@ -84,6 +86,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             if (_service.KernelFactory == null)
             {
                 return (false, "Kernel factory non disponibile per add_music_tags_to_story");
@@ -98,7 +101,7 @@ public sealed partial class StoryMainCommands
                 _service.Tuning,
                 _service.ScopeFactory);
 
-            var result = await command.ExecuteAsync();
+            var result = await command.ExecuteAsync(context.CancellationToken, _service.CurrentDispatcherRunId);
             return (result.Success, result.Message);
         }
     }
@@ -115,6 +118,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var story = context.Story;
             var evaluators = _service.Database.ListAgents()
                 .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
@@ -220,6 +224,7 @@ public sealed partial class StoryMainCommands
 
         public Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var runId = _service.EnqueueReviseStoryCommand(context.Story.Id, trigger: "status_flow", priority: 2, force: true);
             return Task.FromResult<(bool success, string? message)>(string.IsNullOrWhiteSpace(runId)
                 ? (false, "Revisione non accodata")
@@ -239,6 +244,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             if (_service.KernelFactory == null)
             {
                 return (false, "Kernel factory non disponibile");
@@ -253,7 +259,7 @@ public sealed partial class StoryMainCommands
                 _service.Tuning,
                 _service.ScopeFactory);
 
-            var result = await cmd.ExecuteAsync();
+            var result = await cmd.ExecuteAsync(context.CancellationToken, _service.CurrentDispatcherRunId);
             return (result.Success, result.Message);
         }
     }
@@ -270,6 +276,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var sb = new StringBuilder();
             var overallSuccess = true;
 
@@ -350,6 +357,7 @@ public sealed partial class StoryMainCommands
 
         public Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var enqueue = _service.TryEnqueueGenerateTtsAudioCommandInternal(
                 context.Story.Id,
                 trigger: "status_transition",
@@ -375,6 +383,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var deleteCmd = new StoriesService.DeleteAmbienceCommand(_service);
             var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
             if (!cleanupOk)
@@ -410,6 +419,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var deleteCmd = new StoriesService.DeleteFxCommand(_service);
             var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
             if (!cleanupOk)
@@ -445,6 +455,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var deleteCmd = new StoriesService.DeleteMusicCommand(_service);
             var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
             if (!cleanupOk)
@@ -480,6 +491,7 @@ public sealed partial class StoryMainCommands
 
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var deleteCmd = new StoriesService.DeleteFinalMixCommand(_service);
             var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
             if (!cleanupOk)

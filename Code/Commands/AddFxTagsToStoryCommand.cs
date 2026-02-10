@@ -34,6 +34,7 @@ namespace TinyGenerator.Services.Commands
         private readonly StoriesService? _storiesService;
         private readonly ICustomLogger? _logger;
         private readonly IServiceScopeFactory? _scopeFactory;
+        private readonly SimpleModelFallback _simpleModelFallback = new();
 
         public string CommandName => "add_fx_tags_to_story";
         public int Priority => 2;
@@ -262,11 +263,14 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        public Task<CommandResult> Start(CommandContext context)
+        public Task<CommandResult> Execute(CommandContext context)
             => ExecuteAsync(context.CancellationToken, context.RunId);
 
-        public Task End(CommandContext context, CommandResult result)
-            => Task.CompletedTask;
+        public Task Cancel(CommandContext context)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
 
         private bool TryEnqueueNextStatus(StoryRecord story, bool allowNext, string runId)
         {
@@ -347,6 +351,29 @@ namespace TinyGenerator.Services.Commands
                 return null;
             }
 
+            // Esempio d'uso: i valori sono gia' calcolati da CommandTuningOptions a monte.
+            var maxAttempts = Math.Max(1, _tuning.FxExpert.MaxAttemptsPerChunk);
+            var currentAttempt = maxAttempts;
+            var fallbackEnabled = true;
+            var availableFallbacks = fallbackService.GetFallbackModelsForRole(roleCode, failingModelId);
+            var fallbackDecision = _simpleModelFallback.Decide(
+                currentAttempt,
+                maxAttempts,
+                fallbackEnabled,
+                triedModelNames,
+                availableFallbacks);
+
+            if (fallbackDecision.RetrySameModel)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(fallbackDecision.NextModelName))
+            {
+                _logger?.Append(runId, $"[chunk {chunkIndex}/{chunkCount}] No fallback model available for role '{roleCode}'.", "warn");
+                return null;
+            }
+
             var (result, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync(
                 roleCode,
                 failingModelId,
@@ -380,7 +407,9 @@ namespace TinyGenerator.Services.Commands
                 shouldTryModelRole: mr =>
                 {
                     var name = mr.Model?.Name;
-                    return !string.IsNullOrWhiteSpace(name) && triedModelNames.Add(name);
+                    return !string.IsNullOrWhiteSpace(name)
+                        && string.Equals(name, fallbackDecision.NextModelName, StringComparison.OrdinalIgnoreCase)
+                        && triedModelNames.Add(name);
                 });
 
             if (string.IsNullOrWhiteSpace(result) || successfulModelRole?.Model == null || string.IsNullOrWhiteSpace(successfulModelRole.Model.Name))

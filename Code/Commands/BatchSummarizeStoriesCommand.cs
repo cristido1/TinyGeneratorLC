@@ -30,6 +30,7 @@ namespace TinyGenerator.Services.Commands
 
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             _logger.Log("Information", "BatchSummarize", $"Starting batch summarization (min score: {_minScore})");
 
             try
@@ -54,6 +55,7 @@ namespace TinyGenerator.Services.Commands
                 int enqueued = 0;
                 foreach (var story in eligibleStories)
                 {
+                    ct.ThrowIfCancellationRequested();
                     try
                     {
                         var runId = Guid.NewGuid().ToString();

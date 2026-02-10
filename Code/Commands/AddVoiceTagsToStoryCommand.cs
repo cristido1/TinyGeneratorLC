@@ -291,11 +291,14 @@ namespace TinyGenerator.Services.Commands
             }
         }
 
-        public Task<CommandResult> Start(CommandContext context)
+        public Task<CommandResult> Execute(CommandContext context)
             => ExecuteAsync(context.CancellationToken, context.RunId);
 
-        public Task End(CommandContext context, CommandResult result)
-            => Task.CompletedTask;
+        public Task Cancel(CommandContext context)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
 
         private bool TryEnqueueNextStatus(StoryRecord story, bool allowNext, string runId)
         {

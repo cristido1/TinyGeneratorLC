@@ -7,6 +7,7 @@ using TinyGenerator.Hubs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.EntityFrameworkCore;
+using TinyGenerator.Services.Commands;
 
 // Attempt to restart local Ollama with higher priority before app startup (best-effort).
 // Small helper methods and more complex startup logic are extracted into Services/StartupTasks.cs
@@ -93,6 +94,13 @@ builder.Services.AddScoped<TinyGenerator.Data.Repositories.IStoryRepository, Tin
 
 // Model fallback service for agent resilience
 builder.Services.AddScoped<ModelFallbackService>();
+builder.Services.AddTransient<IAgentResolutionService, AgentResolutionService>();
+builder.Services.AddTransient<IChunkProcessingService, ChunkProcessingService>();
+builder.Services.AddTransient<IStoryTaggingPipelineService, StoryTaggingPipelineService>();
+builder.Services.AddTransient<INextStatusEnqueuer>(sp =>
+    new NextStatusEnqueuer(
+        sp.GetService<StoriesService>(),
+        sp.GetService<ICustomLogger>()));
 
 // Persistent memory service (sqlite) using consolidated storage DB
 builder.Services.AddSingleton<PersistentMemoryService>(sp =>
@@ -284,6 +292,7 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
 builder.Services.AddSingleton<LogAnalysisService>();
 builder.Services.AddSingleton<SystemReportService>();
 builder.Services.AddSingleton<CommandModelExecutionService>();
+builder.Services.AddSingleton<IAgentCallService>(sp => sp.GetRequiredService<CommandModelExecutionService>());
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
 builder.Services.AddTransient<LangChainTestService>();

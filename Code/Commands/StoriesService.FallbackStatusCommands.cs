@@ -22,6 +22,7 @@ public sealed partial class StoriesService
 
         public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var functionName = _status.FunctionName ?? _status.Code ?? $"status_{_status.Id}";
             _service._logger?.LogWarning("FunctionCallCommand: function {Function} not implemented yet", functionName);
             return Task.FromResult<(bool success, string? message)>((false, $"Funzione '{functionName}' non ancora implementata."));
@@ -42,6 +43,9 @@ public sealed partial class StoriesService
         public bool HandlesStatusTransition => false;
 
         public Task<(bool success, string? message)> ExecuteAsync(StoryCommandContext context)
-            => Task.FromResult<(bool success, string? message)>((false, _message));
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<(bool success, string? message)>((false, _message));
+        }
     }
 }

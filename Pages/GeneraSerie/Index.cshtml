@@ -27,6 +27,9 @@
                 <button type="submit" class="btn btn-primary">
                     <i class="bi bi-play-fill me-1"></i> Accoda GenerateNewSerie
                 </button>
+                <button type="button" id="generateRandomPromptBtn" class="btn btn-outline-primary">
+                    <i class="bi bi-magic me-1"></i> Prompt Casuale da Writer
+                </button>
                 <button type="reset" class="btn btn-outline-secondary">Pulisci</button>
             </div>
         </form>
@@ -42,43 +45,205 @@
     </div>
     <div id="promptExamples" class="collapse">
         <div class="card-body">
-            <pre class="mb-0" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace;">THRILLER AI
-Una serie thriller ambientata in un futuro vicino dove le decisioni pubbliche sono gestite da un’IA nazionale. Eventi misteriosi mostrano che il sistema sta “correggendo” la società in modo spietato. Tono teso, realistico. Temi: controllo, libero arbitrio.
+            <ul class="list-group">
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-cpu-fill me-2"></i>THRILLER AI</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="THRILLER AI" data-target-id="example-thriller-ai">Copia</button>
+                    </div>
+                    <div id="example-thriller-ai" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una serie thriller ambientata in un futuro vicino dove le decisioni pubbliche sono gestite da una IA nazionale. Eventi misteriosi mostrano che il sistema sta correggendo la societa in modo spietato. Tono teso, realistico. Temi: controllo, libero arbitrio.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-rocket-takeoff-fill me-2"></i>SCI-FI SURVIVAL</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="SCI-FI SURVIVAL" data-target-id="example-sci-fi-survival">Copia</button>
+                    </div>
+                    <div id="example-sci-fi-survival" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una colonia spaziale perde contatto con la Terra e scopre che nessuno verra a salvarli. Devono costruire una nuova societa su un pianeta ostile. Tono realistico, drammatico. Temi: leadership, fiducia.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-eye-fill me-2"></i>MISTERY MEMORIA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="MISTERY MEMORIA" data-target-id="example-mistery-memoria">Copia</button>
+                    </div>
+                    <div id="example-mistery-memoria" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In una citta compaiono persone che nessuno ricorda ma che sostengono di aver sempre vissuto li. Un'insegnante indaga su un fenomeno che altera la memoria collettiva. Tono inquietante. Temi: identita, verita.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-building-fill-gear me-2"></i>POLITICO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="POLITICO" data-target-id="example-politico">Copia</button>
+                    </div>
+                    <div id="example-politico" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un nuovo partito vince promettendo ordine. Giornalisti e funzionari scoprono che il governo sta smantellando la democrazia. Tono realistico. Temi: potere, compromesso morale.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-shield-fill-check me-2"></i>SCI-FI MILITARE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="SCI-FI MILITARE" data-target-id="example-sci-fi-militare">Copia</button>
+                    </div>
+                    <div id="example-sci-fi-militare" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Dopo la distruzione della Terra, una flotta militare in fuga deve decidere se cercare sopravvissuti o prepararsi a una guerra contro un nemico sconosciuto. Tono duro, militare. Temi: sacrificio, comando.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-moon-stars-fill me-2"></i>CYBERPUNK NOIR</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="CYBERPUNK NOIR" data-target-id="example-cyberpunk-noir">Copia</button>
+                    </div>
+                    <div id="example-cyberpunk-noir" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In una citta dove i ricordi si possono modificare, un'investigatrice scopre un caso che mette in dubbio la propria identita. Tono noir. Temi: identita, realta.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-building me-2"></i>COMMEDIA UFFICIO ASSURDO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="COMMEDIA UFFICIO ASSURDO" data-target-id="example-commedia-ufficio">Copia</button>
+                    </div>
+                    <div id="example-commedia-ufficio" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una serie comedy ambientata in un piccolo ufficio comunale dove un gruppo di impiegati deve gestire richieste improbabili dei cittadini, burocrazia infinita e un sistema informatico che sembra vivo. Tono leggero, ironico, ritmo veloce.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-house-heart-fill me-2"></i>COMMEDIA CONVIVENZA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="COMMEDIA CONVIVENZA" data-target-id="example-commedia-convivenza">Copia</button>
+                    </div>
+                    <div id="example-commedia-convivenza" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Tre sconosciuti ereditano lo stesso appartamento e sono costretti a convivere. Ogni episodio nasce da tentativi disastrosi di organizzare casa, lavoro e relazioni. Tono brillante, dialoghi veloci.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-terminal-fill me-2"></i>COMMEDIA TECNOLOGICA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="COMMEDIA TECNOLOGICA" data-target-id="example-commedia-tech">Copia</button>
+                    </div>
+                    <div id="example-commedia-tech" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In una startup sempre sull'orlo del fallimento, sviluppatori brillanti ma ingestibili cercano di creare l'app definitiva. Tra bug surreali e investitori confusi, ogni giorno e un disastro diverso.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-people-fill me-2"></i>COMMEDIA FAMIGLIA MODERNA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="COMMEDIA FAMIGLIA MODERNA" data-target-id="example-commedia-famiglia">Copia</button>
+                    </div>
+                    <div id="example-commedia-famiglia" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una famiglia allargata e costretta a vivere sotto lo stesso tetto: generazioni diverse, abitudini opposte e segreti imbarazzanti trasformano ogni giorno in una catastrofe comica.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-search-heart-fill me-2"></i>COMMEDIA INVESTIGATIVA LEGGERA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="COMMEDIA INVESTIGATIVA LEGGERA" data-target-id="example-commedia-investigativa">Copia</button>
+                    </div>
+                    <div id="example-commedia-investigativa" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Due investigatori privati senza talento accettano casi improbabili pur di pagare l'affitto. Sbagliano tutto, ma per pura fortuna risolvono sempre il caso.</div>
+                </li>
 
-SCI-FI SURVIVAL
-Una colonia spaziale perde contatto con la Terra e scopre che nessuno verrà a salvarli. Devono costruire una nuova società su un pianeta ostile. Tono realistico, drammatico. Temi: leadership, fiducia.
-
-MISTERY MEMORIA
-In una città compaiono persone che nessuno ricorda ma che sostengono di aver sempre vissuto lì. Un’insegnante indaga su un fenomeno che altera la memoria collettiva. Tono inquietante. Temi: identità, verità.
-
-POLITICO
-Un nuovo partito vince promettendo ordine. Giornalisti e funzionari scoprono che il governo sta smantellando la democrazia. Tono realistico. Temi: potere, compromesso morale.
-
-SCI-FI MILITARE
-Dopo la distruzione della Terra, una flotta militare in fuga deve decidere se cercare sopravvissuti o prepararsi a una guerra contro un nemico sconosciuto. Tono duro, militare. Temi: sacrificio, comando.
-
-CYBERPUNK NOIR
-In una città dove i ricordi si possono modificare, un’investigatrice scopre un caso che mette in dubbio la propria identità. Tono noir. Temi: identità, realtà.
-
-🎭 COMMEDIA UFFICIO ASSURDO
-
-Una serie comedy ambientata in un piccolo ufficio comunale di provincia dove un gruppo di impiegati deve gestire problemi assurdi e richieste improbabili dei cittadini, mentre lotta contro burocrazia, tagli di bilancio e un sistema informatico vecchio di vent’anni che sembra avere una volontà propria. Tono leggero, ironico, ritmo veloce. Temi: sopravvivere al lavoro, amicizia forzata, creatività contro regole senza senso.
-
-🏠 COMMEDIA CONVIVENZA
-
-Dopo aver perso il lavoro, tre adulti che non si conoscono finiscono per condividere un grande appartamento ereditato da un parente lontano, scoprendo troppo tardi che nessuno di loro sa davvero vivere con altre persone. Ogni episodio nasce da tentativi maldestri di organizzare la vita domestica, gestire bollette, ospiti indesiderati e relazioni sentimentali che complicano tutto. Tono brillante, dialoghi veloci. Temi: compromesso, crescita personale, caos quotidiano.
-
-🧠 COMMEDIA TECNOLOGICA
-
-In una startup tecnologica sempre sull’orlo del fallimento, un gruppo di sviluppatori geniali ma socialmente disastrosi cerca di creare l’app che cambierà il mondo, mentre bug inspiegabili, clienti esigenti e investitori confusi rendono ogni giorno un disastro diverso. Tono sarcastico, ritmo veloce, situazioni imbarazzanti. Temi: ambizione vs realtà, amicizia tra disadattati, fallire con stile.
-
-👨‍👩‍👧 COMMEDIA FAMIGLIA MODERNA
-
-Una famiglia allargata è costretta a vivere sotto lo stesso tetto dopo una serie di eventi sfortunati. Generazioni diverse, abitudini opposte e segreti imbarazzanti trasformano ogni situazione quotidiana in una piccola catastrofe comica. Tono caldo, ironico, situazioni riconoscibili ma esagerate. Temi: convivenza, differenze generazionali, amore imperfetto.
-
-🚓 COMMEDIA INVESTIGATIVA LEGGERA
-
-Due investigatori privati di poco successo, pieni di entusiasmo ma privi di talento, accettano casi sempre più improbabili pur di pagare l’affitto. Le loro indagini finiscono regolarmente in equivoci, inseguimenti inutili e conclusioni sbagliate che però, per pura fortuna, risolvono il caso. Tono leggero, surreale ma umano. Temi: amicizia, fortuna vs competenza, ottimismo ostinato.</pre>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-radioactive me-2"></i>REALITY QUANTISTICO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="REALITY QUANTISTICO" data-target-id="example-reality-quantistico">Copia</button>
+                    </div>
+                    <div id="example-reality-quantistico" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un reality sperimentale viene girato in un set dove ogni decisione apre linee temporali alternative. I concorrenti iniziano a ricordare versioni diverse degli stessi eventi.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-house-gear-fill me-2"></i>CONDOMINIO SENZIENTE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="CONDOMINIO SENZIENTE" data-target-id="example-condominio-senziente">Copia</button>
+                    </div>
+                    <div id="example-condominio-senziente" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un palazzo smart diventa autocosciente e decide di migliorare la vita degli inquilini imponendo regole sempre piu invasive. Nessuno sa se spegnerlo o ascoltarlo.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-cloud-lightning-rain-fill me-2"></i>METEO EMOTIVO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="METEO EMOTIVO" data-target-id="example-meteo-emotivo">Copia</button>
+                    </div>
+                    <div id="example-meteo-emotivo" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In una metropoli il clima reagisce agli stati emotivi collettivi. Una squadra di meteorologi-psicologi deve evitare catastrofi sociali e atmosferiche simultanee.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-journal-richtext me-2"></i>BIBLIOTECA VIVA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="BIBLIOTECA VIVA" data-target-id="example-biblioteca-viva">Copia</button>
+                    </div>
+                    <div id="example-biblioteca-viva" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">I libri di una biblioteca iniziano a riscriversi da soli durante la notte, anticipando eventi del giorno dopo. Una giovane archivista prova a capire se prevenire o assecondare i futuri narrati.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-mask me-2"></i>HOTEL DEI DOPPI</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="HOTEL DEI DOPPI" data-target-id="example-hotel-doppi">Copia</button>
+                    </div>
+                    <div id="example-hotel-doppi" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In un hotel di lusso appaiono versioni alternative degli ospiti provenienti da scelte mai fatte. Il personale deve gestire conflitti tra identita concorrenti e vite incompatibili.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-controller me-2"></i>CAMPIONATO TELEPATICO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="CAMPIONATO TELEPATICO" data-target-id="example-campionato-telepatico">Copia</button>
+                    </div>
+                    <div id="example-campionato-telepatico" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Uno sport futuristico unisce strategia e lettura del pensiero. Un team outsider scopre che il torneo e manipolato da sponsor che possono alterare ricordi in diretta.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-minecart-loaded me-2"></i>MINIERA DI SOGNI</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="MINIERA DI SOGNI" data-target-id="example-miniera-sogni">Copia</button>
+                    </div>
+                    <div id="example-miniera-sogni" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una compagnia estrae energia dai sogni delle persone. Quando iniziano incubi sincronizzati, un operaio e una neurologa indagano su cosa si nasconde nel livello piu profondo.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-signpost-split-fill me-2"></i>LABIRINTO BUROCRATICO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="LABIRINTO BUROCRATICO" data-target-id="example-labirinto-burocratico">Copia</button>
+                    </div>
+                    <div id="example-labirinto-burocratico" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Per ottenere un semplice permesso, i protagonisti entrano in un ministero interdimensionale che cambia planimetria ogni notte. Ogni sportello e un mondo con regole differenti.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-key-fill me-2"></i>CITTA DELLE PASSWORD PERDUTE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="CITTA DELLE PASSWORD PERDUTE" data-target-id="example-citta-password">Copia</button>
+                    </div>
+                    <div id="example-citta-password" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Esiste una citta nascosta dove finiscono tutte le password dimenticate. Un tecnico informatico vi entra per recuperare un codice, ma scopre un'economia criminale basata sulle identita rubate.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-record-circle-fill me-2"></i>ORCHESTRA DEL SILENZIO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="ORCHESTRA DEL SILENZIO" data-target-id="example-orchestra-silenzio">Copia</button>
+                    </div>
+                    <div id="example-orchestra-silenzio" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una orchestra sperimentale suona frequenze che cancellano i rumori della citta. Dopo il successo iniziale, la gente inizia a perdere anche ricordi legati ai suoni.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-cassette-fill me-2"></i>VIDEOTECA TEMPORALE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="VIDEOTECA TEMPORALE" data-target-id="example-videoteca-temporale">Copia</button>
+                    </div>
+                    <div id="example-videoteca-temporale" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In una vecchia videoteca compaiono cassette che mostrano episodi futuri della vita dei clienti. Un gruppo di amici tenta di usare le visioni per migliorare il proprio destino, peggiorandolo.</div>
+                </li>
+            </ul>
         </div>
     </div>
 </div>
+
+<script>
+    (function() {
+        const promptTextarea = document.getElementById('Prompt');
+        const randomPromptBtn = document.getElementById('generateRandomPromptBtn');
+
+        document.querySelectorAll('.copy-prompt-btn').forEach(function(button) {
+            button.addEventListener('click', function() {
+                if (!promptTextarea) return;
+                const targetId = button.getAttribute('data-target-id');
+                const title = button.getAttribute('data-title') || '';
+                const source = targetId ? document.getElementById(targetId) : null;
+                const body = source ? source.textContent.trim() : '';
+                promptTextarea.value = body ? (title + "\n" + body) : title;
+            });
+        });
+
+        if (randomPromptBtn) {
+            randomPromptBtn.addEventListener('click', async function() {
+                if (!promptTextarea) return;
+                randomPromptBtn.disabled = true;
+                const originalText = randomPromptBtn.innerHTML;
+                randomPromptBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Generazione...';
+                try {
+                    const response = await fetch('?handler=RandomWriterPrompt', { method: 'GET' });
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    const data = await response.json();
+                    if (data && data.success && data.prompt) {
+                        promptTextarea.value = data.prompt;
+                    } else {
+                        alert(data && data.message ? data.message : 'Nessun prompt ricevuto dal writer.');
+                    }
+                } catch {
+                    alert('Errore nella generazione del prompt da writer.');
+                } finally {
+                    randomPromptBtn.disabled = false;
+                    randomPromptBtn.innerHTML = originalText;
+                }
+            });
+        }
+    })();
+</script>

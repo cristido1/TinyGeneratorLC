@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Options;
@@ -94,20 +96,77 @@ public sealed class IndexModel : PageModel
         return RedirectToPage();
     }
 
-    public IActionResult OnGetRandomWriterPrompt()
+    public async Task<IActionResult> OnGetRandomWriterPromptAsync(CancellationToken cancellationToken)
     {
-        var randomWriterAgent = _database.ListAgents()
-            .Where(a => a.Role.StartsWith("writer_", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(_ => Guid.NewGuid())
-            .FirstOrDefault();
+        var writerAgents = _database.ListAgents()
+            .Where(a =>
+                a.IsActive &&
+                !string.IsNullOrWhiteSpace(a.Role) &&
+                (a.Role.StartsWith("writer_", StringComparison.OrdinalIgnoreCase) ||
+                 a.Role.Equals("writer", StringComparison.OrdinalIgnoreCase) ||
+                 a.Role.Equals("story_writer", StringComparison.OrdinalIgnoreCase) ||
+                 a.Role.Equals("text_writer", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
 
-        if (randomWriterAgent == null)
+        if (writerAgents.Count == 0)
         {
             return new JsonResult(new { success = false, message = "Nessun agente writer disponibile." });
         }
 
-        var prompt = $"Prompt generato da {randomWriterAgent.Name}: ..."; // Genera un prompt casuale qui
+        var randomWriterAgent = writerAgents[Random.Shared.Next(writerAgents.Count)];
+        var modelName = randomWriterAgent.ModelName;
+        if (string.IsNullOrWhiteSpace(modelName) && randomWriterAgent.ModelId.HasValue)
+        {
+            modelName = _database.GetModelInfoById(randomWriterAgent.ModelId.Value)?.Name;
+        }
 
-        return new JsonResult(new { success = true, prompt });
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return new JsonResult(new { success = false, message = $"L'agente writer '{randomWriterAgent.Name}' non ha un modello valido." });
+        }
+
+        try
+        {
+            var bridge = _kernelFactory.CreateChatBridge(
+                modelName,
+                randomWriterAgent.Temperature,
+                randomWriterAgent.TopP,
+                randomWriterAgent.RepeatPenalty,
+                randomWriterAgent.TopK,
+                randomWriterAgent.RepeatLastN,
+                randomWriterAgent.NumPredict);
+
+            var messages = new List<ConversationMessage>
+            {
+                new()
+                {
+                    Role = "system",
+                    Content = "Sei un autore creativo di serie TV. Rispondi solo con un singolo prompt pronto all'uso, in italiano, massimo 120 parole."
+                },
+                new()
+                {
+                    Role = "user",
+                    Content = "Genera un prompt originale per una nuova serie non storica. Includi concept, mondo, conflitto centrale, tono emotivo e temi umani."
+                }
+            };
+
+            var raw = await bridge.CallModelWithToolsAsync(
+                messages,
+                tools: new List<Dictionary<string, object>>(),
+                ct: cancellationToken);
+            var (textContent, _) = LangChainChatBridge.ParseChatResponse(raw);
+            var prompt = string.IsNullOrWhiteSpace(textContent) ? raw?.Trim() : textContent.Trim();
+
+            if (string.IsNullOrWhiteSpace(prompt))
+            {
+                return new JsonResult(new { success = false, message = "Il writer non ha restituito un prompt valido." });
+            }
+
+            return new JsonResult(new { success = true, prompt, writer = randomWriterAgent.Name, model = modelName });
+        }
+        catch (Exception ex)
+        {
+            return new JsonResult(new { success = false, message = $"Errore durante la generazione del prompt: {ex.Message}" });
+        }
     }
 }

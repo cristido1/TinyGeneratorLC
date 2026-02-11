@@ -238,7 +238,18 @@ builder.Services.AddSingleton<TextValidationService>();
 builder.Services.Configure<TtsSchemaGenerationOptions>(builder.Configuration.GetSection("TtsSchemaGeneration"));
 // Audio mix options (final mix volumes)
 builder.Services.Configure<AudioMixOptions>(builder.Configuration.GetSection("AudioMix"));
-builder.Services.Configure<SeriesGenerationOptions>(builder.Configuration.GetSection("Serie"));
+builder.Services.Configure<SeriesGenerationOptions>(options =>
+{
+    // Legacy section support.
+    builder.Configuration.GetSection("Serie").Bind(options);
+
+    // Preferred location for command-specific tuning.
+    var commandTuningSection = builder.Configuration.GetSection("Commands:ByCommand:generate_new_serie:Tuning");
+    if (commandTuningSection.Exists())
+    {
+        commandTuningSection.Bind(options);
+    }
+});
 // Audio generation options (autolaunch followups)
 builder.Services.Configure<AudioGenerationOptions>(builder.Configuration.GetSection("AudioGeneration"));
 // Automatic operations (auto enqueue when system idle)
@@ -547,6 +558,8 @@ StartupTasks.NormalizeTestPromptsIfNeeded(db, logger);
 StartupTasks.EnsureEvaluatorInstructions(db, logger);
 // Remove legacy ResponseValidation snippet from agent instructions (do not inject checker rules in prompts)
 StartupTasks.EnsureResponseValidationRulesInAgentInstructions(db, builder.Configuration, logger);
+// Ensure serie_* agents expose prompt placeholders consumed by GenerateNewSerie workflow.
+StartupTasks.EnsureSeriesAgentPromptTemplates(db, logger);
 
 // Clean up old logs if log count exceeds threshold
 // Automatically delete logs older than 7 days if total count > 1000

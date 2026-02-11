@@ -11,17 +11,20 @@ namespace TinyGenerator.Services.Commands
         private readonly DatabaseService _database;
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly ICustomLogger _logger;
+        private readonly IAgentResolutionService _agentResolutionService;
 
         public SummarizeStoryCommand(
             long storyId,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
-            ICustomLogger logger)
+            ICustomLogger logger,
+            IAgentResolutionService? agentResolutionService = null)
         {
             _storyId = storyId;
             _database = database;
             _kernelFactory = kernelFactory;
             _logger = logger;
+            _agentResolutionService = agentResolutionService ?? new AgentResolutionService(database);
         }
 
         public async Task<bool> ExecuteAsync(CancellationToken ct = default)
@@ -51,11 +54,24 @@ namespace TinyGenerator.Services.Commands
                 // ═══════════════════════════════════════════════════════════
                 // 2. Trova l'agente Story Summarizer
                 // ═══════════════════════════════════════════════════════════
-                var agents = _database.ListAgents();
-                var summarizerAgent = agents.FirstOrDefault(a => 
-                    a.Role == "summarizer" && 
-                    a.IsActive && 
-                    a.Name?.Contains("Story Summarizer", StringComparison.OrdinalIgnoreCase) == true);
+                Agent? summarizerAgent = null;
+                try
+                {
+                    summarizerAgent = _agentResolutionService.Resolve(CommandRoleCodes.Summarizer).Agent;
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log("Warning", "SummarizeStory", $"Risoluzione centralizzata summarizer fallita: {ex.Message}");
+                }
+
+                if (summarizerAgent == null || !(summarizerAgent.Name?.Contains("Story Summarizer", StringComparison.OrdinalIgnoreCase) == true))
+                {
+                    var agents = _database.ListAgents();
+                    summarizerAgent = agents.FirstOrDefault(a =>
+                        string.Equals(a.Role, CommandRoleCodes.Summarizer, StringComparison.OrdinalIgnoreCase) &&
+                        a.IsActive &&
+                        a.Name?.Contains("Story Summarizer", StringComparison.OrdinalIgnoreCase) == true);
+                }
 
                 if (summarizerAgent == null)
                 {

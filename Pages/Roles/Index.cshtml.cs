@@ -95,10 +95,12 @@ public class IndexModel : PageModel
     public List<RowAction> GetActionsForRole(Role role)
     {
         var id = role.Id.ToString();
+        var editUrl = Url.Page("Edit", new { id }) ?? "#";
+        var deleteUrl = Url.Page("Index", new { handler = "Delete", id }) ?? "#";
         return new List<RowAction>
         {
-            new("edit", "Modifica", "GET", Url.Page("Edit", new { id })),
-            new("delete", "Elimina", "POST", Url.Page("Index", new { handler = "Delete", id }), true)
+            new("edit", "Modifica", "GET", editUrl),
+            new("delete", "Elimina", "POST", deleteUrl, true)
         };
     }
 }

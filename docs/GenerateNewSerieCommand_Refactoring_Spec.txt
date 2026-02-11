@@ -1,0 +1,130 @@
+DOCUMENTAZIONE PER CODEX – REFACTORING GenerateNewSerieCommand
+
+OBIETTIVO
+
+Rifattorizzare GenerateNewSerieCommand separando chiaramente:
+- Orchestrazione workflow
+- Invocazione agenti
+- Validazione tag
+- Costruzione dominio
+- Persistenza dati
+
+Ridurre complessità, eliminare codice morto e migliorare manutenibilità.
+
+------------------------------------------------------------
+PROBLEMI ATTUALI
+
+1) Classe troppo grande (God Command)
+2) Troppe responsabilità in un unico file
+3) Workflow hardcoded (Bible → Characters → Season → Episodes → Validator)
+4) Parsing, validazione e costruzione dominio mescolati
+5) Metodi legacy non usati (CallAgentAsync, TryFallbackAsync, DiagnoseFailureAsync)
+6) Nessuna persistenza stato intermedio
+
+------------------------------------------------------------
+ARCHITETTURA PROPOSTA
+
+Creare le seguenti componenti:
+
+1) SeriesGenerationWorkflow
+Responsabile solo dell'orchestrazione degli step.
+
+2) SeriesWorkflowStep
+Rappresenta uno step configurabile:
+- RoleCode
+- RequiredTags
+- ValidationFunc
+- Options
+- InputFactory
+- OutputKey
+
+3) SeriesTagParser
+Contiene SOLO:
+- ParseTagBlocks
+- ParseKeyValues
+- CollectTags
+- Funzioni parsing struttura episodio
+
+4) SeriesValidationRules
+Contiene SOLO:
+- ValidateBibleOutput
+- ValidateCharactersOutput
+- ValidateSeasonOutput
+- ValidateEpisodeStructureOutput
+
+5) SeriesDomainAssembler
+Contiene SOLO:
+- BuildSeriesData
+- ParseCharacters
+- ApplyCharacterArcs
+- ApplyRelationships
+
+6) SeriesRepository
+Responsabile solo di:
+- InsertSeries
+- InsertSeriesCharacters
+- InsertSeriesEpisodes
+
+------------------------------------------------------------
+NUOVA STRUTTURA DEL COMMAND
+
+GenerateNewSerieCommand deve diventare:
+
+1) Validare prompt
+2) Creare workflow
+3) Eseguire workflow
+4) Salvare risultato tramite repository
+5) Loggare esito
+
+Il comando NON deve:
+- Fare parsing
+- Fare validazione tag
+- Costruire dominio
+- Gestire fallback manuale
+
+------------------------------------------------------------
+WORKFLOW DINAMICO
+
+Sostituire sequenza hardcoded con lista configurabile:
+
+List<SeriesWorkflowStep> steps = new()
+{
+    new(... SerieBibleAgent ...),
+    new(... SerieCharacterAgent ...),
+    new(... SerieSeasonAgent ...),
+    new(... SerieEpisodeAgent ...),
+    new(... SerieValidatorAgent ...)
+};
+
+Ogni step esegue IAgentCallService.
+
+------------------------------------------------------------
+PERSISTENZA INTERMEDIA (OPZIONALE MA CONSIGLIATA)
+
+Salvare output di ogni step in stato "draft":
+- SeriesDraft
+- SeriesDraftStep
+
+In caso di crash, poter riprendere dal passo fallito.
+
+------------------------------------------------------------
+RISULTATO ATTESO
+
+- Classe GenerateNewSerieCommand ridotta drasticamente
+- Separazione netta dominio/infrastruttura
+- Workflow configurabile
+- Validazione riutilizzabile
+- Parsing riutilizzabile
+- Maggiore testabilità
+- Nessun codice morto
+
+------------------------------------------------------------
+VINCOLI
+
+- Non modificare comportamento funzionale
+- Non cambiare formato tag
+- Non modificare database schema esistente
+- Mantenere uso di IAgentCallService
+
+------------------------------------------------------------
+FINE SPECIFICA

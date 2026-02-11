@@ -89,7 +89,6 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, CommandState> _completed = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<CommandResult>> _completionTasks = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _commandCancellations = new(StringComparer.OrdinalIgnoreCase);
-        private readonly ConcurrentDictionary<string, CancellationTokenSource> _timeoutCancellations = new(StringComparer.OrdinalIgnoreCase);
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
@@ -292,16 +291,10 @@ namespace TinyGenerator.Services
 
             var policy = _policies.Resolve(workItem.OperationName, workItem.Metadata);
             var timeoutSec = policy.TimeoutSec;
-            var hasCommandTimeout = timeoutSec > 0;
 
             using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName, agentRole: workItem.AgentRole, threadId: allocatedThreadId, storyId: allocatedStoryId);
-            using var timeoutCts = new CancellationTokenSource();
-            if (hasCommandTimeout)
-            {
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
-            }
-            _timeoutCancellations[workItem.RunId] = timeoutCts;
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workItem.Cancellation.Token, timeoutCts.Token);
+            using var commandRuntimeScope = CommandExecutionRuntime.Push(workItem.OperationName, timeoutSec);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workItem.Cancellation.Token);
             var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, linkedCts.Token);
             
             // Generate command ID for tracking
@@ -329,10 +322,6 @@ namespace TinyGenerator.Services
 
                 for (int attempt = 1; attempt <= maxAttempts; attempt++)
                 {
-                    if (hasCommandTimeout)
-                    {
-                        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
-                    }
                     linkedCts.Token.ThrowIfCancellationRequested();
 
                     try
@@ -417,30 +406,19 @@ Completed:
             }
             catch (OperationCanceledException oce)
             {
-                var timedOut = hasCommandTimeout
-                    && timeoutCts.IsCancellationRequested
-                    && !stoppingToken.IsCancellationRequested
-                    && !workItem.Cancellation.IsCancellationRequested;
+                var cancelSource = stoppingToken.IsCancellationRequested
+                    ? "dispatcher_stopping"
+                    : workItem.Cancellation.IsCancellationRequested
+                        ? "manual_cancel_request"
+                        : "linked_token_or_unknown";
+                var timeoutInfo = timeoutSec > 0
+                    ? $"timeout policy per singola richiesta agente (TimeoutSec={timeoutSec}s)"
+                    : "nessun timeout policy configurato";
+                _logger?.Append(
+                    workItem.RunId,
+                    $"[cancelled] Dettaglio cancellazione: source={cancelSource}; {timeoutInfo}; stopping={stoppingToken.IsCancellationRequested}; manualCancel={workItem.Cancellation.IsCancellationRequested}",
+                    "warning");
 
-                if (timedOut)
-                {
-                    var timeoutMessage = $"Timeout after {timeoutSec}s";
-                    _logger?.Log("Error", "Command", $"[CmdID: {commandId}][{workItem.RunId}] ⏱️ TIMEOUT {workItem.OperationName}: {timeoutMessage}");
-                    var timeoutResult = new CommandResult(false, timeoutMessage);
-                    workItem.Completion.TrySetResult(timeoutResult);
-
-                    await TryReportFailureAsync(workItem, timeoutMessage, null, allocatedThreadId).ConfigureAwait(false);
-
-                    if (_active.TryGetValue(workItem.RunId, out var timedOutState))
-                    {
-                        timedOutState.Status = "failed";
-                        timedOutState.CompletedAt = DateTimeOffset.UtcNow;
-                        timedOutState.ErrorMessage = timeoutMessage;
-                    }
-
-                    RaiseCompleted(workItem.RunId, workItem.OperationName, timeoutResult, workItem.Metadata);
-                    return;
-                }
 
                 _logger?.Log("Warning", "Command", $"[CmdID: {commandId}][{workItem.RunId}] 🚫 CANCEL {workItem.OperationName}: {oce.Message}", oce.ToString());
                 var result = new CommandResult(false, "Operazione annullata");
@@ -487,7 +465,6 @@ Completed:
                     });
                 }
                 _completionTasks.TryRemove(workItem.RunId, out _);
-                _timeoutCancellations.TryRemove(workItem.RunId, out _);
                 if (_commandCancellations.TryRemove(workItem.RunId, out var cancelCts))
                 {
                     cancelCts.Dispose();
@@ -605,31 +582,7 @@ Completed:
                 {
                     state.StepDescription = stepDescription;
                 }
-                ResetTimeoutForRun(runId, state.TimeoutSec);
                 _ = BroadcastCommandsAsync();
-            }
-        }
-
-        private void ResetTimeoutForRun(string runId, int timeoutSec)
-        {
-            if (timeoutSec <= 0)
-            {
-                return;
-            }
-
-            if (_timeoutCancellations.TryGetValue(runId, out var timeoutCts))
-            {
-                try
-                {
-                    if (!timeoutCts.IsCancellationRequested)
-                    {
-                        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
-                    }
-                }
-                catch
-                {
-                    // best-effort
-                }
             }
         }
 
@@ -673,6 +626,13 @@ Completed:
                 state.Status = "cancelled";
                 state.CompletedAt = DateTimeOffset.UtcNow;
                 state.ErrorMessage = "Operazione annullata";
+                var timeoutInfo = state.TimeoutSec > 0
+                    ? $"timeout policy per singola richiesta agente configurato={state.TimeoutSec}s"
+                    : "nessun timeout policy configurato";
+                _logger?.Append(
+                    runId,
+                    $"[cancelled] Comando annullato manualmente in coda; {timeoutInfo}",
+                    "warning");
             }
 
             _ = BroadcastCommandsAsync();
@@ -755,3 +715,4 @@ Completed:
         public int TimeoutSec { get; set; }
     }
 }
+

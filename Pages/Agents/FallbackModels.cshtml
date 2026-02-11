@@ -256,7 +256,7 @@
                 paging: true,
                 pageLength: 25,
                 lengthChange: true,
-                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]], // Added lengthMenu for selecting number of records per page
                 order: [[13, 'desc']],
                 ordering: true,
                 searching: true,
@@ -288,7 +288,7 @@
                 ],
                 language: {
                     search: "Cerca:",
-                    lengthMenu: "Mostra _MENU_ record",
+                    lengthMenu: "Mostra _MENU_ record", // Updated language for lengthMenu
                     info: "Showing _START_ to _END_ of _TOTAL_ entries",
                     infoEmpty: "Nessun record disponibile",
                     infoFiltered: "(filtrati da _MAX_ record totali)",
@@ -496,10 +496,10 @@
                             var effectiveEnabled = !!resultToggle.enabled;
                             rowEl.setAttribute('data-enabled', effectiveEnabled ? 'true' : 'false');
 
-                            var enabledCell = rowEl.querySelector('td[data-col=\"enabled\"]');
+                            var enabledCell = rowEl.querySelector('td[data-col="enabled"]');
                             if (enabledCell) enabledCell.textContent = effectiveEnabled ? 'Yes' : 'No';
 
-                            var toggleBtn = rowEl.querySelector('button[data-action=\"toggle-enabled\"]');
+                            var toggleBtn = rowEl.querySelector('button[data-action="toggle-enabled"]');
                             if (toggleBtn) toggleBtn.textContent = effectiveEnabled ? 'Disabilita' : 'Abilita';
 
                             showMessage('success', effectiveEnabled ? 'Modello abilitato.' : 'Modello disabilitato.');

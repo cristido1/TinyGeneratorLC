@@ -49,9 +49,10 @@ public sealed class CommandPoliciesOptions
 public sealed class CommandExecutionPolicy
 {
     /// <summary>
-    /// Maximum execution time in seconds for the whole command run.
-    /// If exceeded, the command fails with timeout.
-    /// Set to 0 or less to disable command-level timeout.
+    /// Default timeout in seconds for a single agent/model request within the command.
+    /// The dispatcher does not stop the whole command on this timeout; it is consumed by
+    /// model-execution services as per-call timeout budget.
+    /// Set to 0 or less to disable the policy fallback timeout.
     /// </summary>
     public int TimeoutSec { get; set; } = 20;
 

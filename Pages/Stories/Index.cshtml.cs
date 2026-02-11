@@ -872,8 +872,7 @@ namespace TinyGenerator.Pages.Stories
                         _kernelFactory,
                         _stories,
                         _customLogger,
-                        _tuning,
-                        _scopeFactory);
+                        _tuning);
                     return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                 },
                 "Aggiunta tag avviata in background.");
@@ -929,7 +928,7 @@ namespace TinyGenerator.Pages.Stories
                         "add_ambient_tags_to_story",
                         async inner =>
                         {
-                            var cmd = new AddAmbientTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _tuning, _scopeFactory);
+                            var cmd = new AddAmbientTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _tuning);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,
@@ -995,7 +994,7 @@ namespace TinyGenerator.Pages.Stories
                         "add_fx_tags_to_story",
                         async inner =>
                         {
-                            var cmd = new AddFxTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _tuning, _scopeFactory);
+                            var cmd = new AddFxTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _tuning);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,
@@ -1061,7 +1060,7 @@ namespace TinyGenerator.Pages.Stories
                         "add_music_tags_to_story",
                         async inner =>
                         {
-                            var cmd = new AddMusicTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _tuning, _scopeFactory);
+                            var cmd = new AddMusicTagsToStoryCommand(id, _database, _kernelFactory, _stories, _customLogger, _tuning);
                             return await cmd.ExecuteAsync(inner.CancellationToken, expertRunId);
                         },
                         runId: expertRunId,

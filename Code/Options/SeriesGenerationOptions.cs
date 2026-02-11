@@ -6,6 +6,7 @@ public sealed class SeriesGenerationOptions
     public SeriesRoleOptions Characters { get; set; } = new();
     public SeriesRoleOptions Episodes { get; set; } = new();
     public SeriesRoleOptions Validator { get; set; } = new();
+    public SeriesValidationOptions Validation { get; set; } = new();
 
     public sealed class SeriesRoleOptions
     {
@@ -15,5 +16,17 @@ public sealed class SeriesGenerationOptions
         public bool DiagnoseOnFinalFailure { get; set; } = true;
         public bool UseResponseChecker { get; set; } = false;
         public int ExplainAfterAttempt { get; set; } = 0;
+    }
+
+    public sealed class SeriesValidationOptions
+    {
+        public bool EnableBibleValidation { get; set; } = true;
+        public bool EnableCharactersValidation { get; set; } = true;
+        public bool EnableSeasonValidation { get; set; } = true;
+        public bool EnableEpisodeStructureValidation { get; set; } = true;
+        public bool RequireValidationOkTag { get; set; } = true;
+        public bool ValidateCharacterReferences { get; set; } = true;
+        public bool ValidateDuplicateEpisodeNumbers { get; set; } = true;
+        public int MinEpisodeBeats { get; set; } = 3;
     }
 }

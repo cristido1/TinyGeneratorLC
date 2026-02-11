@@ -81,7 +81,12 @@ public class EditModel : PageModel
         // Handles AJAX inline updates from modal
         if (!ModelState.IsValid)
         {
-            return new JsonResult(new { success = false, errors = ModelState.Where(kv => kv.Value.Errors.Count > 0).ToDictionary(kv => kv.Key, kv => kv.Value.Errors.Select(e => e.ErrorMessage).ToArray()) });
+            var errors = ModelState
+                .Where(kv => kv.Value is { Errors.Count: > 0 })
+                .ToDictionary(
+                    kv => kv.Key,
+                    kv => kv.Value!.Errors.Select(e => e.ErrorMessage).ToArray());
+            return new JsonResult(new { success = false, errors });
         }
 
         if (Item.Id == 0)

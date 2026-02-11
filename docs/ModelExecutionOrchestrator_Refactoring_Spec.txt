@@ -1,0 +1,62 @@
+REFATORING ISTRUZIONI – CENTRALIZZAZIONE RETRY/FALLBACK MODELLI
+
+OBIETTIVO
+
+Rimuovere completamente la logica di retry, fallback e diagnosi dai
+singoli comandi (es. AddFxTagsToStoryCommand) e spostarla in un
+componente riutilizzabile chiamato ModelExecutionOrchestrator.
+
+Il comportamento per comando deve restare configurabile tramite i
+rispettivi setting (es. _tuning.FxExpert, _tuning.MusicExpert, ecc.).
+
+  ------------------------------------------------------------
+  PASSO 1 – CREARE LE CLASSI INFRASTRUTTURALI
+  ------------------------------------------------------------
+  PASSO 2 – IMPLEMENTARE ModelExecutionOrchestrator
+
+  Responsabilità: - Creare bridge per modello iniziale -
+  Gestire retry per MaxAttemptsPerModel - Se fallisce e
+  EnableFallback = true: * Recuperare fallback da
+  ModelFallbackService * Provare modelli alternativi uno alla
+  volta - Applicare RetryDelayBaseSeconds progressivo - Se
+  EnableDiagnosis = true e tutti falliscono: * Eseguire
+  diagnosi finale - Restituire modello effettivamente usato
+
+  L’orchestrator NON deve conoscere: - Regole FX - Regole
+  Music - Regole Writer - Parsing di mapping - Logica dominio
+
+  Riceve solo: - roleCode - modello iniziale - delegate work -
+  opzioni - cancellation token
+  ------------------------------------------------------------
+
+PASSO 3 – MODIFICARE AddFxTagsToStoryCommand
+
+1)  Rimuovere completamente:
+
+-   TryChunkWithFallbackAsync
+-   SimpleModelFallback
+-   ScopeFactory usage
+-   Logica di cambio bridge manuale
+-   Retry loop interno nel comando
+
+2)  Creare metodo locale:
+
+private async Task ProcessFxChunkAsync( LangChainChatBridge bridge,
+string chunkText) { // chiamata modello // validazione formato FX // se
+valido return new ModelWorkResult(true, cleaned) // se non valido return
+new ModelWorkResult(false, cleaned, reason) }
+
+3)  Costruire ModelExecutionOptions dai setting del comando
+
+4)  Chiamare orchestrator invece di gestire fallback nel comando
+
+------------------------------------------------------------------------
+
+RISULTATO ATTESO
+
+-   Nessuna duplicazione retry/fallback tra comandi
+-   Policy configurabile per comando
+-   Possibilità futura di cambiare strategia globale
+-   Logging coerente
+-   Codice dei comandi più pulito
+-   Separazione netta tra dominio e infrastruttura

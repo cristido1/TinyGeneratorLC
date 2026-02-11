@@ -93,4 +93,21 @@ public sealed class IndexModel : PageModel
         TempData["StatusMessage"] = $"Generazione serie accodata (run {runId}).";
         return RedirectToPage();
     }
+
+    public IActionResult OnGetRandomWriterPrompt()
+    {
+        var randomWriterAgent = _database.ListAgents()
+            .Where(a => a.Role.StartsWith("writer_", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(_ => Guid.NewGuid())
+            .FirstOrDefault();
+
+        if (randomWriterAgent == null)
+        {
+            return new JsonResult(new { success = false, message = "Nessun agente writer disponibile." });
+        }
+
+        var prompt = $"Prompt generato da {randomWriterAgent.Name}: ..."; // Genera un prompt casuale qui
+
+        return new JsonResult(new { success = true, prompt });
+    }
 }

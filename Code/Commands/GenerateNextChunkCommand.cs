@@ -26,6 +26,7 @@ public sealed class GenerateNextChunkCommand : ICommand
     private readonly ILangChainKernelFactory _kernelFactory;
     private readonly ICustomLogger? _logger;
     private readonly TextValidationService _textValidationService;
+    private readonly IAgentCallService? _modelExecution;
     private readonly GenerateChunkOptions _options;
     private readonly IServiceScopeFactory? _scopeFactory;
 
@@ -38,7 +39,8 @@ public sealed class GenerateNextChunkCommand : ICommand
         ICustomLogger? logger = null,
         GenerateChunkOptions? options = null,
         CommandTuningOptions? tuning = null,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        IAgentCallService? modelExecution = null)
     {
         _storyId = storyId;
         _writerAgentId = writerAgentId;
@@ -48,13 +50,17 @@ public sealed class GenerateNextChunkCommand : ICommand
         _options = options ?? new GenerateChunkOptions();
         _tuning = tuning ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory;
+        _modelExecution = modelExecution;
         _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
     }
 
-    public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default)
+    public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
     {
         ct.ThrowIfCancellationRequested();
 
+        var effectiveRunId = string.IsNullOrWhiteSpace(runId)
+            ? $"generate_next_chunk_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}"
+            : runId.Trim();
         var snap = _database.GetStateDrivenStorySnapshot(_storyId);
         if (snap == null)
         {
@@ -87,69 +93,27 @@ public sealed class GenerateNextChunkCommand : ICommand
         }
 
         var prompt = BuildWriterPrompt(snap, phase, pov, _options);
-
-        string output = string.Empty;
-        string? lastValidationError = null;
-        var attempts = 0;
-        var maxAttempts = Math.Max(1, _tuning.GenerateNextChunk.MaxAttempts);
-
-        while (attempts < maxAttempts)
-        {
-            attempts++;
-            ct.ThrowIfCancellationRequested();
-
-            var attemptPrompt = prompt;
-            if (!string.IsNullOrWhiteSpace(lastValidationError) && attempts > 1)
-            {
-                attemptPrompt += $"\n\n⚠️ CORREZIONE RICHIESTA (tentativo {attempts}/{maxAttempts}):\n{lastValidationError}\n";
-            }
-
-            output = await CallWriterAsync(writer, attemptPrompt, ct).ConfigureAwait(false);
-            output = ExtractAssistantContent(output);
-            output = (output ?? string.Empty).Trim();
-
-            var history = BuildStoryHistorySnapshot();
-            var validation = _textValidationService.Validate(output, history);
-            if (!validation.IsValid)
-            {
-                _logger?.MarkLatestModelResponseResult("FAILED", $"Text validation: {validation.Reason}");
-                return new CommandResult(false, $"Text validation failed: {validation.Reason}");
-            }
-
-            if (_options.RequireCliffhanger)
-            {
-                if (EndsInTension(output, out var reason))
-                {
-                    _logger?.MarkLatestModelResponseResult("SUCCESS", null);
-                    lastValidationError = null;
-                    break;
-                }
-
-                lastValidationError = reason;
-                _logger?.MarkLatestModelResponseResult("FAILED", lastValidationError);
-            }
-            else
-            {
-                // No cliffhanger validation requested (e.g. final chunk).
-                _logger?.MarkLatestModelResponseResult("SUCCESS", null);
-                lastValidationError = null;
-                break;
-            }
-        }
-
+        var writerResult = await CallWriterWithStandardPatternAsync(writer, prompt, effectiveRunId, ct).ConfigureAwait(false);
+        var output = (writerResult.Text ?? string.Empty).Trim();
         var failureDelta = 0;
-        if (!string.IsNullOrWhiteSpace(lastValidationError))
-        {
-            // Deterministic validator failed after retries; register one failure.
-            failureDelta = 1;
-        }
+        var canPersistWithValidatorFailure =
+            !writerResult.Success
+            && !string.IsNullOrWhiteSpace(output)
+            && !string.IsNullOrWhiteSpace(writerResult.Error)
+            && writerResult.Error.StartsWith("Cliffhanger validation", StringComparison.OrdinalIgnoreCase);
 
-        if (string.IsNullOrWhiteSpace(output))
+        if (canPersistWithValidatorFailure)
         {
-            _logger?.MarkLatestModelResponseResult("FAILED", "Risposta vuota dal writer");
-            return new CommandResult(
-                false,
-                "Writer returned empty output; chunk not persisted. Verify the writer model service (e.g. Ollama/OpenAI endpoint) is running and the selected model is available.");
+            failureDelta = 1;
+            _logger?.MarkLatestModelResponseResult("FAILED", writerResult.Error);
+        }
+        else if (!writerResult.Success || string.IsNullOrWhiteSpace(output))
+        {
+            var reason = string.IsNullOrWhiteSpace(writerResult.Error)
+                ? "Writer returned empty output; chunk not persisted."
+                : writerResult.Error!;
+            _logger?.MarkLatestModelResponseResult("FAILED", reason);
+            return new CommandResult(false, reason);
         }
 
         var tail = GetTail(output, Math.Max(0, _tuning.GenerateNextChunk.ContextTailChars));
@@ -168,11 +132,119 @@ public sealed class GenerateNextChunkCommand : ICommand
             return new CommandResult(false, $"Persist failed: {error}");
         }
 
-        var msg = failureDelta == 0
+        var message = failureDelta == 0
             ? $"Chunk {snap.CurrentChunkIndex + 1} saved (phase={phase}, pov={pov})"
             : $"Chunk {snap.CurrentChunkIndex + 1} saved with validator failure (phase={phase}, pov={pov})";
+        return new CommandResult(true, message);
+    }
 
-        return new CommandResult(true, msg);
+    private async Task<CommandModelExecutionService.Result> CallWriterWithStandardPatternAsync(
+        Agent writerAgent,
+        string prompt,
+        string runId,
+        CancellationToken ct)
+    {
+        var execution = _modelExecution;
+        if (execution == null && _scopeFactory != null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            execution = scope.ServiceProvider.GetService<IAgentCallService>();
+        }
+
+        if (execution == null)
+        {
+            return new CommandModelExecutionService.Result
+            {
+                Success = false,
+                Error = "CommandModelExecutionService non disponibile"
+            };
+        }
+
+        var roleCode = string.IsNullOrWhiteSpace(writerAgent.Role) ? "writer" : writerAgent.Role.Trim();
+        var commandKey = ResolveCommandKey();
+        var storyHistory = BuildStoryHistorySnapshot();
+        var agentIdentity = BuildAgentIdentity(writerAgent);
+
+        return await execution.ExecuteAsync(
+            new CommandModelExecutionService.Request
+            {
+                CommandKey = commandKey,
+                Agent = writerAgent,
+                RoleCode = roleCode,
+                Prompt = prompt,
+                SystemPrompt = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.",
+                MaxAttempts = Math.Max(1, _tuning.GenerateNextChunk.MaxAttempts),
+                UseResponseChecker = true,
+                EnableFallback = true,
+                DiagnoseOnFinalFailure = true,
+                RunId = runId,
+                DeterministicValidator = output =>
+                {
+                    var cleaned = (output ?? string.Empty).Trim();
+                    if (string.IsNullOrWhiteSpace(cleaned))
+                    {
+                        return new CommandModelExecutionService.DeterministicValidationResult(
+                            false,
+                            $"Risposta vuota ({agentIdentity})");
+                    }
+
+                    var validation = _textValidationService.Validate(cleaned, storyHistory);
+                    if (!validation.IsValid)
+                    {
+                        return new CommandModelExecutionService.DeterministicValidationResult(
+                            false,
+                            $"Text validation ({agentIdentity}): {validation.Reason}");
+                    }
+
+                    if (_options.RequireCliffhanger && !EndsInTension(cleaned, out var reason))
+                    {
+                        return new CommandModelExecutionService.DeterministicValidationResult(
+                            false,
+                            $"Cliffhanger validation ({agentIdentity}): {reason}");
+                    }
+
+                    return new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                },
+                RetryPromptFactory = BuildWriterRetryPrompt
+            },
+            ct).ConfigureAwait(false);
+    }
+
+    private static string BuildWriterRetryPrompt(string originalPrompt, string reason)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("ATTENZIONE: il tuo output precedente NON era valido.");
+        sb.AppendLine("Motivo: " + reason);
+        sb.AppendLine("Rigenera la risposta COMPLETA rispettando tutti i vincoli.");
+        sb.AppendLine();
+        sb.AppendLine("PROMPT ORIGINALE:");
+        sb.AppendLine(originalPrompt.Trim());
+        return sb.ToString();
+    }
+
+    private static string ResolveCommandKey()
+    {
+        var scope = LogScope.Current;
+        if (!string.IsNullOrWhiteSpace(scope))
+        {
+            var normalized = CommandOperationNameResolver.Normalize(scope);
+            if (!string.IsNullOrWhiteSpace(normalized))
+            {
+                return normalized;
+            }
+        }
+
+        return "generate_next_chunk";
+    }
+
+    private string BuildAgentIdentity(Agent agent)
+    {
+        var name = string.IsNullOrWhiteSpace(agent.Name) ? $"id={agent.Id}" : agent.Name.Trim();
+        var role = string.IsNullOrWhiteSpace(agent.Role) ? "writer" : agent.Role.Trim();
+        var model = !string.IsNullOrWhiteSpace(agent.ModelName)
+            ? agent.ModelName!.Trim()
+            : (agent.ModelId.HasValue ? (_database.GetModelInfoById(agent.ModelId.Value)?.Name ?? $"modelId={agent.ModelId.Value}") : "model=n/a");
+        return $"{name}; role={role}; model={model}";
     }
 
     private static string DecidePhase(DatabaseService.StateDrivenStorySnapshot snap)
@@ -233,6 +305,7 @@ public sealed class GenerateNextChunkCommand : ICommand
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(NormalizePhaseToken)
             .Where(s => !string.IsNullOrWhiteSpace(s) && IsAllowed(s))
+            .OfType<string>()
             .ToList();
 
         if (parts.Count == 0)

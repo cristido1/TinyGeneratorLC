@@ -34,8 +34,7 @@ public sealed partial class StoryMainCommands
                 _service.KernelFactory,
                 _service,
                 _service.CustomLogger,
-                _service.Tuning,
-                _service.ScopeFactory);
+                _service.Tuning);
 
             var result = await command.ExecuteAsync(context.CancellationToken, _service.CurrentDispatcherRunId);
             return (result.Success, result.Message);
@@ -66,8 +65,7 @@ public sealed partial class StoryMainCommands
                 _service.KernelFactory,
                 _service,
                 _service.CustomLogger,
-                _service.Tuning,
-                _service.ScopeFactory);
+                _service.Tuning);
 
             var result = await command.ExecuteAsync(context.CancellationToken, _service.CurrentDispatcherRunId);
             return (result.Success, result.Message);
@@ -98,8 +96,7 @@ public sealed partial class StoryMainCommands
                 _service.KernelFactory,
                 _service,
                 _service.CustomLogger,
-                _service.Tuning,
-                _service.ScopeFactory);
+                _service.Tuning);
 
             var result = await command.ExecuteAsync(context.CancellationToken, _service.CurrentDispatcherRunId);
             return (result.Success, result.Message);
@@ -256,8 +253,7 @@ public sealed partial class StoryMainCommands
                 _service.KernelFactory,
                 _service,
                 _service.CustomLogger,
-                _service.Tuning,
-                _service.ScopeFactory);
+                _service.Tuning);
 
             var result = await cmd.ExecuteAsync(context.CancellationToken, _service.CurrentDispatcherRunId);
             return (result.Success, result.Message);

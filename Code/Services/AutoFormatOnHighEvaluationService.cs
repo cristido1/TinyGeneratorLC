@@ -103,8 +103,7 @@ namespace TinyGenerator.Services
                                 _kernelFactory,
                                 storiesService: null,
                                 logger: _customLogger,
-                                tuning: _tuning,
-                                scopeFactory: _scopeFactory);
+                                tuning: _tuning);
 
                             return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                         }

@@ -1461,7 +1461,7 @@ namespace TinyGenerator.Services
                 var tagCount = System.Text.RegularExpressions.Regex.Matches(responseContent ?? "", @"\[([A-Z_]+):").Count;
                 _logger?.Log("Info", "LangChainBridge", $"[ReqID: {requestId}] <-- Response OK ({responseContent?.Length ?? 0} char, {tagCount} tags)");
                 
-                return responseContent;
+                return responseContent ?? string.Empty;
             }
             catch (Exception ex)
             {

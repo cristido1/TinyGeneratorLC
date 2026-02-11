@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.DependencyInjection;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands
@@ -53,12 +52,11 @@ namespace TinyGenerator.Services.Commands
             ILangChainKernelFactory kernelFactory,
             StoriesService? storiesService = null,
             ICustomLogger? logger = null,
-            CommandTuningOptions? tuning = null,
-            IServiceScopeFactory? scopeFactory = null)
+            CommandTuningOptions? tuning = null)
             : this(
                 storyId,
                 new AgentResolutionService(database),
-                new ChunkProcessingService(kernelFactory, scopeFactory),
+                new ChunkProcessingService(kernelFactory, storiesService?.ScopeFactory, logger),
                 new StoryTaggingPipelineService(database),
                 new NextStatusEnqueuer(storiesService, logger),
                 logger,

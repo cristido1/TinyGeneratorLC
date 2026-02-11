@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using TinyGenerator.Services;
+using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator
 {
@@ -461,6 +462,74 @@ evaluate_full_story({
             catch (Exception ex)
             {
                 logger?.LogWarning(ex, "[Startup] EnsureResponseValidationRulesInAgentInstructions failed: {msg}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Ensures serie_* agents have prompt templates with expected placeholders.
+        /// Existing custom prompts are preserved; missing placeholders are appended.
+        /// </summary>
+        public static void EnsureSeriesAgentPromptTemplates(DatabaseService? db, ILogger? logger = null)
+        {
+            if (db == null) return;
+
+            try
+            {
+                var agents = db.ListAgents()?.Where(a =>
+                        a.IsActive &&
+                        !string.IsNullOrWhiteSpace(a.Role) &&
+                        SeriesPromptTemplates.RequiredPlaceholdersByRole.ContainsKey(a.Role!))
+                    .ToList() ?? new List<Models.Agent>();
+
+                var updated = 0;
+                foreach (var agent in agents)
+                {
+                    var role = agent.Role!;
+                    var requiredPlaceholders = SeriesPromptTemplates.RequiredPlaceholdersByRole[role];
+                    var prompt = agent.Prompt ?? string.Empty;
+
+                    var hasAllPlaceholders = requiredPlaceholders.All(p =>
+                        prompt.IndexOf($"{{{{{p}}}}}", StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (hasAllPlaceholders)
+                    {
+                        continue;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(prompt))
+                    {
+                        agent.Prompt = SeriesPromptTemplates.GetDefaultTemplate(role);
+                        db.UpdateAgent(agent);
+                        updated++;
+                        continue;
+                    }
+
+                    var sb = new StringBuilder(prompt.TrimEnd());
+                    sb.AppendLine();
+                    sb.AppendLine();
+                    sb.AppendLine("=== INPUT PLACEHOLDERS ===");
+                    foreach (var placeholder in requiredPlaceholders)
+                    {
+                        if (prompt.IndexOf($"{{{{{placeholder}}}}}", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            continue;
+                        }
+
+                        sb.AppendLine($"{{{{{placeholder}}}}}");
+                    }
+
+                    agent.Prompt = sb.ToString().TrimEnd();
+                    db.UpdateAgent(agent);
+                    updated++;
+                }
+
+                if (updated > 0)
+                {
+                    logger?.LogInformation("[Startup] EnsureSeriesAgentPromptTemplates: updated {count} serie agent prompts", updated);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "[Startup] EnsureSeriesAgentPromptTemplates failed: {msg}", ex.Message);
             }
         }
 

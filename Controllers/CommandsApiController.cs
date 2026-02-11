@@ -127,17 +127,13 @@ namespace TinyGenerator.Controllers
 
             var runId = Guid.NewGuid().ToString();
 
-                // IMPORTANT: do not capture scoped DbContext-backed services for a background command.
-                // Pass the scope factory instead and resolve ModelFallbackService inside the command when needed.
-                var scopeFactory = _serviceProvider.GetService<IServiceScopeFactory>();
             var cmd = new AddVoiceTagsToStoryCommand(
                 storyId,
                 _database,
                 _kernelFactory,
                 _storiesService,
                 _logger,
-                _tuning,
-                scopeFactory);
+                _tuning);
 
             _dispatcher.Enqueue(
                 "TransformStoryRawToTagged",

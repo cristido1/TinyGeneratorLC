@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -1293,8 +1294,7 @@ public sealed partial class StoriesService
                         _kernelFactory,
                         storiesService: this,
                         logger: _customLogger,
-                        tuning: _tuning,
-                        scopeFactory: _scopeFactory);
+                        tuning: _tuning);
 
                     return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
                 }
@@ -2823,6 +2823,11 @@ public sealed partial class StoriesService
             return (false, new List<StoryCharacter>(), lastError ?? "Estrazione personaggi fallita");
         }
 
+        if (_scopeFactory == null)
+        {
+            return (false, new List<StoryCharacter>(), lastError ?? "IServiceScopeFactory non disponibile");
+        }
+
         using var fallbackScope = _scopeFactory.CreateScope();
         var fallbackService = fallbackScope.ServiceProvider.GetService<ModelFallbackService>();
         if (fallbackService == null)
@@ -2895,6 +2900,11 @@ public sealed partial class StoriesService
         int? numPredict,
         string? instructionsOverride)
     {
+        if (_kernelFactory == null)
+        {
+            return (false, new List<StoryCharacter>(), "Kernel factory non disponibile");
+        }
+
         var systemPrompt = "Sei un assistente che estrae la lista personaggi da una storia. " +
                            "Rispondi SOLO con un JSON array. Ogni elemento deve avere: " +
                            "name, gender (male|female|robot|alien), age, title, role, aliases (array). " +
@@ -3106,6 +3116,13 @@ public sealed partial class StoriesService
             return (false, "Template multi-step TTS non trovato o con task_type errato");
         }
 
+        if (!model.Id.HasValue)
+        {
+            return (false, "Modello senza Id valido");
+        }
+
+        var modelId = model.Id.Value;
+
         // Prepara cartella storia
         var folderPath = EnsureStoryFolder(story);
 
@@ -3126,7 +3143,7 @@ public sealed partial class StoriesService
         try
         {
             runId = _database.CreateTestRun(
-                model.Id.Value,
+                modelId,
                 testGroup,
                 description: $"tts_schema story {story.Id}",
                 passed: false,
@@ -3160,7 +3177,7 @@ public sealed partial class StoriesService
                 initialContext: story.StoryTagged ?? string.Empty,
                 threadId: threadId,
                 templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions,
-                executorModelOverrideId: model.Id.Value);
+                executorModelOverrideId: modelId);
 
             if (executionId.HasValue)
             {
@@ -3170,7 +3187,7 @@ public sealed partial class StoriesService
             var schemaPath = Path.Combine(folderPath, "tts_schema.json");
             var success = File.Exists(schemaPath);
             var score = success ? 10 : 0;
-            _database.UpdateModelTtsScore(model.Id.Value, score);
+            _database.UpdateModelTtsScore(modelId, score);
 
             if (stepId.HasValue)
             {
@@ -3193,7 +3210,7 @@ public sealed partial class StoriesService
                 try
                 {
                     _database.UpdateTestRunResult(runId.Value, success, sw.ElapsedMilliseconds);
-                    _database.RecalculateModelGroupScore(model.Id.Value, testGroup);
+                    _database.RecalculateModelGroupScore(modelId, testGroup);
                 }
                 catch (Exception ex)
                 {
@@ -3232,7 +3249,7 @@ public sealed partial class StoriesService
                 }
             }
 
-                    _database.UpdateModelTtsScore(model.Id.Value, partialScore);
+                    _database.UpdateModelTtsScore(modelId, partialScore);
 
             if (stepId.HasValue)
             {
@@ -3259,7 +3276,7 @@ public sealed partial class StoriesService
 
                     _database.UpdateTestRunResult(runId.Value, false, sw.ElapsedMilliseconds);
                     _database.UpdateTestRunNotes(runId.Value, errMsg);
-                    _database.RecalculateModelGroupScore(model.Id.Value, testGroup);
+                    _database.RecalculateModelGroupScore(modelId, testGroup);
                 }
                 catch (Exception innerEx)
                 {
@@ -5570,39 +5587,30 @@ public sealed partial class StoriesService
                     _customLogger?.Append(runId, $"[{story.Id}] {err}");
                     return (false, err);
                 }
+                generatedFileName = NormalizeAudioCraftFileName(generatedFileName);
 
                 // Download file from AudioCraft server
                 var localFileName = $"ambience_{segmentCounter:D3}.wav";
                 var localFilePath = Path.Combine(folderPath, localFileName);
 
-                try
+                var (downloadOk, downloadError) = await TryDownloadAudioCraftFileAsync(
+                    httpClient,
+                    generatedFileName,
+                    localFilePath,
+                    story.Id,
+                    runId,
+                    cancellationToken);
+                if (!downloadOk)
                 {
-                    var downloadResponse = await httpClient.GetAsync($"http://localhost:8003/download/{generatedFileName}", cancellationToken);
-                    if (downloadResponse.IsSuccessStatusCode)
-                    {
-                        var audioBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
-                        await File.WriteAllBytesAsync(localFilePath, audioBytes);
-                        _customLogger?.Append(runId, $"[{story.Id}] Salvato: {localFileName}");
-                        
-                        // Save prompt to .txt file with same name
-                        var promptFileName = Path.ChangeExtension(localFileName, ".txt");
-                        var promptFilePath = Path.Combine(folderPath, promptFileName);
-                        await File.WriteAllTextAsync(promptFilePath, segment.AmbiencePrompt);
-                        _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt: {promptFileName}");
-                    }
-                    else
-                    {
-                        var err = $"Impossibile scaricare {generatedFileName}";
-                        _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                        return (false, err);
-                    }
+                    return (false, downloadError ?? $"Impossibile scaricare {generatedFileName}");
                 }
-                catch (Exception ex)
-                {
-                    var err = $"Errore download {generatedFileName}: {ex.Message}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
+                _customLogger?.Append(runId, $"[{story.Id}] Salvato: {localFileName}");
+
+                // Save prompt to .txt file with same name
+                var promptFileName = Path.ChangeExtension(localFileName, ".txt");
+                var promptFilePath = Path.Combine(folderPath, promptFileName);
+                await File.WriteAllTextAsync(promptFilePath, segment.AmbiencePrompt);
+                _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt: {promptFileName}");
 
                 // Update tts_schema.json: add ambient sound file reference only on the definition record
                 if (segment.DefinitionIndex >= 0 && segment.DefinitionIndex < phraseEntries.Count)
@@ -6013,39 +6021,30 @@ public sealed partial class StoriesService
                     _customLogger?.Append(runId, $"[{story.Id}] {err}");
                     return (false, err);
                 }
+                generatedFileName = NormalizeAudioCraftFileName(generatedFileName);
 
                 // Download file from AudioCraft server
                 var localFileName = $"fx_{fxCounter:D3}.wav";
                 var localFilePath = Path.Combine(folderPath, localFileName);
 
-                try
+                var (downloadOk, downloadError) = await TryDownloadAudioCraftFileAsync(
+                    httpClient,
+                    generatedFileName,
+                    localFilePath,
+                    story.Id,
+                    runId,
+                    cancellationToken);
+                if (!downloadOk)
                 {
-                    var downloadResponse = await httpClient.GetAsync($"http://localhost:8003/download/{generatedFileName}", cancellationToken);
-                    if (downloadResponse.IsSuccessStatusCode)
-                    {
-                        var audioBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
-                        await File.WriteAllBytesAsync(localFilePath, audioBytes);
-                        _customLogger?.Append(runId, $"[{story.Id}] Salvato: {localFileName}");
-                        
-                        // Save prompt to .txt file with same name
-                        var promptFileName = Path.ChangeExtension(localFileName, ".txt");
-                        var promptFilePath = Path.Combine(folderPath, promptFileName);
-                        await File.WriteAllTextAsync(promptFilePath, description);
-                        _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt: {promptFileName}");
-                    }
-                    else
-                    {
-                        var err = $"Impossibile scaricare {generatedFileName} (status {downloadResponse.StatusCode})";
-                        _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                        return (false, err);
-                    }
+                    return (false, downloadError ?? $"Impossibile scaricare {generatedFileName}");
                 }
-                catch (Exception ex)
-                {
-                    var err = $"Errore download {generatedFileName}: {ex.Message}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
+                _customLogger?.Append(runId, $"[{story.Id}] Salvato: {localFileName}");
+                
+                // Save prompt to .txt file with same name
+                var promptFileName = Path.ChangeExtension(localFileName, ".txt");
+                var promptFilePath = Path.Combine(folderPath, promptFileName);
+                await File.WriteAllTextAsync(promptFilePath, description);
+                _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt: {promptFileName}");
 
                 // Update tts_schema.json: add fxFile property
                 entry["fxFile"] = localFileName;
@@ -6085,6 +6084,142 @@ public sealed partial class StoriesService
         var successMsg = $"Generazione effetti sonori completata ({fxCounter} effetti)";
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
+    }
+
+    private static string NormalizeAudioCraftFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return string.Empty;
+        }
+
+        var normalized = fileName.Trim().Trim('"', '\'');
+
+        if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+        {
+            normalized = uri.AbsolutePath;
+        }
+
+        normalized = normalized.Replace('\\', '/');
+
+        var idx = normalized.LastIndexOf("/download/", StringComparison.OrdinalIgnoreCase);
+        if (idx >= 0)
+        {
+            normalized = normalized.Substring(idx + "/download/".Length);
+        }
+
+        var qIndex = normalized.IndexOf('?');
+        if (qIndex >= 0)
+        {
+            normalized = normalized.Substring(0, qIndex);
+        }
+
+        var hashIndex = normalized.IndexOf('#');
+        if (hashIndex >= 0)
+        {
+            normalized = normalized.Substring(0, hashIndex);
+        }
+
+        normalized = normalized.Trim('/');
+        normalized = Path.GetFileName(normalized);
+        return normalized.Trim();
+    }
+
+    private async Task<(bool success, string? error)> TryDownloadAudioCraftFileAsync(
+        HttpClient httpClient,
+        string generatedFileName,
+        string localFilePath,
+        long storyId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(generatedFileName))
+        {
+            var err = "Nome file AudioCraft non valido";
+            _customLogger?.Append(runId, $"[{storyId}] {err}", "error");
+            return (false, err);
+        }
+
+        const int maxAttempts = 4;
+        var lastError = string.Empty;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fileToken = Uri.EscapeDataString(generatedFileName);
+            var downloadUrl = $"http://localhost:8003/download/{fileToken}";
+
+            try
+            {
+                using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                attemptCts.CancelAfter(TimeSpan.FromSeconds(45));
+
+                using var downloadResponse = await httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, attemptCts.Token);
+                if (downloadResponse.IsSuccessStatusCode)
+                {
+                    var audioBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
+                    if (audioBytes.Length == 0)
+                    {
+                        lastError = $"File vuoto per {generatedFileName}";
+                    }
+                    else
+                    {
+                        await File.WriteAllBytesAsync(localFilePath, audioBytes, cancellationToken);
+                        return (true, null);
+                    }
+                }
+                else
+                {
+                    var status = downloadResponse.StatusCode;
+                    var retryable = status == HttpStatusCode.NotFound ||
+                                    status == HttpStatusCode.RequestTimeout ||
+                                    status == HttpStatusCode.Conflict ||
+                                    status == HttpStatusCode.TooManyRequests ||
+                                    status == HttpStatusCode.InternalServerError ||
+                                    status == HttpStatusCode.BadGateway ||
+                                    status == HttpStatusCode.ServiceUnavailable ||
+                                    status == HttpStatusCode.GatewayTimeout;
+
+                    lastError = $"Impossibile scaricare {generatedFileName} (status {status})";
+                    if (!retryable || attempt == maxAttempts)
+                    {
+                        _customLogger?.Append(runId, $"[{storyId}] {lastError}", "error");
+                        return (false, lastError);
+                    }
+                }
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                lastError = $"Timeout download {generatedFileName}: {ex.Message}";
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (HttpRequestException ex)
+            {
+                lastError = $"Errore rete download {generatedFileName}: {ex.Message}";
+            }
+            catch (Exception ex)
+            {
+                lastError = $"Errore download {generatedFileName}: {ex.Message}";
+                _customLogger?.Append(runId, $"[{storyId}] {lastError}", "error");
+                return (false, lastError);
+            }
+
+            if (attempt < maxAttempts)
+            {
+                var delay = TimeSpan.FromSeconds(Math.Max(1, attempt * 2));
+                _customLogger?.Append(runId, $"[{storyId}] Tentativo download {attempt}/{maxAttempts} fallito per {generatedFileName}. Retry in {delay.TotalSeconds:0}s...", "warn");
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+
+        var finalError = string.IsNullOrWhiteSpace(lastError)
+            ? $"Impossibile scaricare {generatedFileName}"
+            : lastError;
+        _customLogger?.Append(runId, $"[{storyId}] {finalError}", "error");
+        return (false, finalError);
     }
 
     /// <summary>

@@ -727,12 +727,6 @@ namespace TinyGenerator.Services
                 reason = "errore durante la selezione della storia";
                 return false;
             }
-
-            if (string.IsNullOrWhiteSpace(reason))
-            {
-                reason = "nessuna storia valida per auto-complete";
-            }
-            return false;
         }
 
         private int CountStoriesByStatus(IEnumerable<string> statusCodes)

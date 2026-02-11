@@ -65,10 +65,10 @@ public sealed class CanonExtractorCommand : ICommand
         var stateInJson = currentState?.WorldStateJson ?? "{}";
         _database.EnsureSeriesEpisodeStateInJson(_serieId, _episodeNumber, stateInJson);
 
-        var agent = GetActiveAgent("canon_extractor");
+        var agent = GetActiveAgent(CommandRoleCodes.CanonExtractor);
         if (agent == null)
         {
-            return new CommandResult(false, "Nessun agente attivo con ruolo canon_extractor");
+            return new CommandResult(false, $"Nessun agente attivo con ruolo {CommandRoleCodes.CanonExtractor}");
         }
 
         var storyText = !string.IsNullOrWhiteSpace(story.StoryRevised) ? story.StoryRevised : story.StoryRaw;
@@ -78,7 +78,7 @@ public sealed class CanonExtractorCommand : ICommand
         }
 
         var prompt = BuildCanonExtractorPrompt(storyText);
-        var response = await CallAgentAsync(agent, prompt, roleOverride: "canon_extractor", ct: ct);
+        var response = await CallAgentAsync(agent, prompt, roleOverride: CommandRoleCodes.CanonExtractor, ct: ct);
         if (!response.Success)
         {
             return new CommandResult(false, response.Error ?? "CanonExtractor failed");
@@ -108,10 +108,10 @@ public sealed class CanonExtractorCommand : ICommand
     private void EnqueueStateDeltaBuilder()
     {
         if (_dispatcher == null) return;
-        var runId = StateDrivenPipelineHelpers.NewRunId("state_delta_builder", _storyId);
+        var runId = StateDrivenPipelineHelpers.NewRunId(CommandRoleCodes.StateDeltaBuilder, _storyId);
         _dispatcher.Enqueue(
             new DelegateCommand(
-                "state_delta_builder",
+                CommandRoleCodes.StateDeltaBuilder,
                 ctx =>
                 {
                     var cmd = new StateDeltaBuilderCommand(
@@ -129,14 +129,13 @@ public sealed class CanonExtractorCommand : ICommand
                 priority: 3),
             runId: runId,
             threadScope: $"series/{_serieId}/episode/{_episodeNumber}",
-            metadata: StateDrivenPipelineHelpers.BuildMetadata(_storyId, _serieId, _episodeNumber, "state_delta_builder"),
+            metadata: StateDrivenPipelineHelpers.BuildMetadata(_storyId, _serieId, _episodeNumber, CommandRoleCodes.StateDeltaBuilder),
             priority: 3);
     }
 
     private Agent? GetActiveAgent(string role)
     {
-        return _database.ListAgents()
-            .FirstOrDefault(a => a.IsActive && a.Role != null && a.Role.Equals(role, StringComparison.OrdinalIgnoreCase));
+        return StateDrivenPipelineHelpers.ResolveActiveAgent(_database, role);
     }
 
     private async Task<AgentResponse> CallAgentAsync(Agent agent, string prompt, string roleOverride, CancellationToken ct)
@@ -238,14 +237,14 @@ public sealed class StateDeltaBuilderCommand : ICommand
         var stateSummary = currentState?.StateSummary ?? "{}";
         var stateInJson = episode.StateInJson ?? currentState?.WorldStateJson ?? "{}";
 
-        var agent = GetActiveAgent("state_delta_builder");
+        var agent = GetActiveAgent(CommandRoleCodes.StateDeltaBuilder);
         if (agent == null)
         {
-            return new CommandResult(false, "Nessun agente attivo con ruolo state_delta_builder");
+            return new CommandResult(false, $"Nessun agente attivo con ruolo {CommandRoleCodes.StateDeltaBuilder}");
         }
 
         var prompt = BuildDeltaPrompt(stateSummary, stateInJson, episode.CanonEvents ?? "[]");
-        var response = await CallAgentAsync(agent, prompt, roleOverride: "state_delta_builder", ct: ct);
+        var response = await CallAgentAsync(agent, prompt, roleOverride: CommandRoleCodes.StateDeltaBuilder, ct: ct);
         if (!response.Success)
         {
             return new CommandResult(false, response.Error ?? "StateDeltaBuilder failed");
@@ -274,10 +273,10 @@ public sealed class StateDeltaBuilderCommand : ICommand
     private void EnqueueContinuityValidator()
     {
         if (_dispatcher == null) return;
-        var runId = StateDrivenPipelineHelpers.NewRunId("continuity_validator", _storyId);
+        var runId = StateDrivenPipelineHelpers.NewRunId(CommandRoleCodes.ContinuityValidator, _storyId);
         _dispatcher.Enqueue(
             new DelegateCommand(
-                "continuity_validator",
+                CommandRoleCodes.ContinuityValidator,
                 ctx =>
                 {
                     var cmd = new ContinuityValidatorCommand(
@@ -295,14 +294,13 @@ public sealed class StateDeltaBuilderCommand : ICommand
                 priority: 3),
             runId: runId,
             threadScope: $"series/{_serieId}/episode/{_episodeNumber}",
-            metadata: StateDrivenPipelineHelpers.BuildMetadata(_storyId, _serieId, _episodeNumber, "continuity_validator"),
+            metadata: StateDrivenPipelineHelpers.BuildMetadata(_storyId, _serieId, _episodeNumber, CommandRoleCodes.ContinuityValidator),
             priority: 3);
     }
 
     private Agent? GetActiveAgent(string role)
     {
-        return _database.ListAgents()
-            .FirstOrDefault(a => a.IsActive && a.Role != null && a.Role.Equals(role, StringComparison.OrdinalIgnoreCase));
+        return StateDrivenPipelineHelpers.ResolveActiveAgent(_database, role);
     }
 
     private async Task<AgentResponse> CallAgentAsync(Agent agent, string prompt, string roleOverride, CancellationToken ct)
@@ -407,14 +405,14 @@ public sealed class ContinuityValidatorCommand : ICommand
         var currentState = _database.GetCurrentSeriesState(_serieId);
         var stateSummary = currentState?.StateSummary ?? "{}";
 
-        var agent = GetActiveAgent("continuity_validator");
+        var agent = GetActiveAgent(CommandRoleCodes.ContinuityValidator);
         if (agent == null)
         {
-            return new CommandResult(false, "Nessun agente attivo con ruolo continuity_validator");
+            return new CommandResult(false, $"Nessun agente attivo con ruolo {CommandRoleCodes.ContinuityValidator}");
         }
 
         var prompt = BuildContinuityPrompt(stateSummary, episode.CanonEvents ?? "[]", episode.DeltaJson ?? "{}");
-        var response = await CallAgentAsync(agent, prompt, roleOverride: "continuity_validator", ct: ct);
+        var response = await CallAgentAsync(agent, prompt, roleOverride: CommandRoleCodes.ContinuityValidator, ct: ct);
         if (!response.Success)
         {
             return new CommandResult(false, response.Error ?? "ContinuityValidator failed");
@@ -472,8 +470,7 @@ public sealed class ContinuityValidatorCommand : ICommand
 
     private Agent? GetActiveAgent(string role)
     {
-        return _database.ListAgents()
-            .FirstOrDefault(a => a.IsActive && a.Role != null && a.Role.Equals(role, StringComparison.OrdinalIgnoreCase));
+        return StateDrivenPipelineHelpers.ResolveActiveAgent(_database, role);
     }
 
     private async Task<AgentResponse> CallAgentAsync(Agent agent, string prompt, string roleOverride, CancellationToken ct)
@@ -626,10 +623,10 @@ public sealed class StateUpdaterCommand : ICommand
     private void EnqueueStateCompressor(int seriesStateId)
     {
         if (_dispatcher == null || _kernelFactory == null) return;
-        var runId = StateDrivenPipelineHelpers.NewRunId("state_compressor", _storyId);
+        var runId = StateDrivenPipelineHelpers.NewRunId(CommandRoleCodes.StateCompressor, _storyId);
         _dispatcher.Enqueue(
             new DelegateCommand(
-                "state_compressor",
+                CommandRoleCodes.StateCompressor,
                 ctx =>
                 {
                     var cmd = new StateCompressorCommand(
@@ -648,7 +645,7 @@ public sealed class StateUpdaterCommand : ICommand
                 priority: 3),
             runId: runId,
             threadScope: $"series/{_serieId}/episode/{_episodeNumber}",
-            metadata: StateDrivenPipelineHelpers.BuildMetadata(_storyId, _serieId, _episodeNumber, "state_compressor"),
+            metadata: StateDrivenPipelineHelpers.BuildMetadata(_storyId, _serieId, _episodeNumber, CommandRoleCodes.StateCompressor),
             priority: 3);
     }
 }
@@ -703,15 +700,15 @@ public sealed class StateCompressorCommand : ICommand
             return new CommandResult(false, "KernelFactory non disponibile per state_compressor");
         }
 
-        var agent = GetActiveAgent("state_compressor");
+        var agent = GetActiveAgent(CommandRoleCodes.StateCompressor);
         if (agent == null)
         {
-            return new CommandResult(false, "Nessun agente attivo con ruolo state_compressor");
+            return new CommandResult(false, $"Nessun agente attivo con ruolo {CommandRoleCodes.StateCompressor}");
         }
 
         var series = _database.GetSeriesById(_serieId);
         var prompt = BuildStateCompressorPrompt(currentState, series);
-        var response = await CallAgentAsync(agent, prompt, roleOverride: "state_compressor", ct: ct);
+        var response = await CallAgentAsync(agent, prompt, roleOverride: CommandRoleCodes.StateCompressor, ct: ct);
         if (!response.Success)
         {
             return new CommandResult(false, response.Error ?? "StateCompressor failed");
@@ -739,10 +736,10 @@ public sealed class StateCompressorCommand : ICommand
     private void EnqueueRecapBuilder()
     {
         if (_dispatcher == null || _kernelFactory == null) return;
-        var runId = StateDrivenPipelineHelpers.NewRunId("recap_builder", _storyId);
+        var runId = StateDrivenPipelineHelpers.NewRunId(CommandRoleCodes.RecapBuilder, _storyId);
         _dispatcher.Enqueue(
             new DelegateCommand(
-                "recap_builder",
+                CommandRoleCodes.RecapBuilder,
                 ctx =>
                 {
                     var cmd = new RecapBuilderCommand(
@@ -759,14 +756,13 @@ public sealed class StateCompressorCommand : ICommand
                 priority: 3),
             runId: runId,
             threadScope: $"series/{_serieId}/episode/{_episodeNumber}",
-            metadata: StateDrivenPipelineHelpers.BuildMetadata(_storyId, _serieId, _episodeNumber, "recap_builder"),
+            metadata: StateDrivenPipelineHelpers.BuildMetadata(_storyId, _serieId, _episodeNumber, CommandRoleCodes.RecapBuilder),
             priority: 3);
     }
 
     private Agent? GetActiveAgent(string role)
     {
-        return _database.ListAgents()
-            .FirstOrDefault(a => a.IsActive && a.Role != null && a.Role.Equals(role, StringComparison.OrdinalIgnoreCase));
+        return StateDrivenPipelineHelpers.ResolveActiveAgent(_database, role);
     }
 
     private async Task<AgentResponse> CallAgentAsync(Agent agent, string prompt, string roleOverride, CancellationToken ct)
@@ -877,14 +873,14 @@ public sealed class RecapBuilderCommand : ICommand
             return new CommandResult(false, "Canon events mancanti: impossibile generare recap");
         }
 
-        var agent = GetActiveAgent("recap_builder");
+        var agent = GetActiveAgent(CommandRoleCodes.RecapBuilder);
         if (agent == null)
         {
-            return new CommandResult(false, "Nessun agente attivo con ruolo recap_builder");
+            return new CommandResult(false, $"Nessun agente attivo con ruolo {CommandRoleCodes.RecapBuilder}");
         }
 
         var prompt = BuildRecapPrompt(episode.CanonEvents ?? "[]");
-        var response = await CallAgentAsync(agent, prompt, roleOverride: "recap_builder", ct: ct);
+        var response = await CallAgentAsync(agent, prompt, roleOverride: CommandRoleCodes.RecapBuilder, ct: ct);
         if (!response.Success)
         {
             return new CommandResult(false, response.Error ?? "RecapBuilder failed");
@@ -903,8 +899,7 @@ public sealed class RecapBuilderCommand : ICommand
 
     private Agent? GetActiveAgent(string role)
     {
-        return _database.ListAgents()
-            .FirstOrDefault(a => a.IsActive && a.Role != null && a.Role.Equals(role, StringComparison.OrdinalIgnoreCase));
+        return StateDrivenPipelineHelpers.ResolveActiveAgent(_database, role);
     }
 
     private async Task<AgentResponse> CallAgentAsync(Agent agent, string prompt, string roleOverride, CancellationToken ct)
@@ -958,6 +953,20 @@ internal sealed record StateMergeResult(bool Success, string? MergedWorldStateJs
 
 internal static class StateDrivenPipelineHelpers
 {
+    public static Agent? ResolveActiveAgent(DatabaseService database, string roleCode)
+    {
+        try
+        {
+            return new AgentResolutionService(database).Resolve(roleCode).Agent;
+        }
+        catch
+        {
+            // Backward-compatible fallback for partial/misaligned role configuration.
+            return database.ListAgents()
+                .FirstOrDefault(a => a.IsActive && a.Role != null && a.Role.Equals(roleCode, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     public static string NewRunId(string prefix, long storyId)
         => $"{prefix}_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
 

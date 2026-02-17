@@ -108,8 +108,30 @@ namespace TinyGenerator.Pages.Series
 
         public IActionResult OnPost()
         {
+            // This page hosts multiple forms/tabs. When posting the "Serie" form,
+            // ignore model-state entries from other tab DTOs and non-posted concurrency fields.
+            foreach (var key in ModelState.Keys.Where(k =>
+                         k.StartsWith("CharacterInput.", StringComparison.Ordinal) ||
+                         k.StartsWith("EpisodeInput.", StringComparison.Ordinal) ||
+                         string.Equals(k, "SeriesItem.Timestamp", StringComparison.Ordinal)).ToList())
+            {
+                ModelState.Remove(key);
+            }
+
+            // data_inserimento comes from a datetime-local input and may fail binding on some browsers/locales.
+            // Do not block save for this field; fallback is handled below.
+            ModelState.Remove("SeriesItem.DataInserimento");
+
             if (!ModelState.IsValid)
             {
+                var errors = ModelState
+                    .SelectMany(kvp => kvp.Value?.Errors?.Select(e => $"{kvp.Key}: {e.ErrorMessage}") ?? Enumerable.Empty<string>())
+                    .Take(5)
+                    .ToList();
+                if (errors.Count > 0)
+                {
+                    TempData["ErrorMessage"] = "Dati non validi: " + string.Join(" | ", errors);
+                }
                 LoadPageData(SeriesItem.Id);
                 return Page();
             }
@@ -122,59 +144,30 @@ namespace TinyGenerator.Pages.Series
                     return NotFound();
                 }
 
-                existing.Titolo = SeriesItem.Titolo;
-                existing.Genere = SeriesItem.Genere;
-                existing.Sottogenere = SeriesItem.Sottogenere;
-                existing.PeriodoNarrativo = SeriesItem.PeriodoNarrativo;
-                existing.TonoBase = SeriesItem.TonoBase;
-                existing.Target = SeriesItem.Target;
-                existing.Lingua = SeriesItem.Lingua;
-                existing.AmbientazioneBase = SeriesItem.AmbientazioneBase;
+                existing.Titolo = (SeriesItem.Titolo ?? string.Empty).Trim();
+                existing.Genere = string.IsNullOrWhiteSpace(SeriesItem.Genere) ? null : SeriesItem.Genere.Trim();
+                existing.Sottogenere = string.IsNullOrWhiteSpace(SeriesItem.Sottogenere) ? null : SeriesItem.Sottogenere.Trim();
+                existing.PeriodoNarrativo = string.IsNullOrWhiteSpace(SeriesItem.PeriodoNarrativo) ? null : SeriesItem.PeriodoNarrativo.Trim();
+                existing.TonoBase = string.IsNullOrWhiteSpace(SeriesItem.TonoBase) ? null : SeriesItem.TonoBase.Trim();
+                existing.Target = string.IsNullOrWhiteSpace(SeriesItem.Target) ? null : SeriesItem.Target.Trim();
+                existing.Lingua = string.IsNullOrWhiteSpace(SeriesItem.Lingua) ? "Italiano" : SeriesItem.Lingua.Trim();
+                existing.AmbientazioneBase = string.IsNullOrWhiteSpace(SeriesItem.AmbientazioneBase) ? null : SeriesItem.AmbientazioneBase;
                 existing.DefaultNarrativeProfileId = SeriesItem.DefaultNarrativeProfileId;
-                existing.PremessaSerie = SeriesItem.PremessaSerie;
-                existing.ArcoNarrativoSerie = SeriesItem.ArcoNarrativoSerie;
-                existing.StileScrittura = SeriesItem.StileScrittura;
-                existing.RegoleNarrative = SeriesItem.RegoleNarrative;
-                existing.SerieFinalGoal = SeriesItem.SerieFinalGoal;
-                existing.NoteAI = SeriesItem.NoteAI;
-                existing.ImagesStyle = SeriesItem.ImagesStyle;
+                existing.PremessaSerie = string.IsNullOrWhiteSpace(SeriesItem.PremessaSerie) ? null : SeriesItem.PremessaSerie;
+                existing.ArcoNarrativoSerie = string.IsNullOrWhiteSpace(SeriesItem.ArcoNarrativoSerie) ? null : SeriesItem.ArcoNarrativoSerie;
+                existing.StileScrittura = string.IsNullOrWhiteSpace(SeriesItem.StileScrittura) ? null : SeriesItem.StileScrittura;
+                existing.RegoleNarrative = string.IsNullOrWhiteSpace(SeriesItem.RegoleNarrative) ? null : SeriesItem.RegoleNarrative;
+                existing.SerieFinalGoal = string.IsNullOrWhiteSpace(SeriesItem.SerieFinalGoal) ? null : SeriesItem.SerieFinalGoal;
+                existing.NoteAI = string.IsNullOrWhiteSpace(SeriesItem.NoteAI) ? null : SeriesItem.NoteAI;
+                existing.ImagesStyle = string.IsNullOrWhiteSpace(SeriesItem.ImagesStyle) ? null : SeriesItem.ImagesStyle.Trim();
                 existing.PlannerMethodId = SeriesItem.PlannerMethodId;
                 existing.DefaultTipoPlanningId = SeriesItem.DefaultTipoPlanningId;
-                existing.EpisodiGenerati = SeriesItem.EpisodiGenerati;
-                existing.DataInserimento = SeriesItem.DataInserimento;
+                existing.EpisodiGenerati = Math.Max(0, SeriesItem.EpisodiGenerati);
+                existing.DataInserimento = SeriesItem.DataInserimento == default ? DateTime.UtcNow : SeriesItem.DataInserimento;
 
                 try
                 {
-                    var affected = _context.Database.ExecuteSqlInterpolated($@"
-UPDATE series SET
-    titolo = {existing.Titolo},
-    genere = {existing.Genere},
-    sottogenere = {existing.Sottogenere},
-    periodo_narrativo = {existing.PeriodoNarrativo},
-    tono_base = {existing.TonoBase},
-    target = {existing.Target},
-    lingua = {existing.Lingua},
-    ambientazione_base = {existing.AmbientazioneBase},
-    premessa_serie = {existing.PremessaSerie},
-    arco_narrativo_serie = {existing.ArcoNarrativoSerie},
-    stile_scrittura = {existing.StileScrittura},
-    regole_narrative = {existing.RegoleNarrative},
-    serie_final_goal = {existing.SerieFinalGoal},
-    note_ai = {existing.NoteAI},
-    images_style = {existing.ImagesStyle},
-    planner_method_id = {existing.PlannerMethodId},
-    default_tipo_planning_id = {existing.DefaultTipoPlanningId},
-    default_narrative_profile_id = {existing.DefaultNarrativeProfileId},
-    episodi_generati = {existing.EpisodiGenerati},
-    data_inserimento = {existing.DataInserimento}
-WHERE id = {existing.Id};");
-
-                    if (affected <= 0)
-                    {
-                        TempData["ErrorMessage"] = "Salvataggio non riuscito: serie non trovata.";
-                        LoadPageData(SeriesItem.Id);
-                        return Page();
-                    }
+                    _context.SaveChanges();
                 }
                 catch (Exception ex)
                 {

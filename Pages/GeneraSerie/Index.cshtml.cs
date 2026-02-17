@@ -97,76 +97,79 @@ public sealed class IndexModel : PageModel
     }
 
     public async Task<IActionResult> OnGetRandomWriterPromptAsync(CancellationToken cancellationToken)
+        => await ExecuteRandomWriterPromptAsync(
+            GenerateRandomSeriesPromptCommand.PromptStyle.Standard,
+            "generate_random_series_prompt",
+            cancellationToken);
+
+    public async Task<IActionResult> OnGetRandomCrazyWriterPromptAsync(CancellationToken cancellationToken)
+        => await ExecuteRandomWriterPromptAsync(
+            GenerateRandomSeriesPromptCommand.PromptStyle.Crazy,
+            "generate_random_series_prompt_crazy",
+            cancellationToken);
+
+    public async Task<IActionResult> OnGetSpaceMilitaryWriterPromptAsync(CancellationToken cancellationToken)
+        => await ExecuteRandomWriterPromptAsync(
+            GenerateRandomSeriesPromptCommand.PromptStyle.SpaceMilitaryItalian,
+            "generate_random_series_prompt_space_military_italian",
+            cancellationToken);
+
+    private async Task<IActionResult> ExecuteRandomWriterPromptAsync(
+        GenerateRandomSeriesPromptCommand.PromptStyle style,
+        string operation,
+        CancellationToken cancellationToken)
     {
-        var writerAgents = _database.ListAgents()
-            .Where(a =>
-                a.IsActive &&
-                !string.IsNullOrWhiteSpace(a.Role) &&
-                (a.Role.StartsWith("writer_", StringComparison.OrdinalIgnoreCase) ||
-                 a.Role.Equals("writer", StringComparison.OrdinalIgnoreCase) ||
-                 a.Role.Equals("story_writer", StringComparison.OrdinalIgnoreCase) ||
-                 a.Role.Equals("text_writer", StringComparison.OrdinalIgnoreCase)))
-            .ToList();
+        var runId = $"{operation}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+        var cmd = new GenerateRandomSeriesPromptCommand(
+            _database,
+            style,
+            _logger,
+            _modelExecution);
 
-        if (writerAgents.Count == 0)
-        {
-            return new JsonResult(new { success = false, message = "Nessun agente writer disponibile." });
-        }
-
-        var randomWriterAgent = writerAgents[Random.Shared.Next(writerAgents.Count)];
-        var modelName = randomWriterAgent.ModelName;
-        if (string.IsNullOrWhiteSpace(modelName) && randomWriterAgent.ModelId.HasValue)
-        {
-            modelName = _database.GetModelInfoById(randomWriterAgent.ModelId.Value)?.Name;
-        }
-
-        if (string.IsNullOrWhiteSpace(modelName))
-        {
-            return new JsonResult(new { success = false, message = $"L'agente writer '{randomWriterAgent.Name}' non ha un modello valido." });
-        }
+        var handle = _dispatcher.Enqueue(
+            cmd,
+            runId: runId,
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = operation,
+                ["source"] = "GeneraSeriePage"
+            },
+            priority: 2);
 
         try
         {
-            var bridge = _kernelFactory.CreateChatBridge(
-                modelName,
-                randomWriterAgent.Temperature,
-                randomWriterAgent.TopP,
-                randomWriterAgent.RepeatPenalty,
-                randomWriterAgent.TopK,
-                randomWriterAgent.RepeatLastN,
-                randomWriterAgent.NumPredict);
-
-            var messages = new List<ConversationMessage>
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(70));
+            var result = await handle.CompletionTask.WaitAsync(timeoutCts.Token);
+            if (!result.Success)
             {
-                new()
-                {
-                    Role = "system",
-                    Content = "Sei un autore creativo di serie TV. Rispondi solo con un singolo prompt pronto all'uso, in italiano, massimo 120 parole."
-                },
-                new()
-                {
-                    Role = "user",
-                    Content = "Genera un prompt originale per una nuova serie non storica. Includi concept, mondo, conflitto centrale, tono emotivo e temi umani."
-                }
-            };
-
-            var raw = await bridge.CallModelWithToolsAsync(
-                messages,
-                tools: new List<Dictionary<string, object>>(),
-                ct: cancellationToken);
-            var (textContent, _) = LangChainChatBridge.ParseChatResponse(raw);
-            var prompt = string.IsNullOrWhiteSpace(textContent) ? raw?.Trim() : textContent.Trim();
-
-            if (string.IsNullOrWhiteSpace(prompt))
-            {
-                return new JsonResult(new { success = false, message = "Il writer non ha restituito un prompt valido." });
+                return new JsonResult(new { success = false, message = result.Message ?? "Generazione prompt fallita.", runId });
             }
 
-            return new JsonResult(new { success = true, prompt, writer = randomWriterAgent.Name, model = modelName });
+            var prompt = cmd.GeneratedPrompt ?? result.Message;
+            if (string.IsNullOrWhiteSpace(prompt))
+            {
+                return new JsonResult(new { success = false, message = "Il comando non ha prodotto un prompt utilizzabile.", runId });
+            }
+
+            return new JsonResult(new
+            {
+                success = true,
+                prompt,
+                writer = cmd.SelectedWriterName,
+                model = cmd.SelectedModelName,
+                runId
+            });
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            return new JsonResult(new { success = false, message = $"Errore durante la generazione del prompt: {ex.Message}" });
+            _dispatcher.CancelCommand(runId);
+            return new JsonResult(new
+            {
+                success = false,
+                message = "Timeout nella generazione del prompt casuale. Controlla il run nei log comandi.",
+                runId
+            });
         }
     }
 }

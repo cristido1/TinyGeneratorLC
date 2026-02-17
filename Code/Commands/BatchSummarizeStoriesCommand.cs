@@ -1,4 +1,5 @@
-﻿using TinyGenerator.Models;
+﻿using Microsoft.Extensions.DependencyInjection;
+using TinyGenerator.Models;
 
 namespace TinyGenerator.Services.Commands
 {
@@ -12,6 +13,7 @@ namespace TinyGenerator.Services.Commands
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly ICommandEnqueuer _dispatcher;
         private readonly ICustomLogger _logger;
+        private readonly IServiceScopeFactory? _scopeFactory;
         private readonly int _minScore;
 
         public BatchSummarizeStoriesCommand(
@@ -19,12 +21,14 @@ namespace TinyGenerator.Services.Commands
             ILangChainKernelFactory kernelFactory,
             ICommandEnqueuer dispatcher,
             ICustomLogger logger,
+            IServiceScopeFactory? scopeFactory = null,
             int minScore = 60)
         {
             _database = database;
             _kernelFactory = kernelFactory;
             _dispatcher = dispatcher;
             _logger = logger;
+            _scopeFactory = scopeFactory;
             _minScore = minScore;
         }
 
@@ -38,8 +42,8 @@ namespace TinyGenerator.Services.Commands
                 // Trova tutte le storie con valutazione >= minScore senza riassunto
                 var allStories = _database.GetAllStories();
                 var eligibleStories = allStories
-                    .Where(s => 
-                        s.Score >= _minScore && 
+                    .Where(s =>
+                        s.Score >= _minScore &&
                         string.IsNullOrWhiteSpace(s.Summary) &&
                         !string.IsNullOrWhiteSpace(s.StoryRaw))
                     .ToList();
@@ -58,18 +62,32 @@ namespace TinyGenerator.Services.Commands
                     ct.ThrowIfCancellationRequested();
                     try
                     {
+                        IAgentCallService? modelExecution = null;
+                        if (_scopeFactory != null)
+                        {
+                            using var modelScope = _scopeFactory.CreateScope();
+                            modelExecution = modelScope.ServiceProvider.GetService<IAgentCallService>();
+                        }
+                        modelExecution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
+
                         var runId = Guid.NewGuid().ToString();
                         var cmd = new SummarizeStoryCommand(
                             story.Id,
                             _database,
                             _kernelFactory,
-                            _logger);
+                            _logger,
+                            scopeFactory: _scopeFactory,
+                            modelExecution: modelExecution);
 
                         var summarizeCommand = new DelegateCommand(
                             "SummarizeStory",
-                            async ctx => {
-                                bool success = await cmd.ExecuteAsync(ctx.CancellationToken);
-                                return new CommandResult(success, success ? "Summary generated" : "Failed to generate summary");
+                            async ctx =>
+                            {
+                                bool success = await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
+                                var message = success
+                                    ? "Summary generated"
+                                    : (string.IsNullOrWhiteSpace(cmd.LastError) ? "Failed to generate summary" : cmd.LastError);
+                                return new CommandResult(success, message);
                             },
                             priority: 3);
 
@@ -83,7 +101,7 @@ namespace TinyGenerator.Services.Commands
                                 ["triggeredBy"] = "batch_summarize",
                                 ["batchScore"] = story.Score.ToString("F2")
                             },
-                            priority: 3);  // Priorità media-bassa// PrioritÃ  media-bassa
+                            priority: 3);
 
                         enqueued++;
                         _logger.Log("Information", "BatchSummarize", $"Enqueued summarization for story {story.Id} (score: {story.Score:F2})");
@@ -96,7 +114,7 @@ namespace TinyGenerator.Services.Commands
 
                 var message = $"Enqueued {enqueued} summarization commands";
                 _logger.Log("Information", "BatchSummarize", message);
-                
+
                 // Ritorna immediatamente - i comandi accodati verranno eseguiti in background
                 return new CommandResult(true, message);
             }
@@ -108,5 +126,3 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
-
-

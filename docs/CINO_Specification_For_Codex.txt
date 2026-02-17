@@ -1,0 +1,127 @@
+Competitive Iterative Narrative Optimization (CINO) Technical
+Specification for Codex Integration Generated on: 2026-02-12 15:43:02
+
+====================================================================
+OVERVIEW
+====================================================================
+
+Implement the Competitive Iterative Narrative Optimization (CINO)
+algorithm inside TinyGenerator using existing centralized services for
+command orchestration, logging, and evaluation.
+
+CINO is a competitive evolutionary refinement system that: - Uses two
+writers (role: writer_cino) - Uses two evaluators already configured -
+Uses the existing response checker - Performs full-text evaluation at
+each iteration - Applies strict acceptance rules - Stops on score target
+or timeout
+
+====================================================================
+ALGORITHM FLOW
+====================================================================
+
+1.  Insert initial story node (root) with reduced prompt.
+
+    -   Evaluate immediately.
+    -   Initial score is baseline.
+
+2.  LOOP:
+
+    a)  Select current best node (parent).
+    b)  Send parent text to two writers (writer_cino role).
+    c)  Each generates a full rewritten version (child candidate).
+    d)  Pass each candidate through response checker.
+        -   If checker fails -> discard candidate.
+    e)  Evaluate full text using both evaluators.
+    f)  Compute final score (average of evaluators).
+
+3.  Acceptance Rules:
+
+    -   NewScore >= PreviousScore + 1
+    -   For each of the 4 criteria: (Evaluator1Score + Evaluator2Score)
+        for that criterion must NOT decrease by more than 1 point
+        compared to previous version.
+
+    If rules satisfied: Candidate becomes new parent. Else: Discard
+    candidate.
+
+4.  Stop conditions:
+
+    -   Target score reached (see appsettings.json).
+    -   Timeout reached (seconds limit).
+    -   Otherwise continue iteration.
+
+5.  If timeout reached: Accept best version found even if below target.
+
+====================================================================
+APPSETTINGS.JSON ADDITIONS
+====================================================================
+
+Add new configuration section:
+
+“CINO”: { “TargetScore”: 85, “MaxDurationSeconds”: 300 }
+
+TargetScore: - Minimum final average score required to stop early.
+
+MaxDurationSeconds: - If exceeded, accept best current version even if
+below target.
+
+====================================================================
+WRITER CONFIGURATION
+====================================================================
+
+Role name: writer_cino
+
+Two writers with different behavior profiles.
+
+  ------------------------------
+  Writer A – Escalation Engine
+  ------------------------------
+
+Model: - Qwen3-30B-Instruct (ollama version)
+
+Instruction Profile: - Increase narrative tension. - Strengthen
+conflict. - Add decisive actions. - Avoid passive narration. - Ensure
+cause-effect clarity. - Do NOT resolve central conflict prematurely. -
+Full rewrite required.
+
+Parameters: - Temperature: 0.60 - TopP: 0.90 - Repeat penalty: 1.15 -
+TopK: 40 - Context: full text injected explicitly
+
+  -------------------------------
+  Writer B – Structural Refiner
+  -------------------------------
+
+Model: - Qwen2.5-7B-Instruct (ollama version) OR - Minstral-8B-Instruct
+(gguf llama.cpp version with larger context)
+
+Instruction Profile: - Improve logical coherence. - Clarify temporal
+transitions. - Strengthen character consistency. - Improve flow between
+paragraphs. - Maintain escalation but prioritize structural integrity. -
+Full rewrite required.
+
+Parameters: - Temperature: 0.50 - TopP: 0.90 - Repeat penalty: 1.15 -
+TopK: 40 - Context: full text injected explicitly
+
+====================================================================
+EVALUATION
+====================================================================
+
+-   Use existing evaluators (no modification).
+-   Full-text evaluation only.
+-   Compute average score.
+-   Track per-criterion totals across both evaluators.
+
+====================================================================
+IMPORTANT RULES
+====================================================================
+
+-   Writers DO NOT receive numeric score.
+-   Writers receive structured feedback only.
+-   Always use centralized command dispatcher and logging services.
+-   Store parent-child relationship in existing story table.
+-   Keep only accepted best version.
+-   Discard inferior candidates.
+
+==================================================================== END
+OF SPECIFICATION
+====================================================================

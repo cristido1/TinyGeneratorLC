@@ -96,6 +96,7 @@ namespace TinyGenerator.Pages.TtsVoices
                     var q = Search.Trim();
                     filtered = filtered.Where(v => (v.Name ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
                         || (v.VoiceId ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                        || (v.Provider ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
                         || (v.Model ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
                         || (v.Language ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase));
                 }
@@ -110,6 +111,7 @@ namespace TinyGenerator.Pages.TtsVoices
                     {
                         "name" => asc ? filtered.OrderBy(v => v.Name) : filtered.OrderByDescending(v => v.Name),
                         "voiceId" => asc ? filtered.OrderBy(v => v.VoiceId) : filtered.OrderByDescending(v => v.VoiceId),
+                        "provider" => asc ? filtered.OrderBy(v => v.Provider) : filtered.OrderByDescending(v => v.Provider),
                         "gender" => asc ? filtered.OrderBy(v => v.Gender) : filtered.OrderByDescending(v => v.Gender),
                         "age" => asc ? filtered.OrderBy(v => v.Age) : filtered.OrderByDescending(v => v.Age),
                         "score" => asc ? filtered.OrderBy(v => v.Score) : filtered.OrderByDescending(v => v.Score),
@@ -189,6 +191,7 @@ namespace TinyGenerator.Pages.TtsVoices
                     var q = search.Trim();
                     filtered = filtered.Where(v => (v.Name ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
                         || (v.VoiceId ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
+                        || (v.Provider ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
                         || (v.Model ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase)
                         || (v.Language ?? string.Empty).Contains(q, StringComparison.OrdinalIgnoreCase));
                 }
@@ -207,19 +210,20 @@ namespace TinyGenerator.Pages.TtsVoices
                 {
                     1 => "Name",
                     2 => "VoiceId",
-                    3 => "Model",
-                    4 => "Language",
-                    5 => "Gender",
-                    6 => "Age",
-                    7 => "Confidence",
-                    8 => "Score",
-                    9 => "Tags",
-                    10 => "TemplateWav",
+                    3 => "Provider",
+                    4 => "Model",
+                    5 => "Language",
+                    6 => "Gender",
+                    7 => "Age",
+                    8 => "Confidence",
+                    9 => "Score",
+                    10 => "Tags",
                     11 => "TemplateWav",
-                    12 => "Archetype",
-                    13 => "Notes",
-                    14 => "CreatedAt",
-                    15 => "UpdatedAt",
+                    12 => "TemplateWav",
+                    13 => "Archetype",
+                    14 => "Notes",
+                    15 => "CreatedAt",
+                    16 => "UpdatedAt",
                     _ => "Name"
                 };
 
@@ -232,6 +236,7 @@ namespace TinyGenerator.Pages.TtsVoices
                     string.Empty,
                     v.Name ?? string.Empty,
                     v.VoiceId ?? string.Empty,
+                    v.Provider ?? string.Empty,
                     v.Model ?? string.Empty,
                     v.Language ?? string.Empty,
                     v.Gender ?? string.Empty,
@@ -262,6 +267,7 @@ namespace TinyGenerator.Pages.TtsVoices
             {
                 "Name" => v.Name,
                 "VoiceId" => v.VoiceId,
+                "Provider" => v.Provider,
                 "Model" => v.Model,
                 "Language" => v.Language,
                 "Gender" => v.Gender,
@@ -311,8 +317,11 @@ namespace TinyGenerator.Pages.TtsVoices
                 if (string.IsNullOrWhiteSpace(textToRead)) return NotFound();
 
                 // Call TTS to synthesize sample. Use voice's Model if present (pass model:voiceId) so the TTS service picks correct model/speaker.
-                var voiceParam = !string.IsNullOrWhiteSpace(v.Model) ? (v.Model + ":" + (v.VoiceId ?? string.Empty)) : (v.VoiceId ?? string.Empty);
-                var synth = await _tts.SynthesizeAsync(voiceParam, textToRead, v.Language);
+                var provider = string.IsNullOrWhiteSpace(v.Provider) ? "localtts" : v.Provider;
+                var voiceParam = string.Equals(provider, "elevenlabs", StringComparison.OrdinalIgnoreCase)
+                    ? (v.VoiceId ?? string.Empty)
+                    : (!string.IsNullOrWhiteSpace(v.Model) ? (v.Model + ":" + (v.VoiceId ?? string.Empty)) : (v.VoiceId ?? string.Empty));
+                var synth = await _tts.SynthesizeAsync(voiceParam, textToRead, v.Language, provider: provider);
                 if (synth == null) return StatusCode(500, "Synthesis failed or returned no audio");
 
                 byte[] audioBytes = Array.Empty<byte>();
@@ -426,8 +435,11 @@ namespace TinyGenerator.Pages.TtsVoices
                 var textToRead = !string.IsNullOrWhiteSpace(v.Notes) ? v.Notes : (v.Name ?? v.VoiceId ?? "Sample");
                 if (string.IsNullOrWhiteSpace(textToRead)) return new JsonResult(new { error = "No sample text available" }) { StatusCode = 400 };
 
-                var voiceParam = !string.IsNullOrWhiteSpace(v.Model) ? (v.Model + ":" + (v.VoiceId ?? string.Empty)) : (v.VoiceId ?? string.Empty);
-                var synth = await _tts.SynthesizeAsync(voiceParam, textToRead, v.Language);
+                var provider = string.IsNullOrWhiteSpace(v.Provider) ? "localtts" : v.Provider;
+                var voiceParam = string.Equals(provider, "elevenlabs", StringComparison.OrdinalIgnoreCase)
+                    ? (v.VoiceId ?? string.Empty)
+                    : (!string.IsNullOrWhiteSpace(v.Model) ? (v.Model + ":" + (v.VoiceId ?? string.Empty)) : (v.VoiceId ?? string.Empty));
+                var synth = await _tts.SynthesizeAsync(voiceParam, textToRead, v.Language, provider: provider);
                 if (synth == null) return new JsonResult(new { error = "Synthesis failed" }) { StatusCode = 500 };
 
                 byte[] audioBytes = Array.Empty<byte>();

@@ -48,6 +48,26 @@ namespace TinyGenerator.Services
         public bool EnableDeterministicValidation { get; set; } = true;
 
         /// <summary>
+        /// If true, apply a deterministic similarity repetition check on text responses.
+        /// </summary>
+        public bool EnableSimilarSentenceRepetitionCheck { get; set; } = false;
+
+        /// <summary>
+        /// If true, apply an embedding-based semantic repetition check on text responses.
+        /// </summary>
+        public bool EnableEmbeddingSemanticRepetitionCheck { get; set; } = false;
+
+        /// <summary>
+        /// Similarity threshold (Jaccard) used by sentence repetition check.
+        /// </summary>
+        public double SimilarSentenceSimilarityThreshold { get; set; } = 0.8;
+
+        /// <summary>
+        /// Number of similar sentence matches tolerated before failing validation.
+        /// </summary>
+        public int SimilarSentenceRepeatLimit { get; set; } = 2;
+
+        /// <summary>
         /// Roles that must never be validated (avoid recursion / unwanted validation).
         /// </summary>
         public List<string> SkipRoles { get; set; } = new() { "response_checker", "log_analyzer" };
@@ -91,6 +111,26 @@ namespace TinyGenerator.Services
         /// Overrides ResponseValidationOptions.EnableDeterministicValidation for this operation.
         /// </summary>
         public bool? EnableDeterministicValidation { get; set; }
+
+        /// <summary>
+        /// Overrides ResponseValidationOptions.EnableSimilarSentenceRepetitionCheck for this operation.
+        /// </summary>
+        public bool? EnableSimilarSentenceRepetitionCheck { get; set; }
+
+        /// <summary>
+        /// Overrides ResponseValidationOptions.EnableEmbeddingSemanticRepetitionCheck for this operation.
+        /// </summary>
+        public bool? EnableEmbeddingSemanticRepetitionCheck { get; set; }
+
+        /// <summary>
+        /// Overrides ResponseValidationOptions.SimilarSentenceSimilarityThreshold for this operation.
+        /// </summary>
+        public double? SimilarSentenceSimilarityThreshold { get; set; }
+
+        /// <summary>
+        /// Overrides ResponseValidationOptions.SimilarSentenceRepeatLimit for this operation.
+        /// </summary>
+        public int? SimilarSentenceRepeatLimit { get; set; }
 
         /// <summary>
         /// If set, only these rule ids will be passed to response_checker for this operation.

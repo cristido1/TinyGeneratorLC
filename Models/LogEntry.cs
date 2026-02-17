@@ -91,6 +91,9 @@ namespace TinyGenerator.Models
         
         [Column("MaxStep")]
         public int? MaxStep { get; set; } // Total steps for multi-step operations
+
+        [Column("durationSecs")]
+        public int? DurationSecs { get; set; }
         
         // Concurrency token for optimistic locking
         [Timestamp]

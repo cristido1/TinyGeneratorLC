@@ -84,7 +84,12 @@ namespace TinyGenerator.Controllers
                 // Call model and expose default tools (memory) if the model supports tools
                 var chatBridge = _kernelFactory.CreateChatBridge(request.Model);
                 var tools = _kernelFactory.GetDefaultToolSchemasForModel(request.Model) ?? new List<Dictionary<string, object>>();
-                var response = await chatBridge.CallModelWithToolsAsync(messages, tools, CancellationToken.None);
+                var response = await chatBridge.CallModelWithToolsAsync(
+                    messages,
+                    tools,
+                    CancellationToken.None,
+                    skipResponseChecker: true,
+                    skipResponseValidation: true);
 
                 // ReAct loop: if the model returns tool_calls, execute them and re-call the model
                 var (textContent, toolCalls) = LangChainChatBridge.ParseChatResponse(response);
@@ -151,7 +156,12 @@ namespace TinyGenerator.Controllers
                         var toolSchemas = orchestrator.GetToolSchemas();
 
                         // Call model again with updated history
-                        var nextResponse = await chatBridge.CallModelWithToolsAsync(nextMessages, toolSchemas, CancellationToken.None);
+                        var nextResponse = await chatBridge.CallModelWithToolsAsync(
+                            nextMessages,
+                            toolSchemas,
+                            CancellationToken.None,
+                            skipResponseChecker: true,
+                            skipResponseValidation: true);
                         var (nextText, nextToolCalls) = LangChainChatBridge.ParseChatResponse(nextResponse);
 
                         // Append assistant response

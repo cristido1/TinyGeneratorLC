@@ -1,4 +1,7 @@
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Text.Json;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
@@ -45,6 +48,11 @@ public sealed class CommandModelExecutionService : IAgentCallService
     private readonly ICustomLogger? _logger;
     private readonly IOptions<ResponseValidationOptions>? _responseValidationOptions;
     private readonly IOptions<CommandPoliciesOptions>? _commandPoliciesOptions;
+    private readonly IOptionsMonitor<RepetitionDetectionOptions>? _repetitionDetectionOptions;
+    private readonly IOptionsMonitor<EmbeddingRepetitionOptions>? _embeddingRepetitionOptions;
+    private readonly Queue<List<string>> _recentSentenceNgrams = new();
+    private readonly object _recentSentenceNgramsLock = new();
+    private static readonly HttpClient EmbeddingHttpClient = new HttpClient();
 
     private sealed record ExecutionSettings(
         int MaxAttempts,
@@ -55,7 +63,39 @@ public sealed class CommandModelExecutionService : IAgentCallService
         bool DiagnoseOnFinalFailure,
         int ExplainAfterAttempt,
         int CheckerTimeoutSec,
-        bool EnableDeterministicValidation);
+        bool EnableDeterministicValidation,
+        bool EnableSimilarSentenceRepetitionCheck,
+        bool EnableEmbeddingSemanticRepetitionCheck,
+        int SimilarSentenceRepeatLimit,
+        int NGramSize,
+        int LocalWindow,
+        int RecentMemorySize,
+        int ChunkSizeSentences,
+        double LocalThreshold,
+        double MemoryThreshold,
+        double ChunkThreshold,
+        double HardFailThreshold,
+        double PenaltyMedium,
+        double PenaltyLow,
+        bool RemoveStopWords);
+
+    public sealed record RepetitionAnalysisResult(
+        double LocalJaccard,
+        double MemoryJaccard,
+        double ChunkJaccard,
+        double RepetitionScore,
+        string Source,
+        int LocalHits,
+        int MemoryHits,
+        int ChunkHits);
+
+    public sealed class RepetitionResult
+    {
+        public double MaxScore { get; set; }
+        public string Source { get; set; } = "local";
+        public bool HardFail { get; set; }
+        public int SentencesCount { get; set; }
+    }
 
     public CommandModelExecutionService(
         ILangChainKernelFactory kernelFactory,
@@ -63,6 +103,8 @@ public sealed class CommandModelExecutionService : IAgentCallService
         DatabaseService database,
         IOptions<CommandPoliciesOptions>? commandPoliciesOptions = null,
         IOptions<ResponseValidationOptions>? responseValidationOptions = null,
+        IOptionsMonitor<RepetitionDetectionOptions>? repetitionDetectionOptions = null,
+        IOptionsMonitor<EmbeddingRepetitionOptions>? embeddingRepetitionOptions = null,
         ICustomLogger? logger = null)
     {
         _kernelFactory = kernelFactory;
@@ -70,6 +112,8 @@ public sealed class CommandModelExecutionService : IAgentCallService
         _database = database;
         _commandPoliciesOptions = commandPoliciesOptions;
         _responseValidationOptions = responseValidationOptions;
+        _repetitionDetectionOptions = repetitionDetectionOptions;
+        _embeddingRepetitionOptions = embeddingRepetitionOptions;
         _logger = logger;
     }
 
@@ -148,6 +192,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     roleCode,
                     request.SystemPrompt ?? BuildSystemPrompt(request.Agent),
                     currentPrompt,
+                    request.CommandKey,
                     skipResponseChecker: true,
                     attemptToken).ConfigureAwait(false);
             }
@@ -155,7 +200,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             {
                 lastError = $"Timeout fase dopo {settings.StepTimeoutSec}s";
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito: {lastError}");
-                MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
+                MarkLatestAttemptResult(modelName, request.Agent!, "FAILED", lastError, examined: true);
                 if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
@@ -183,14 +228,32 @@ public sealed class CommandModelExecutionService : IAgentCallService
             }
 
             lastOutput = text;
-            var deterministic = settings.EnableDeterministicValidation
-                ? request.DeterministicValidator?.Invoke(text) ?? new DeterministicValidationResult(true, null)
-                : new DeterministicValidationResult(true, null);
+            var deterministic = await ValidateGlobalDeterministicChecksAsync(
+                text,
+                settings,
+                request.Agent?.Name,
+                modelName,
+                roleCode,
+                request.RunId ?? string.Empty,
+                ct).ConfigureAwait(false);
+            if (deterministic.IsValid && settings.EnableDeterministicValidation)
+            {
+                deterministic = request.DeterministicValidator?.Invoke(text) ?? new DeterministicValidationResult(true, null);
+            }
 
             if (!deterministic.IsValid)
             {
                 lastError = string.IsNullOrWhiteSpace(deterministic.Reason) ? "Check deterministico fallito" : deterministic.Reason!;
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito (deterministico): {lastError}");
+                LogValidationFailureContext(
+                    request,
+                    roleCode,
+                    modelName,
+                    validationType: "deterministico",
+                    attempt: attempt,
+                    reason: lastError,
+                    promptSent: currentPrompt,
+                    responseText: lastOutput);
                 MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
                 if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                 {
@@ -217,12 +280,28 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 }
 
                 var checkerToken = checkerCts?.Token ?? attemptToken;
+                LogCheckerRequestContext(
+                    request,
+                    roleCode,
+                    modelName,
+                    attempt,
+                    currentPrompt,
+                    text);
                 var checkerResult = await ValidateWithCheckerAsync(request, text, rules, checkerToken).ConfigureAwait(false);
                 if (!checkerResult.IsValid)
                 {
                     lastError = string.IsNullOrWhiteSpace(checkerResult.Reason) ? "response_checker invalid" : checkerResult.Reason!;
                     _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito (checker): {lastError}");
-                    MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
+                    LogValidationFailureContext(
+                        request,
+                        roleCode,
+                        modelName,
+                        validationType: "checker",
+                        attempt: attempt,
+                        reason: lastError,
+                        promptSent: currentPrompt,
+                        responseText: lastOutput);
+                    MarkLatestAttemptResult(modelName, request.Agent!, "FAILED", lastError, examined: true);
                     if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                     {
                         await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
@@ -239,7 +318,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             }
 
             _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} riuscito");
-            MarkLatestAttemptResult(modelName, request.Agent, "SUCCESS", null, examined: true);
+            MarkLatestAttemptResult(modelName, request.Agent!, "SUCCESS", null, examined: true);
             return new Result
             {
                 Success = true,
@@ -338,6 +417,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         string roleCode,
         string systemPrompt,
         string prompt,
+        string? operationScope,
         bool skipResponseChecker,
         CancellationToken ct)
     {
@@ -356,8 +436,11 @@ public sealed class CommandModelExecutionService : IAgentCallService
             new ConversationMessage { Role = "user", Content = prompt }
         };
 
+        var effectiveScope = string.IsNullOrWhiteSpace(operationScope)
+            ? (LogScope.Current ?? requestScope(roleCode))
+            : operationScope.Trim();
         using var scope = LogScope.Push(
-            LogScope.Current ?? requestScope(roleCode),
+            effectiveScope,
             operationId: null,
             stepNumber: null,
             maxStep: null,
@@ -380,6 +463,12 @@ public sealed class CommandModelExecutionService : IAgentCallService
         IReadOnlyList<ResponseValidationRule> rules,
         CancellationToken ct)
     {
+        if (IsResponseCheckerRole(request.RoleCode, request.Agent?.Role))
+        {
+            // Never let response_checker recursively validate itself.
+            return new ValidationResult { IsValid = true, NeedsRetry = false, Reason = "response_checker self-check disabled" };
+        }
+
         using var scope = _scopeFactory.CreateScope();
         var checker = scope.ServiceProvider.GetService<ResponseCheckerService>();
         if (checker == null)
@@ -392,8 +481,8 @@ public sealed class CommandModelExecutionService : IAgentCallService
             instruction,
             outputText,
             rules,
-            agentName: request.Agent.Name,
-            modelName: ResolveModelName(request.Agent),
+            agentName: request.Agent?.Name,
+            modelName: request.Agent != null ? ResolveModelName(request.Agent) : null,
             ct: ct).ConfigureAwait(false);
     }
 
@@ -446,6 +535,71 @@ public sealed class CommandModelExecutionService : IAgentCallService
         }
     }
 
+    private void LogCheckerRequestContext(
+        Request request,
+        string roleCode,
+        string modelName,
+        int attempt,
+        string? promptSent,
+        string? candidateResponse)
+    {
+        if (_logger == null)
+        {
+            return;
+        }
+
+        var runId = request.RunId ?? string.Empty;
+        var agentName = string.IsNullOrWhiteSpace(request.Agent?.Name) ? "(agent n/a)" : request.Agent.Name;
+        var instruction = BuildInstructionForChecker(request);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"[CHECKER_REQUEST] attempt={attempt}");
+        sb.AppendLine($"role={roleCode}; agent={agentName}; model={modelName}");
+        sb.AppendLine("PROMPT_INVIATO_AL_MODELLO:");
+        sb.AppendLine(promptSent ?? request.Prompt ?? string.Empty);
+        sb.AppendLine("ISTRUZIONE_INVIATA_AL_CHECKER:");
+        sb.AppendLine(instruction);
+        sb.AppendLine("RISPOSTA_CANDIDATA_DA_VALIDARE:");
+        sb.AppendLine(candidateResponse ?? string.Empty);
+
+        _logger.Append(runId, sb.ToString(), "info");
+    }
+
+    private void LogValidationFailureContext(
+        Request request,
+        string roleCode,
+        string modelName,
+        string validationType,
+        int attempt,
+        string reason,
+        string? promptSent,
+        string? responseText)
+    {
+        if (_logger == null)
+        {
+            return;
+        }
+
+        var runId = request.RunId ?? string.Empty;
+        var agentName = string.IsNullOrWhiteSpace(request.Agent?.Name) ? "(agent n/a)" : request.Agent.Name;
+        var prompt = promptSent ?? request.Prompt ?? string.Empty;
+        var responsePreview = responseText ?? string.Empty;
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"[VALIDATION_FAIL_CONTEXT] type={validationType}; attempt={attempt}");
+        sb.AppendLine($"role={roleCode}; agent={agentName}; model={modelName}");
+        sb.AppendLine($"reason={reason}");
+        sb.AppendLine("PROMPT_INVIATO:");
+        sb.AppendLine(prompt);
+        if (!string.IsNullOrWhiteSpace(responsePreview))
+        {
+            sb.AppendLine("RISPOSTA_MODELLO:");
+            sb.AppendLine(responsePreview);
+        }
+
+        _logger.Append(runId, sb.ToString(), "warning");
+    }
+
     private string BuildInstructionForChecker(Request request)
     {
         var sb = new StringBuilder();
@@ -469,6 +623,558 @@ public sealed class CommandModelExecutionService : IAgentCallService
         return sb.ToString();
     }
 
+    private async Task<DeterministicValidationResult> ValidateGlobalDeterministicChecksAsync(
+        string text,
+        ExecutionSettings settings,
+        string? agentName,
+        string? modelName,
+        string roleCode,
+        string runId,
+        CancellationToken ct)
+    {
+        var output = (text ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return new DeterministicValidationResult(false, "Output vuoto");
+        }
+
+        RepetitionAnalysisResult? jaccard = null;
+        RepetitionResult? embedding = null;
+        var checkSw = Stopwatch.StartNew();
+
+        if (settings.EnableSimilarSentenceRepetitionCheck)
+        {
+            jaccard = AnalyzeRepetition(
+                output,
+                settings.NGramSize,
+                settings.LocalWindow,
+                settings.RecentMemorySize,
+                settings.ChunkSizeSentences,
+                settings.LocalThreshold,
+                settings.MemoryThreshold,
+                settings.ChunkThreshold,
+                settings.RemoveStopWords);
+        }
+
+        if (settings.EnableEmbeddingSemanticRepetitionCheck)
+        {
+            var embeddingOptions = _embeddingRepetitionOptions?.CurrentValue ?? new EmbeddingRepetitionOptions();
+            embedding = await DetectEmbeddingRepetitionsAsync(output, embeddingOptions, ct).ConfigureAwait(false);
+        }
+
+        checkSw.Stop();
+        var durationSecs = Math.Max(1, (int)Math.Ceiling(checkSw.Elapsed.TotalSeconds));
+        if (_logger != null && (settings.EnableSimilarSentenceRepetitionCheck || settings.EnableEmbeddingSemanticRepetitionCheck))
+        {
+            var maxScore = Math.Max(jaccard?.RepetitionScore ?? 0, embedding?.MaxScore ?? 0);
+            var source = (embedding != null && embedding.MaxScore >= (jaccard?.RepetitionScore ?? 0))
+                ? $"embedding:{embedding.Source}"
+                : $"jaccard:{jaccard?.Source ?? "none"}";
+            var success = true;
+
+            if (jaccard != null)
+            {
+                var hasLocalFail = jaccard.LocalJaccard >= settings.LocalThreshold && jaccard.LocalHits > settings.SimilarSentenceRepeatLimit;
+                var hasMemoryFail = jaccard.MemoryJaccard >= settings.MemoryThreshold && jaccard.MemoryHits > settings.SimilarSentenceRepeatLimit;
+                var hasChunkFail = jaccard.ChunkJaccard >= settings.ChunkThreshold && jaccard.ChunkHits > settings.SimilarSentenceRepeatLimit;
+                if (hasLocalFail || hasMemoryFail || hasChunkFail) success = false;
+            }
+            if (embedding != null && embedding.HardFail) success = false;
+
+            var statusWord = success ? "SUCCESSED" : "FAILED";
+            _logger.Log(
+                success ? "Information" : "Warning",
+                "RepetitionValidation",
+                $"agent={agentName ?? roleCode}; model={modelName ?? "(unknown)"}; score={maxScore:0.000}; source={source}; status={statusWord}; durationSecs={durationSecs}",
+                result: success ? "SUCCESS" : "FAILED",
+                durationSecs: durationSecs);
+        }
+
+        if (jaccard != null)
+        {
+            var hasLocalFail = jaccard.LocalJaccard >= settings.LocalThreshold && jaccard.LocalHits > settings.SimilarSentenceRepeatLimit;
+            var hasMemoryFail = jaccard.MemoryJaccard >= settings.MemoryThreshold && jaccard.MemoryHits > settings.SimilarSentenceRepeatLimit;
+            var hasChunkFail = jaccard.ChunkJaccard >= settings.ChunkThreshold && jaccard.ChunkHits > settings.SimilarSentenceRepeatLimit;
+            if (hasLocalFail || hasMemoryFail || hasChunkFail)
+            {
+                return new DeterministicValidationResult(
+                    false,
+                    $"Ripetizioni rilevate (Jaccard) score={jaccard.RepetitionScore:0.00} source={jaccard.Source} (limite={settings.SimilarSentenceRepeatLimit})");
+            }
+        }
+
+        if (embedding != null && embedding.HardFail)
+        {
+            return new DeterministicValidationResult(
+                false,
+                $"Ripetizioni semantiche (STS) score={embedding.MaxScore:0.00} source={embedding.Source}");
+        }
+
+        return new DeterministicValidationResult(true, null);
+    }
+
+    private RepetitionAnalysisResult AnalyzeRepetition(
+        string text,
+        int nGramSize,
+        int localWindow,
+        int recentMemorySize,
+        int chunkSizeSentences,
+        double localThreshold,
+        double memoryThreshold,
+        double chunkThreshold,
+        bool removeStopWords)
+    {
+        var sentences = ExtractSentences(text);
+        if (sentences.Count == 0)
+        {
+            return new RepetitionAnalysisResult(0, 0, 0, 0, "none", 0, 0, 0);
+        }
+
+        var localBest = 0.0;
+        var localHits = 0;
+        for (var i = 0; i < sentences.Count; i++)
+        {
+            var maxOffset = Math.Min(localWindow, sentences.Count - i - 1);
+            for (var offset = 1; offset <= maxOffset; offset++)
+            {
+                var score = ComputeSentenceSimilarity(sentences[i], sentences[i + offset], nGramSize, removeStopWords);
+                if (score > localBest) localBest = score;
+                if (score >= localThreshold) localHits++;
+            }
+        }
+
+        var memoryBest = 0.0;
+        var memoryHits = 0;
+        var memorySnapshot = GetRecentMemorySnapshot();
+        foreach (var sentence in sentences)
+        {
+            var tokens = NormalizeAndTokenize(sentence, removeStopWords);
+            var currentNgrams = BuildNGrams(tokens, nGramSize).ToList();
+            if (currentNgrams.Count == 0) continue;
+            var currentSet = new HashSet<string>(currentNgrams, StringComparer.Ordinal);
+
+            foreach (var past in memorySnapshot)
+            {
+                if (past == null || past.Count == 0) continue;
+                var score = ComputeJaccard(currentSet, new HashSet<string>(past, StringComparer.Ordinal));
+                if (score > memoryBest) memoryBest = score;
+                if (score >= memoryThreshold) memoryHits++;
+            }
+
+            EnqueueRecentSentenceNgrams(currentNgrams, recentMemorySize);
+        }
+
+        var chunkBest = 0.0;
+        var chunkHits = 0;
+        var chunks = BuildChunks(sentences, chunkSizeSentences);
+        var chunkSets = chunks
+            .Select(chunk => BuildChunkNGramSet(chunk, nGramSize, removeStopWords))
+            .ToList();
+        for (var i = 0; i < chunkSets.Count; i++)
+        {
+            for (var j = 0; j < i; j++)
+            {
+                var score = ComputeJaccard(chunkSets[i], chunkSets[j]);
+                if (score > chunkBest) chunkBest = score;
+                if (score >= chunkThreshold) chunkHits++;
+            }
+        }
+
+        var repetitionScore = Math.Max(localBest, Math.Max(memoryBest, chunkBest));
+        var source = "local";
+        if (memoryBest >= localBest && memoryBest >= chunkBest) source = "memory";
+        if (chunkBest >= localBest && chunkBest >= memoryBest) source = "chunk";
+        if (repetitionScore <= 0) source = "none";
+
+        return new RepetitionAnalysisResult(
+            LocalJaccard: localBest,
+            MemoryJaccard: memoryBest,
+            ChunkJaccard: chunkBest,
+            RepetitionScore: repetitionScore,
+            Source: source,
+            LocalHits: localHits,
+            MemoryHits: memoryHits,
+            ChunkHits: chunkHits);
+    }
+
+    public static RepetitionAnalysisResult AnalyzeTextRepetition(string text, RepetitionDetectionOptions? options = null)
+    {
+        var cfg = options ?? new RepetitionDetectionOptions();
+        var sentences = ExtractSentences(text);
+        if (sentences.Count == 0)
+        {
+            return new RepetitionAnalysisResult(0, 0, 0, 0, "none", 0, 0, 0);
+        }
+
+        var nGramSize = Math.Max(1, cfg.NGramSize);
+        var localWindow = Math.Max(1, cfg.LocalWindow);
+        var chunkSizeSentences = Math.Max(1, cfg.ChunkSizeSentences);
+        var localThreshold = Math.Clamp(cfg.LocalThreshold, 0.0, 1.0);
+        var chunkThreshold = Math.Clamp(cfg.ChunkThreshold, 0.0, 1.0);
+
+        var localBest = 0.0;
+        var localHits = 0;
+        for (var i = 0; i < sentences.Count; i++)
+        {
+            var maxOffset = Math.Min(localWindow, sentences.Count - i - 1);
+            for (var offset = 1; offset <= maxOffset; offset++)
+            {
+                var score = ComputeSentenceSimilarity(sentences[i], sentences[i + offset], nGramSize, cfg.RemoveStopWords);
+                if (score > localBest) localBest = score;
+                if (score >= localThreshold) localHits++;
+            }
+        }
+
+        var chunkBest = 0.0;
+        var chunkHits = 0;
+        var chunks = BuildChunks(sentences, chunkSizeSentences);
+        var chunkSets = chunks
+            .Select(chunk => BuildChunkNGramSet(chunk, nGramSize, cfg.RemoveStopWords))
+            .ToList();
+        for (var i = 0; i < chunkSets.Count; i++)
+        {
+            for (var j = 0; j < i; j++)
+            {
+                var score = ComputeJaccard(chunkSets[i], chunkSets[j]);
+                if (score > chunkBest) chunkBest = score;
+                if (score >= chunkThreshold) chunkHits++;
+            }
+        }
+
+        var repetitionScore = Math.Max(localBest, chunkBest);
+        var source = repetitionScore <= 0 ? "none" : (chunkBest >= localBest ? "chunk" : "local");
+        return new RepetitionAnalysisResult(localBest, 0, chunkBest, repetitionScore, source, localHits, 0, chunkHits);
+    }
+
+    public async Task<RepetitionResult> DetectEmbeddingRepetitionsAsync(string text, EmbeddingRepetitionOptions opt, CancellationToken ct = default)
+    {
+        var options = opt ?? new EmbeddingRepetitionOptions();
+        var sentences = ExtractSentences(text);
+        if (sentences.Count == 0)
+        {
+            return new RepetitionResult { MaxScore = 0, Source = "local", HardFail = false, SentencesCount = 0 };
+        }
+
+        var embeddings = await BatchGetEmbeddings(sentences, options, ct).ConfigureAwait(false);
+        var recentMemory = new Queue<float[]>();
+
+        var maxLocal = 0.0;
+        var maxMemory = 0.0;
+
+        for (var i = 0; i < embeddings.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var embI = embeddings[i];
+            if (embI.Length == 0) continue;
+
+            var maxJ = Math.Min(embeddings.Count - 1, i + Math.Max(1, options.SentenceWindow));
+            for (var j = i + 1; j <= maxJ; j++)
+            {
+                var sim = Cosine(embI, embeddings[j]);
+                if (sim > maxLocal) maxLocal = sim;
+            }
+
+            foreach (var embPrev in recentMemory)
+            {
+                var sim = Cosine(embI, embPrev);
+                if (sim > maxMemory) maxMemory = sim;
+            }
+
+            recentMemory.Enqueue(embI);
+            while (recentMemory.Count > Math.Max(1, options.MemorySize))
+            {
+                recentMemory.Dequeue();
+            }
+        }
+
+        var maxChunk = 0.0;
+        var chunkSize = Math.Max(1, options.ChunkSize);
+        var chunkEmbeddings = new List<float[]>();
+        for (var i = 0; i < embeddings.Count; i += chunkSize)
+        {
+            var slice = embeddings.Skip(i).Take(chunkSize).Where(v => v.Length > 0).ToList();
+            if (slice.Count == 0) continue;
+            chunkEmbeddings.Add(AverageEmbedding(slice));
+        }
+
+        for (var i = 0; i < chunkEmbeddings.Count; i++)
+        {
+            for (var j = 0; j < i; j++)
+            {
+                var sim = Cosine(chunkEmbeddings[i], chunkEmbeddings[j]);
+                if (sim > maxChunk) maxChunk = sim;
+            }
+        }
+
+        var maxScore = Math.Max(maxLocal, Math.Max(maxMemory, maxChunk));
+        var source = "local";
+        if (maxChunk >= maxMemory && maxChunk >= maxLocal) source = "chunk";
+        else if (maxMemory >= maxLocal) source = "memory";
+
+        return new RepetitionResult
+        {
+            MaxScore = maxScore,
+            Source = source,
+            HardFail = maxScore >= options.HardFail,
+            SentencesCount = sentences.Count
+        };
+    }
+
+    private async Task<List<float[]>> BatchGetEmbeddings(List<string> sentences, EmbeddingRepetitionOptions options, CancellationToken ct)
+    {
+        var maxParallel = Math.Max(1, Math.Min(4, options.MaxParallelRequests));
+        var cache = new Dictionary<string, float[]>(StringComparer.Ordinal);
+        var results = new float[sentences.Count][];
+        var sem = new SemaphoreSlim(maxParallel, maxParallel);
+        var tasks = new List<Task>(sentences.Count);
+
+        for (var i = 0; i < sentences.Count; i++)
+        {
+            var idx = i;
+            var sentence = sentences[i];
+            tasks.Add(Task.Run(async () =>
+            {
+                ct.ThrowIfCancellationRequested();
+                if (cache.TryGetValue(sentence, out var cached))
+                {
+                    results[idx] = cached;
+                    return;
+                }
+
+                await sem.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    if (cache.TryGetValue(sentence, out var cachedAgain))
+                    {
+                        results[idx] = cachedAgain;
+                        return;
+                    }
+
+                    var emb = await GetEmbeddingAsync(sentence, options, ct).ConfigureAwait(false);
+                    lock (cache)
+                    {
+                        if (!cache.ContainsKey(sentence))
+                        {
+                            cache[sentence] = emb;
+                        }
+                        results[idx] = cache[sentence];
+                    }
+                }
+                finally
+                {
+                    sem.Release();
+                }
+            }, ct));
+        }
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+        return results.Select(r => r ?? Array.Empty<float>()).ToList();
+    }
+
+    private static async Task<float[]> GetEmbeddingAsync(string text, EmbeddingRepetitionOptions options, CancellationToken ct)
+    {
+        var endpoint = (options.Endpoint ?? "http://localhost:11434").TrimEnd('/');
+        var url = $"{endpoint}/api/embeddings";
+        var payload = JsonSerializer.Serialize(new
+        {
+            model = string.IsNullOrWhiteSpace(options.Model) ? "nomic-embed-text" : options.Model,
+            prompt = text ?? string.Empty
+        });
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+        using var response = await EmbeddingHttpClient.PostAsync(url, content, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+        if (doc.RootElement.TryGetProperty("embedding", out var embProp) && embProp.ValueKind == JsonValueKind.Array)
+        {
+            var vals = new List<float>();
+            foreach (var n in embProp.EnumerateArray())
+            {
+                if (n.ValueKind == JsonValueKind.Number && n.TryGetSingle(out var f))
+                {
+                    vals.Add(f);
+                }
+                else if (n.ValueKind == JsonValueKind.Number)
+                {
+                    vals.Add((float)n.GetDouble());
+                }
+            }
+
+            return vals.ToArray();
+        }
+
+        return Array.Empty<float>();
+    }
+
+    private static double Cosine(float[] a, float[] b)
+    {
+        if (a == null || b == null || a.Length == 0 || b.Length == 0) return 0;
+        var len = Math.Min(a.Length, b.Length);
+        if (len == 0) return 0;
+
+        double dot = 0;
+        double normA = 0;
+        double normB = 0;
+        for (var i = 0; i < len; i++)
+        {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+
+        if (normA <= 0 || normB <= 0) return 0;
+        return dot / (Math.Sqrt(normA) * Math.Sqrt(normB));
+    }
+
+    private static float[] AverageEmbedding(List<float[]> vectors)
+    {
+        if (vectors == null || vectors.Count == 0) return Array.Empty<float>();
+        var dim = vectors.Min(v => v?.Length ?? 0);
+        if (dim <= 0) return Array.Empty<float>();
+
+        var avg = new float[dim];
+        foreach (var vector in vectors)
+        {
+            if (vector == null || vector.Length < dim) continue;
+            for (var i = 0; i < dim; i++)
+            {
+                avg[i] += vector[i];
+            }
+        }
+
+        for (var i = 0; i < dim; i++)
+        {
+            avg[i] /= vectors.Count;
+        }
+
+        return avg;
+    }
+
+    private List<List<string>> GetRecentMemorySnapshot()
+    {
+        lock (_recentSentenceNgramsLock)
+        {
+            return _recentSentenceNgrams.Select(x => x.ToList()).ToList();
+        }
+    }
+
+    private void EnqueueRecentSentenceNgrams(List<string> ngrams, int recentMemorySize)
+    {
+        lock (_recentSentenceNgramsLock)
+        {
+            _recentSentenceNgrams.Enqueue(ngrams);
+            while (_recentSentenceNgrams.Count > recentMemorySize)
+            {
+                _recentSentenceNgrams.Dequeue();
+            }
+        }
+    }
+
+    private static List<string> ExtractSentences(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return new List<string>();
+        var sentences = Regex.Split(text.Trim(), @"(?<=[\.!?])\s+");
+        return sentences
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .ToList();
+    }
+
+    private static List<List<string>> BuildChunks(List<string> sentences, int chunkSizeSentences)
+    {
+        var size = Math.Max(1, chunkSizeSentences);
+        var chunks = new List<List<string>>();
+        for (var i = 0; i < sentences.Count; i += size)
+        {
+            chunks.Add(sentences.Skip(i).Take(size).ToList());
+        }
+
+        return chunks;
+    }
+
+    private static HashSet<string> BuildChunkNGramSet(List<string> chunk, int nGramSize, bool removeStopWords)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var sentence in chunk)
+        {
+            var tokens = NormalizeAndTokenize(sentence, removeStopWords);
+            foreach (var ng in BuildNGrams(tokens, nGramSize))
+            {
+                set.Add(ng);
+            }
+        }
+
+        return set;
+    }
+
+    private static readonly HashSet<string> ItalianStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "il","lo","la","i","gli","le","un","uno","una","di","a","da","in","con","su","per","tra","fra",
+        "e","o","ma","che","chi","cui","non","si","mi","ti","ci","vi","ne","del","della","dello","dei","degli","delle"
+    };
+
+    private static List<string> NormalizeAndTokenize(string sentence, bool removeStopWords = false)
+    {
+        var tokens = Regex.Matches((sentence ?? string.Empty).ToLowerInvariant(), @"\p{L}+")
+            .Select(m => m.Value)
+            .Where(x => x.Length > 0);
+
+        if (removeStopWords)
+        {
+            tokens = tokens.Where(t => !ItalianStopWords.Contains(t));
+        }
+
+        return tokens.ToList();
+    }
+
+    private static IEnumerable<string> BuildNGrams(List<string> tokens, int n)
+    {
+        var gramSize = Math.Max(1, n);
+        var items = tokens ?? new List<string>();
+        if (items.Count == 0) return Enumerable.Empty<string>();
+        if (items.Count < gramSize) return new[] { string.Join(" ", items) };
+
+        var ngrams = new List<string>(items.Count - gramSize + 1);
+        for (var i = 0; i <= items.Count - gramSize; i++)
+        {
+            ngrams.Add(string.Join(" ", items.Skip(i).Take(gramSize)));
+        }
+
+        return ngrams;
+    }
+
+    private static HashSet<string> ToNGramSet(string sentence, int nGramSize, bool removeStopWords)
+    {
+        var tokens = NormalizeAndTokenize(sentence, removeStopWords);
+        var ngrams = BuildNGrams(tokens, nGramSize).ToList();
+        return new HashSet<string>(ngrams, StringComparer.Ordinal);
+    }
+
+    private static double ComputeSentenceSimilarity(string s1, string s2)
+        => ComputeSentenceSimilarity(s1, s2, 3, true);
+
+    private static double ComputeSentenceSimilarity(string s1, string s2, int nGramSize, bool removeStopWords)
+    {
+        var a = ToNGramSet(s1, nGramSize, removeStopWords);
+        var b = ToNGramSet(s2, nGramSize, removeStopWords);
+        return ComputeJaccard(a, b);
+    }
+
+    private static double ComputeChunkSimilarity(List<string> chunkA, List<string> chunkB)
+    {
+        var a = BuildChunkNGramSet(chunkA, 3, true);
+        var b = BuildChunkNGramSet(chunkB, 3, true);
+        return ComputeJaccard(a, b);
+    }
+
+    private static double ComputeJaccard(HashSet<string> a, HashSet<string> b)
+    {
+        if (a.Count == 0 || b.Count == 0) return 0;
+        var intersection = a.Intersect(b).Count();
+        var union = a.Union(b).Count();
+        return union == 0 ? 0 : (double)intersection / union;
+    }
+
     private ExecutionSettings ResolveSettings(Request request)
     {
         var commandPolicy = _commandPoliciesOptions?.Value?.Resolve(request.CommandKey, null) ?? new CommandExecutionPolicy();
@@ -481,6 +1187,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var useResponseChecker = request.UseResponseChecker
             ?? responsePolicy?.EnableChecker
             ?? responseValidation.EnableCheckerByDefault;
+        if (IsResponseCheckerRole(request.RoleCode, request.Agent?.Role))
+        {
+            useResponseChecker = false;
+        }
         var enableFallback = request.EnableFallback ?? responseValidation.EnableFallback;
         var diagnoseOnFinalFailure = request.DiagnoseOnFinalFailure ?? responseValidation.AskFailureReasonOnFinalFailure;
         var explainAfterAttempt = request.ExplainAfterAttempt
@@ -492,6 +1202,24 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var enableDeterministicValidation = request.EnableDeterministicValidation
             ?? responsePolicy?.EnableDeterministicValidation
             ?? responseValidation.EnableDeterministicValidation;
+        var enableSimilarSentenceRepetitionCheck = responsePolicy?.EnableSimilarSentenceRepetitionCheck
+            ?? responseValidation.EnableSimilarSentenceRepetitionCheck;
+        var enableEmbeddingSemanticRepetitionCheck = responsePolicy?.EnableEmbeddingSemanticRepetitionCheck
+            ?? responseValidation.EnableEmbeddingSemanticRepetitionCheck;
+        var similarSentenceRepeatLimit = responsePolicy?.SimilarSentenceRepeatLimit
+            ?? responseValidation.SimilarSentenceRepeatLimit;
+        var repetitionOptions = _repetitionDetectionOptions?.CurrentValue ?? new RepetitionDetectionOptions();
+        var nGramSize = Math.Max(1, repetitionOptions.NGramSize);
+        var localWindow = Math.Max(1, repetitionOptions.LocalWindow);
+        var recentMemorySize = Math.Max(1, repetitionOptions.RecentMemorySize);
+        var chunkSizeSentences = Math.Max(1, repetitionOptions.ChunkSizeSentences);
+        var localThreshold = Math.Clamp(repetitionOptions.LocalThreshold, 0.0, 1.0);
+        var memoryThreshold = Math.Clamp(repetitionOptions.MemoryThreshold, 0.0, 1.0);
+        var chunkThreshold = Math.Clamp(repetitionOptions.ChunkThreshold, 0.0, 1.0);
+        var hardFailThreshold = Math.Clamp(repetitionOptions.HardFailThreshold, 0.0, 1.0);
+        var penaltyMedium = Math.Clamp(repetitionOptions.PenaltyMedium, 0.0, 1.0);
+        var penaltyLow = Math.Clamp(repetitionOptions.PenaltyLow, 0.0, 1.0);
+        var removeStopWords = repetitionOptions.RemoveStopWords;
 
         return new ExecutionSettings(
             MaxAttempts: Math.Max(1, maxAttempts),
@@ -502,7 +1230,21 @@ public sealed class CommandModelExecutionService : IAgentCallService
             DiagnoseOnFinalFailure: diagnoseOnFinalFailure,
             ExplainAfterAttempt: Math.Max(0, explainAfterAttempt),
             CheckerTimeoutSec: Math.Max(0, checkerTimeoutSec),
-            EnableDeterministicValidation: enableDeterministicValidation);
+            EnableDeterministicValidation: enableDeterministicValidation,
+            EnableSimilarSentenceRepetitionCheck: enableSimilarSentenceRepetitionCheck,
+            EnableEmbeddingSemanticRepetitionCheck: enableEmbeddingSemanticRepetitionCheck,
+            SimilarSentenceRepeatLimit: Math.Max(1, similarSentenceRepeatLimit),
+            NGramSize: nGramSize,
+            LocalWindow: localWindow,
+            RecentMemorySize: recentMemorySize,
+            ChunkSizeSentences: chunkSizeSentences,
+            LocalThreshold: localThreshold,
+            MemoryThreshold: memoryThreshold,
+            ChunkThreshold: chunkThreshold,
+            HardFailThreshold: hardFailThreshold,
+            PenaltyMedium: penaltyMedium,
+            PenaltyLow: penaltyLow,
+            RemoveStopWords: removeStopWords);
     }
 
     private static (string? MatchedKey, ResponseValidationCommandPolicy? Policy) ResolveResponsePolicy(
@@ -574,6 +1316,15 @@ public sealed class CommandModelExecutionService : IAgentCallService
         Add(TrimAgentSuffix(roleCode));
         Add(TrimAgentSuffix(agentRole));
         return candidates;
+    }
+
+    private static bool IsResponseCheckerRole(string? roleCode, string? agentRole)
+    {
+        static bool Match(string? value)
+            => !string.IsNullOrWhiteSpace(value)
+               && value.Trim().Equals("response_checker", StringComparison.OrdinalIgnoreCase);
+
+        return Match(roleCode) || Match(agentRole);
     }
 
     private void MarkLatestAttemptResult(string modelName, Agent agent, string result, string? failReason, bool examined)

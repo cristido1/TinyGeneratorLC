@@ -59,6 +59,12 @@ builder.Services.AddHttpClient("AudioCraft", c =>
     c.Timeout = TimeSpan.FromSeconds(5);
 });
 
+// TTS health check client (used by ServiceHealthMonitor)
+builder.Services.AddHttpClient("TTS", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(5);
+});
+
 // Service health monitor (for checking external services like AudioCraft)
 builder.Services.AddSingleton<IServiceHealthMonitor, ServiceHealthMonitor>();
 
@@ -257,6 +263,10 @@ builder.Services.Configure<AutomaticOperationsOptions>(builder.Configuration.Get
 builder.Services.Configure<StoryTaggingPipelineOptions>(builder.Configuration.GetSection("StoryTaggingPipeline"));
 // Narrator voice options (default voice id)
 builder.Services.Configure<NarratorVoiceOptions>(builder.Configuration.GetSection("NarratorVoice"));
+builder.Services.Configure<CinoOptions>(builder.Configuration.GetSection("CINO"));
+builder.Services.Configure<StoryEvaluationOptions>(builder.Configuration.GetSection("StoryEvaluation"));
+builder.Services.Configure<RepetitionDetectionOptions>(builder.Configuration.GetSection("RepetitionDetection"));
+builder.Services.Configure<EmbeddingRepetitionOptions>(builder.Configuration.GetSection("EmbeddingRepetition"));
 // ResponseValidationOptions configured above (Commands:ResponseValidation preferred)
 builder.Services.AddSingleton<CommandDispatcher>(sp =>
     new CommandDispatcher(
@@ -296,6 +306,7 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     audioGenerationOptions: sp.GetService<IOptionsMonitor<AudioGenerationOptions>>(),
     audioMixOptions: sp.GetService<IOptionsMonitor<AudioMixOptions>>(),
     narratorVoiceOptions: sp.GetService<IOptionsMonitor<NarratorVoiceOptions>>(),
+    storyEvaluationOptions: sp.GetService<IOptions<StoryEvaluationOptions>>(),
     idleAutoOptions: sp.GetService<IOptionsMonitor<AutomaticOperationsOptions>>(),
     scopeFactory: sp.GetService<IServiceScopeFactory>(),
     storyTaggingOptions: sp.GetService<IOptionsMonitor<StoryTaggingPipelineOptions>>(),
@@ -376,6 +387,27 @@ var ttsTimeoutRaw = Environment.GetEnvironmentVariable("TTS_TIMEOUT_SECONDS");
 if (!int.TryParse(ttsTimeoutRaw, out var ttsTimeout)) ttsTimeout = ttsOptions.TimeoutSeconds;
 ttsOptions.TimeoutSeconds = ttsTimeout;
 builder.Services.AddSingleton(ttsOptions);
+
+var elevenLabsOptions = new ElevenLabsOptions();
+builder.Configuration.GetSection("Secrets:ElevenLabs").Bind(elevenLabsOptions);
+if (string.IsNullOrWhiteSpace(elevenLabsOptions.ApiKey))
+{
+    elevenLabsOptions.ApiKey = Environment.GetEnvironmentVariable("ELEVENLABS_API_KEY") ?? string.Empty;
+}
+if (string.IsNullOrWhiteSpace(elevenLabsOptions.BaseUrl))
+{
+    elevenLabsOptions.BaseUrl = "https://api.elevenlabs.io";
+}
+if (string.IsNullOrWhiteSpace(elevenLabsOptions.ModelId))
+{
+    elevenLabsOptions.ModelId = "eleven_multilingual_v2";
+}
+if (string.IsNullOrWhiteSpace(elevenLabsOptions.OutputFormat))
+{
+    elevenLabsOptions.OutputFormat = "mp3_44100_128";
+}
+builder.Services.AddSingleton(elevenLabsOptions);
+
 builder.Services.AddHttpClient<TtsService>(client =>
 {
     client.BaseAddress = new Uri(ttsOptions.BaseUrl);
@@ -383,7 +415,8 @@ builder.Services.AddHttpClient<TtsService>(client =>
 }).AddTypedClient<TtsService>((httpClient, sp) =>
 {
     var customLogger = sp.GetService<ICustomLogger>();
-    return new TtsService(httpClient, ttsOptions, customLogger);
+    var elevenLabs = sp.GetRequiredService<ElevenLabsOptions>();
+    return new TtsService(httpClient, ttsOptions, elevenLabs, customLogger);
 });
 
 // CostController removed - call tracking/cost controller disabled
@@ -449,9 +482,9 @@ else
     logger?.LogInformation("[Startup] EF Core migrations are disabled (Database:EnableEfMigrations=false)");
 }
 
-// Ensure the global ServiceLocator points to the DI DatabaseService so legacy/static code
-// can route database access through the centralized semaphore-protected helpers.
-// ServiceLocator removed: DatabaseService is now available via DI (IOllamaMonitorService, DatabaseService, etc.)
+// Keep a minimal global bridge for legacy/static paths that still resolve services at runtime.
+TinyGenerator.Services.ServiceLocator.Services = app.Services;
+TinyGenerator.Services.ServiceLocator.Database = app.Services.GetService<TinyGenerator.Services.DatabaseService>();
 
 // Run expensive initialization (database schema migrations, seeding) after the DI container
 // is built to avoid blocking the `builder.Build()` call (which can resolve registered

@@ -49,9 +49,9 @@ namespace TinyGenerator.Services
             _timer = new Timer(async _ => await OnTimerAsync().ConfigureAwait(false), null, _flushInterval, _flushInterval);
         }
 
-        public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null)
+        public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null, int? durationSecs = null)
         {
-            LogWithChatText(level, category, message, null, exception, state, result, null);
+            LogWithChatText(level, category, message, null, exception, state, result, null, null, null, durationSecs);
         }
 
         private void LogWithChatText(
@@ -64,7 +64,8 @@ namespace TinyGenerator.Services
             string? result = null,
             int? explicitThreadId = null,
             string? modelName = null,
-            string? agentNameOverride = null)
+            string? agentNameOverride = null,
+            int? durationSecs = null)
         {
             if (_disposed) return;
 
@@ -74,8 +75,8 @@ namespace TinyGenerator.Services
             if (!ShouldPersist(category))
                 return;
 
-            var scope = LogScope.Current;
-            var effectiveAgentName = string.IsNullOrWhiteSpace(agentNameOverride) ? LogScope.CurrentAgentName : agentNameOverride;
+            var scope = ResolveOperationScope(LogScope.Current, category, message);
+            var effectiveAgentName = ResolveAgentName(agentNameOverride, scope, category);
             var currentAgentRole = LogScope.CurrentAgentRole;
 
             // Derive a default Result if not provided, to track SUCCESS/FAILED consistently.
@@ -167,7 +168,8 @@ namespace TinyGenerator.Services
                 ResultFailReason = null,
                 Examined = false,
                 StepNumber = LogScope.CurrentStepNumber,
-                MaxStep = LogScope.CurrentMaxStep
+                MaxStep = LogScope.CurrentMaxStep,
+                DurationSecs = NormalizeDuration(durationSecs)
             };
 
             bool shouldFlush = false;
@@ -182,6 +184,66 @@ namespace TinyGenerator.Services
                 // fire-and-forget flush; if semaphore is busy, FlushAsync will return quickly and postpone
                 _ = Task.Run(() => TryFlushAsync());
             }
+        }
+
+        private static int NormalizeDuration(int? durationSecs)
+        {
+            if (!durationSecs.HasValue) return 1;
+            return Math.Max(1, durationSecs.Value);
+        }
+
+        private static string ResolveOperationScope(string? scope, string? category, string? message)
+        {
+            if (!string.IsNullOrWhiteSpace(scope)) return scope.Trim();
+
+            var runtimeOperation = CommandExecutionRuntime.CurrentOperationName;
+            if (!string.IsNullOrWhiteSpace(runtimeOperation))
+            {
+                return runtimeOperation.Trim();
+            }
+
+            var fromMessage = DatabaseService.TryInferOperationFromMessage(message, category);
+            if (!string.IsNullOrWhiteSpace(fromMessage))
+            {
+                return fromMessage!;
+            }
+
+            if (!string.IsNullOrWhiteSpace(category))
+            {
+                return CommandOperationNameResolver.Normalize(category);
+            }
+
+            return "operation";
+        }
+
+        private static string ResolveAgentName(string? agentNameOverride, string operationScope, string? category)
+        {
+            if (!string.IsNullOrWhiteSpace(agentNameOverride))
+            {
+                return agentNameOverride.Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(LogScope.CurrentAgentName))
+            {
+                return LogScope.CurrentAgentName!.Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(LogScope.CurrentAgentRole))
+            {
+                return LogScope.CurrentAgentRole!.Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(operationScope))
+            {
+                return DatabaseService.NormalizeOperationForDisplay(operationScope);
+            }
+
+            if (!string.IsNullOrWhiteSpace(category))
+            {
+                return CommandOperationNameResolver.Normalize(category);
+            }
+
+            return "system";
         }
 
         private static bool IsResponseCheckerAgent(string? agentRole, string? agentName)

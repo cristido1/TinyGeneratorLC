@@ -21,12 +21,14 @@ namespace TinyGenerator.Pages.TtsVoices
         public void OnGet()
         {
             Voice.Disabled = false;
+            Voice.Provider = "localtts";
             Voice.CreatedAt = DateTime.UtcNow.ToString("o");
         }
 
         public IActionResult OnPost()
         {
             if (!ModelState.IsValid) return Page();
+            Voice.Provider = NormalizeProvider(Voice.Provider);
 
             try
             {
@@ -39,6 +41,13 @@ namespace TinyGenerator.Pages.TtsVoices
                 ModelState.AddModelError(string.Empty, ex.Message);
                 return Page();
             }
+        }
+
+        private static string NormalizeProvider(string? provider)
+        {
+            if (string.Equals(provider, "elevenlabs", StringComparison.OrdinalIgnoreCase))
+                return "elevenlabs";
+            return "localtts";
         }
     }
 }

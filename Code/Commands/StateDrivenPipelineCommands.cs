@@ -1008,118 +1008,52 @@ internal static class StateDrivenPipelineHelpers
         bool allowInternalFallback = true,
         bool skipResponseChecker = false)
     {
+        _ = kernelFactory;
+        _ = modelName;
+
+        async Task<AgentResponse> ExecuteWithAsync(IAgentCallService agentCall)
+        {
+            var result = await agentCall.ExecuteAsync(
+                new CommandModelExecutionService.Request
+                {
+                    CommandKey = roleCode,
+                    Agent = agent,
+                    RoleCode = roleCode,
+                    Prompt = userPrompt,
+                    SystemPrompt = systemPrompt,
+                    UseResponseChecker = !skipResponseChecker,
+                    EnableFallback = allowInternalFallback,
+                    DiagnoseOnFinalFailure = true,
+                    ExplainAfterAttempt = 0,
+                    RunId = LogScope.CurrentThreadId?.ToString()
+                },
+                ct).ConfigureAwait(false);
+
+            if (result.Success && !string.IsNullOrWhiteSpace(result.Text))
+            {
+                return AgentResponse.Ok(result.Text!);
+            }
+
+            return AgentResponse.Fail(result.Error ?? "Risposta vuota dal modello");
+        }
+
         if (scopeFactory != null)
         {
             using var agentScope = scopeFactory.CreateScope();
             var agentCall = agentScope.ServiceProvider.GetService<IAgentCallService>();
             if (agentCall != null)
             {
-                var result = await agentCall.ExecuteAsync(
-                    new CommandModelExecutionService.Request
-                    {
-                        CommandKey = roleCode,
-                        Agent = agent,
-                        RoleCode = roleCode,
-                        Prompt = userPrompt,
-                        SystemPrompt = systemPrompt,
-                        UseResponseChecker = !skipResponseChecker,
-                        EnableFallback = allowInternalFallback,
-                        DiagnoseOnFinalFailure = true,
-                        ExplainAfterAttempt = 0,
-                        RunId = LogScope.CurrentThreadId?.ToString()
-                    },
-                    ct).ConfigureAwait(false);
-
-                if (result.Success && !string.IsNullOrWhiteSpace(result.Text))
-                {
-                    return AgentResponse.Ok(result.Text!);
-                }
-
-                return AgentResponse.Fail(result.Error ?? "Risposta vuota dal modello");
+                return await ExecuteWithAsync(agentCall).ConfigureAwait(false);
             }
         }
 
-        var bridge = kernelFactory.CreateChatBridge(
-            modelName,
-            agent.Temperature,
-            agent.TopP,
-            agent.RepeatPenalty,
-            agent.TopK,
-            agent.RepeatLastN,
-            agent.NumPredict);
-
-        var messages = new List<ConversationMessage>
+        var rootAgentCall = ServiceLocator.Services?.GetService<IAgentCallService>();
+        if (rootAgentCall != null)
         {
-            new ConversationMessage { Role = "system", Content = systemPrompt },
-            new ConversationMessage { Role = "user", Content = userPrompt }
-        };
-
-        var response = await bridge.CallModelWithToolsAsync(
-            messages,
-            new List<Dictionary<string, object>>(),
-            ct,
-            skipResponseChecker: skipResponseChecker).ConfigureAwait(false);
-
-        var primary = ExtractAssistantContent(response);
-        if (!string.IsNullOrWhiteSpace(primary))
-        {
-            return AgentResponse.Ok(primary);
+            return await ExecuteWithAsync(rootAgentCall).ConfigureAwait(false);
         }
 
-        if (!allowInternalFallback || scopeFactory == null)
-        {
-            return AgentResponse.Fail("Risposta vuota dal modello");
-        }
-
-        using var scope = scopeFactory.CreateScope();
-        var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
-        if (fallbackService == null)
-        {
-            return AgentResponse.Fail("ModelFallbackService non disponibile");
-        }
-
-        var (fallbackResult, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync(
-            roleCode,
-            agent.ModelId,
-            async modelRole =>
-            {
-                var fallbackName = modelRole.Model?.Name;
-                if (string.IsNullOrWhiteSpace(fallbackName))
-                {
-                    throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
-                }
-
-                var fallbackBridge = kernelFactory.CreateChatBridge(
-                    fallbackName,
-                    agent.Temperature,
-                    modelRole.TopP ?? agent.TopP,
-                    agent.RepeatPenalty,
-                    modelRole.TopK ?? agent.TopK,
-                    agent.RepeatLastN,
-                    agent.NumPredict);
-
-                var fallbackMessages = new List<ConversationMessage>
-                {
-                    new ConversationMessage { Role = "system", Content = systemPrompt },
-                    new ConversationMessage { Role = "user", Content = userPrompt }
-                };
-
-                var fallbackResponse = await fallbackBridge.CallModelWithToolsAsync(
-                    fallbackMessages,
-                    new List<Dictionary<string, object>>(),
-                    ct,
-                    skipResponseChecker: skipResponseChecker).ConfigureAwait(false);
-
-                return ExtractAssistantContent(fallbackResponse);
-            },
-            validateResult: s => !string.IsNullOrWhiteSpace(s));
-
-        if (!string.IsNullOrWhiteSpace(fallbackResult) && successfulModelRole?.Model != null)
-        {
-            return AgentResponse.Ok(fallbackResult!);
-        }
-
-        return AgentResponse.Fail("Risposta vuota dal modello");
+        return AgentResponse.Fail("IAgentCallService non disponibile nel scope: chiamata diretta al modello disabilitata");
     }
 
     public static bool TryExtractJson(string raw, JsonValueKind expectedKind, out string json, out string error)

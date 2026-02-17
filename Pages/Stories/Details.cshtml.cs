@@ -298,7 +298,8 @@ namespace TinyGenerator.Pages.Stories
                     }
                 }
 
-                var res = await _tts.SynthesizeAsync(voiceId, text, narrator.Language, null);
+                var provider = string.IsNullOrWhiteSpace(narrator.Provider) ? "localtts" : narrator.Provider;
+                var res = await _tts.SynthesizeAsync(voiceId, text, narrator.Language, null, provider);
                 if (res == null)
                 {
                     _logger.LogError("TTS synthesis returned null for story {Id} using voice {VoiceId}", id, voiceId);

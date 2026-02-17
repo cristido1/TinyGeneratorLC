@@ -215,6 +215,62 @@
             statusEl.title = connected ? 'Connesso' : 'Disconnesso';
         }
 
+        function formatElapsedFromMs(totalMs) {
+            const safeMs = Number.isFinite(totalMs) ? Math.max(0, totalMs) : 0;
+            const totalSec = Math.floor(safeMs / 1000);
+            const hh = Math.floor(totalSec / 3600).toString().padStart(2, '0');
+            const mm = Math.floor((totalSec % 3600) / 60).toString().padStart(2, '0');
+            const ss = (totalSec % 60).toString().padStart(2, '0');
+            return `${hh}:${mm}:${ss}`;
+        }
+
+        function parseStepKeyValues(stepDesc) {
+            const result = {};
+            if (!stepDesc || typeof stepDesc !== 'string') return result;
+            const parts = stepDesc.split(/[|,]/);
+            for (const part of parts) {
+                const idx = part.indexOf('=');
+                if (idx <= 0) continue;
+                const key = part.substring(0, idx).trim().toLowerCase();
+                const value = part.substring(idx + 1).trim();
+                if (key) result[key] = value;
+            }
+            return result;
+        }
+
+        function extractModelCode(rawValue, modelId) {
+            let value = (rawValue || '').toString().trim();
+            if (!value) return modelId ? `#${modelId}` : 'N/A';
+
+            // Support payloads like "model=xxx|writer=yyy" or "modelname=xxx"
+            const kv = parseStepKeyValues(value);
+            const kvModel =
+                kv.modelcode ||
+                kv.modelname ||
+                kv.model ||
+                kv.code ||
+                '';
+            if (kvModel) {
+                value = kvModel.trim();
+            }
+
+            // Remove common descriptive suffixes, keep the technical model code.
+            const separators = [' - ', ' — ', ' (', ' [', ' | '];
+            for (const sep of separators) {
+                const idx = value.indexOf(sep);
+                if (idx > 0) {
+                    value = value.substring(0, idx).trim();
+                    break;
+                }
+            }
+
+            if (value.includes('/')) {
+                value = value.substring(value.lastIndexOf('/') + 1);
+            }
+
+            return value || (modelId ? `#${modelId}` : 'N/A');
+        }
+
         function renderCommands(cmds) {
             console.log('[CommandPanel] Rendering commands:', cmds);
             if (!Array.isArray(cmds)) cmds = [];
@@ -274,11 +330,15 @@
                     statusIcon = '<i class="bi bi-slash-circle me-1"></i>';
                 }
 
-                const currentStep = c.currentStep || c.CurrentStep;
-                const maxStep = c.maxStep || c.MaxStep;
+                const currentStep = c.currentStep ?? c.CurrentStep;
+                const maxStep = c.maxStep ?? c.MaxStep;
                 const stepDesc = c.stepDescription || c.StepDescription || '';
-                const retryCount = c.retryCount || c.RetryCount || 0;
-                const retryInfo = (retryCount > 0) ? ` (Retry ${retryCount})` : '';
+                const stepKv = parseStepKeyValues(stepDesc);
+                const retryCount = c.retryCount ?? c.RetryCount ?? 0;
+                const maxRetry = c.maxRetry ?? c.MaxRetry ?? 0;
+                const retryInfo = (retryCount > 0 || maxRetry > 0)
+                    ? ` (Retry ${retryCount}/${maxRetry})`
+                    : '';
                 const metadata = c.metadata || c.Metadata || {};
                 const op = metadata.operation || metadata.Operation || c.operationName || c.OperationName || c.threadScope || c.ThreadScope || 'N/A';
                 const opLower = (op || '').toString().toLowerCase();
@@ -287,23 +347,24 @@
                     || opLower.includes('intelligence_score')
                     || opLower.includes('intelligence_test');
                 const isIntelligenceTestCommand = opLower.includes('intelligence_test') || opLower.includes('intelligence_score');
+                const isCinoCommand = opLower.includes('cino_optimize_story');
                 const hasStep = currentStep !== undefined && currentStep !== null && maxStep !== undefined && maxStep !== null;
                 const scoreMatch = /(?:score\s*parziale|parziale)\s+(\d+\/10)/i.exec(stepDesc);
                 const runningScore = scoreMatch ? scoreMatch[1] : '';
+                const normalizedStepDesc = stepDesc ? stepDesc.replace(/\|/g, ', ') : '';
                 const stepInfo = stepDesc
                     ? ` (${stepDesc})`
                     : (hasStep ? ` ${isScoreCommand ? `Test ${currentStep}/${maxStep}` : `Step ${currentStep}/${maxStep}`}` : '');
-                const agent = c.agentName || c.AgentName || metadata.agentName || metadata.AgentName || metadata.agentRole || metadata.AgentRole || 'N/A';
+                const agent = c.agentName || c.AgentName || metadata.agentName || metadata.AgentName || metadata.agent || metadata.Agent || metadata.agentRole || metadata.AgentRole || 'N/A';
                 const statusDisplay = c.status || c.Status || '?';
                 const runId = c.runId || c.RunId || '';
+                const startedAtStr = c.startedAt || c.StartedAt;
+                const startedAt = startedAtStr ? new Date(startedAtStr) : null;
+                const elapsedText = startedAt ? formatElapsedFromMs(Date.now() - startedAt.getTime()) : '';
 
-                let modelShort = c.modelName || c.ModelName || metadata.modelName || metadata.ModelName || '';
-                if (modelShort && modelShort.includes('/')) {
-                    modelShort = modelShort.substring(modelShort.lastIndexOf('/') + 1);
-                }
-                if (modelShort && modelShort.includes(':')) {
-                    modelShort = modelShort.substring(0, modelShort.indexOf(':'));
-                }
+                const modelId = c.modelId || c.ModelId || metadata.modelId || metadata.ModelId || '';
+                const modelRaw = c.modelName || c.ModelName || metadata.modelName || metadata.ModelName || metadata.model || metadata.Model || '';
+                const modelCode = extractModelCode(modelRaw, modelId);
 
                 // Extract storyId from metadata if present
                 const storyId = metadata.storyId || metadata.StoryId;
@@ -352,21 +413,102 @@
                 if (candidateCount) autoInfoParts.push(`Candidati: ${candidateCount}`);
                 if (storyTitle) autoInfoParts.push(`Titolo: ${storyTitle}`);
                 const autoInfo = autoInfoParts.length
-                    ? `<div style="font-size:11px; color:#444; margin-top:4px; user-select:text;">${escapeHtml(autoInfoParts.join(' | '))}</div>`
+                    ? `<div style="font-size:11px; color:#444; margin-top:4px; user-select:text;">${escapeHtml(autoInfoParts.join(', '))}</div>`
                     : '';
 
                 const progressParts = [];
-                if (modelShort) progressParts.push(`<i class="bi bi-cpu me-1"></i>${modelShort}`);
+                if (modelCode && modelCode !== 'N/A') progressParts.push(`<i class="bi bi-cpu me-1"></i>${modelCode}`);
                 if (hasStep) {
                     progressParts.push(`${isIntelligenceTestCommand ? 'Domanda' : (isScoreCommand ? 'Test' : 'Step')} ${currentStep}/${maxStep}`);
                 }
                 if (isScoreCommand && runningScore) {
                     progressParts.push(`score running ${runningScore}`);
                 } else if (stepDesc) {
-                    progressParts.push(stepDesc);
+                    progressParts.push(normalizedStepDesc);
                 }
                 const progressInfo = progressParts.length
                     ? `<div style="font-size:11px; color:#111; margin-top:4px; user-select:text;">${progressParts.join(' • ')}</div>`
+                    : '';
+
+                const cinoWriter = stepKv.writer && stepKv.writer !== '-' ? stepKv.writer : (agent || 'N/A');
+                const cinoModelRaw = stepKv.modelname || (stepKv.model && stepKv.model !== '-' ? stepKv.model : '') || modelRaw;
+                const cinoModel = extractModelCode(cinoModelRaw, modelId);
+                const cinoBest = stepKv.best || '';
+                const cinoElapsed = stepKv.elapsed || elapsedText;
+                const cinoPhaseRaw = (stepKv.phase || '').toString().toLowerCase();
+                const cinoPhaseMap = {
+                    baseline: 'Baseline',
+                    generazione: 'Generazione candidato',
+                    writer_fallito: 'Writer fallito',
+                    valutazione_fallita: 'Valutazione fallita',
+                    candidato_accettato: 'Candidato accettato',
+                    candidato_scartato: 'Candidato scartato',
+                    fine_iterazione: 'Fine iterazione',
+                    completato: 'Completato'
+                };
+                const cinoPhase = cinoPhaseMap[cinoPhaseRaw] || (cinoPhaseRaw || 'N/A');
+                const cinoIter = stepKv.iter || '0';
+                const cinoParentId = stepKv.parentstoryid && stepKv.parentstoryid !== '0' ? stepKv.parentstoryid : '';
+                const cinoCandidateId = stepKv.candidatestoryid && stepKv.candidatestoryid !== '0' ? stepKv.candidatestoryid : '';
+                const cinoAcceptedStories = Number(stepKv.acceptedstories || metadata.acceptedStories || metadata.AcceptedStories || 0);
+                const cinoNote = stepKv.note && stepKv.note !== '-' ? stepKv.note : '';
+                const cinoTarget = metadata.targetScore || metadata.TargetScore || '';
+                const cinoMaxDuration = metadata.maxDurationSec || metadata.MaxDurationSec || '';
+                const cinoProgressPercent = (isCinoCommand && hasStep && maxStep > 0)
+                    ? Math.max(0, Math.min(100, Math.round((currentStep / maxStep) * 100)))
+                    : null;
+                const generatedStories = Number(
+                    stepKv.generatedstories
+                    || stepKv.generated
+                    || stepKv.stories
+                    || stepKv.cinoiter
+                    || metadata.generatedStories
+                    || metadata.GeneratedStories
+                    || metadata.cinoIteration
+                    || metadata.CinoIteration
+                );
+                const cinoGeneratedInfo = generatedStories > 0
+                    ? `<div style="font-size:11px; color:#111; margin-top:2px; user-select:text;">Storie generate: ${generatedStories}</div>`
+                    : '';
+                const cinoAcceptedInfo = cinoAcceptedStories > 0
+                    ? `<div style="font-size:11px; color:#111; margin-top:2px; user-select:text;">Storie accettate: ${cinoAcceptedStories}</div>`
+                    : '';
+                const cinoParentCandidateInfo = (cinoParentId || cinoCandidateId)
+                    ? `<div style="font-size:11px; color:#111; margin-top:2px; user-select:text;">${cinoParentId ? `Parent: ${escapeHtml(cinoParentId)}` : ''}${cinoParentId && cinoCandidateId ? ' • ' : ''}${cinoCandidateId ? `Candidate: ${escapeHtml(cinoCandidateId)}` : ''}</div>`
+                    : '';
+                const cinoTargetInfo = (cinoTarget || cinoMaxDuration)
+                    ? `<div style="font-size:11px; color:#111; margin-top:2px; user-select:text;">${cinoTarget ? `Target: ${escapeHtml(cinoTarget)}` : ''}${cinoTarget && cinoMaxDuration ? ' • ' : ''}${cinoMaxDuration ? `MaxDurata: ${escapeHtml(cinoMaxDuration)}s` : ''}</div>`
+                    : '';
+                const cinoNoteInfo = cinoNote
+                    ? `<div style="font-size:11px; color:#333; margin-top:2px; user-select:text;">Nota: ${escapeHtml(cinoNote)}</div>`
+                    : '';
+                const cinoProgressBar = cinoProgressPercent !== null
+                    ? `<div style="margin-top:4px;">
+                        <div style="height:6px; background:#e2e8f0; border-radius:999px; overflow:hidden;">
+                            <div style="height:100%; width:${cinoProgressPercent}%; background:#0d6efd;"></div>
+                        </div>
+                        <div style="font-size:10px; color:#444; margin-top:2px;">Tempo usato: ${cinoProgressPercent}%</div>
+                    </div>`
+                    : '';
+                const cinoInfo = isCinoCommand ? `
+                    <div style="font-size:11px; color:#111; margin-top:4px; user-select:text;">
+                        Writer: ${escapeHtml(cinoWriter)}${cinoModel ? ` • Model: ${escapeHtml(cinoModel)}` : ''}
+                    </div>
+                    <div style="font-size:11px; color:#111; margin-top:2px; user-select:text;">
+                        Fase: ${escapeHtml(cinoPhase)} • Iterazione: ${escapeHtml(cinoIter)}
+                    </div>
+                    <div style="font-size:11px; color:#111; margin-top:2px; user-select:text;">
+                        Best score: ${escapeHtml(cinoBest || 'N/A')} • Elapsed: ${escapeHtml(cinoElapsed || 'N/A')}
+                    </div>
+                    ${cinoGeneratedInfo}
+                    ${cinoAcceptedInfo}
+                    ${cinoParentCandidateInfo}
+                    ${cinoTargetInfo}
+                    ${cinoNoteInfo}
+                    ${cinoProgressBar}
+                ` : '';
+                const retryInfoLine = retryInfo
+                    ? `<div style="font-size:11px; color:#111; margin-top:2px; user-select:text;">Retry ${retryCount}/${maxRetry}</div>`
                     : '';
 
 
@@ -381,6 +523,9 @@
                         line-height: 1.2;
                     ">Annulla</button>
                 ` : '';
+                const compactStatus = (isCinoCommand && status === 'running')
+                    ? 'running CINO'
+                    : `${statusDisplay}${stepInfo}${retryInfo}`;
 
                 return `
                     <div style="
@@ -394,14 +539,17 @@
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <strong>${statusIcon} ${op}${storyIdBadge}</strong>
                             <div style="display:flex; align-items:center; gap:6px;">
-                                <span style="font-size:11px; opacity:0.8;">${statusDisplay}${stepInfo}${retryInfo}</span>
+                                <span style="font-size:11px; opacity:0.8;">${compactStatus}</span>
                                 ${cancelButton}
                             </div>
                         </div>
                         <div style="font-size:11px; color:#555; margin-top:4px;">
                             <span><i class="bi bi-person-fill me-1"></i>${agent || 'N/A'}</span>
-                            ${modelShort ? `<span class="ms-2"><i class="bi bi-cpu me-1"></i>${modelShort}</span>` : ''}
+                            <span class="ms-2"><i class="bi bi-cpu me-1"></i>${escapeHtml(modelCode)}</span>
+                            ${elapsedText ? `<span class="ms-2"><i class="bi bi-clock me-1"></i>${elapsedText}</span>` : ''}
                         </div>
+                        ${isCinoCommand ? retryInfoLine : ''}
+                        ${cinoInfo}
                         ${progressInfo}
                         ${autoInfo}
                         ${errorMsg}

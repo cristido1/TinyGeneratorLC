@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Services;
 using TinyGenerator.Models;
@@ -12,11 +13,13 @@ namespace TinyGenerator.Controllers
     {
         private readonly DatabaseService _db;
         private readonly ICustomLogger _logger;
+        private readonly ICommandDispatcher _dispatcher;
 
-        public LogsApiController(DatabaseService db, ICustomLogger logger)
+        public LogsApiController(DatabaseService db, ICustomLogger logger, ICommandDispatcher dispatcher)
         {
             _db = db;
             _logger = logger;
+            _dispatcher = dispatcher;
         }
 
         /// <summary>
@@ -87,13 +90,48 @@ namespace TinyGenerator.Controllers
         /// Clear all logs
         /// </summary>
         [HttpPost("clear")]
-        public IActionResult ClearLogs()
+        public async Task<IActionResult> ClearLogs()
         {
             try
             {
+                var runId = $"update_model_stats_pre_clear_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                var handle = _dispatcher.Enqueue(
+                    "update_model_stats",
+                    ctx =>
+                    {
+                        _db.RefreshModelStatsFromAllLogs();
+                        return Task.FromResult(new CommandResult(true, "Model stats refreshed from all logs"));
+                    },
+                    runId: runId,
+                    threadScope: "system/model_stats",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["operation"] = "update_model_stats",
+                        ["trigger"] = "clear_logs"
+                    },
+                    priority: 1,
+                    batch: true);
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
+                var statsResult = await _dispatcher.WaitForCompletionAsync(handle.RunId, cts.Token);
+                if (!statsResult.Success)
+                {
+                    return StatusCode(409, new
+                    {
+                        message = "ClearLogs bloccato: aggiornamento stats_models fallito.",
+                        statsRunId = handle.RunId,
+                        statsError = statsResult.Message
+                    });
+                }
+
                 _db.ClearLogs();
-                _logger.Log("Information", "LogsApi", "Logs cleared");
-                return Ok(new { message = "Logs cleared" });
+                _logger.Log("Information", "LogsApi", $"Logs cleared (statsRunId={handle.RunId})");
+                return Ok(new
+                {
+                    message = "Logs cleared",
+                    statsRunId = handle.RunId,
+                    statsMessage = statsResult.Message
+                });
             }
             catch (System.Exception ex)
             {

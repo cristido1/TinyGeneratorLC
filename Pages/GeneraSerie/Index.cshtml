@@ -30,6 +30,12 @@
                 <button type="button" id="generateRandomPromptBtn" class="btn btn-outline-primary">
                     <i class="bi bi-magic me-1"></i> Prompt Casuale da Writer
                 </button>
+                <button type="button" id="generateCrazyPromptBtn" class="btn btn-outline-warning">
+                    <i class="bi bi-stars me-1"></i> Prompt Pazzo da Writer
+                </button>
+                <button type="button" id="generateSpaceMilitaryPromptBtn" class="btn btn-outline-danger">
+                    <i class="bi bi-crosshair me-1"></i> Prompt Spaziale Militare
+                </button>
                 <button type="reset" class="btn btn-outline-secondary">Pulisci</button>
             </div>
         </form>
@@ -201,6 +207,181 @@
                     </div>
                     <div id="example-videoteca-temporale" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In una vecchia videoteca compaiono cassette che mostrano episodi futuri della vita dei clienti. Un gruppo di amici tenta di usare le visioni per migliorare il proprio destino, peggiorandolo.</div>
                 </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-door-open-fill me-2"></i>TERRORE - CASA SENZA USCITE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="TERRORE - CASA SENZA USCITE" data-target-id="example-terrore-casa-senza-uscite">Copia</button>
+                    </div>
+                    <div id="example-terrore-casa-senza-uscite" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una famiglia entra in una villa per una sola notte, ma all'alba ogni porta conduce a stanze diverse e sempre piu ostili. Tono claustrofobico, cupo, psicologico. Temi: colpa, memoria, sopravvivenza.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-mic-fill me-2"></i>TERRORE - RADIO DELLE ORE MORTE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="TERRORE - RADIO DELLE ORE MORTE" data-target-id="example-terrore-radio-ore-morte">Copia</button>
+                    </div>
+                    <div id="example-terrore-radio-ore-morte" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una piccola radio locale riceve ogni notte chiamate da persone gia morte che descrivono omicidi non ancora avvenuti. Tono teso, investigativo, soprannaturale. Temi: destino, responsabilita, paranoia.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-eye-fill me-2"></i>TERRORE - QUARTIERE OSSERVATO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="TERRORE - QUARTIERE OSSERVATO" data-target-id="example-terrore-quartiere-osservato">Copia</button>
+                    </div>
+                    <div id="example-terrore-quartiere-osservato" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In un quartiere periferico compaiono telecamere anonime che mostrano in diretta il futuro immediato dei residenti, sempre piu violento. Tono urbano, disturbante. Temi: controllo, paura collettiva, scelta morale.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-moisture me-2"></i>TERRORE - ACQUA NERA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="TERRORE - ACQUA NERA" data-target-id="example-terrore-acqua-nera">Copia</button>
+                    </div>
+                    <div id="example-terrore-acqua-nera" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Dopo una piena anomala, l'acqua del paese riflette volti sconosciuti e induce allucinazioni condivise. Un medico e una vigile urbana cercano l'origine del fenomeno. Tono realistico, angosciante. Temi: fede, sanita mentale, comunita.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-archive-fill me-2"></i>TERRORE - ARCHIVIO 404</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="TERRORE - ARCHIVIO 404" data-target-id="example-terrore-archivio-404">Copia</button>
+                    </div>
+                    <div id="example-terrore-archivio-404" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un team di archivisti digitali recupera file cancellati da anni: sono confessioni video di persone scomparse che li nominano uno per uno. Tono techno-horror, crescente. Temi: identita, colpa, verita digitale.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-bandaid-fill me-2"></i>ZOMBIE - REPARTO CHIUSO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="ZOMBIE - REPARTO CHIUSO" data-target-id="example-zombie-reparto-chiuso">Copia</button>
+                    </div>
+                    <div id="example-zombie-reparto-chiuso" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un ospedale resta isolato quando i pazienti in terapia intensiva tornano in vita e infettano il personale. Medici e infermieri devono scegliere chi salvare. Tono brutale, realistico. Temi: etica, sacrificio, leadership.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-train-front-fill me-2"></i>ZOMBIE - ULTIMO TRENO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="ZOMBIE - ULTIMO TRENO" data-target-id="example-zombie-ultimo-treno">Copia</button>
+                    </div>
+                    <div id="example-zombie-ultimo-treno" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un convoglio blindato attraversa l'Italia devastata da orde zombie per trasportare un campione biologico decisivo. A bordo, soldati, civili e criminali convivono sotto tensione. Tono action survival. Temi: fiducia, tradimento, speranza.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-building-fill-exclamation me-2"></i>ZOMBIE - PALAZZO 19</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="ZOMBIE - PALAZZO 19" data-target-id="example-zombie-palazzo-19">Copia</button>
+                    </div>
+                    <div id="example-zombie-palazzo-19" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Gli abitanti di un condominio in centro citta bloccano gli ingressi durante i primi giorni dell'epidemia zombie. Le lotte interne diventano quasi piu pericolose dell'esterno. Tono corale, feroce. Temi: potere, comunita, paura.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-broadcast-pin me-2"></i>ZOMBIE - SEGNALE ROSSO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="ZOMBIE - SEGNALE ROSSO" data-target-id="example-zombie-segnale-rosso">Copia</button>
+                    </div>
+                    <div id="example-zombie-segnale-rosso" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una troupe televisiva continua a trasmettere in diretta durante il collasso zombie, diventando guida per i sopravvissuti e bersaglio di milizie private. Tono urgente, mediatico. Temi: verita, propaganda, responsabilita.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-tree-fill me-2"></i>ZOMBIE - BOSCO FAME</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="ZOMBIE - BOSCO FAME" data-target-id="example-zombie-bosco-fame">Copia</button>
+                    </div>
+                    <div id="example-zombie-bosco-fame" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una comunita agricola in montagna sembra immune al contagio zombie, ma il bosco circostante nasconde infetti che non marciscono e imparano a cacciare. Tono folk horror, survival. Temi: isolamento, natura ostile, istinto.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-moon-fill me-2"></i>VAMPIRI - CORTE DI NOTTE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="VAMPIRI - CORTE DI NOTTE" data-target-id="example-vampiri-corte-di-notte">Copia</button>
+                    </div>
+                    <div id="example-vampiri-corte-di-notte" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">In una capitale europea opera in segreto una corte vampirica che manipola politica e finanza. Una PM ostinata scopre il patto di sangue che protegge i potenti. Tono noir, elegante, crudele. Temi: corruzione, immortalita, giustizia.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-bank2 me-2"></i>VAMPIRI - BANCA DEL SANGUE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="VAMPIRI - BANCA DEL SANGUE" data-target-id="example-vampiri-banca-sangue">Copia</button>
+                    </div>
+                    <div id="example-vampiri-banca-sangue" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una biotech crea sangue sintetico per curare malattie rare, ma il prodotto attira clan vampiri che vogliono monopolizzarlo. Tono thriller scientifico. Temi: bioetica, dipendenza, potere economico.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-building-lock me-2"></i>VAMPIRI - CITTA SENZA ALBA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="VAMPIRI - CITTA SENZA ALBA" data-target-id="example-vampiri-citta-senza-alba">Copia</button>
+                    </div>
+                    <div id="example-vampiri-citta-senza-alba" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Dopo un fenomeno atmosferico irreversibile, una metropoli vive in notte perpetua e i vampiri smettono di nascondersi. Umani e predatori negoziano tregue fragili. Tono distopico. Temi: convivenza forzata, paura, compromesso.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-cup-hot-fill me-2"></i>VAMPIRI - CAFE CREMISI</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="VAMPIRI - CAFE CREMISI" data-target-id="example-vampiri-cafe-cremisi">Copia</button>
+                    </div>
+                    <div id="example-vampiri-cafe-cremisi" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un locale notturno all'apparenza artistico e in realta terreno neutrale tra casate vampiriche rivali. Una barista umana viene usata come mediatrice. Tono sensuale, minaccioso. Temi: identita, manipolazione, desiderio.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-heartbreak-fill me-2"></i>VAMPIRI - PATTO D'OMBRA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="VAMPIRI - PATTO D'OMBRA" data-target-id="example-vampiri-patto-ombra">Copia</button>
+                    </div>
+                    <div id="example-vampiri-patto-ombra" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una cacciatrice di vampiri stipula un patto con il suo peggior nemico per fermare un culto che trasforma bambini in non-morti. Tono tragico, d'azione. Temi: vendetta, redenzione, limite morale.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-fire me-2"></i>INFERNO - CITTA BRUCIATA</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="INFERNO - CITTA BRUCIATA" data-target-id="example-inferno-citta-bruciata">Copia</button>
+                    </div>
+                    <div id="example-inferno-citta-bruciata" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una squadra di soccorso resta intrappolata in una citta dove ogni peccato commesso diventa fisicamente visibile e punitivo. Tono apocalittico, metafisico. Temi: colpa, espiazione, umanita.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-sign-stop-fill me-2"></i>INFERNO - FRONTIERA NOVE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="INFERNO - FRONTIERA NOVE" data-target-id="example-inferno-frontiera-nove">Copia</button>
+                    </div>
+                    <div id="example-inferno-frontiera-nove" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una sezione segreta dell'esercito custodisce un varco verso un inferno stratificato in nove settori. Una recluta scopre che alcuni comandanti trafficano anime in cambio di potere. Tono militare oscuro. Temi: obbedienza, fede, corruzione.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-gear-fill me-2"></i>INFERNO - FABBRICA DEL PECCATO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="INFERNO - FABBRICA DEL PECCATO" data-target-id="example-inferno-fabbrica-peccato">Copia</button>
+                    </div>
+                    <div id="example-inferno-fabbrica-peccato" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una multinazionale apre un impianto energetico che sfrutta un frammento dell'inferno. Operai e ingegneri vengono corrotti da apparizioni che promettono desideri in cambio di anime. Tono industrial horror. Temi: avidita, sfruttamento, scelta.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-journal-x me-2"></i>INFERNO - PROCESSO ETERNO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="INFERNO - PROCESSO ETERNO" data-target-id="example-inferno-processo-eterno">Copia</button>
+                    </div>
+                    <div id="example-inferno-processo-eterno" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un magistrato muore e si risveglia in un tribunale infernale dove e costretto a giudicare i vivi vedendo i loro futuri possibili. Tono morale, allucinato. Temi: giustizia, libero arbitrio, responsabilita.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-lightning-charge-fill me-2"></i>INFERNO - RETE ABISSALE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="INFERNO - RETE ABISSALE" data-target-id="example-inferno-rete-abissale">Copia</button>
+                    </div>
+                    <div id="example-inferno-rete-abissale" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un social network sperimentale collega inconsapevolmente gli utenti a entita infernali che si nutrono di rabbia e vergogna. Un team cyber-forense prova a spezzare il circuito. Tono techno-demoniaco. Temi: dipendenza, identita, danno collettivo.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-compass-fill me-2"></i>DANTE - GUIDA NELLE TENEBRE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="DANTE - GUIDA NELLE TENEBRE" data-target-id="example-dante-guida-tenebre">Copia</button>
+                    </div>
+                    <div id="example-dante-guida-tenebre" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un insegnante in crisi viene guidato da un poeta sconosciuto in una discesa moderna attraverso nove quartieri che incarnano peccati contemporanei. Tono visionario, drammatico. Temi: redenzione, coscienza, societa.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-map-fill me-2"></i>DANTE - NOVE CERCHI METROPOLITANI</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="DANTE - NOVE CERCHI METROPOLITANI" data-target-id="example-dante-nove-cerchi">Copia</button>
+                    </div>
+                    <div id="example-dante-nove-cerchi" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Una giornalista scompare nella rete fognaria di una megalopoli e scopre livelli sotterranei organizzati come i cerchi infernali. Ogni episodio e un cerchio. Tono urbano, simbolico. Temi: verita, potere, dannazione civile.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-hourglass-split me-2"></i>DANTE - CANTO DEL FUTURO</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="DANTE - CANTO DEL FUTURO" data-target-id="example-dante-canto-futuro">Copia</button>
+                    </div>
+                    <div id="example-dante-canto-futuro" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Nel 2099, un'intelligenza artificiale addestrata sulla Commedia conduce i condannati in un inferno virtuale punitivo. Un hacker deve attraversarlo per liberare sua sorella. Tono cyber-mistico. Temi: colpa, tecnologia, misericordia.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-book-fill me-2"></i>DANTE - CRONACHE DI MALEBOLGE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="DANTE - CRONACHE DI MALEBOLGE" data-target-id="example-dante-malebolge">Copia</button>
+                    </div>
+                    <div id="example-dante-malebolge" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un detective occulto indaga su dieci crimini seriali ispirati alle bolge dantesche. Ogni caso rivela una setta che vuole aprire il fondo dell'inferno in citta. Tono investigativo, esoterico. Temi: verita, colpa, ossessione.</div>
+                </li>
+                <li class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold"><i class="bi bi-stars me-2"></i>DANTE - RIVEDER LE STELLE</span>
+                        <button type="button" class="btn btn-sm btn-outline-primary copy-prompt-btn" data-title="DANTE - RIVEDER LE STELLE" data-target-id="example-dante-riveder-stelle">Copia</button>
+                    </div>
+                    <div id="example-dante-riveder-stelle" class="mt-2 small" style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">Un gruppo di detenuti partecipa a un programma di riabilitazione estremo: vivere simulazioni dei cerchi infernali per affrontare i propri crimini. Solo chi supera il viaggio puo tornare alla luce. Tono emotivo, severo. Temi: espiazione, dignita, speranza.</div>
+                </li>
             </ul>
         </div>
     </div>
@@ -210,6 +391,8 @@
     (function() {
         const promptTextarea = document.getElementById('Prompt');
         const randomPromptBtn = document.getElementById('generateRandomPromptBtn');
+        const crazyPromptBtn = document.getElementById('generateCrazyPromptBtn');
+        const spaceMilitaryPromptBtn = document.getElementById('generateSpaceMilitaryPromptBtn');
 
         document.querySelectorAll('.copy-prompt-btn').forEach(function(button) {
             button.addEventListener('click', function() {
@@ -222,27 +405,51 @@
             });
         });
 
+        async function requestWriterPrompt(button, handlerName) {
+            if (!button || !promptTextarea) return;
+            button.disabled = true;
+            const originalText = button.innerHTML;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Generazione...';
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 75000);
+            try {
+                const response = await fetch('?handler=' + handlerName, { method: 'GET', signal: controller.signal });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                if (data && data.success && data.prompt) {
+                    promptTextarea.value = data.prompt;
+                } else {
+                    const suffix = data && data.runId ? ('\\nRunId: ' + data.runId) : '';
+                    alert((data && data.message ? data.message : 'Nessun prompt ricevuto dal writer.') + suffix);
+                }
+            } catch (err) {
+                if (err && err.name === 'AbortError') {
+                    alert('Timeout client durante la generazione del prompt da writer.');
+                } else {
+                    alert('Errore nella generazione del prompt da writer.');
+                }
+            } finally {
+                clearTimeout(timeoutId);
+                button.disabled = false;
+                button.innerHTML = originalText;
+            }
+        }
+
         if (randomPromptBtn) {
             randomPromptBtn.addEventListener('click', async function() {
-                if (!promptTextarea) return;
-                randomPromptBtn.disabled = true;
-                const originalText = randomPromptBtn.innerHTML;
-                randomPromptBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Generazione...';
-                try {
-                    const response = await fetch('?handler=RandomWriterPrompt', { method: 'GET' });
-                    if (!response.ok) throw new Error('HTTP ' + response.status);
-                    const data = await response.json();
-                    if (data && data.success && data.prompt) {
-                        promptTextarea.value = data.prompt;
-                    } else {
-                        alert(data && data.message ? data.message : 'Nessun prompt ricevuto dal writer.');
-                    }
-                } catch {
-                    alert('Errore nella generazione del prompt da writer.');
-                } finally {
-                    randomPromptBtn.disabled = false;
-                    randomPromptBtn.innerHTML = originalText;
-                }
+                await requestWriterPrompt(randomPromptBtn, 'RandomWriterPrompt');
+            });
+        }
+
+        if (crazyPromptBtn) {
+            crazyPromptBtn.addEventListener('click', async function() {
+                await requestWriterPrompt(crazyPromptBtn, 'RandomCrazyWriterPrompt');
+            });
+        }
+
+        if (spaceMilitaryPromptBtn) {
+            spaceMilitaryPromptBtn.addEventListener('click', async function() {
+                await requestWriterPrompt(spaceMilitaryPromptBtn, 'SpaceMilitaryWriterPrompt');
             });
         }
     })();

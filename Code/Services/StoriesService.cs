@@ -43,6 +43,7 @@ public sealed partial class StoriesService
     private readonly IOptionsMonitor<AudioGenerationOptions>? _audioGenerationOptions;
     private readonly IOptionsMonitor<AudioMixOptions>? _audioMixOptions;
     private readonly IOptionsMonitor<NarratorVoiceOptions>? _narratorVoiceOptions;
+    private readonly StoryEvaluationOptions _storyEvaluationOptions;
     private readonly IOptionsMonitor<AutomaticOperationsOptions>? _idleAutoOptions;
     private readonly IOptionsMonitor<StoryTaggingPipelineOptions>? _storyTaggingOptions;
     private readonly IServiceScopeFactory? _scopeFactory;
@@ -81,6 +82,7 @@ public sealed partial class StoriesService
         IOptionsMonitor<AudioGenerationOptions>? audioGenerationOptions = null,
         IOptionsMonitor<AudioMixOptions>? audioMixOptions = null,
         IOptionsMonitor<NarratorVoiceOptions>? narratorVoiceOptions = null,
+        IOptions<StoryEvaluationOptions>? storyEvaluationOptions = null,
         IOptionsMonitor<AutomaticOperationsOptions>? idleAutoOptions = null,
         IServiceScopeFactory? scopeFactory = null,
         IOptionsMonitor<StoryTaggingPipelineOptions>? storyTaggingOptions = null,
@@ -100,6 +102,7 @@ public sealed partial class StoriesService
         _audioGenerationOptions = audioGenerationOptions;
         _audioMixOptions = audioMixOptions;
         _narratorVoiceOptions = narratorVoiceOptions;
+        _storyEvaluationOptions = storyEvaluationOptions?.Value ?? new StoryEvaluationOptions();
         _scopeFactory = scopeFactory;
         _idleAutoOptions = idleAutoOptions;
         _storyTaggingOptions = storyTaggingOptions;
@@ -219,6 +222,39 @@ public sealed partial class StoriesService
         return ApplyStatusTransitionWithCleanup(story, statusCode, runId);
     }
 
+    public bool ForceResetToEvaluatedAndCleanup(StoryRecord story, out string? message, string? runId = null)
+    {
+        message = null;
+        if (story == null)
+        {
+            message = "Storia non trovata.";
+            return false;
+        }
+
+        try
+        {
+            var evaluatedStatus = _database.GetStoryStatusByCode("evaluated");
+            if (evaluatedStatus == null)
+            {
+                message = "Status 'evaluated' non trovato.";
+                return false;
+            }
+
+            _database.UpdateStoryById(story.Id, statusId: evaluatedStatus.Id, updateStatus: true);
+            var folderPath = ResolveStoryFolderPath(story);
+            CleanupNextItemsForStatus(story.Id, "evaluated", folderPath);
+
+            message = "Storia riportata a evaluated con cleanup degli output successivi.";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+            _logger?.LogWarning(ex, "Errore reset a evaluated per story {StoryId}", story.Id);
+            return false;
+        }
+    }
+
     public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, long? storyId = null, int? serieId = null, int? serieEpisode = null)
     {
         storyId ??= LogScope.CurrentStoryId;
@@ -259,6 +295,12 @@ public sealed partial class StoriesService
         => _audioGenerationOptions?.CurrentValue?.Tts?.AutolaunchNextCommand
             ?? _ttsSchemaOptions?.CurrentValue?.AutolaunchNextCommand
             ?? true;
+
+    public bool IsAmbienceGenerationEnabled()
+        => _audioGenerationOptions?.CurrentValue?.Ambience?.Enabled ?? true;
+
+    public bool IsAmbienceRequiredForNextStatus()
+        => _audioGenerationOptions?.CurrentValue?.Ambience?.RequiredForNextStatus ?? true;
 
     public bool TryValidateTaggedVoice(StoryRecord? story, out string? reason)
     {
@@ -810,7 +852,7 @@ public sealed partial class StoriesService
         _database.SaveChapter(memoryKey, chapterNumber, content);
     }
 
-    public async Task<(bool success, double score, string? error)> EvaluateStoryWithAgentAsync(long storyId, int agentId)
+    public async Task<(bool success, double score, string? error)> EvaluateStoryWithAgentAsync(long storyId, int agentId, bool forceStandardFlow = false)
     {
         if (_kernelFactory == null)
             return (false, 0, "Kernel factory non disponibile");
@@ -843,7 +885,7 @@ public sealed partial class StoriesService
         var runId = $"storyeval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
         _customLogger?.Start(runId);
         var evaluationOpId = LogScope.GenerateOperationId();
-        using var scope = LogScope.Push($"story_evaluation_{story.Id}", evaluationOpId, null, null, agent.Name);
+        using var scope = LogScope.Push($"story_evaluation_{story.Id}", evaluationOpId, null, null, agent.Name, agent.Role, storyId: story.Id);
 
         try
         {
@@ -877,16 +919,9 @@ public sealed partial class StoriesService
                         coherenceTool.CurrentStoryId = story.Id;
                     }
 
-                    var chatBridge = _kernelFactory.CreateChatBridge(
-                        evaluationModelName,
-                        agent.Temperature,
-                        topPOverride ?? agent.TopP,
-                        agent.RepeatPenalty,
-                        topKOverride ?? agent.TopK,
-                        agent.RepeatLastN,
-                        agent.NumPredict);
-
-                    var isStoryEvaluatorTextProtocol = agent.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
+                    var isStoryEvaluatorTextProtocol =
+                        forceStandardFlow ||
+                        (agent.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ?? false);
                     var baseSystemMessage = (isStoryEvaluatorTextProtocol
                         ? StoriesServiceDefaults.EvaluatorTextProtocolInstructions
                         : (!string.IsNullOrWhiteSpace(agent.Instructions) ? agent.Instructions : ComposeSystemMessage(agent)))
@@ -907,7 +942,7 @@ public sealed partial class StoriesService
                     {
                         var protocolResult = await EvaluateStoryWithTextProtocolAsync(
                             story,
-                            chatBridge,
+                            agent,
                             systemMessage,
                             modelId: evaluationModelId,
                             agentId: agent.Id).ConfigureAwait(false);
@@ -924,19 +959,62 @@ public sealed partial class StoriesService
                         if (!allowedPlugins.Any())
                             return (false, 0, "L'agente valutatore non ha strumenti abilitati");
 
-                        var reactLoop = new ReActLoopOrchestrator(
-                            orchestrator,
-                            _customLogger,
+                        var reactAgent = new Agent
+                        {
+                            Id = agent.Id,
+                            Name = agent.Name,
+                            Role = agent.Role ?? string.Empty,
+                            ModelId = evaluationModelId,
+                            ModelName = evaluationModelName,
+                            Temperature = agent.Temperature,
+                            TopP = topPOverride ?? agent.TopP,
+                            RepeatPenalty = agent.RepeatPenalty,
+                            TopK = topKOverride ?? agent.TopK,
+                            RepeatLastN = agent.RepeatLastN,
+                            NumPredict = agent.NumPredict,
+                            Prompt = agent.Prompt,
+                            Instructions = agent.Instructions,
+                            Skills = agent.Skills,
+                            IsActive = agent.IsActive
+                        };
+
+                        var reactExecution = await ExecuteReActWithStandardPathAsync(
                             runId: runId,
-                            modelBridge: chatBridge,
+                            roleCode: agent.Role ?? "story_evaluator",
+                            agent: reactAgent,
+                            modelName: evaluationModelName,
+                            prompt: prompt,
                             systemMessage: systemMessage,
                             responseChecker: _responseChecker,
-                            agentRole: agent.Role);
+                            maxIterations: 100,
+                            orchestratorFactory: () =>
+                            {
+                                var o = _kernelFactory.CreateOrchestrator(evaluationModelName, allowedPlugins, agent.Id);
+                                var evaluator = o.GetTool<EvaluatorTool>("evaluate_full_story");
+                                if (evaluator != null)
+                                {
+                                    evaluator.CurrentStoryId = story.Id;
+                                }
 
-                        var reactResult = await reactLoop.ExecuteAsync(prompt);
-                        if (!reactResult.Success)
+                                var chunkFacts = o.GetTool<ChunkFactsExtractorTool>("extract_chunk_facts");
+                                if (chunkFacts != null)
+                                {
+                                    chunkFacts.CurrentStoryId = story.Id;
+                                }
+
+                                var coherence = o.GetTool<CoherenceCalculatorTool>("calculate_coherence");
+                                if (coherence != null)
+                                {
+                                    coherence.CurrentStoryId = story.Id;
+                                }
+
+                                return o;
+                            },
+                            ct: CancellationToken.None).ConfigureAwait(false);
+
+                        if (!reactExecution.success)
                         {
-                            var error = reactResult.Error ?? "Valutazione fallita";
+                            var error = reactExecution.error ?? "Valutazione fallita";
                             _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
                             return (false, 0, error);
                         }
@@ -1000,19 +1078,32 @@ public sealed partial class StoriesService
 
                                 if (summarizerAgent != null)
                                 {
+                                    IAgentCallService? summarizeModelExecution = null;
+                                    if (_scopeFactory != null)
+                                    {
+                                        using var summarizeScope = _scopeFactory.CreateScope();
+                                        summarizeModelExecution = summarizeScope.ServiceProvider.GetService<IAgentCallService>();
+                                    }
+                                    summarizeModelExecution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
+
                                     var summarizeRunId = Guid.NewGuid().ToString();
                                     var cmd = new Commands.SummarizeStoryCommand(
                                         storyId,
                                         _database,
                                         _kernelFactory!,
-                                        _customLogger!);
+                                        _customLogger!,
+                                        scopeFactory: _scopeFactory,
+                                        modelExecution: summarizeModelExecution);
 
                                     _commandDispatcher.Enqueue(
                                         "SummarizeStory",
                                         async ctx =>
                                         {
-                                            bool success = await cmd.ExecuteAsync(ctx.CancellationToken);
-                                            return new CommandResult(success, success ? "Summary generated" : "Failed to generate summary");
+                                            bool success = await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
+                                            var message = success
+                                                ? "Summary generated"
+                                                : (string.IsNullOrWhiteSpace(cmd.LastError) ? "Failed to generate summary" : cmd.LastError);
+                                            return new CommandResult(success, message);
                                         },
                                         runId: summarizeRunId,
                                         metadata: new Dictionary<string, string>
@@ -1134,7 +1225,7 @@ public sealed partial class StoriesService
 
     private async Task<(bool success, double score, string? error)> EvaluateStoryWithTextProtocolAsync(
         StoryRecord story,
-        LangChainChatBridge chatBridge,
+        Agent evaluatorAgent,
         string systemMessage,
         int? modelId,
         int agentId)
@@ -1145,6 +1236,11 @@ public sealed partial class StoriesService
             : story.StoryRaw;
 
         if (string.IsNullOrWhiteSpace(storyText)) return (false, 0, "Storia non trovata o priva di contenuto");
+
+        if (_scopeFactory == null) return (false, 0, "IServiceScopeFactory non disponibile");
+        using var scope = _scopeFactory.CreateScope();
+        var modelExecution = scope.ServiceProvider.GetService<IAgentCallService>();
+        if (modelExecution == null) return (false, 0, "IAgentCallService non disponibile");
 
         var messages = new List<ConversationMessage>
         {
@@ -1170,9 +1266,30 @@ public sealed partial class StoriesService
             var stepId = RequestIdGenerator.Generate();
             _logger?.LogInformation("[StepID: {StepId}][Story: {StoryId}] Valutazione tentativo {Attempt}/{Max}", stepId, story.Id, attempt, maxAttemptsFinalEvaluation);
 
-            var evalRawJson = await chatBridge.CallModelWithToolsAsync(messages, tools: new List<Dictionary<string, object>>(), skipResponseChecker: true).ConfigureAwait(false);
-            var (evalResponseText, _) = LangChainChatBridge.ParseChatResponse(evalRawJson);
-            evalText = NormalizeEvaluatorOutput((evalResponseText ?? string.Empty));
+            var promptForAttempt = string.Join(
+                "\n\n",
+                messages
+                    .Where(m => !string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase))
+                    .Select(m => $"[{m.Role}] {m.Content}"));
+
+            var evalResult = await modelExecution.ExecuteAsync(
+                new CommandModelExecutionService.Request
+                {
+                    CommandKey = "story_evaluation",
+                    Agent = evaluatorAgent,
+                    RoleCode = string.IsNullOrWhiteSpace(evaluatorAgent.Role) ? "story_evaluator" : evaluatorAgent.Role,
+                    Prompt = promptForAttempt,
+                    SystemPrompt = systemMessage,
+                    MaxAttempts = 1,
+                    RetryDelaySeconds = 0,
+                    StepTimeoutSec = 120,
+                    UseResponseChecker = false,
+                    EnableFallback = true,
+                    DiagnoseOnFinalFailure = true,
+                    ExplainAfterAttempt = 1
+                }).ConfigureAwait(false);
+
+            evalText = NormalizeEvaluatorOutput((evalResult.Text ?? string.Empty));
             messages.Add(new ConversationMessage { Role = "assistant", Content = evalText });
                 if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 {
@@ -1203,9 +1320,15 @@ public sealed partial class StoriesService
         }
 
         var totalScore = (double)(parsed.NarrativeScore10 + parsed.OriginalityScore10 + parsed.EmotionalScore10 + parsed.ActionScore10);
+        var lengthPenaltyCharsLimit =
+            string.Equals(evaluatorAgent.Role, "story_evaluator", StringComparison.OrdinalIgnoreCase)
+                ? Math.Max(0, _storyEvaluationOptions.LengthPenaltyNoPenaltyChars)
+                : 0;
+
+        long savedEvalId;
         try
         {
-            _database.AddStoryEvaluation(
+            savedEvalId = _database.AddStoryEvaluation(
                 story.Id,
                 parsed.NarrativeScore10, parsed.NarrativeExplanation,
                 parsed.OriginalityScore10, parsed.OriginalityExplanation,
@@ -1214,14 +1337,18 @@ public sealed partial class StoriesService
                 totalScore,
                 rawJson: evalText,
                 modelId: modelId,
-                agentId: agentId);
+                agentId: agentId,
+                lengthPenaltyCharsLimit: lengthPenaltyCharsLimit);
         }
         catch (Exception ex)
         {
             return (false, 0, $"Errore nel salvataggio della valutazione: {ex.Message}");
         }
 
-        return (true, totalScore, null);
+        var savedScore = _database.GetStoryEvaluations(story.Id)
+            .FirstOrDefault(e => e.Id == savedEvalId)?.TotalScore ?? totalScore;
+
+        return (true, savedScore, null);
     }
 
     private void TryEnqueueAutoFormatAfterEvaluation(long storyId)
@@ -1456,10 +1583,10 @@ public sealed partial class StoriesService
         (int score5, string explanation) ExtractSection(int start, int end)
         {
             var seg = normalized.Substring(start, Math.Max(0, end - start)).Trim();
-            if (string.IsNullOrWhiteSpace(seg)) return (0, string.Empty);
+            if (string.IsNullOrWhiteSpace(seg)) return (-1, string.Empty);
 
-            var mScore = Regex.Match(seg, @"\b([1-5])\b");
-            if (!mScore.Success) return (0, string.Empty);
+            var mScore = Regex.Match(seg, @"\b([0-5])\b");
+            if (!mScore.Success) return (-1, string.Empty);
             var score = int.Parse(mScore.Groups[1].Value);
 
             // Explanation is optional.
@@ -1473,9 +1600,9 @@ public sealed partial class StoriesService
         var (eScore5, eExp) = ExtractSection(emot.Value.idx + emot.Value.len, azione.Value.idx);
         var (aScore5, aExp) = ExtractSection(azione.Value.idx + azione.Value.len, normalized.Length);
 
-        if (nScore5 < 1 || oScore5 < 1 || eScore5 < 1 || aScore5 < 1)
+        if (nScore5 < 0 || oScore5 < 0 || eScore5 < 0 || aScore5 < 0)
         {
-            error = "Formato valutazione non valido: punteggi non trovati o fuori range (atteso 1-5 per sezione).";
+            error = "Formato valutazione non valido: punteggi non trovati o fuori range (atteso 0-5 per sezione).";
             return false;
         }
 
@@ -1498,10 +1625,12 @@ public sealed partial class StoriesService
                 Level = success ? "Information" : "Warning",
                 Category = "StoryEvaluation",
                 Message = $"[{storyId}] {message}",
-                ThreadScope = runId,
+                ThreadScope = "story_evaluation",
                 ThreadId = 0,
+                StoryId = storyId,
                 AgentName = agentName,
-                Result = success ? "SUCCESS" : "FAILED"
+                Result = success ? "SUCCESS" : "FAILED",
+                DurationSecs = 1
             };
             _database.InsertLogsAsync(new[] { entry }).ConfigureAwait(false).GetAwaiter().GetResult();
         }
@@ -1536,40 +1665,31 @@ public sealed partial class StoriesService
         var runId = $"actioneval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
         _customLogger?.Start(runId);
         var evaluationOpId = LogScope.GenerateOperationId();
-        using var scope = LogScope.Push($"action_evaluation_{story.Id}", evaluationOpId, null, null, agent.Name);
+        using var scope = LogScope.Push($"action_evaluation_{story.Id}", evaluationOpId, null, null, agent.Name, agent.Role, storyId: story.Id);
 
         try
         {
-            var orchestrator = _kernelFactory.CreateOrchestrator(modelName, allowedPlugins, agent.Id);
-
-            var chatBridge = _kernelFactory.CreateChatBridge(
-                modelName,
-                agent.Temperature,
-                agent.TopP,
-                agent.RepeatPenalty,
-                agent.TopK,
-                agent.RepeatLastN,
-                agent.NumPredict);
-
             var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
                 ? agent.Instructions
-                : ComposeSystemMessage(agent);
+                : (ComposeSystemMessage(agent) ?? string.Empty);
 
             var prompt = BuildActionPacingPrompt(story);
 
-            var reactLoop = new ReActLoopOrchestrator(
-                orchestrator,
-                _customLogger,
+            var reactExecution = await ExecuteReActWithStandardPathAsync(
                 runId: runId,
-                modelBridge: chatBridge,
+                roleCode: agent.Role ?? "action_evaluator",
+                agent: agent,
+                modelName: modelName,
+                prompt: prompt,
                 systemMessage: systemMessage,
                 responseChecker: _responseChecker,
-                agentRole: agent.Role);
+                maxIterations: 100,
+                orchestratorFactory: () => _kernelFactory.CreateOrchestrator(modelName, allowedPlugins, agent.Id),
+                ct: CancellationToken.None).ConfigureAwait(false);
 
-            var reactResult = await reactLoop.ExecuteAsync(prompt);
-            if (!reactResult.Success)
+            if (!reactExecution.success)
             {
-                var error = reactResult.Error ?? "Valutazione azione/ritmo fallita";
+                var error = reactExecution.error ?? "Valutazione azione/ritmo fallita";
                 _customLogger?.Append(runId, $"[{storyId}] Valutazione fallita: {error}", "Error");
                 return (false, 0, error);
             }
@@ -1585,6 +1705,89 @@ public sealed partial class StoriesService
         finally
         {
             _customLogger?.MarkCompleted(runId);
+        }
+    }
+
+    private async Task<(bool success, string? error)> ExecuteReActWithStandardPathAsync(
+        string runId,
+        string roleCode,
+        Agent agent,
+        string modelName,
+        string prompt,
+        string systemMessage,
+        ResponseCheckerService? responseChecker,
+        int maxIterations,
+        Func<HybridLangChainOrchestrator> orchestratorFactory,
+        CancellationToken ct)
+    {
+        if (_kernelFactory == null)
+        {
+            return (false, "Kernel factory non disponibile");
+        }
+
+        var initialModelId = agent.ModelId ?? 0;
+        if (initialModelId <= 0)
+        {
+            return (false, $"Agente {agent.Name} senza modello configurato");
+        }
+
+        try
+        {
+            var executionOrchestrator = new ModelExecutionOrchestrator(_kernelFactory, _scopeFactory, _customLogger);
+            var result = await executionOrchestrator.ExecuteAsync(
+                new ModelExecutionRequest
+                {
+                    RoleCode = roleCode,
+                    Agent = agent,
+                    InitialModelId = initialModelId,
+                    InitialModelName = modelName,
+                    WorkInput = prompt,
+                    RunId = runId,
+                    ChunkIndex = 1,
+                    ChunkCount = 1,
+                    WorkLabel = "react_loop",
+                    Options = new ModelExecutionOptions
+                    {
+                        MaxAttemptsPerModel = 1,
+                        RetryDelayBaseSeconds = 0,
+                        EnableFallback = false,
+                        EnableDiagnosis = false
+                    },
+                    WorkAsync = async (bridge, token) =>
+                    {
+                        var orchestrator = orchestratorFactory();
+                        var loop = new ReActLoopOrchestrator(
+                            orchestrator,
+                            _customLogger,
+                            maxIterations: maxIterations,
+                            runId: runId,
+                            modelBridge: bridge,
+                            systemMessage: systemMessage,
+                            responseChecker: responseChecker,
+                            agentRole: agent.Role);
+
+                        var reactResult = await loop.ExecuteAsync(prompt, token).ConfigureAwait(false);
+                        if (!reactResult.Success)
+                        {
+                            return ModelWorkResult.Fail(
+                                reactResult.Error ?? "ReAct loop fallito",
+                                reactResult.FinalResponse);
+                        }
+
+                        var text = string.IsNullOrWhiteSpace(reactResult.FinalResponse)
+                            ? "__react_tool_success__"
+                            : reactResult.FinalResponse;
+                        return ModelWorkResult.Ok(text);
+                    }
+                },
+                ct).ConfigureAwait(false);
+
+            return (true, result.OutputText);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "ExecuteReActWithStandardPathAsync fallito per ruolo {Role}", roleCode);
+            return (false, ex.Message);
         }
     }
 
@@ -1879,15 +2082,18 @@ public sealed partial class StoriesService
                 },
                 basePriority + 5);
 
-            EnqueueIfNotQueued(
-                "generate_ambience_audio",
-                $"generate_ambience_audio_{storyId}_",
-                async ctx =>
-                {
-                    var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
-                    return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
-                },
-                basePriority + 6);
+            if (IsAmbienceGenerationEnabled())
+            {
+                EnqueueIfNotQueued(
+                    "generate_ambience_audio",
+                    $"generate_ambience_audio_{storyId}_",
+                    async ctx =>
+                    {
+                        var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
+                        return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
+                    },
+                    basePriority + 6);
+            }
 
             EnqueueIfNotQueued(
                 "generate_fx_audio",
@@ -2073,7 +2279,8 @@ public sealed partial class StoriesService
                     return new CommandResult(ok, ok ? "Generazione musica completata." : err);
                 });
 
-            var autoAmbience = _audioGenerationOptions?.CurrentValue?.Ambience?.AutolaunchNextCommand ?? true;
+            var autoAmbience = IsAmbienceGenerationEnabled()
+                && (_audioGenerationOptions?.CurrentValue?.Ambience?.AutolaunchNextCommand ?? true);
             if (autoAmbience)
             {
                 EnqueueIfNotQueued(
@@ -2255,14 +2462,17 @@ public sealed partial class StoriesService
                                 : "Revisor prompt empty: copied raw to story_revised.");
                         }
 
-                        var bridge = _kernelFactory.CreateChatBridge(
-                            modelInfo.Name,
-                            revisor.Temperature,
-                            revisor.TopP,
-                            revisor.RepeatPenalty,
-                            revisor.TopK,
-                            revisor.RepeatLastN,
-                            revisor.NumPredict);
+                        if (_scopeFactory == null)
+                        {
+                            return new CommandResult(false, "IServiceScopeFactory non disponibile per revisione");
+                        }
+
+                        using var modelScope = _scopeFactory.CreateScope();
+                        var modelExecution = modelScope.ServiceProvider.GetService<IAgentCallService>();
+                        if (modelExecution == null)
+                        {
+                            return new CommandResult(false, "IAgentCallService non disponibile per revisione");
+                        }
 
                         // Use smaller chunks for the revisor to reduce repetition risk and improve responsiveness.
                         // Prepare all chunks up-front and validate we are not losing/skipping text.
@@ -2324,20 +2534,43 @@ public sealed partial class StoriesService
                             }
                             catch { }
 
-                            // IMPORTANT: do not send any conversation history. Only (systemPrompt + current chunk).
                             var systemPromptWithChunk = systemPrompt + $"\n\n(chunk: {i + 1}/{chunks.Count})";
-                            var messages = new List<ConversationMessage>
-                            {
-                                new ConversationMessage { Role = "system", Content = systemPromptWithChunk },
-                                new ConversationMessage { Role = "user", Content = chunk.Text }
-                            };
+                            var result = await modelExecution.ExecuteAsync(
+                                new CommandModelExecutionService.Request
+                                {
+                                    CommandKey = "story_revisor_chunk",
+                                    Agent = revisor,
+                                    RoleCode = string.IsNullOrWhiteSpace(revisor.Role) ? "revisor" : revisor.Role,
+                                    Prompt = chunk.Text,
+                                    SystemPrompt = systemPromptWithChunk,
+                                    MaxAttempts = 2,
+                                    RetryDelaySeconds = 1,
+                                    StepTimeoutSec = 90,
+                                    UseResponseChecker = false,
+                                    EnableFallback = true,
+                                    DiagnoseOnFinalFailure = true,
+                                    ExplainAfterAttempt = 1,
+                                    RunId = runId,
+                                    EnableDeterministicValidation = true,
+                                    DeterministicValidator = output =>
+                                    {
+                                        var text = (output ?? string.Empty).Trim();
+                                        return string.IsNullOrWhiteSpace(text)
+                                            ? new CommandModelExecutionService.DeterministicValidationResult(false, "Revisor output vuoto")
+                                            : new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                                    }
+                                },
+                                ctx.CancellationToken);
 
                             var stepId = RequestIdGenerator.Generate();
-                            _logger?.LogInformation("[StepID: {StepId}][Story: {StoryId}] Revisione chunk {ChunkNum}/{Total}", stepId, storyId, i + 1, chunks.Count);
+                            _logger?.LogInformation("[StepID: {StepId}][Story: {StoryId}] Revisione chunk {ChunkNum}/{Total} via standard path", stepId, storyId, i + 1, chunks.Count);
 
-                            var responseJson = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ctx.CancellationToken);
-                            var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
-                            var revisedChunk = (textContent ?? string.Empty).Trim();
+                            var revisedChunk = (result.Text ?? string.Empty).Trim();
+                            if (!result.Success)
+                            {
+                                _customLogger?.Append(runId, $"[story {storyId}] Revisor failed on chunk {i + 1}/{chunks.Count}: {result.Error ?? "errore sconosciuto"}", "warn");
+                            }
+
                             if (string.IsNullOrWhiteSpace(revisedChunk))
                             {
                                 // If the model returned nothing, fall back to original chunk.
@@ -2716,6 +2949,11 @@ public sealed partial class StoriesService
     /// </summary>
     public async Task<(bool success, string? error)> GenerateAmbienceForStoryAsync(long storyId, string folderName, string? dispatcherRunId = null)
     {
+        if (!IsAmbienceGenerationEnabled())
+        {
+            return (true, "Generazione rumori ambientali disattivata da impostazioni.");
+        }
+
         if (string.IsNullOrWhiteSpace(folderName))
             return (false, "Folder name is required");
 
@@ -2925,20 +3163,75 @@ public sealed partial class StoriesService
             }
         };
 
-        var bridge = _kernelFactory.CreateChatBridge(
-            modelName,
-            temperature,
-            topP,
-            repeatPenalty,
-            topK,
-            repeatLastN,
-            numPredict);
-
         var stepId = RequestIdGenerator.Generate();
         _logger?.LogInformation("[StepID: {StepId}] Generazione personaggi da modello {Model}", stepId, modelName);
+        string responseText;
+        var usedStandardPath = false;
 
-        var raw = await bridge.CallModelWithToolsAsync(messages, tools: new List<Dictionary<string, object>>());
-        var (responseText, _) = LangChainChatBridge.ParseChatResponse(raw);
+        if (_scopeFactory != null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var execution = scope.ServiceProvider.GetService<IAgentCallService>();
+            if (execution != null)
+            {
+                usedStandardPath = true;
+                var syntheticAgent = new Agent
+                {
+                    Name = "Character Extractor",
+                    Role = "character_extractor",
+                    ModelName = modelName,
+                    Temperature = temperature,
+                    TopP = topP,
+                    RepeatPenalty = repeatPenalty,
+                    TopK = topK,
+                    RepeatLastN = repeatLastN,
+                    NumPredict = numPredict,
+                    IsActive = true
+                };
+
+                var modelResult = await execution.ExecuteAsync(
+                    new CommandModelExecutionService.Request
+                    {
+                        CommandKey = "extract_characters",
+                        Agent = syntheticAgent,
+                        RoleCode = "character_extractor",
+                        Prompt = messages.Last().Content ?? string.Empty,
+                        SystemPrompt = systemPrompt,
+                        MaxAttempts = 2,
+                        RetryDelaySeconds = 1,
+                        StepTimeoutSec = 90,
+                        UseResponseChecker = false,
+                        EnableFallback = false,
+                        DiagnoseOnFinalFailure = true,
+                        ExplainAfterAttempt = 1,
+                        EnableDeterministicValidation = true,
+                        DeterministicValidator = output =>
+                        {
+                            var jsonCandidate = ExtractJsonArray(output);
+                            return string.IsNullOrWhiteSpace(jsonCandidate)
+                                ? new CommandModelExecutionService.DeterministicValidationResult(false, "JSON personaggi non trovato")
+                                : new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                        }
+                    });
+
+                responseText = modelResult.Text ?? string.Empty;
+            }
+            else
+            {
+                responseText = string.Empty;
+            }
+        }
+        else
+        {
+            responseText = string.Empty;
+        }
+
+        if (!usedStandardPath)
+        {
+            _customLogger?.MarkLatestModelResponseResult("FAILED", "IAgentCallService non disponibile per estrazione personaggi");
+            return (false, new List<StoryCharacter>(), "IAgentCallService non disponibile per estrazione personaggi");
+        }
+
         var json = ExtractJsonArray(responseText);
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -3710,7 +4003,7 @@ public sealed partial class StoriesService
                                 {
                                     var fn = item.TryGetPropertyValue("fileName", out var f1) ? f1?.ToString() : null;
                                     if (string.IsNullOrWhiteSpace(fn)) fn = item.TryGetPropertyValue("FileName", out var f2) ? f2?.ToString() : fn;
-                                    if (!string.IsNullOrWhiteSpace(fn)) DeleteIfExists(Path.Combine(folderPath, fn));
+                                    // Keep historical TTS files on disk for voiceId+text reuse.
 
                                     var amb = item.TryGetPropertyValue("ambienceFile", out var a1) ? a1?.ToString() : null;
                                     if (!string.IsNullOrWhiteSpace(amb)) DeleteIfExists(Path.Combine(folderPath, amb));
@@ -3844,7 +4137,7 @@ public sealed partial class StoriesService
                             {
                                 var fn = item.TryGetPropertyValue("fileName", out var f1) ? f1?.ToString() : null;
                                 if (string.IsNullOrWhiteSpace(fn)) fn = item.TryGetPropertyValue("FileName", out var f2) ? f2?.ToString() : fn;
-                                if (!string.IsNullOrWhiteSpace(fn)) DeleteIfExists(Path.Combine(folderPath, fn));
+                                // Keep historical TTS files on disk for voiceId+text reuse.
 
                                 item.Remove("fileName");
                                 item.Remove("FileName");
@@ -4941,7 +5234,7 @@ public sealed partial class StoriesService
                     continue;
                 }
 
-                var reuse = TryReuseExistingAudioEntry(entry, folderPath, cleanText, characterName, emotion, runId, story.Id, usedFiles);
+                var reuse = TryReuseExistingAudioEntry(entry, folderPath, cleanText, character.VoiceId!, characterName, emotion, runId, story.Id, usedFiles);
                 if (reuse.reused && !string.IsNullOrWhiteSpace(reuse.fileName))
                 {
                     var reuseStartMs = currentMs;
@@ -4965,7 +5258,7 @@ public sealed partial class StoriesService
                 
                 // Save TTS text to .txt file with same name
                 var txtFilePath = Path.ChangeExtension(filePath, ".txt");
-                await File.WriteAllTextAsync(txtFilePath, $"[{characterName}, {emotion}]\n{cleanText}");
+                await File.WriteAllTextAsync(txtFilePath, $"voiceId={character.VoiceId}\n{cleanText}");
 
                 var durationMs = durationFromResult ?? TryGetWavDuration(audioBytes) ?? 0;
                 var startMs = currentMs;
@@ -4993,6 +5286,7 @@ public sealed partial class StoriesService
             SanitizeTtsSchemaTextFields(rootNode);
             var updated = rootNode.ToJsonString(SchemaJsonOptions);
             await File.WriteAllTextAsync(schemaPath, updated);
+            DeleteOrphanTtsAudioFiles(folderPath, timelineArray, usedFiles);
             // Mark story as having generated TTS audio (best-effort)
             try
             {
@@ -5148,7 +5442,7 @@ public sealed partial class StoriesService
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
-                var reuse = TryReuseExistingAudioEntry(entry, folderPath, cleanText, characterName, emotion, dispatcherRunId, story.Id, usedFiles);
+                var reuse = TryReuseExistingAudioEntry(entry, folderPath, cleanText, character.VoiceId!, characterName, emotion, dispatcherRunId, story.Id, usedFiles);
                 if (reuse.reused && !string.IsNullOrWhiteSpace(reuse.fileName))
                 {
                     var reuseStartMs = currentMs;
@@ -5174,7 +5468,7 @@ public sealed partial class StoriesService
                 
                 var txtFilePath = Path.ChangeExtension(filePath, ".txt");
                 cancellationToken.ThrowIfCancellationRequested();
-                await File.WriteAllTextAsync(txtFilePath, $"[{characterName}, {emotion}]\n{cleanText}");
+                await File.WriteAllTextAsync(txtFilePath, $"voiceId={character.VoiceId}\n{cleanText}");
 
                 var durationMs = durationFromResult ?? TryGetWavDuration(audioBytes) ?? 0;
                 var startMs = currentMs;
@@ -5203,6 +5497,7 @@ public sealed partial class StoriesService
             SanitizeTtsSchemaTextFields(rootNode);
             var updated = rootNode.ToJsonString(SchemaJsonOptions);
             await File.WriteAllTextAsync(schemaPath, updated);
+            DeleteOrphanTtsAudioFiles(folderPath, timelineArray, usedFiles);
             // Mark story as having generated TTS audio (best-effort)
             try
             {
@@ -5227,6 +5522,7 @@ public sealed partial class StoriesService
         JsonObject entry,
         string folderPath,
         string cleanText,
+        string voiceId,
         string characterName,
         string emotion,
         string runId,
@@ -5236,58 +5532,232 @@ public sealed partial class StoriesService
         var existingFileName = ReadString(entry, "fileName") ??
                                ReadString(entry, "FileName") ??
                                ReadString(entry, "file_name");
-        if (string.IsNullOrWhiteSpace(existingFileName))
+        if (!string.IsNullOrWhiteSpace(existingFileName))
         {
-            return (false, null, 0);
-        }
-
-        var filePath = Path.Combine(folderPath, existingFileName);
-        var txtPath = Path.ChangeExtension(filePath, ".txt");
-        if (!File.Exists(filePath) || !File.Exists(txtPath))
-        {
-            return (false, null, 0);
-        }
-
-        try
-        {
-            var lines = File.ReadAllLines(txtPath);
-            if (lines.Length < 2)
+            var filePath = Path.Combine(folderPath, existingFileName);
+            var txtPath = Path.ChangeExtension(filePath, ".txt");
+            if (File.Exists(filePath) && File.Exists(txtPath))
             {
-                return (false, null, 0);
+                try
+                {
+                    var lines = File.ReadAllLines(txtPath);
+                    if (lines.Length >= 2)
+                    {
+                        if (TrySidecarMatch(lines, cleanText, voiceId, characterName, emotion))
+                        {
+                            var duration = ResolveAudioDurationMs(filePath);
+                            usedFiles.Add(existingFileName);
+                            _customLogger?.Append(runId, $"[{storyId}] Riutilizzo file audio esistente {existingFileName} (voiceId+testo invariati).");
+                            return (true, existingFileName, duration);
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore malformed sidecar and continue with broader cache lookup.
+                }
             }
+        }
 
+        var fromFolder = TryFindReusableAudioInFolder(
+            folderPath,
+            cleanText,
+            voiceId,
+            characterName,
+            emotion,
+            usedFiles);
+        if (fromFolder.reused && !string.IsNullOrWhiteSpace(fromFolder.fileName))
+        {
+            _customLogger?.Append(runId, $"[{storyId}] Riutilizzo da cache cartella: {fromFolder.fileName} (voiceId+testo invariati).");
+            return fromFolder;
+        }
+
+        return (false, null, 0);
+    }
+
+    private static bool TryParseTtsSidecarVoiceId(string headerLine, out string voiceId)
+    {
+        voiceId = string.Empty;
+        if (string.IsNullOrWhiteSpace(headerLine))
+            return false;
+
+        var trimmed = headerLine.Trim();
+        const string prefix = "voiceId=";
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        voiceId = trimmed[prefix.Length..].Trim();
+        return !string.IsNullOrWhiteSpace(voiceId);
+    }
+
+    private static bool TrySidecarMatch(
+        string[] lines,
+        string cleanText,
+        string voiceId,
+        string characterName,
+        string emotion)
+    {
+        if (lines == null || lines.Length < 2)
+            return false;
+
+        if (TryParseTtsSidecarVoiceId(lines[0], out var recordedVoiceId))
+        {
+            if (!string.Equals(recordedVoiceId, voiceId, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            // Backward compatibility for old sidecar format: [Character, Emotion]
             if (!TryParseTtsSidecarHeader(lines[0], out var recordedCharacter, out var recordedEmotion))
             {
-                return (false, null, 0);
+                return false;
             }
 
             if (!string.Equals(recordedCharacter, characterName, StringComparison.OrdinalIgnoreCase))
             {
-                return (false, null, 0);
+                return false;
             }
 
             var normalizedRecordedEmotion = NormalizeEmotionForTts(recordedEmotion);
             var normalizedTargetEmotion = NormalizeEmotionForTts(emotion);
             if (!string.Equals(normalizedRecordedEmotion, normalizedTargetEmotion, StringComparison.OrdinalIgnoreCase))
             {
-                return (false, null, 0);
+                return false;
             }
+        }
 
-            var recordedText = string.Join("\n", lines.Skip(1));
-            if (!string.Equals(NormalizeTextForComparison(recordedText), NormalizeTextForComparison(cleanText), StringComparison.Ordinal))
-            {
+        var recordedText = string.Join("\n", lines.Skip(1));
+        return string.Equals(NormalizeTextForComparison(recordedText), NormalizeTextForComparison(cleanText), StringComparison.Ordinal);
+    }
+
+    private (bool reused, string? fileName, int durationMs) TryFindReusableAudioInFolder(
+        string folderPath,
+        string cleanText,
+        string voiceId,
+        string characterName,
+        string emotion,
+        HashSet<string> usedFiles)
+    {
+        try
+        {
+            if (!Directory.Exists(folderPath))
                 return (false, null, 0);
+
+            var sidecars = Directory.EnumerateFiles(folderPath, "*.txt", SearchOption.TopDirectoryOnly);
+            foreach (var txtPath in sidecars)
+            {
+                var baseName = Path.GetFileNameWithoutExtension(txtPath);
+                var wavPath = Path.Combine(folderPath, baseName + ".wav");
+                var mp3Path = Path.Combine(folderPath, baseName + ".mp3");
+                var audioPath = File.Exists(wavPath) ? wavPath : (File.Exists(mp3Path) ? mp3Path : null);
+                if (string.IsNullOrWhiteSpace(audioPath))
+                    continue;
+
+                var audioFileName = Path.GetFileName(audioPath);
+                if (string.IsNullOrWhiteSpace(audioFileName) || usedFiles.Contains(audioFileName))
+                    continue;
+
+                string[] lines;
+                try
+                {
+                    lines = File.ReadAllLines(txtPath);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (!TrySidecarMatch(lines, cleanText, voiceId, characterName, emotion))
+                    continue;
+
+                usedFiles.Add(audioFileName);
+                var duration = ResolveAudioDurationMs(audioPath);
+                return (true, audioFileName, duration);
             }
         }
         catch
         {
-            return (false, null, 0);
+            // Best-effort cache lookup
         }
 
-        var duration = TryGetWavDurationFromFile(filePath) ?? 0;
-        usedFiles.Add(existingFileName);
-        _customLogger?.Append(runId, $"[{storyId}] Riutilizzo file audio esistente {existingFileName} (testo invariato).");
-        return (true, existingFileName, duration);
+        return (false, null, 0);
+    }
+
+    private int ResolveAudioDurationMs(string filePath)
+    {
+        try
+        {
+            var ext = Path.GetExtension(filePath);
+            if (string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase))
+            {
+                return TryGetWavDurationFromFile(filePath) ?? 0;
+            }
+        }
+        catch
+        {
+            // Best-effort duration extraction
+        }
+
+        return 0;
+    }
+
+    private void DeleteOrphanTtsAudioFiles(string folderPath, JsonArray timelineArray, HashSet<string> usedFiles)
+    {
+        if (!Directory.Exists(folderPath) || timelineArray == null)
+            return;
+
+        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in timelineArray.OfType<JsonObject>())
+        {
+            var fn = ReadString(item, "fileName") ?? ReadString(item, "FileName") ?? ReadString(item, "file_name");
+            if (!string.IsNullOrWhiteSpace(fn))
+            {
+                referenced.Add(fn.Trim());
+            }
+        }
+
+        foreach (var u in usedFiles)
+        {
+            if (!string.IsNullOrWhiteSpace(u))
+            {
+                referenced.Add(u.Trim());
+            }
+        }
+
+        IEnumerable<string> candidates;
+        try
+        {
+            candidates = Directory.EnumerateFiles(folderPath, "*.*", SearchOption.TopDirectoryOnly)
+                .Where(path =>
+                {
+                    var ext = Path.GetExtension(path);
+                    if (!string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+
+                    var name = Path.GetFileName(path);
+                    return name.StartsWith("tts_", StringComparison.OrdinalIgnoreCase) ||
+                           (name.Length > 4 && char.IsDigit(name[0]) && char.IsDigit(name[1]) && char.IsDigit(name[2]) && name[3] == '_');
+                });
+        }
+        catch
+        {
+            return;
+        }
+
+        foreach (var audioPath in candidates)
+        {
+            var fileName = Path.GetFileName(audioPath);
+            if (referenced.Contains(fileName))
+                continue;
+
+            TryDeleteFile(audioPath);
+            TryDeleteFile(Path.ChangeExtension(audioPath, ".txt"));
+        }
     }
 
     private static bool TryParseTtsSidecarHeader(string headerLine, out string character, out string emotion)
@@ -5334,6 +5804,105 @@ public sealed partial class StoriesService
         {
             return null;
         }
+    }
+
+    private int? TryGetAudioDurationMsFromFile(string filePath)
+    {
+        try
+        {
+            var wavDuration = TryGetWavDurationFromFile(filePath);
+            if (wavDuration.HasValue && wavDuration.Value > 0)
+            {
+                return wavDuration.Value;
+            }
+
+            if (!File.Exists(filePath))
+            {
+                return null;
+            }
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "ffprobe",
+                Arguments = $"-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"{filePath}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var proc = new Process { StartInfo = psi };
+            proc.Start();
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
+            if (!proc.WaitForExit(5000))
+            {
+                try { proc.Kill(true); } catch { }
+                return null;
+            }
+
+            var output = stdoutTask.GetAwaiter().GetResult()?.Trim();
+            _ = stderrTask.GetAwaiter().GetResult();
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                return null;
+            }
+
+            if (double.TryParse(output, NumberStyles.Any, CultureInfo.InvariantCulture, out var seconds) && seconds > 0)
+            {
+                return (int)Math.Round(seconds * 1000.0);
+            }
+        }
+        catch
+        {
+            // best effort
+        }
+
+        try
+        {
+            // Fallback when ffprobe is unavailable: parse "Duration: HH:MM:SS.xx" from ffmpeg stderr.
+            var psi = new ProcessStartInfo
+            {
+                FileName = "ffmpeg",
+                Arguments = $"-i \"{filePath}\" -f null -",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var proc = new Process { StartInfo = psi };
+            proc.Start();
+            var stderr = proc.StandardError.ReadToEnd();
+            if (!proc.WaitForExit(7000))
+            {
+                try { proc.Kill(true); } catch { }
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                var match = Regex.Match(stderr, @"Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)", RegexOptions.IgnoreCase);
+                if (match.Success &&
+                    int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hh) &&
+                    int.TryParse(match.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mm) &&
+                    double.TryParse(match.Groups[3].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var ss))
+                {
+                    var totalMs = (int)Math.Round(((hh * 3600) + (mm * 60) + ss) * 1000.0);
+                    if (totalMs > 0)
+                    {
+                        return totalMs;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // best effort
+        }
+
+        return null;
     }
 
 // =====================================================================
@@ -5799,6 +6368,107 @@ public sealed partial class StoriesService
         }
 
         return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
+    }
+
+    private static string BuildOpeningAnnouncement(string? seriesTitle, int? episodeNumber, string storyTitle, string? episodeTitle)
+    {
+        var cleanedSeries = (seriesTitle ?? string.Empty).Trim();
+        var cleanedStoryTitle = (storyTitle ?? string.Empty).Trim();
+        var cleanedEpisodeTitle = (episodeTitle ?? string.Empty).Trim();
+
+        var titleForAnnouncement = !string.IsNullOrWhiteSpace(cleanedEpisodeTitle)
+            ? cleanedEpisodeTitle
+            : StripSeriesEpisodePrefix(cleanedStoryTitle, cleanedSeries, episodeNumber);
+        if (string.IsNullOrWhiteSpace(titleForAnnouncement))
+        {
+            titleForAnnouncement = cleanedStoryTitle;
+        }
+
+        var parts = new List<string>();
+        void AddPart(string? value)
+        {
+            var part = (value ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(part))
+            {
+                return;
+            }
+
+            var norm = NormalizeForTitleMatch(part);
+            if (string.IsNullOrWhiteSpace(norm))
+            {
+                return;
+            }
+
+            if (parts.Any(p => NormalizeForTitleMatch(p) == norm))
+            {
+                return;
+            }
+
+            parts.Add(part);
+        }
+
+        AddPart(cleanedSeries);
+        if (episodeNumber.HasValue && !ContainsEpisodeMarker(titleForAnnouncement, episodeNumber.Value))
+        {
+            AddPart($"Episodio {episodeNumber.Value}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(titleForAnnouncement))
+        {
+            if (string.IsNullOrWhiteSpace(cleanedSeries) ||
+                !NormalizeForTitleMatch(titleForAnnouncement).Contains(NormalizeForTitleMatch(cleanedSeries), StringComparison.Ordinal))
+            {
+                AddPart(titleForAnnouncement);
+            }
+        }
+
+        if (parts.Count == 0 && !string.IsNullOrWhiteSpace(cleanedStoryTitle))
+        {
+            AddPart(cleanedStoryTitle);
+        }
+
+        var announcement = string.Join(". ", parts).Trim();
+        if (string.IsNullOrWhiteSpace(announcement))
+        {
+            return cleanedStoryTitle;
+        }
+
+        return announcement.EndsWith('.') ? announcement : $"{announcement}.";
+    }
+
+    private static string StripSeriesEpisodePrefix(string title, string seriesTitle, int? episodeNumber)
+    {
+        var value = (title ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        if (!string.IsNullOrWhiteSpace(seriesTitle))
+        {
+            var escapedSeries = Regex.Escape(seriesTitle.Trim());
+            value = Regex.Replace(value, @"^\s*" + escapedSeries + @"\s*[-:|,.]*\s*", string.Empty, RegexOptions.IgnoreCase);
+        }
+
+        if (episodeNumber.HasValue)
+        {
+            var ep = Regex.Escape(episodeNumber.Value.ToString());
+            value = Regex.Replace(value, @"^\s*(?:ep(?:isodio)?|episode)\s*\.?\s*" + ep + @"\s*[:\-–—]?\s*", string.Empty, RegexOptions.IgnoreCase);
+        }
+
+        return value.Trim(' ', '-', ':', ',', '.', '|');
+    }
+
+    private static bool ContainsEpisodeMarker(string value, int episodeNumber)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var ep = Regex.Escape(episodeNumber.ToString());
+        var pattern = @"\b(?:ep(?:isodio)?|episode)\s*\.?\s*" + ep + @"\b";
+        return Regex.IsMatch(value, pattern, RegexOptions.IgnoreCase);
     }
 
     // =====================================================================
@@ -6987,7 +7657,7 @@ private static string? SelectMusicFileDeterministic(
             return (false, err);
         }
 
-        // Step 3: Check for missing ambient sound files (from ambient sound description/file fields)
+        // Step 3: Check for missing ambient sound files only when ambience is required.
         var ambientSoundsNeeded = phraseEntries.Any(e =>
             !string.IsNullOrWhiteSpace(
                 ReadString(e, "ambient_sound_description") ??
@@ -6997,7 +7667,7 @@ private static string? SelectMusicFileDeterministic(
                 ReadString(e, "AmbientSounds") ??
                 ReadString(e, "ambient_sounds")));
 
-        if (ambientSoundsNeeded)
+        if (IsAmbienceRequiredForNextStatus() && ambientSoundsNeeded)
         {
             var missingAmbientSounds = phraseEntries.Where(e =>
             {
@@ -7017,7 +7687,18 @@ private static string? SelectMusicFileDeterministic(
                     ReadString(e, "ambientSoundsFile") ??
                     ReadString(e, "AmbientSoundsFile") ??
                     ReadString(e, "ambient_sounds_file");
-                if (string.IsNullOrWhiteSpace(ambientSoundFile)) return true;
+                if (string.IsNullOrWhiteSpace(ambientSoundFile))
+                {
+                    // Keep mix check aligned with ambient generation:
+                    // entries with ambient description but zero computed duration do not generate a wav.
+                    if (TryReadNumber(e, "ambientSoundsDuration", out var ambientDur) ||
+                        TryReadNumber(e, "AmbientSoundsDuration", out ambientDur) ||
+                        TryReadNumber(e, "ambient_sounds_duration", out ambientDur))
+                    {
+                        return ambientDur > 0;
+                    }
+                    return true;
+                }
                 return !File.Exists(Path.Combine(folderPath, ambientSoundFile));
             }).ToList();
 
@@ -7120,41 +7801,73 @@ private static string? SelectMusicFileDeterministic(
                         narratorVoice = GetNarratorDefaultVoiceId() ?? string.Empty;
                     }
 
+                    string? seriesTitle = null;
+                    if (story.SerieId.HasValue)
+                    {
+                        try
+                        {
+                            seriesTitle = _database.GetSeriesById(story.SerieId.Value)?.Titolo;
+                        }
+                        catch
+                        {
+                            seriesTitle = null;
+                        }
+                    }
+                    var episodeNumber = story.SerieEpisode;
                     var storyTitle = (story.Title ?? string.Empty).Trim();
+                    string? episodeTitle = null;
+                    if (story.SerieId.HasValue && episodeNumber.HasValue)
+                    {
+                        try
+                        {
+                            episodeTitle = _database.GetSeriesEpisodeBySerieAndNumber(story.SerieId.Value, episodeNumber.Value)?.Title;
+                        }
+                        catch
+                        {
+                            episodeTitle = null;
+                        }
+                    }
                     var titleAlreadyInTimeline = !string.IsNullOrWhiteSpace(storyTitle)
                         && TimelineContainsTitle(phraseEntries, storyTitle);
-                    if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null && !string.IsNullOrWhiteSpace(narratorVoice) && !titleAlreadyInTimeline)
+                    var seriesAlreadyInTimeline = !string.IsNullOrWhiteSpace(seriesTitle)
+                        && TimelineContainsTitle(phraseEntries, seriesTitle);
+                    var episodeAlreadyInTimeline = episodeNumber.HasValue && (
+                        TimelineContainsTitle(phraseEntries, $"episodio {episodeNumber.Value}") ||
+                        TimelineContainsTitle(phraseEntries, $"ep {episodeNumber.Value}") ||
+                        TimelineContainsTitle(phraseEntries, $"ep{episodeNumber.Value}")
+                    );
+                    var openingAlreadyInTimeline = titleAlreadyInTimeline || seriesAlreadyInTimeline || episodeAlreadyInTimeline;
+
+                    if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null && !string.IsNullOrWhiteSpace(narratorVoice) && !openingAlreadyInTimeline)
                     {
-                        string? seriesTitle = null;
-                        if (story.SerieId.HasValue)
+                        var announcement = BuildOpeningAnnouncement(seriesTitle, episodeNumber, storyTitle, episodeTitle);
+
+                        var openingTtsFile = Path.Combine(folderPath, "tts_opening.wav");
+                        var openingAnnouncementFile = Path.Combine(folderPath, "tts_opening.txt");
+                        var mustRegenerateOpening = true;
+                        if (File.Exists(openingTtsFile) && File.Exists(openingAnnouncementFile))
                         {
                             try
                             {
-                                seriesTitle = _database.GetSeriesById(story.SerieId.Value)?.Titolo;
+                                var savedAnnouncement = (await File.ReadAllTextAsync(openingAnnouncementFile)).Trim();
+                                mustRegenerateOpening = !string.Equals(savedAnnouncement, announcement, StringComparison.Ordinal);
                             }
                             catch
                             {
-                                seriesTitle = null;
+                                mustRegenerateOpening = true;
                             }
                         }
 
-                        var episodeNumber = story.SerieEpisode;
-
-                        var announcement = !string.IsNullOrWhiteSpace(seriesTitle) && episodeNumber.HasValue
-                            ? $"{seriesTitle}. Episodio {episodeNumber.Value}. {storyTitle}."
-                            : !string.IsNullOrWhiteSpace(seriesTitle)
-                                ? $"{seriesTitle}. {storyTitle}."
-                                : $"{storyTitle}.";
-
-                        var openingTtsFile = Path.Combine(folderPath, "tts_opening.wav");
-                        if (!File.Exists(openingTtsFile))
+                        if (mustRegenerateOpening)
                         {
                             var ttsSafe = ProsodyNormalizer.NormalizeForTTS(announcement);
-                            var ttsResult = await _ttsService.SynthesizeAsync(narratorVoice, ttsSafe);
+                            var narratorProvider = ResolveVoiceProvider(narratorVoice);
+                            var ttsResult = await _ttsService.SynthesizeAsync(narratorVoice, ttsSafe, provider: narratorProvider);
                             if (ttsResult != null && !string.IsNullOrWhiteSpace(ttsResult.AudioBase64))
                             {
                                 var audioBytes = Convert.FromBase64String(ttsResult.AudioBase64);
                                 await File.WriteAllBytesAsync(openingTtsFile, audioBytes);
+                                await File.WriteAllTextAsync(openingAnnouncementFile, announcement);
                             }
                         }
 
@@ -7171,8 +7884,10 @@ private static string? SelectMusicFileDeterministic(
             _customLogger?.Append(runId, $"[{story.Id}] [WARN] Opening intro fallito: {ex.Message}");
         }
 
-        // Accoda il resto della storia come al solito (shift startMs di +introShiftMs)
+        // Accoda il resto della storia in sequenza reale:
+        // start di ogni frase = fine frase precedente + 2000ms
         int currentTimeMs = introShiftMs;
+        int wavDurationUsedCount = 0;
         foreach (var entry in phraseEntries)
         {
             // TTS file
@@ -7183,15 +7898,33 @@ private static string? SelectMusicFileDeterministic(
                 if (File.Exists(ttsFilePath))
                 {
                     int startMs = currentTimeMs;
-                    if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
-                        startMs = (int)s + introShiftMs;
-                    ttsTrackFiles.Add((ttsFilePath, startMs));
-
-                    // Update current time based on duration
-                    int durationMs = 2000; // default gap
-                    if (TryReadNumber(entry, "durationMs", out var d) || TryReadNumber(entry, "DurationMs", out d) || TryReadNumber(entry, "duration_ms", out d))
+                    int durationMs = 0;
+                    var wavDuration = TryGetWavDurationFromFile(ttsFilePath);
+                    if (wavDuration.HasValue && wavDuration.Value > 0)
+                    {
+                        durationMs = wavDuration.Value;
+                        wavDurationUsedCount++;
+                    }
+                    else if (TryReadNumber(entry, "durationMs", out var d) ||
+                             TryReadNumber(entry, "DurationMs", out d) ||
+                             TryReadNumber(entry, "duration_ms", out d))
+                    {
                         durationMs = (int)d;
-                    currentTimeMs = startMs + durationMs;
+                    }
+
+                    if (durationMs <= 0)
+                    {
+                        durationMs = TryGetAudioDurationMsFromFile(ttsFilePath) ?? 0;
+                        if (durationMs > 0)
+                        {
+                            wavDurationUsedCount++;
+                        }
+                    }
+                    if (durationMs <= 0)
+                        durationMs = 2000; // fallback gap if duration is unavailable
+
+                    ttsTrackFiles.Add((ttsFilePath, startMs));
+                    currentTimeMs = startMs + durationMs + 2000;
                 }
             }
 
@@ -7236,6 +7969,13 @@ private static string? SelectMusicFileDeterministic(
                     musicTrackFiles.Add((musicFilePath, musicStartMs, durationMs));
                 }
             }
+        }
+
+        if (wavDurationUsedCount > 0)
+        {
+            _customLogger?.Append(
+                runId,
+                $"[{story.Id}] Timeline TTS sequenziale applicata: durate reali file={wavDurationUsedCount}, gap=2000ms");
         }
 
         // Build ambience segments based on ambient_sound_file definitions and ambientSoundsDuration
@@ -8053,12 +8793,12 @@ private static string? SelectMusicFileDeterministic(
         var map = new Dictionary<string, CharacterVoiceInfo>(StringComparer.OrdinalIgnoreCase);
         foreach (var node in charactersArray.OfType<JsonObject>())
         {
-            var name = ReadString(node, "Name");
+            var name = ReadString(node, "Name") ?? ReadString(node, "name");
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
-            var voiceId = ReadString(node, "VoiceId");
-            var gender = ReadString(node, "Gender");
+            var voiceId = ReadString(node, "VoiceId") ?? ReadString(node, "voiceId") ?? ReadString(node, "voice_id");
+            var gender = ReadString(node, "Gender") ?? ReadString(node, "gender");
 
             map[name] = new CharacterVoiceInfo(name, voiceId, gender);
         }
@@ -8117,13 +8857,13 @@ private static string? SelectMusicFileDeterministic(
     private static bool TryReadPhrase(JsonObject entry, out string character, out string text, out string emotion)
     {
         character = text = emotion = string.Empty;
-        var charName = ReadString(entry, "Character");
+        var charName = ReadString(entry, "Character") ?? ReadString(entry, "character");
         if (string.IsNullOrWhiteSpace(charName))
             return false;
 
         character = charName.Trim();
-        text = ReadString(entry, "Text") ?? string.Empty;
-        emotion = ReadString(entry, "Emotion") ?? "neutral";
+        text = ReadString(entry, "Text") ?? ReadString(entry, "text") ?? string.Empty;
+        emotion = ReadString(entry, "Emotion") ?? ReadString(entry, "emotion") ?? "neutral";
         if (string.IsNullOrWhiteSpace(emotion))
             emotion = "neutral";
         emotion = emotion.Trim();
@@ -8186,8 +8926,34 @@ private static string? SelectMusicFileDeterministic(
         
         // Normalize text for TTS before sending to service
         var ttsSafeText = ProsodyNormalizer.NormalizeForTTS(text);
+        var voiceProvider = ResolveVoiceProvider(voiceId);
+        SynthesisResult? synthesis = null;
 
-        var synthesis = await _ttsService.SynthesizeAsync(voiceId, ttsSafeText, "it", normalizedEmotion);
+        try
+        {
+            synthesis = await _ttsService.SynthesizeAsync(voiceId, ttsSafeText, "it", normalizedEmotion, voiceProvider);
+        }
+        catch (Exception ex)
+        {
+            var recovered = await TryEnsureTtsServiceReadyAsync();
+            if (!recovered)
+            {
+                throw;
+            }
+
+            _logger?.LogWarning(ex, "TTS non disponibile al primo tentativo. Riprovo dopo restart del servizio.");
+            synthesis = await _ttsService.SynthesizeAsync(voiceId, ttsSafeText, "it", normalizedEmotion, voiceProvider);
+        }
+
+        if (synthesis == null)
+        {
+            var recovered = await TryEnsureTtsServiceReadyAsync();
+            if (recovered)
+            {
+                synthesis = await _ttsService.SynthesizeAsync(voiceId, ttsSafeText, "it", normalizedEmotion, voiceProvider);
+            }
+        }
+
         if (synthesis == null)
             throw new InvalidOperationException("Il servizio TTS non ha restituito alcun risultato");
 
@@ -8212,6 +8978,43 @@ private static string? SelectMusicFileDeterministic(
         }
 
         return (audioBytes, durationMs);
+    }
+
+    private async Task<bool> TryEnsureTtsServiceReadyAsync()
+    {
+        var isHealthy = _healthMonitor != null
+            ? await _healthMonitor.CheckTtsHealthAsync()
+            : await StartupTasks.CheckTtsHealthAsync(_logger);
+        if (isHealthy)
+        {
+            return true;
+        }
+
+        _logger?.LogWarning("Servizio TTS non raggiungibile: avvio tentativo di riattivazione automatica.");
+        return await StartupTasks.TryRestartTtsAsync(_healthMonitor, _logger);
+    }
+
+    private string ResolveVoiceProvider(string? voiceId)
+    {
+        if (string.IsNullOrWhiteSpace(voiceId))
+        {
+            return "localtts";
+        }
+
+        try
+        {
+            var voice = _database.GetTtsVoiceByVoiceId(voiceId);
+            if (!string.IsNullOrWhiteSpace(voice?.Provider))
+            {
+                return voice.Provider!.Trim();
+            }
+        }
+        catch
+        {
+            // Fallback to localtts
+        }
+
+        return "localtts";
     }
 
     /// <summary>

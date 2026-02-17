@@ -5,7 +5,8 @@
     ViewData["PageDescription"] = "Crea una storia completa con trama, personaggi e capitoli";
 }
 
-<div class="note-card" style="max-width:900px; margin-bottom:18px">
+<details class="note-card" style="max-width:900px; margin-bottom:18px">
+    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Genera storia multi-step</summary>
     <form id="genForm">
         @Html.AntiForgeryToken()
         <div style="margin-bottom:10px">
@@ -52,12 +53,35 @@
             <div id="stepStatus" style="margin-top:6px; font-size:0.9em; color:#666;"></div>
         </div>
     </form>
-</div>
+</details>
 
-<div class="note-card" style="max-width:900px; margin-bottom:18px">
+<details class="note-card" style="max-width:900px; margin-bottom:18px">
+    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">CINO Optimize Story</summary>
+    <form id="cinoForm">
+        @Html.AntiForgeryToken()
+        <div style="margin-bottom:10px">
+            <label for="CinoTitle" class="note-title">Titolo</label>
+            <input class="keep-input font-monospace" id="CinoTitle" name="CinoTitle" style="width:100%; padding:10px; font-size:0.95rem;" maxlength="160" required />
+        </div>
+        <div style="margin-bottom:10px">
+            <label for="CinoPrompt" class="note-title">Prompt iniziale (testo storia)</label>
+            <textarea class="keep-input font-monospace" id="CinoPrompt" name="CinoPrompt" rows="8" style="width:100%; padding:10px; font-size:0.95rem;" required></textarea>
+        </div>
+        <div style="margin-bottom:10px; display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="CinoUseResponseChecker" name="CinoUseResponseChecker" value="true" @(Model.CinoUseResponseChecker ? "checked" : null) />
+            <label for="CinoUseResponseChecker" class="note-title" style="margin:0">Attiva response checker</label>
+        </div>
+        <div id="cinoError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
+        <div style="display:flex; gap:8px;">
+            <button type="button" id="startCinoBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia CINO</button>
+        </div>
+    </form>
+</details>
+
+<details class="note-card" style="max-width:900px; margin-bottom:18px">
+    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Genera episodio da serie</summary>
     <form id="seriesEpisodeForm">
         @Html.AntiForgeryToken()
-        <h5 class="note-title" style="margin-bottom:10px">Genera episodio da serie</h5>
         <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
             <div style="min-width:260px; flex:1;">
                 <label for="SeriesId" class="note-title">Serie</label>
@@ -93,12 +117,12 @@
             <button type="button" id="startSeriesEpisodeBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia episodio serie</button>
         </div>
     </form>
-</div>
+</details>
 
-<div class="note-card" style="max-width:900px; margin-bottom:18px">
+<details class="note-card" style="max-width:900px; margin-bottom:18px">
+    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Genera episodio state-driven</summary>
     <form id="stateSeriesEpisodeForm">
         @Html.AntiForgeryToken()
-        <h5 class="note-title" style="margin-bottom:10px">Genera episodio (Narrative Engine / state-driven)</h5>
         <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
             <div style="min-width:260px; flex:1;">
                 <label for="StateSeriesId" class="note-title">Serie</label>
@@ -142,12 +166,12 @@
             <button type="button" id="startStateSeriesEpisodeAutoBtn" class="action-btn" style="font-weight:600; padding:8px 14px">Avvia episodio completo (~minuti TTS)</button>
         </div>
     </form>
-</div>
+</details>
 
-<div class="note-card" style="max-width:900px; margin-bottom:18px">
+<details class="note-card" style="max-width:900px; margin-bottom:18px">
+    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Continua storia state-driven</summary>
     <form id="stateNextChunkForm">
         @Html.AntiForgeryToken()
-        <h5 class="note-title" style="margin-bottom:10px">Continua storia (state-driven)</h5>
         <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
             <div style="min-width:220px; flex:0 0 220px;">
                 <label for="StateStoryId" class="note-title">StoryId</label>
@@ -171,7 +195,7 @@
             <button type="button" id="startStateNextChunkBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Genera chunk successivo</button>
         </div>
     </form>
-</div>
+</details>
 
 <hr />
 <h2>Stato generazione (live):</h2>
@@ -198,6 +222,8 @@
     const stateStoryIdInput = document.getElementById('StateStoryId');
     const startStateNextChunkBtn = document.getElementById('startStateNextChunkBtn');
     const stateNextChunkError = document.getElementById('stateNextChunkError');
+    const startCinoBtn = document.getElementById('startCinoBtn');
+    const cinoError = document.getElementById('cinoError');
     let pollInterval = null;
     let connection = null;
 
@@ -522,6 +548,37 @@
             const id = data.id;
             try { localStorage.setItem('lastGenId', id); } catch { }
             appendMessage('Chunk accodato. id: ' + id);
+            await loadHistory(id);
+            await connectSignalRAndJoin(id);
+        });
+    }
+
+    if (startCinoBtn) {
+        startCinoBtn.addEventListener('click', async () => {
+            if (cinoError) {
+                cinoError.textContent = '';
+                cinoError.style.display = 'none';
+            }
+            clearMessages();
+            appendMessage('Avvio CINO...');
+
+            const form = document.getElementById('cinoForm');
+            const fd = new FormData(form);
+            const res = await fetch('?handler=StartCinoOptimize', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const text = await res.text();
+                if (cinoError) {
+                    cinoError.textContent = text;
+                    cinoError.style.display = 'block';
+                }
+                appendMessage('Errore avvio: ' + text, 'error');
+                return;
+            }
+
+            const data = await res.json();
+            const id = data.id;
+            try { localStorage.setItem('lastGenId', id); } catch { }
+            appendMessage('CINO avviato. id: ' + id);
             await loadHistory(id);
             await connectSignalRAndJoin(id);
         });

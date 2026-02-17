@@ -9,6 +9,7 @@ UPDATE tts_voices
 SET 
     name = COALESCE((SELECT name FROM backup.tts_voices WHERE voice_id = tts_voices.voice_id), name),
     model = COALESCE((SELECT model FROM backup.tts_voices WHERE voice_id = tts_voices.voice_id), model),
+    provider = COALESCE((SELECT provider FROM backup.tts_voices WHERE voice_id = tts_voices.voice_id), provider),
     language = COALESCE((SELECT language FROM backup.tts_voices WHERE voice_id = tts_voices.voice_id), language),
     gender = COALESCE((SELECT gender FROM backup.tts_voices WHERE voice_id = tts_voices.voice_id), gender),
     age = COALESCE((SELECT age FROM backup.tts_voices WHERE voice_id = tts_voices.voice_id), age),

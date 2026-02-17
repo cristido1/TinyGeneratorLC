@@ -319,7 +319,7 @@ namespace TinyGenerator.Services
 
                 // Push a scope with "Response Checker" as agent name so logs show correctly in ChatLog
                 using var checkerScope = LogScope.Push(
-                    "response_checker_validation",
+                    "response_checker",
                     null,
                     LogScope.CurrentStepNumber,
                     LogScope.CurrentMaxStep,
@@ -552,7 +552,7 @@ namespace TinyGenerator.Services
 
                 // Push a scope with "Response Checker" as agent name so logs show correctly in ChatLog
                 using var checkerScope = LogScope.Push(
-                    "response_checker_tool_reminder",
+                    "response_checker",
                     null,
                     LogScope.CurrentStepNumber,
                     LogScope.CurrentMaxStep,
@@ -863,11 +863,10 @@ namespace TinyGenerator.Services
 
             try
             {
-                // Keep the existing operation scope so the checker request/response is visible
-                // in the same log thread, but override agent identity to avoid confusion.
-                var parentScope = LogScope.Current ?? "response_checker_generic_validation";
+                // Use a dedicated checker operation so stats are per-agent-operation
+                // and not inherited from the container command.
                 using var checkerScope = LogScope.Push(
-                    parentScope,
+                    "response_checker",
                     null,
                     LogScope.CurrentStepNumber,
                     LogScope.CurrentMaxStep,

@@ -10,6 +10,8 @@ namespace TinyGenerator.Services
 {
     public sealed class SystemReportService
     {
+        private const int DuplicateWindowMinutes = 15;
+        private const int DuplicateScanLimit = 200;
         private readonly DatabaseService _database;
         private readonly LogAnalysisService _logAnalysis;
         private readonly ICustomLogger? _logger;
@@ -134,12 +136,100 @@ namespace TinyGenerator.Services
                     RawLogRef = ctx.RawLogRef
                 };
 
+                if (IsDuplicateRecentReport(report))
+                {
+                    _logger?.Log("Info", "SystemReport", $"Duplicate system report skipped: {report.Title}");
+                    return;
+                }
+
                 _database.InsertSystemReport(report);
             }
             catch (Exception ex)
             {
                 _logger?.Log("Error", "SystemReport", $"Failed to write system report: {ex.Message}", ex.ToString());
             }
+        }
+
+        private bool IsDuplicateRecentReport(SystemReport candidate)
+        {
+            var now = DateTime.UtcNow;
+            var recent = _database.GetRecentSystemReports(DuplicateScanLimit);
+            if (recent.Count == 0)
+            {
+                return false;
+            }
+
+            var candidateSignature = BuildDuplicateSignature(candidate);
+            if (string.IsNullOrWhiteSpace(candidateSignature))
+            {
+                return false;
+            }
+
+            foreach (var existing in recent)
+            {
+                if (existing.Deleted)
+                {
+                    continue;
+                }
+
+                if (!IsWithinDuplicateWindow(existing.CreatedAt, now))
+                {
+                    continue;
+                }
+
+                var existingSignature = BuildDuplicateSignature(existing);
+                if (string.Equals(existingSignature, candidateSignature, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsWithinDuplicateWindow(string? createdAtIso, DateTime nowUtc)
+        {
+            if (string.IsNullOrWhiteSpace(createdAtIso))
+            {
+                return false;
+            }
+
+            if (!DateTime.TryParse(createdAtIso, out var createdAt))
+            {
+                return false;
+            }
+
+            var minutes = Math.Abs((nowUtc - createdAt.ToUniversalTime()).TotalMinutes);
+            return minutes <= DuplicateWindowMinutes;
+        }
+
+        private static string BuildDuplicateSignature(SystemReport report)
+        {
+            static string Normalize(string? value)
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    return string.Empty;
+                }
+
+                var trimmed = value.Trim().ToLowerInvariant();
+                return string.Join(" ", trimmed.Split(new[] { ' ', '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries));
+            }
+
+            return string.Join("|", new[]
+            {
+                Normalize(report.Title),
+                Normalize(report.OperationType),
+                Normalize(report.Severity),
+                Normalize(report.Status),
+                Normalize(report.AgentName),
+                Normalize(report.ModelName),
+                report.StoryId?.ToString() ?? string.Empty,
+                report.SeriesId?.ToString() ?? string.Empty,
+                report.SeriesEpisode?.ToString() ?? string.Empty,
+                Normalize(report.Message),
+                Normalize(report.FailureReason)
+            });
         }
 
         private static string BuildFailureAnalysisInput(

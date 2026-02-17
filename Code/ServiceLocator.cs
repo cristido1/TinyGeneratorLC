@@ -1,9 +1,9 @@
 namespace TinyGenerator.Services
 {
-    // Simple service locator to allow legacy static callers to access DatabaseService.
-    // This is a pragmatic bridge during the refactor to centralize sqlite access.
+    // Pragmatic bridge for legacy/static callers that still need DI-resolved services.
     public static class ServiceLocator
     {
         public static DatabaseService? Database { get; set; }
+        public static IServiceProvider? Services { get; set; }
     }
 }

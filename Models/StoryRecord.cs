@@ -13,6 +13,9 @@ namespace TinyGenerator.Models
 
         [Column("story_id")]
         public long? StoryId { get; set; }
+
+        [Column("parent_story_id")]
+        public long? ParentStoryId { get; set; }
         
         [Column("generation_id")]
         public string GenerationId { get; set; } = string.Empty;

@@ -16,6 +16,14 @@
         if (percent >= 40) return "bg-danger";
         return "bg-secondary";
     }
+
+    private string LengthPenaltyBadgeClass(double penaltyPercent)
+    {
+        if (penaltyPercent <= 0) return "bg-success";
+        if (penaltyPercent < 30) return "bg-warning text-dark";
+        if (penaltyPercent <= 60) return "text-white";
+        return "bg-danger";
+    }
 }
 
 <div class="card mb-2">
@@ -36,6 +44,21 @@
                 <span class="me-1">Score:</span>
                 <span class="badge @TotalBadgeClass(totalPercent)">@totalPercent.ToString("F0")/100</span>
             </div>
+        </div>
+        <div class="mt-2 small text-muted">
+            @if (Model.LenghtPenalityCharsLimit > 0)
+            {
+                var penalty = Model.LenghtPenalityPercentageApplyed;
+                var badgeClass = LengthPenaltyBadgeClass(penalty);
+                var useOrange = penalty >= 30 && penalty <= 60;
+                <text>Penalita' lunghezza: </text>
+                <span class="badge @badgeClass" @(useOrange ? "style=\"background-color:#fd7e14;\"" : null)>@penalty.ToString("F2")%</span>
+                <text> (len=@Model.StoryLengthChars, limite=@Model.LenghtPenalityCharsLimit)</text>
+            }
+            else
+            {
+                <text>Penalita' lunghezza: non applicata (len=@Model.StoryLengthChars)</text>
+            }
         </div>
         <div class="row mt-2 g-3">
             <div class="col-md-6">

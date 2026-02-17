@@ -39,6 +39,15 @@ namespace TinyGenerator.Models
 
         [Column("total_score")]
         public double TotalScore { get; set; }
+
+        [Column("story_length_chars")]
+        public int StoryLengthChars { get; set; }
+
+        [Column("lenght_penality_chars_limit")]
+        public int LenghtPenalityCharsLimit { get; set; }
+
+        [Column("lenght_penality_percentage_applyed")]
+        public double LenghtPenalityPercentageApplyed { get; set; }
         // Backwards-compatible property for UI views (summary score)
         [NotMapped]
         public double Score { get => TotalScore; set => TotalScore = value; }

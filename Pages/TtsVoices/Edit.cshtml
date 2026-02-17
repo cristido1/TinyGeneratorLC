@@ -20,6 +20,13 @@
                 <div class="form-text">Il campo model non è modificabile.</div>
             </div>
             <div class="mb-3">
+                <label asp-for="Voice.Provider" class="form-label">Provider</label>
+                <select asp-for="Voice.Provider" class="form-select">
+                    <option value="localtts">localtts</option>
+                    <option value="elevenlabs">elevenlabs</option>
+                </select>
+            </div>
+            <div class="mb-3">
                 <label asp-for="Voice.Name" class="form-label"></label>
                 <input asp-for="Voice.Name" class="form-control" />
                 <span asp-validation-for="Voice.Name" class="text-danger"></span>

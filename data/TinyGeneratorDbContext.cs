@@ -218,7 +218,8 @@ public class TinyGeneratorDbContext : DbContext
             new Role { Id = 10, Ruolo = "continuity_validator", ComandoCollegato = "ContinuityValidator", CreatedAt = now, UpdatedAt = now },
             new Role { Id = 11, Ruolo = "state_updater", ComandoCollegato = "StateUpdater", CreatedAt = now, UpdatedAt = now },
             new Role { Id = 12, Ruolo = "state_compressor", ComandoCollegato = "StateCompressor", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 13, Ruolo = "recap_builder", ComandoCollegato = "RecapBuilder", CreatedAt = now, UpdatedAt = now }
+            new Role { Id = 13, Ruolo = "recap_builder", ComandoCollegato = "RecapBuilder", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 14, Ruolo = "writer_cino", ComandoCollegato = "cino_optimize_story", CreatedAt = now, UpdatedAt = now }
         );
     }
 }

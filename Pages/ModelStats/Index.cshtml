@@ -11,6 +11,15 @@
 }
 
 <div class="page-wrapper">
+    @if (!string.IsNullOrWhiteSpace(Model.StatusMessage))
+    {
+        <div class="alert alert-info py-2 px-3 mb-2" role="alert">
+            @Model.StatusMessage
+        </div>
+    }
+
+    <form id="recalculateStatsForm" method="post" asp-page-handler="Recalculate" class="d-none"></form>
+
     <div style="height: calc(100vh - 200px); width:100%; overflow-x:auto; overflow-y:auto;">
         <style>
             .table-container {
@@ -104,6 +113,17 @@
                         <th data-col="totalFail">Tot fail (s)</th>
                         <th data-col="ratioSuccess">Tempo/successo (tot/ok)</th>
                         <th data-col="ratioFail">Tempo/fallimento (tot/ko)</th>
+                        <th data-col="durationCount">Duration logs</th>
+                        <th data-col="durationTotal">Duration totale (s)</th>
+                        <th data-col="durationAvgSecs">Duration media (s)</th>
+                        <th data-col="durationAvgHuman">Duration media (umana)</th>
+                        <th data-col="runtimeSamples">Runtime samples</th>
+                        <th data-col="avgPromptTokens">Avg prompt tokens</th>
+                        <th data-col="avgGenTokens">Avg gen tokens</th>
+                        <th data-col="avgRuntimeTotal">Avg total_duration (s)</th>
+                        <th data-col="avgRuntimeLoad">Avg load_duration (s)</th>
+                        <th data-col="doneStopRate">done_reason stop %</th>
+                        <th data-col="doneLengthRate">done_reason length %</th>
                         <th data-col="first">Prima operazione</th>
                         <th data-col="last">Ultima operazione</th>
                     </tr>
@@ -124,6 +144,17 @@
                             <td data-col="totalFail">@s.TotalFailTimeSecs.ToString("F2")</td>
                             <td data-col="ratioSuccess">@s.SuccessTimePerSuccessDisplay</td>
                             <td data-col="ratioFail">@s.FailTimePerFailDisplay</td>
+                            <td data-col="durationCount">@s.DurationTotalCount</td>
+                            <td data-col="durationTotal">@s.DurationTotalTime.ToString("F2")</td>
+                            <td data-col="durationAvgSecs">@s.AvgDurationSecsDisplay</td>
+                            <td data-col="durationAvgHuman">@s.AvgDurationHumanDisplay</td>
+                            <td data-col="runtimeSamples">@s.RuntimeSamplesDisplay</td>
+                            <td data-col="avgPromptTokens">@s.AvgPromptTokensDisplay</td>
+                            <td data-col="avgGenTokens">@s.AvgGenTokensDisplay</td>
+                            <td data-col="avgRuntimeTotal">@s.AvgRuntimeTotalSecsDisplay</td>
+                            <td data-col="avgRuntimeLoad">@s.AvgRuntimeLoadSecsDisplay</td>
+                            <td data-col="doneStopRate">@s.DoneStopRateDisplay</td>
+                            <td data-col="doneLengthRate">@s.DoneLengthRateDisplay</td>
                             <td data-col="first">@s.FirstOperationDate</td>
                             <td data-col="last">@s.LastOperationDate</td>
                         </tr>
@@ -156,15 +187,23 @@
                 order: [[0,'asc']],
                 buttons: [
                     {
+                        text: '<i class="bi bi-calculator me-1"></i>Ricalcola statistiche',
+                        className: 'btn btn-sm btn-light border me-1',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function(){
+                            document.getElementById('recalculateStatsForm').submit();
+                        }
+                    },
+                    {
                         text: '<i class="bi bi-arrow-clockwise me-1"></i>Aggiorna',
-                        className: 'btn btn-sm btn-primary me-1',
+                        className: 'btn btn-sm btn-light border me-1',
                         attr: { style: 'width: auto; flex: 0 0 auto;' },
                         action: function(){ location.reload(); }
                     },
                     {
                         extend: 'colvis',
                         text: 'Colonne',
-                        className: 'btn btn-sm btn-secondary',
+                        className: 'btn btn-sm btn-light border',
                         attr: { style: 'width: auto; flex: 0 0 auto;' }
                     }
                 ]

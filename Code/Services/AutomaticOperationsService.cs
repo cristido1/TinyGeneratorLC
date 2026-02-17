@@ -385,8 +385,8 @@ namespace TinyGenerator.Services
                             "update_model_stats",
                             ctx =>
                             {
-                                var updated = _database.UpdateModelStatsFromUnexaminedLogs();
-                                var msg = updated == 0 ? "No model stats updates" : $"Updated model stats: {updated}";
+                                _database.RefreshModelStatsFromAllLogs();
+                                var msg = "Model stats refreshed from all logs";
                                 return Task.FromResult(new CommandResult(true, msg));
                             },
                             runId: runId,
@@ -396,7 +396,8 @@ namespace TinyGenerator.Services
                                 ["operation"] = "update_model_stats",
                                 ["trigger"] = "idle_auto"
                             },
-                            priority: Math.Max(1, opts.UpdateModelStats.Priority));
+                            priority: Math.Max(1, opts.UpdateModelStats.Priority),
+                            batch: true);
                         return new IdleTaskResult(true, null, null, filter, count);
                     }));
             }

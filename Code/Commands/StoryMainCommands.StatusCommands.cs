@@ -380,6 +380,17 @@ public sealed partial class StoryMainCommands
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
+            if (!_service.IsAmbienceGenerationEnabled())
+            {
+                var deleteCmdSkip = new StoriesService.DeleteAmbienceCommand(_service);
+                _ = await deleteCmdSkip.ExecuteAsync(context);
+
+                var runIdSkip = _service.CurrentDispatcherRunId;
+                var storySkip = _service.GetStoryById(context.Story.Id) ?? context.Story;
+                _service.ApplyStatusTransitionWithCleanup(storySkip, "ambient_generated", runIdSkip);
+                return (true, "Generazione rumori ambientali disattivata da impostazioni: step saltato.");
+            }
+
             var deleteCmd = new StoriesService.DeleteAmbienceCommand(_service);
             var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
             if (!cleanupOk)

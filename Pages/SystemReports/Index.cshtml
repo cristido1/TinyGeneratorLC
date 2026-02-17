@@ -48,10 +48,6 @@
 
 <div class="container-fluid px-4">
     <div class="reports-header">
-        <div class="d-flex flex-column flex-sm-row align-items-sm-center gap-2">
-            <h4 class="mb-0">System Reports</h4>
-            <div class="text-muted small">Totale: @Model.TotalCount</div>
-        </div>
         <form method="post" asp-page-handler="DeleteAll" class="mb-0">
             <input type="hidden" name="page" value="@Model.PageIndex" />
             <input type="hidden" name="pageSize" value="@Model.PageSize" />

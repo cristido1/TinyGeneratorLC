@@ -4,8 +4,11 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text;
+using System.Diagnostics;
 using System.Threading.Tasks;
 
 namespace TinyGenerator.Services
@@ -19,6 +22,18 @@ namespace TinyGenerator.Services
         // Timeout in seconds for TTS HTTP requests (configurable via TTS_TIMEOUT_SECONDS env var)
         public int TimeoutSeconds { get; set; } = 300;
         public TimeSpan Timeout => TimeSpan.FromSeconds(TimeoutSeconds);
+    }
+
+    public class ElevenLabsOptions
+    {
+        public string ApiKey { get; set; } = string.Empty;
+        public string BaseUrl { get; set; } = "https://api.elevenlabs.io";
+        public string ModelId { get; set; } = "eleven_multilingual_v2";
+        public string OutputFormat { get; set; } = "mp3_44100_128";
+        public double? Stability { get; set; } = 0.5;
+        public double? SimilarityBoost { get; set; } = 0.75;
+        public double? Style { get; set; }
+        public bool? UseSpeakerBoost { get; set; } = true;
     }
 
     // Minimal DTOs matching the localTTS FastAPI responses
@@ -58,6 +73,7 @@ namespace TinyGenerator.Services
         [JsonPropertyName("age")] public string? Age { get; set; }
         [JsonPropertyName("confidence")] public double? Confidence { get; set; }
         [JsonPropertyName("tags")] public Dictionary<string,string>? Tags { get; set; }
+        [JsonPropertyName("provider")] public string? Provider { get; set; }
     }
 
     public class SynthesisResult
@@ -74,6 +90,7 @@ namespace TinyGenerator.Services
     {
         private readonly HttpClient _http;
         private readonly TtsOptions _options;
+        private readonly ElevenLabsOptions _elevenLabs;
         private readonly ICustomLogger? _logger;
         private static readonly JsonSerializerOptions VoiceJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -83,10 +100,11 @@ namespace TinyGenerator.Services
         /// </summary>
         private const int MaxCharsPerRequest = 220;
 
-        public TtsService(HttpClient http, TtsOptions? options = null, ICustomLogger? logger = null)
+        public TtsService(HttpClient http, TtsOptions? options = null, ElevenLabsOptions? elevenLabs = null, ICustomLogger? logger = null)
         {
             _http = http ?? throw new ArgumentNullException(nameof(http));
             _options = options ?? new TtsOptions();
+            _elevenLabs = elevenLabs ?? new ElevenLabsOptions();
             _logger = logger;
         }
 
@@ -139,10 +157,15 @@ namespace TinyGenerator.Services
         // If no language is provided, default to Italian ("it").
         // The voiceId parameter is the speaker name (e.g., "Dionisio Schuyler")
         // Automatically splits long texts into chunks to respect XTTS 400 token limit.
-        public async Task<SynthesisResult?> SynthesizeAsync(string voiceId, string text, string? language = null, string? sentiment = null)
+        public async Task<SynthesisResult?> SynthesizeAsync(string voiceId, string text, string? language = null, string? sentiment = null, string? provider = null)
         {
             if (string.IsNullOrWhiteSpace(voiceId)) throw new ArgumentException("voiceId required", nameof(voiceId));
             if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("text required", nameof(text));
+
+            if (string.Equals(provider, "elevenlabs", StringComparison.OrdinalIgnoreCase))
+            {
+                return await SynthesizeWithElevenLabsAsync(voiceId, text, language, sentiment);
+            }
 
             // If text is short enough, synthesize directly
             if (text.Length <= MaxCharsPerRequest)
@@ -197,6 +220,91 @@ namespace TinyGenerator.Services
                 AudioBase64 = Convert.ToBase64String(concatenated),
                 DurationSeconds = totalDuration > 0 ? totalDuration : null
             };
+        }
+
+        private async Task<SynthesisResult?> SynthesizeWithElevenLabsAsync(string voiceId, string text, string? language, string? sentiment)
+        {
+            if (string.IsNullOrWhiteSpace(_elevenLabs.ApiKey))
+            {
+                throw new InvalidOperationException("Chiave API ElevenLabs non configurata");
+            }
+
+            var endpoint = $"{_elevenLabs.BaseUrl.TrimEnd('/')}/v1/text-to-speech/{Uri.EscapeDataString(voiceId)}";
+            var payload = new Dictionary<string, object?>
+            {
+                ["text"] = text,
+                ["model_id"] = string.IsNullOrWhiteSpace(_elevenLabs.ModelId) ? "eleven_multilingual_v2" : _elevenLabs.ModelId,
+                ["output_format"] = string.IsNullOrWhiteSpace(_elevenLabs.OutputFormat) ? "mp3_44100_128" : _elevenLabs.OutputFormat
+            };
+
+            var voiceSettings = new Dictionary<string, object?>();
+            if (_elevenLabs.Stability.HasValue) voiceSettings["stability"] = _elevenLabs.Stability.Value;
+            if (_elevenLabs.SimilarityBoost.HasValue) voiceSettings["similarity_boost"] = _elevenLabs.SimilarityBoost.Value;
+            if (_elevenLabs.Style.HasValue) voiceSettings["style"] = _elevenLabs.Style.Value;
+            if (_elevenLabs.UseSpeakerBoost.HasValue) voiceSettings["use_speaker_boost"] = _elevenLabs.UseSpeakerBoost.Value;
+            if (voiceSettings.Count > 0) payload["voice_settings"] = voiceSettings;
+
+            var payloadJson = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+            var maskedKey = MaskApiKey(_elevenLabs.ApiKey);
+            var requestDebug = $"POST {endpoint}\nHeaders:\n  xi-api-key: {maskedKey}\n  Accept: audio/mpeg\n  Content-Type: application/json\nBody:\n{payloadJson}";
+            _logger?.LogRequestJson("ElevenLabs", requestDebug, null, LogScope.CurrentAgentName);
+            _logger?.Log("INFO", "TTS", $"ElevenLabs request -> voiceId={voiceId}, model={payload["model_id"]}, output={payload["output_format"]}, textLen={text.Length}");
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("audio/mpeg"));
+            req.Headers.Add("xi-api-key", _elevenLabs.ApiKey);
+            req.Content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+
+            var sw = Stopwatch.StartNew();
+            var resp = await _http.SendAsync(req);
+            sw.Stop();
+            var contentType = resp.Content.Headers.ContentType?.ToString() ?? "(none)";
+            _logger?.Log("INFO", "TTS", $"ElevenLabs response <- status={(int)resp.StatusCode} {resp.StatusCode}, contentType={contentType}, elapsedMs={sw.ElapsedMilliseconds}");
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                _logger?.LogResponseJson("ElevenLabs", $"Status: {(int)resp.StatusCode} {resp.StatusCode}\nContent-Type: {contentType}\nBody:\n{body}", null, LogScope.CurrentAgentName);
+                throw new InvalidOperationException($"ElevenLabs ha risposto {(int)resp.StatusCode}: {body}");
+            }
+
+            var audioBytes = await resp.Content.ReadAsByteArrayAsync();
+            if (audioBytes.Length == 0)
+            {
+                _logger?.LogResponseJson("ElevenLabs", $"Status: {(int)resp.StatusCode} {resp.StatusCode}\nContent-Type: {contentType}\nBody: <empty audio>", null, LogScope.CurrentAgentName);
+                throw new InvalidOperationException("ElevenLabs non ha restituito dati audio");
+            }
+
+            _logger?.LogResponseJson("ElevenLabs", $"Status: {(int)resp.StatusCode} {resp.StatusCode}\nContent-Type: {contentType}\nAudioBytes: {audioBytes.Length}", null, LogScope.CurrentAgentName);
+
+            return new SynthesisResult
+            {
+                AudioBase64 = Convert.ToBase64String(audioBytes),
+                DurationSeconds = null,
+                Meta = new Dictionary<string, string>
+                {
+                    ["provider"] = "elevenlabs",
+                    ["voice_id"] = voiceId,
+                    ["language"] = language ?? string.Empty,
+                    ["sentiment"] = sentiment ?? string.Empty
+                }
+            };
+        }
+
+        private static string MaskApiKey(string? apiKey)
+        {
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                return "(empty)";
+            }
+
+            var clean = apiKey.Trim();
+            if (clean.Length <= 8)
+            {
+                return new string('*', clean.Length);
+            }
+
+            return $"{clean[..4]}...{clean[^4..]}";
         }
 
         /// <summary>

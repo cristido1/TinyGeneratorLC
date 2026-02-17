@@ -18,6 +18,9 @@ namespace TinyGenerator.Models
         
         [Column("model")]
         public string? Model { get; set; }
+
+        [Column("provider")]
+        public string? Provider { get; set; } = "localtts";
         
         [Column("language")]
         public string? Language { get; set; }

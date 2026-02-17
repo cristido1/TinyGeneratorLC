@@ -10,13 +10,15 @@ public sealed class DelegateCommand : ICommand
 
     public string CommandName { get; }
     public int Priority { get; }
+    public bool Batch { get; }
     public event EventHandler<CommandProgressEventArgs>? Progress { add { } remove { } }
 
-    public DelegateCommand(string commandName, Func<CommandContext, Task<CommandResult>> handler, int priority = 2)
+    public DelegateCommand(string commandName, Func<CommandContext, Task<CommandResult>> handler, int priority = 2, bool batch = false)
     {
         CommandName = string.IsNullOrWhiteSpace(commandName) ? "command" : commandName.Trim();
         _handler = handler ?? throw new ArgumentNullException(nameof(handler));
         Priority = Math.Max(1, priority);
+        Batch = batch;
     }
 
     public Task<CommandResult> Execute(CommandContext context) => _handler(context);

@@ -1,5 +1,6 @@
 ﻿using TinyGenerator.Models;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands
@@ -31,6 +32,8 @@ namespace TinyGenerator.Services.Commands
         private readonly StoriesService _storiesService;
         private readonly ICommandEnqueuer _dispatcher;
         private readonly ICustomLogger _logger;
+        private readonly IServiceScopeFactory? _scopeFactory;
+        private readonly IAgentCallService? _modelExecution;
 
         public PlannedStoryCommand(
             int plannerAgentId,
@@ -45,6 +48,8 @@ namespace TinyGenerator.Services.Commands
             StoriesService storiesService,
             ICommandEnqueuer dispatcher,
             ICustomLogger logger,
+            IServiceScopeFactory? scopeFactory = null,
+            IAgentCallService? modelExecution = null,
             CommandTuningOptions? tuning = null)
         {
             _plannerAgentId = plannerAgentId;
@@ -59,6 +64,8 @@ namespace TinyGenerator.Services.Commands
             _storiesService = storiesService;
             _dispatcher = dispatcher;
             _logger = logger;
+            _scopeFactory = scopeFactory;
+            _modelExecution = modelExecution;
             _tuning = tuning ?? new CommandTuningOptions();
         }
 
@@ -250,40 +257,62 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
 
         private async Task<string> CallPlannerAsync(Agent plannerAgent, string prompt, int threadId, CancellationToken ct)
         {
+            _ = threadId;
             try
             {
-                var orchestrator = _kernelFactory.GetOrchestratorForAgent(plannerAgent.Id);
-                if (orchestrator == null)
+                var execution = _modelExecution;
+                if (execution == null && _scopeFactory != null)
                 {
-                    _logger.Log("Warning", "PlannedStory", $"No orchestrator found for planner {plannerAgent.Name}");
+                    using var scope = _scopeFactory.CreateScope();
+                    execution = scope.ServiceProvider.GetService<IAgentCallService>();
+                }
+
+                if (execution == null)
+                {
+                    _logger.Log("Error", "PlannedStory", "IAgentCallService non disponibile per planner");
                     return string.Empty;
                 }
 
-                // Create chat bridge for direct model call
-                var bridge = _kernelFactory.CreateChatBridge(
-                    plannerAgent.ModelName ?? "qwen2.5:7b-instruct",
-                    plannerAgent.Temperature,
-                    plannerAgent.TopP,
-                    plannerAgent.RepeatPenalty,
-                    plannerAgent.TopK,
-                    plannerAgent.RepeatLastN,
-                    plannerAgent.NumPredict);
-
-                var systemMessage = plannerAgent.Prompt ?? "Sei un planner narrativo esperto.";
-                var messages = new List<ConversationMessage>
+                var request = new CommandModelExecutionService.Request
                 {
-                    new ConversationMessage { Role = "system", Content = systemMessage },
-                    new ConversationMessage { Role = "user", Content = prompt }
+                    CommandKey = "planned_story_planner",
+                    Agent = plannerAgent,
+                    RoleCode = string.IsNullOrWhiteSpace(plannerAgent.Role) ? "planner" : plannerAgent.Role,
+                    Prompt = prompt,
+                    SystemPrompt = plannerAgent.Instructions ?? plannerAgent.Prompt ?? "Sei un planner narrativo esperto.",
+                    MaxAttempts = 2,
+                    RetryDelaySeconds = 1,
+                    StepTimeoutSec = 90,
+                    UseResponseChecker = false,
+                    EnableFallback = true,
+                    DiagnoseOnFinalFailure = true,
+                    ExplainAfterAttempt = 1,
+                    RunId = _generationId.ToString(),
+                    EnableDeterministicValidation = true,
+                    DeterministicValidator = output =>
+                    {
+                        var normalized = NormalizePotentialJson(output);
+                        if (string.IsNullOrWhiteSpace(normalized))
+                        {
+                            return new CommandModelExecutionService.DeterministicValidationResult(false, "Planner output vuoto");
+                        }
+
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(normalized);
+                            return doc.RootElement.ValueKind == JsonValueKind.Array
+                                ? new CommandModelExecutionService.DeterministicValidationResult(true, null)
+                                : new CommandModelExecutionService.DeterministicValidationResult(false, "Planner output non e' un array JSON");
+                        }
+                        catch
+                        {
+                            return new CommandModelExecutionService.DeterministicValidationResult(false, "Planner output non parseabile come JSON");
+                        }
+                    }
                 };
 
-                var response = await bridge.CallModelWithToolsAsync(
-                    messages,
-                    new List<Dictionary<string, object>>(), // No tools needed for planner
-                    ct,
-                    skipResponseChecker: true
-                );
-
-                return response ?? string.Empty;
+                var result = await execution.ExecuteAsync(request, ct);
+                return result.Success ? (result.Text ?? string.Empty) : string.Empty;
             }
             catch (Exception ex)
             {
@@ -438,46 +467,78 @@ REGOLE FONDAMENTALI:
 
         private async Task<string> CallWriterAsync(Agent writerAgent, string prompt, int threadId, CancellationToken ct)
         {
+            _ = threadId;
             try
             {
-                var orchestrator = _kernelFactory.GetOrchestratorForAgent(writerAgent.Id);
-                if (orchestrator == null)
+                var execution = _modelExecution;
+                if (execution == null && _scopeFactory != null)
                 {
-                    _logger.Log("Warning", "PlannedStory", $"No orchestrator found for writer {writerAgent.Name}");
+                    using var scope = _scopeFactory.CreateScope();
+                    execution = scope.ServiceProvider.GetService<IAgentCallService>();
+                }
+
+                if (execution == null)
+                {
+                    _logger.Log("Error", "PlannedStory", "IAgentCallService non disponibile per writer");
                     return string.Empty;
                 }
 
-                // Create chat bridge for direct model call
-                var bridge = _kernelFactory.CreateChatBridge(
-                    writerAgent.ModelName ?? "qwen2.5:7b-instruct",
-                    writerAgent.Temperature,
-                    writerAgent.TopP,
-                    writerAgent.RepeatPenalty,
-                    writerAgent.TopK,
-                    writerAgent.RepeatLastN,
-                    writerAgent.NumPredict);
-
-                var systemMessage = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.";
-                var messages = new List<ConversationMessage>
+                var request = new CommandModelExecutionService.Request
                 {
-                    new ConversationMessage { Role = "system", Content = systemMessage },
-                    new ConversationMessage { Role = "user", Content = prompt }
+                    CommandKey = "planned_story_writer",
+                    Agent = writerAgent,
+                    RoleCode = string.IsNullOrWhiteSpace(writerAgent.Role) ? "writer" : writerAgent.Role,
+                    Prompt = prompt,
+                    SystemPrompt = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.",
+                    MaxAttempts = 2,
+                    RetryDelaySeconds = 1,
+                    StepTimeoutSec = 90,
+                    UseResponseChecker = false,
+                    EnableFallback = true,
+                    DiagnoseOnFinalFailure = true,
+                    ExplainAfterAttempt = 1,
+                    RunId = _generationId.ToString(),
+                    EnableDeterministicValidation = true,
+                    DeterministicValidator = output =>
+                    {
+                        var text = (output ?? string.Empty).Trim();
+                        if (string.IsNullOrWhiteSpace(text))
+                        {
+                            return new CommandModelExecutionService.DeterministicValidationResult(false, "Writer output vuoto");
+                        }
+
+                        return new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                    }
                 };
 
-                var response = await bridge.CallModelWithToolsAsync(
-                    messages,
-                    new List<Dictionary<string, object>>(), // No tools needed for beat writing
-                    ct,
-                    skipResponseChecker: true
-                );
-
-                return response ?? string.Empty;
+                var result = await execution.ExecuteAsync(request, ct);
+                return result.Success ? (result.Text ?? string.Empty) : string.Empty;
             }
             catch (Exception ex)
             {
                 _logger.Log("Error", "PlannedStory", $"Writer call failed: {ex.Message}");
                 return string.Empty;
             }
+        }
+
+        private static string NormalizePotentialJson(string? json)
+        {
+            var text = (json ?? string.Empty).Trim();
+            if (text.StartsWith("```json", StringComparison.OrdinalIgnoreCase))
+            {
+                text = text.Substring(7).Trim();
+            }
+            else if (text.StartsWith("```", StringComparison.Ordinal))
+            {
+                text = text.Substring(3).Trim();
+            }
+
+            if (text.EndsWith("```", StringComparison.Ordinal))
+            {
+                text = text.Substring(0, text.Length - 3).Trim();
+            }
+
+            return text;
         }
 
         private bool ContainsAnticipations(string text, int currentBeat, int totalBeats)

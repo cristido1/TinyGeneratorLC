@@ -106,11 +106,19 @@ namespace TinyGenerator.Services
             List<ConversationMessage> messages,
             List<Dictionary<string, object>> tools,
             CancellationToken ct = default,
-            bool skipResponseChecker = false)
+            bool skipResponseChecker = false,
+            bool skipResponseValidation = false)
         {
             // Generate unique request ID for tracking this call in logs
             var requestId = RequestIdGenerator.Generate();
-            _logger?.Log("Info", "LangChainBridge", $"[ReqID: {requestId}] --> Chiamata {_modelId} (validation: {!skipResponseChecker})");
+            _logger?.Log("Info", "LangChainBridge", $"[ReqID: {requestId}] --> Chiamata {_modelId} (responseValidation: {!skipResponseValidation}, checker: {!skipResponseChecker})");
+
+            if (skipResponseValidation)
+            {
+                var raw = await CallModelWithToolsOnceAsync(messages, tools, ct, requestId).ConfigureAwait(false);
+                _logger?.Log("Info", "LangChainBridge", $"[ReqID: {requestId}] <-- Response OK (response validation skipped)");
+                return raw;
+            }
 
             var options = TryGetResponseValidationOptions();
             if (options == null || !options.Enabled)
@@ -244,8 +252,7 @@ namespace TinyGenerator.Services
                     lastPrimaryResponseLogId,
                     ct).ConfigureAwait(false);
 
-                var responseValidation = BuildResponseValidation(lastPrimaryResponseLogId, validation);
-                ApplyResponseValidation(responseValidation);
+                TryApplyResponseValidation(lastPrimaryResponseLogId, validation, $"req:{requestId}");
 
                 if (validation.IsValid)
                 {
@@ -493,6 +500,25 @@ namespace TinyGenerator.Services
             }
 
             return new ResponseValidation(logId.Value, validation.IsValid, errors);
+        }
+
+        private void TryApplyResponseValidation(long? logId, ValidationResult validation, string context)
+        {
+            if (logId is null || logId.Value <= 0)
+            {
+                _logger?.Log("Warning", "ResponseValidation", $"Skipped persistence: missing response log id (context={context})");
+                return;
+            }
+
+            try
+            {
+                var responseValidation = BuildResponseValidation(logId, validation);
+                ApplyResponseValidation(responseValidation);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log("Warning", "ResponseValidation", $"Failed to persist response validation (context={context}): {ex.Message}");
+            }
         }
 
         private void ApplyResponseValidation(ResponseValidation validation)
@@ -1149,8 +1175,7 @@ namespace TinyGenerator.Services
                             primaryResponseLogId: fallbackLogId,
                             ct).ConfigureAwait(false);
 
-                        var responseValidation = BuildResponseValidation(fallbackLogId, lastValidation);
-                        ApplyResponseValidation(responseValidation);
+                        TryApplyResponseValidation(fallbackLogId, lastValidation, $"fallback:{candidateBridge._modelId}:attempt:{attempt}");
 
                         if (lastValidation.IsValid)
                         {
@@ -1440,8 +1465,7 @@ namespace TinyGenerator.Services
                         Reason = $"HTTP {(int)response.StatusCode}: {responseContent}"
                     };
                     var failureLogId = TryGetLatestPrimaryModelResponseLogId();
-                    var responseValidation = BuildResponseValidation(failureLogId, failureValidation);
-                    ApplyResponseValidation(responseValidation);
+                    TryApplyResponseValidation(failureLogId, failureValidation, $"http-failure:req:{requestId}");
                     
                     // Check if the error indicates the model doesn't support tools
                     if (responseContent.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))

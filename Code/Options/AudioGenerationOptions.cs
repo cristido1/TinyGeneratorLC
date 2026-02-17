@@ -10,4 +10,6 @@ public sealed class AudioGenerationOptions
 public sealed class AudioGenerationCommandOptions
 {
     public bool AutolaunchNextCommand { get; set; } = true;
+    public bool Enabled { get; set; } = true;
+    public bool RequiredForNextStatus { get; set; } = true;
 }

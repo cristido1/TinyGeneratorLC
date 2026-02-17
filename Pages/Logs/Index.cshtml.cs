@@ -40,6 +40,12 @@ namespace TinyGenerator.Pages.Logs
             LogEntries = _db.GetRecentLogs(limit: 1000);
         }
 
+        public static string GetOperationDisplay(LogEntry log)
+        {
+            if (log == null) return "unknown";
+            return DatabaseService.NormalizeOperationForDisplay(log.ThreadScope);
+        }
+
         public IActionResult OnPostAnalyze(string threadId, string? threadScope)
         {
             if (string.IsNullOrWhiteSpace(threadId))
@@ -126,13 +132,39 @@ namespace TinyGenerator.Pages.Logs
             return RedirectToPage();
         }
 
-        public IActionResult OnPostClearAllLogs()
+        public async Task<IActionResult> OnPostClearAllLogs()
         {
             try
             {
+                var runId = $"update_model_stats_pre_clear_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                var handle = _dispatcher.Enqueue(
+                    "update_model_stats",
+                    ctx =>
+                    {
+                        _db.RefreshModelStatsFromAllLogs();
+                        return Task.FromResult(new CommandResult(true, "Model stats refreshed from all logs"));
+                    },
+                    runId: runId,
+                    threadScope: "system/model_stats",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["operation"] = "update_model_stats",
+                        ["trigger"] = "clear_logs"
+                    },
+                    priority: 1,
+                    batch: true);
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
+                var statsResult = await _dispatcher.WaitForCompletionAsync(handle.RunId, cts.Token);
+                if (!statsResult.Success)
+                {
+                    StatusMessage = $"Cancellazione annullata: aggiornamento stats fallito ({statsResult.Message ?? "errore sconosciuto"}).";
+                    return RedirectToPage();
+                }
+
                 _db.ClearLogs();
                 _numerator.ResetThreadIds();
-                StatusMessage = "Tutti i log e le analisi sono stati cancellati con successo.";
+                StatusMessage = $"Log cancellati. Stats aggiornate prima della cancellazione (runId={handle.RunId}).";
             }
             catch (Exception ex)
             {

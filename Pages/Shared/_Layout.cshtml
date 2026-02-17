@@ -45,9 +45,13 @@
                 <div class="sidebar-section-title">Principale</div>
                 <a href="/" title="Home"><i class="bi bi-house"></i><span>Home</span></a>
                 <a asp-page="/Genera" title="Genera storia"><i class="bi bi-pencil-square"></i><span>Genera storia</span></a>
-                <a asp-page="/GeneraSerie/Index" title="Genera serie"><i class="bi bi-collection-play"></i><span>Genera serie</span></a>
                 <a asp-page="/Stories/Index" title="Storie salvate"><i class="bi bi-journal-text"></i><span>Storie salvate</span></a>
                 <a asp-page="/Chat" title="Chat"><i class="bi bi-chat-dots"></i><span>Chat</span></a>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Serie</div>
+                <a asp-page="/GeneraSerie/Index" title="Genera serie"><i class="bi bi-collection-play"></i><span>Genera serie</span></a>
+                <a asp-page="/Series/Index" title="Serie"><i class="bi bi-collection"></i><span>Serie</span></a>
             </div>
             <div class="sidebar-section">
                 <div class="sidebar-section-title">Monitoraggio</div>
@@ -63,7 +67,6 @@
                 <a asp-page="/Models/Index" title="Modelli"><i class="bi bi-diagram-3"></i><span>Modelli</span></a>
                 <a asp-page="/Agents/Index" title="Agents"><i class="bi bi-people"></i><span>Agents</span></a>
                 <a asp-page="/Agents/FallbackModels" title="Fallback models"><i class="bi bi-shuffle"></i><span>Fallback models</span></a>
-                <a asp-page="/Series/Index" title="Serie"><i class="bi bi-collection"></i><span>Serie</span></a>
                 <a asp-page="/TaskTypes/Index" title="Task Types"><i class="bi bi-tags"></i><span>Task Types</span></a>
                 <a asp-page="/StepTemplates/Index" title="Step Templates"><i class="bi bi-list-ol"></i><span>Step Templates</span></a>
                 <a asp-page="/PlannerMethods" title="Metodi Pianificazione"><i class="bi bi-diagram-2"></i><span>Metodi Pianificazione</span></a>

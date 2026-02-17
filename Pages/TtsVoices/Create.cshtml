@@ -22,6 +22,14 @@
                 <span asp-validation-for="Voice.Name" class="text-danger"></span>
             </div>
 
+            <div class="mb-3">
+                <label asp-for="Voice.Provider" class="form-label">Provider</label>
+                <select asp-for="Voice.Provider" class="form-select">
+                    <option value="localtts">localtts</option>
+                    <option value="elevenlabs">elevenlabs</option>
+                </select>
+            </div>
+
             <div class="row">
                 <div class="mb-3 col-md-6">
                     <label asp-for="Voice.Language" class="form-label"></label>

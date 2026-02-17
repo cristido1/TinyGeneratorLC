@@ -32,5 +32,41 @@ namespace TinyGenerator.Models
 
         [Column("first_operation_date")]
         public string? FirstOperationDate { get; set; }
+
+        [Column("duration_total_count")]
+        public int? DurationTotalCount { get; set; }
+
+        [Column("duration_total_time")]
+        public double? DurationTotalTime { get; set; }
+
+        [Column("runtime_total_count")]
+        public int? RuntimeTotalCount { get; set; }
+
+        [Column("prompt_eval_count_total")]
+        public long? PromptEvalCountTotal { get; set; }
+
+        [Column("prompt_eval_duration_total")]
+        public double? PromptEvalDurationTotal { get; set; }
+
+        [Column("eval_count_total")]
+        public long? EvalCountTotal { get; set; }
+
+        [Column("eval_duration_total")]
+        public double? EvalDurationTotal { get; set; }
+
+        [Column("total_duration_total")]
+        public double? TotalDurationTotal { get; set; }
+
+        [Column("load_duration_total")]
+        public double? LoadDurationTotal { get; set; }
+
+        [Column("done_stop_count")]
+        public int? DoneStopCount { get; set; }
+
+        [Column("done_length_count")]
+        public int? DoneLengthCount { get; set; }
+
+        [Column("done_other_count")]
+        public int? DoneOtherCount { get; set; }
     }
 }

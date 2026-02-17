@@ -70,13 +70,23 @@ namespace TinyGenerator.Pages
                 });
                 await RememberChatAsync(model, "user", message);
 
+                using var chatScope = LogScope.Push(
+                    "chat",
+                    null,
+                    null,
+                    null,
+                    "chat",
+                    agentRole: "chat");
+
                 // Call model via LangChain bridge. If model supports tools, expose default tools (memory).
                 var chatBridge = _kernelFactory.CreateChatBridge(model);
                 var tools = _kernelFactory.GetDefaultToolSchemasForModel(model) ?? new List<Dictionary<string, object>>();
                 var response = await chatBridge.CallModelWithToolsAsync(
                     history,
                     tools, // Default tools (may include memory if model supports tools)
-                    CancellationToken.None);
+                    CancellationToken.None,
+                    skipResponseChecker: true,
+                    skipResponseValidation: true);
 
                 // Parse response and potential tool calls
                 var (textContent, toolCalls) = LangChainChatBridge.ParseChatResponse(response);
@@ -123,7 +133,12 @@ namespace TinyGenerator.Pages
 
                         // Call model again with updated history and orchestrator's tool schemas
                         var toolSchemas = orchestrator.GetToolSchemas();
-                        var nextResponse = await chatBridge.CallModelWithToolsAsync(history, toolSchemas, CancellationToken.None);
+                        var nextResponse = await chatBridge.CallModelWithToolsAsync(
+                            history,
+                            toolSchemas,
+                            CancellationToken.None,
+                            skipResponseChecker: true,
+                            skipResponseValidation: true);
                         var (nextText, nextToolCalls) = LangChainChatBridge.ParseChatResponse(nextResponse);
 
                         history.Add(new Services.ConversationMessage

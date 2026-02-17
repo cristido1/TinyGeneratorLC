@@ -84,5 +84,6 @@ namespace TinyGenerator.Services
         int? MaxStep = null,
         string? StepDescription = null,
         int RetryCount = 0,
-        string? ErrorMessage = null);
+        string? ErrorMessage = null,
+        int MaxRetry = 0);
 }

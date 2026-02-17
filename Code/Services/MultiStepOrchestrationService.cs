@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
 using TinyGenerator.Skills;
+using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Services
 {
@@ -979,58 +980,88 @@ namespace TinyGenerator.Services
                         ttsTool.CurrentStoryId = execution.EntityId.Value;
                     }
                 }
-                var bridge = _kernelFactory.CreateChatBridge(
-                    executorModelName,
-                    executorAgent.Temperature,
-                    executorAgent.TopP,
-                    executorAgent.RepeatPenalty,
-                    executorAgent.TopK,
-                    executorAgent.RepeatLastN,
-                    executorAgent.NumPredict);
-                var loop = new ReActLoopOrchestrator(
-                    orchestrator,
-                    _logger,
-                    maxIterations: 100,
-                    runId: null,
-                    modelBridge: bridge,
-                    systemMessage: systemMessage,
-                    responseChecker: _checkerService,
-                    agentRole: executorAgent.Role,
-                    extraMessages: extraMessages); // Pass extra messages (assistant/system) for retry feedback
+                var scopeFactory = _services.GetService(typeof(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory)) as Microsoft.Extensions.DependencyInjection.IServiceScopeFactory;
+                var executionOrchestrator = new ModelExecutionOrchestrator(_kernelFactory, scopeFactory, _logger);
+                var agentForExecution = new Agent
+                {
+                    Id = executorAgent.Id,
+                    Name = executorAgent.Name,
+                    Role = executorAgent.Role,
+                    ModelId = modelOverrideId ?? executorAgent.ModelId,
+                    ModelName = executorModelName,
+                    Temperature = executorAgent.Temperature,
+                    TopP = executorAgent.TopP,
+                    RepeatPenalty = executorAgent.RepeatPenalty,
+                    TopK = executorAgent.TopK,
+                    RepeatLastN = executorAgent.RepeatLastN,
+                    NumPredict = executorAgent.NumPredict,
+                    Prompt = executorAgent.Prompt,
+                    Instructions = executorAgent.Instructions,
+                    Skills = executorAgent.Skills,
+                    IsActive = executorAgent.IsActive
+                };
 
                 _logger.Log("Information", "MultiStep", $"About to execute ReAct loop - systemMessage length: {systemMessage?.Length ?? 0}, prompt length: {fullPrompt?.Length ?? 0}");
                 if (_logger is CustomLogger cl6) await cl6.FlushAsync();
-                
-                Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - Calling loop.ExecuteAsync with prompt length: {fullPrompt?.Length ?? 0}");
-                var result = await loop.ExecuteAsync(fullPrompt ?? string.Empty, stepCts.Token);
-                Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - loop.ExecuteAsync completed");
-                Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.FinalResponse is null: {result.FinalResponse == null}");
-                Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.FinalResponse length: {result.FinalResponse?.Length ?? 0}");
-                Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.Success: {result.Success}, result.Error: {result.Error ?? "(null)"}");
-                Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.IterationCount: {result.IterationCount}, result.ExecutedTools count: {result.ExecutedTools?.Count ?? 0}");
-                if (!string.IsNullOrWhiteSpace(result.FinalResponse))
-                {
-                    Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - result.FinalResponse preview: {result.FinalResponse.Substring(0, Math.Min(200, result.FinalResponse.Length))}");
-                }
-                output = result.FinalResponse ?? string.Empty;
 
-                // If FinalResponse is empty but we executed tool calls, reconstruct a tool_calls JSON
-                // from the executed tools so the TTS validator can parse it.
-                if (string.IsNullOrWhiteSpace(output))
-                {
-                    if (result.ExecutedTools != null && result.ExecutedTools.Count > 0)
+                var executionResult = await executionOrchestrator.ExecuteAsync(
+                    new ModelExecutionRequest
                     {
-                        output = ReconstructToolCallsJsonFromToolRecords(result.ExecutedTools);
-                        _logger.Log("Information", "MultiStep", $"Reconstructed output from executed tools (count={result.ExecutedTools.Count}) for validation (threadId={threadId})");
-                    }
+                        RoleCode = executorAgent.Role ?? "executor",
+                        Agent = agentForExecution,
+                        InitialModelId = agentForExecution.ModelId ?? 0,
+                        InitialModelName = executorModelName,
+                        WorkInput = fullPrompt ?? string.Empty,
+                        RunId = threadId.ToString(),
+                        ChunkIndex = 1,
+                        ChunkCount = 1,
+                        WorkLabel = "react_executor",
+                        Options = new ModelExecutionOptions
+                        {
+                            MaxAttemptsPerModel = 1,
+                            RetryDelayBaseSeconds = 0,
+                            EnableFallback = false,
+                            EnableDiagnosis = false
+                        },
+                        WorkAsync = async (bridge, token) =>
+                        {
+                            var loop = new ReActLoopOrchestrator(
+                                orchestrator,
+                                _logger,
+                                maxIterations: 100,
+                                runId: null,
+                                modelBridge: bridge,
+                                systemMessage: systemMessage,
+                                responseChecker: _checkerService,
+                                agentRole: executorAgent.Role,
+                                extraMessages: extraMessages);
 
-                    if (string.IsNullOrWhiteSpace(output))
-                    {
-                        Console.WriteLine($"[DEBUG] ExecuteNextStepAsync - Output is empty! result object: {result != null}, FinalResponse: '{result?.FinalResponse ?? "(null)"}'");
-                        _logger.Log("Error", "MultiStep", $"Executor agent produced empty output. Success={(result?.Success.ToString() ?? "false")}, Error={(result?.Error ?? "(null)" )}, Iterations={(result?.IterationCount.ToString() ?? "0")}, ExecutedTools={result?.ExecutedTools?.Count ?? 0}");
-                        throw new InvalidOperationException($"Executor agent produced empty output. Model: {executorModelName}, Success: {(result?.Success.ToString() ?? "false")}, Error: {(result?.Error ?? "none")}, Iterations: {result?.IterationCount ?? 0}");
-                    }
-                }
+                            var result = await loop.ExecuteAsync(fullPrompt ?? string.Empty, token);
+                            if (!result.Success)
+                            {
+                                return ModelWorkResult.Fail(result.Error ?? "ReAct execution failed", result.FinalResponse);
+                            }
+
+                            var finalOutput = result.FinalResponse ?? string.Empty;
+                            if (string.IsNullOrWhiteSpace(finalOutput) && result.ExecutedTools != null && result.ExecutedTools.Count > 0)
+                            {
+                                finalOutput = ReconstructToolCallsJsonFromToolRecords(result.ExecutedTools);
+                                _logger.Log("Information", "MultiStep", $"Reconstructed output from executed tools (count={result.ExecutedTools.Count}) for validation (threadId={threadId})");
+                            }
+
+                            if (string.IsNullOrWhiteSpace(finalOutput))
+                            {
+                                return ModelWorkResult.Fail(
+                                    $"Executor agent produced empty output. Iterations: {result.IterationCount}, ExecutedTools: {result.ExecutedTools?.Count ?? 0}",
+                                    result.FinalResponse);
+                            }
+
+                            return ModelWorkResult.Ok(finalOutput);
+                        }
+                    },
+                    stepCts.Token).ConfigureAwait(false);
+
+                output = executionResult.OutputText ?? string.Empty;
             }
             catch (OperationCanceledException)
             {
@@ -2010,21 +2041,12 @@ namespace TinyGenerator.Services
 {text}
 
 RIASSUNTO:";
-
-                var orchestrator = _kernelFactory.CreateOrchestrator(summaryModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(
-                    summaryModelName,
-                    summarizerAgent.Temperature,
-                    summarizerAgent.TopP,
-                    summarizerAgent.RepeatPenalty,
-                    summarizerAgent.TopK,
-                    summarizerAgent.RepeatLastN,
-                    summarizerAgent.NumPredict);
-                var loop = new ReActLoopOrchestrator(orchestrator, _logger, modelBridge: bridge);
-                var response = await loop.ExecuteAsync(prompt, ct);
-                
-                var summary = response.FinalResponse ?? string.Empty;
-                _logger.Log("Information", "MultiStep", $"Summary generated: {summary.Length} chars, success={response.Success}");
+                var summary = await ExecuteSummarizerWithStandardPathAsync(
+                    summarizerAgent,
+                    commandKey: "multi_step_generate_summary",
+                    prompt,
+                    ct).ConfigureAwait(false);
+                _logger.Log("Information", "MultiStep", $"Summary generated: {summary.Length} chars");
                 
                 if (string.IsNullOrWhiteSpace(summary))
                 {
@@ -2204,29 +2226,85 @@ RIASSUNTO:";
 {context}
 
 RIASSUNTO:";
+                var cloned = new Agent
+                {
+                    Id = summarizerAgent.Id,
+                    Name = summarizerAgent.Name,
+                    Role = summarizerAgent.Role,
+                    ModelId = summarizerAgent.ModelId,
+                    ModelName = summarizerAgent.ModelName,
+                    Temperature = temperature ?? summarizerAgent.Temperature,
+                    TopP = topP ?? summarizerAgent.TopP,
+                    RepeatPenalty = repeatPenalty ?? summarizerAgent.RepeatPenalty,
+                    TopK = topK ?? summarizerAgent.TopK,
+                    RepeatLastN = repeatLastN ?? summarizerAgent.RepeatLastN,
+                    NumPredict = numPredict ?? summarizerAgent.NumPredict,
+                    Prompt = summarizerAgent.Prompt,
+                    Instructions = summarizerAgent.Instructions,
+                    IsActive = summarizerAgent.IsActive
+                };
 
-                var orchestrator = _kernelFactory.CreateOrchestrator(summaryModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(
-                    summaryModelName,
-                    temperature ?? summarizerAgent.Temperature,
-                    topP ?? summarizerAgent.TopP,
-                    repeatPenalty ?? summarizerAgent.RepeatPenalty,
-                    topK ?? summarizerAgent.TopK,
-                    repeatLastN ?? summarizerAgent.RepeatLastN,
-                    numPredict ?? summarizerAgent.NumPredict);
-                var systemMessage = summarizerAgent.Instructions ?? string.Empty;
-                var loop = new ReActLoopOrchestrator(
-                    orchestrator,
-                    _logger,
-                    modelBridge: bridge,
-                    systemMessage: systemMessage);
-                var response = await loop.ExecuteAsync(prompt, ct);
-                return response.FinalResponse ?? context;
+                var summary = await ExecuteSummarizerWithStandardPathAsync(
+                    cloned,
+                    commandKey: "multi_step_summarize_context",
+                    prompt,
+                    ct).ConfigureAwait(false);
+                return string.IsNullOrWhiteSpace(summary) ? context : summary;
             }
             catch
             {
                 return context;
             }
+        }
+
+        private async Task<string> ExecuteSummarizerWithStandardPathAsync(
+            Agent summarizerAgent,
+            string commandKey,
+            string prompt,
+            CancellationToken ct)
+        {
+            var scopeFactory = _services.GetService(typeof(IServiceScopeFactory)) as IServiceScopeFactory;
+            if (scopeFactory == null)
+            {
+                _logger.Log("Warning", "MultiStep", "IServiceScopeFactory non disponibile per percorso standard summarizer");
+                return string.Empty;
+            }
+
+            using var scope = scopeFactory.CreateScope();
+            var execution = scope.ServiceProvider.GetService(typeof(IAgentCallService)) as IAgentCallService;
+            if (execution == null)
+            {
+                _logger.Log("Warning", "MultiStep", "IAgentCallService non disponibile per percorso standard summarizer");
+                return string.Empty;
+            }
+
+            var modelResult = await execution.ExecuteAsync(
+                new CommandModelExecutionService.Request
+                {
+                    CommandKey = commandKey,
+                    Agent = summarizerAgent,
+                    RoleCode = string.IsNullOrWhiteSpace(summarizerAgent.Role) ? "summarizer" : summarizerAgent.Role,
+                    Prompt = prompt,
+                    SystemPrompt = summarizerAgent.Instructions ?? summarizerAgent.Prompt ?? "Sei un summarizer esperto.",
+                    MaxAttempts = 2,
+                    RetryDelaySeconds = 1,
+                    StepTimeoutSec = 90,
+                    UseResponseChecker = false,
+                    EnableFallback = true,
+                    DiagnoseOnFinalFailure = true,
+                    ExplainAfterAttempt = 1,
+                    EnableDeterministicValidation = true,
+                    DeterministicValidator = output =>
+                    {
+                        var text = (output ?? string.Empty).Trim();
+                        return string.IsNullOrWhiteSpace(text)
+                            ? new CommandModelExecutionService.DeterministicValidationResult(false, "Summary vuoto")
+                            : new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                    }
+                },
+                ct).ConfigureAwait(false);
+
+            return modelResult.Text ?? string.Empty;
         }
 
         private async Task<bool> TryFallbackModelAsync(
@@ -2262,22 +2340,69 @@ RIASSUNTO:";
             {
                 var fullPrompt = string.IsNullOrEmpty(context) ? stepInstruction : $"{context}\n\n---\n\n{stepInstruction}";
                 var fallbackModelName = fallbackModel.Name;
-                var orchestrator = _kernelFactory.CreateOrchestrator(fallbackModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(
-                    fallbackModelName,
-                    currentAgent.Temperature,
-                    currentAgent.TopP,
-                    currentAgent.RepeatPenalty,
-                    currentAgent.TopK,
-                    currentAgent.RepeatLastN,
-                    currentAgent.NumPredict);
-                var loop = new ReActLoopOrchestrator(orchestrator, _logger, modelBridge: bridge);
+                var scopeFactory = _services.GetService(typeof(IServiceScopeFactory)) as IServiceScopeFactory;
+                if (scopeFactory == null)
+                {
+                    _logger.Log("Warning", "MultiStep", "IServiceScopeFactory non disponibile: fallback standard disabilitato");
+                    return false;
+                }
+
+                using var scope = scopeFactory.CreateScope();
+                var modelExecution = scope.ServiceProvider.GetService(typeof(IAgentCallService)) as IAgentCallService;
+                if (modelExecution == null)
+                {
+                    _logger.Log("Warning", "MultiStep", "IAgentCallService non disponibile: fallback standard disabilitato");
+                    return false;
+                }
 
                 using var stepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 stepCts.CancelAfter(TimeSpan.FromMinutes(20));
 
-                var result = await loop.ExecuteAsync(fullPrompt, stepCts.Token);
-                var output = result.FinalResponse ?? string.Empty;
+                var fallbackAgent = new Agent
+                {
+                    Id = currentAgent.Id,
+                    Name = currentAgent.Name,
+                    Role = currentAgent.Role,
+                    ModelId = fallbackModel.Id,
+                    ModelName = fallbackModelName,
+                    Temperature = currentAgent.Temperature,
+                    TopP = currentAgent.TopP,
+                    RepeatPenalty = currentAgent.RepeatPenalty,
+                    TopK = currentAgent.TopK,
+                    RepeatLastN = currentAgent.RepeatLastN,
+                    NumPredict = currentAgent.NumPredict,
+                    Prompt = currentAgent.Prompt,
+                    Instructions = currentAgent.Instructions,
+                    IsActive = currentAgent.IsActive
+                };
+
+                var modelResult = await modelExecution.ExecuteAsync(
+                    new CommandModelExecutionService.Request
+                    {
+                        CommandKey = "multi_step_fallback_step",
+                        Agent = fallbackAgent,
+                        RoleCode = string.IsNullOrWhiteSpace(currentAgent.Role) ? "writer" : currentAgent.Role,
+                        Prompt = fullPrompt,
+                        SystemPrompt = currentAgent.Instructions ?? currentAgent.Prompt ?? "Sei un assistente esperto.",
+                        MaxAttempts = 1,
+                        RetryDelaySeconds = 0,
+                        StepTimeoutSec = 1200,
+                        UseResponseChecker = false,
+                        EnableFallback = false,
+                        DiagnoseOnFinalFailure = true,
+                        ExplainAfterAttempt = 1,
+                        EnableDeterministicValidation = true,
+                        DeterministicValidator = text =>
+                        {
+                            var cleaned = (text ?? string.Empty).Trim();
+                            return string.IsNullOrWhiteSpace(cleaned)
+                                ? new CommandModelExecutionService.DeterministicValidationResult(false, "Fallback output vuoto")
+                                : new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                        }
+                    },
+                    stepCts.Token).ConfigureAwait(false);
+
+                var output = (modelResult.Text ?? string.Empty).Trim();
 
                 if (string.IsNullOrWhiteSpace(output)) return false;
 
@@ -3005,15 +3130,6 @@ RIASSUNTO:";
                 chapterTool.ModelName = modelName;
             }
 
-            var bridge = _kernelFactory.CreateChatBridge(
-                modelName,
-                evaluator.Temperature,
-                evaluator.TopP,
-                evaluator.RepeatPenalty,
-                evaluator.TopK,
-                evaluator.RepeatLastN,
-                evaluator.NumPredict);
-
             // Build system message for evaluation
             var systemMessage = evaluator.Instructions ?? 
                 "Sei un critico letterario esperto. Valuta il capitolo fornito usando la funzione evaluate_chapter. " +
@@ -3035,23 +3151,56 @@ Analizza il testo e fornisci una valutazione dettagliata per:
 
 Chiama la funzione evaluate_chapter con i tuoi punteggi e feedback.";
 
-            var loop = new ReActLoopOrchestrator(
-                orchestrator,
-                _logger,
-                maxIterations: 10,
-                runId: null,
-                modelBridge: bridge,
-                systemMessage: systemMessage,
-                responseChecker: null, // No response checker for evaluations
-                agentRole: evaluator.Role,
-                extraMessages: null);
-
             try
             {
                 using var evalCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 evalCts.CancelAfter(TimeSpan.FromMinutes(3));
+                var scopeFactory = _services.GetService(typeof(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory)) as Microsoft.Extensions.DependencyInjection.IServiceScopeFactory;
+                var executionOrchestrator = new ModelExecutionOrchestrator(_kernelFactory, scopeFactory, _logger);
+                string? finalResponse = null;
+                await executionOrchestrator.ExecuteAsync(
+                    new ModelExecutionRequest
+                    {
+                        RoleCode = evaluator.Role ?? "chapter_evaluator",
+                        Agent = evaluator,
+                        InitialModelId = evaluator.ModelId ?? 0,
+                        InitialModelName = modelName,
+                        WorkInput = userPrompt,
+                        RunId = $"chapter_eval_{threadId}_{stepNumber}_{evaluator.Id}",
+                        ChunkIndex = 1,
+                        ChunkCount = 1,
+                        WorkLabel = "chapter_react_evaluation",
+                        Options = new ModelExecutionOptions
+                        {
+                            MaxAttemptsPerModel = 1,
+                            RetryDelayBaseSeconds = 0,
+                            EnableFallback = false,
+                            EnableDiagnosis = false
+                        },
+                        WorkAsync = async (bridge, token) =>
+                        {
+                            var loop = new ReActLoopOrchestrator(
+                                orchestrator,
+                                _logger,
+                                maxIterations: 10,
+                                runId: null,
+                                modelBridge: bridge,
+                                systemMessage: systemMessage,
+                                responseChecker: null,
+                                agentRole: evaluator.Role,
+                                extraMessages: null);
 
-                var result = await loop.ExecuteAsync(userPrompt, evalCts.Token);
+                            var result = await loop.ExecuteAsync(userPrompt, token).ConfigureAwait(false);
+                            finalResponse = result.FinalResponse;
+                            if (!result.Success)
+                            {
+                                return ModelWorkResult.Fail(result.Error ?? "Valutazione capitolo fallita", result.FinalResponse);
+                            }
+
+                            return ModelWorkResult.Ok(string.IsNullOrWhiteSpace(result.FinalResponse) ? "__chapter_eval_tool_success__" : result.FinalResponse);
+                        }
+                    },
+                    evalCts.Token).ConfigureAwait(false);
 
                 // Parse result from ChapterEvaluatorTool
                 if (chapterTool?.LastResult != null)
@@ -3062,12 +3211,12 @@ Chiama la funzione evaluate_chapter con i tuoi punteggi e feedback.";
                 }
 
                 // Try to parse from final response
-                if (!string.IsNullOrWhiteSpace(result.FinalResponse))
+                if (!string.IsNullOrWhiteSpace(finalResponse))
                 {
                     try
                     {
                         return JsonSerializer.Deserialize<ChapterEvaluationResult>(
-                            result.FinalResponse,
+                            finalResponse,
                             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     }
                     catch

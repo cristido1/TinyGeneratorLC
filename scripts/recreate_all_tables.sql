@@ -193,6 +193,7 @@ CREATE TABLE tts_voices (
     voice_id TEXT NOT NULL,
     name TEXT NOT NULL,
     model TEXT NULL,
+    provider TEXT NOT NULL DEFAULT 'localtts',
     language TEXT NULL,
     gender TEXT NULL,
     age TEXT NULL,
@@ -248,6 +249,7 @@ CREATE TABLE Log (
     analized INTEGER NOT NULL DEFAULT 0,
     chat_text TEXT NULL,
     Result TEXT NULL,
+    durationSecs INTEGER NOT NULL DEFAULT 1,
     RowVersion BLOB NULL
 );
 

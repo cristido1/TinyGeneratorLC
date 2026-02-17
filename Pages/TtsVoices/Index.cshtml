@@ -63,6 +63,7 @@
                     <th data-col="actions">Azioni</th>
                     <th data-col="name"><a href="?orderBy=name&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">Nome</a></th>
                     <th data-col="voiceId"><a href="?orderBy=voiceId&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">VoiceId</a></th>
+                    <th data-col="provider"><a href="?orderBy=provider&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">Provider</a></th>
                     <th data-col="model">Model</th>
                     <th data-col="language">Language</th>
                     <th data-col="gender"><a href="?orderBy=gender&search=@Model.Search&showDisabled=@(Model.ShowDisabled ? "1" : "")">Gender</a></th>
@@ -112,6 +113,23 @@
                         </td>
                         <td data-col="name">@v.Name</td>
                         <td data-col="voiceId">@v.VoiceId</td>
+                        <td data-col="provider">
+                            @{
+                                var provider = (v.Provider ?? string.Empty).Trim().ToLowerInvariant();
+                                if (provider == "elevenlabs")
+                                {
+                                    <span class="badge bg-warning text-dark">elevenlabs</span>
+                                }
+                                else if (provider == "localtts")
+                                {
+                                    <span class="badge bg-success">localtts</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">@(string.IsNullOrWhiteSpace(v.Provider) ? "localtts" : v.Provider)</span>
+                                }
+                            }
+                        </td>
                         <td data-col="model">@v.Model</td>
                         <td data-col="language">@v.Language</td>
                         <td data-col="gender">@v.Gender</td>

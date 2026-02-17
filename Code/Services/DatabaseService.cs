@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Dapper;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -2274,9 +2275,21 @@ public sealed class DatabaseService
         double totalScore,
         string rawJson,
         int? modelId = null,
-        int? agentId = null)
+        int? agentId = null,
+        int? lengthPenaltyCharsLimit = null)
     {
         using var context = CreateDbContext();
+        var (storyLengthChars, effectiveLimit, penaltyPercent, computedTotalScore) =
+            ComputeLengthPenaltyForEvaluation(
+                context,
+                storyId,
+                narrativeScore,
+                originalityScore,
+                emotionalScore,
+                actionScore,
+                fallbackTotalScore: totalScore,
+                configuredCharsLimit: lengthPenaltyCharsLimit);
+
         var eval = new StoryEvaluation
         {
             StoryId = storyId,
@@ -2288,7 +2301,10 @@ public sealed class DatabaseService
             EmotionalImpactDefects = emotionalDefects ?? string.Empty,
             ActionScore = actionScore,
             ActionDefects = actionDefects ?? string.Empty,
-            TotalScore = totalScore,
+            TotalScore = computedTotalScore,
+            StoryLengthChars = storyLengthChars,
+            LenghtPenalityCharsLimit = effectiveLimit,
+            LenghtPenalityPercentageApplyed = penaltyPercent,
             RawJson = rawJson ?? string.Empty,
             ModelId = modelId.HasValue ? (long?)modelId.Value : null,
             AgentId = agentId,
@@ -2306,7 +2322,7 @@ public sealed class DatabaseService
         return eval.Id;
     }
 
-    public long AddStoryEvaluation(long storyId, string rawJson, double totalScore, int? modelId = null, int? agentId = null)
+    public long AddStoryEvaluation(long storyId, string rawJson, double totalScore, int? modelId = null, int? agentId = null, int? lengthPenaltyCharsLimit = null)
     {
         using var context = CreateDbContext();
         // Deduplicate: avoid inserting identical evaluation (same story, same agent, same raw JSON)
@@ -2366,6 +2382,17 @@ public sealed class DatabaseService
                 actionDef = GetDefectsFromCategory("pacing");
             }
 
+            var (storyLengthChars, effectiveLimit, penaltyPercent, computedTotalScore) =
+                ComputeLengthPenaltyForEvaluation(
+                    context,
+                    storyId,
+                    nc,
+                    org,
+                    em,
+                    action,
+                    fallbackTotalScore: totalScore,
+                    configuredCharsLimit: lengthPenaltyCharsLimit);
+
             var eval = new StoryEvaluation
             {
                 StoryId = storyId,
@@ -2377,7 +2404,10 @@ public sealed class DatabaseService
                 EmotionalImpactDefects = emdef ?? string.Empty,
                 ActionScore = action,
                 ActionDefects = actionDef ?? string.Empty,
-                TotalScore = totalScore,
+                TotalScore = computedTotalScore,
+                StoryLengthChars = storyLengthChars,
+                LenghtPenalityCharsLimit = effectiveLimit,
+                LenghtPenalityPercentageApplyed = penaltyPercent,
                 RawJson = rawJson ?? string.Empty,
                 ModelId = modelId.HasValue ? (long?)modelId.Value : null,
                 AgentId = agentId,
@@ -2400,6 +2430,17 @@ public sealed class DatabaseService
             // Best-effort fallback: insert minimal evaluation with defaulted category fields
             try
             {
+                var (storyLengthChars, effectiveLimit, penaltyPercent, computedTotalScore) =
+                    ComputeLengthPenaltyForEvaluation(
+                        context,
+                        storyId,
+                        0,
+                        0,
+                        0,
+                        0,
+                        fallbackTotalScore: totalScore,
+                        configuredCharsLimit: lengthPenaltyCharsLimit);
+
                 var eval = new StoryEvaluation
                 {
                     StoryId = storyId,
@@ -2411,7 +2452,10 @@ public sealed class DatabaseService
                     EmotionalImpactDefects = string.Empty,
                     ActionScore = 0,
                     ActionDefects = string.Empty,
-                    TotalScore = totalScore,
+                    TotalScore = computedTotalScore,
+                    StoryLengthChars = storyLengthChars,
+                    LenghtPenalityCharsLimit = effectiveLimit,
+                    LenghtPenalityPercentageApplyed = penaltyPercent,
                     RawJson = rawJson ?? string.Empty,
                     ModelId = modelId.HasValue ? (long?)modelId.Value : null,
                     AgentId = agentId,
@@ -2435,6 +2479,39 @@ public sealed class DatabaseService
                 return 0;
             }
         }
+    }
+
+    private static (int storyLengthChars, int penaltyCharsLimit, double penaltyPercentApplied, double totalScore) ComputeLengthPenaltyForEvaluation(
+        TinyGeneratorDbContext context,
+        long storyId,
+        int narrativeScore,
+        int originalityScore,
+        int emotionalScore,
+        int actionScore,
+        double fallbackTotalScore,
+        int? configuredCharsLimit)
+    {
+        var story = context.Stories.FirstOrDefault(s => s.Id == storyId);
+        var text = story == null
+            ? string.Empty
+            : (string.IsNullOrWhiteSpace(story.StoryRevised) ? (story.StoryRaw ?? string.Empty) : story.StoryRevised!);
+
+        var storyLengthChars = text.Length;
+        var penaltyCharsLimit = Math.Max(0, configuredCharsLimit ?? 0);
+
+        var baseTotal = narrativeScore + originalityScore + emotionalScore + actionScore;
+        var baseScore = baseTotal > 0 ? baseTotal : fallbackTotalScore;
+
+        if (penaltyCharsLimit <= 0 || storyLengthChars <= 0)
+        {
+            return (storyLengthChars, penaltyCharsLimit, 0.0, Math.Round(baseScore, 2));
+        }
+
+        var penaltyFactor = Math.Min(1.0, storyLengthChars / (double)penaltyCharsLimit);
+        var penaltyPercentApplied = Math.Round((1.0 - penaltyFactor) * 100.0, 2);
+        var totalScore = Math.Round(baseScore * penaltyFactor, 2);
+
+        return (storyLengthChars, penaltyCharsLimit, penaltyPercentApplied, totalScore);
     }
 
     public void RecalculateWriterScore(int modelId)
@@ -2563,6 +2640,9 @@ SET TotalScore = (
                       se.action_score AS ActionScore,
                       se.action_defects AS ActionDefects,
                       se.total_score AS TotalScore,
+                      se.story_length_chars AS StoryLengthChars,
+                      se.lenght_penality_chars_limit AS LenghtPenalityCharsLimit,
+                      se.lenght_penality_percentage_applyed AS LenghtPenalityPercentageApplyed,
                       se.raw_json AS RawJson,
                       se.model_id AS ModelId,
                       se.agent_id AS AgentId,
@@ -3073,7 +3153,8 @@ HAVING COUNT(se.id) >= 2";
                 l.Message,
                 l.ThreadScope,
                 l.Result,
-                l.ModelName))
+                l.ModelName,
+                l.DurationSecs))
             .Take(batchSize)
             .ToList();
 
@@ -3167,6 +3248,37 @@ HAVING COUNT(se.id) >= 2";
                 }
             }
 
+            if (resp.DurationSecs.HasValue && resp.DurationSecs.Value > 0)
+            {
+                agg.DurationTotalCount++;
+                agg.DurationTotalTime += resp.DurationSecs.Value;
+            }
+
+            if (TryExtractRuntimeMetricsFromResponseMessage(resp.Message, out var runtime))
+            {
+                agg.RuntimeTotalCount++;
+                agg.PromptEvalCountTotal += runtime.PromptEvalCount;
+                agg.PromptEvalDurationTotal += runtime.PromptEvalDurationSecs;
+                agg.EvalCountTotal += runtime.EvalCount;
+                agg.EvalDurationTotal += runtime.EvalDurationSecs;
+                agg.TotalDurationTotal += runtime.TotalDurationSecs;
+                agg.LoadDurationTotal += runtime.LoadDurationSecs;
+
+                var done = (runtime.DoneReason ?? string.Empty).Trim().ToLowerInvariant();
+                if (done == "stop")
+                {
+                    agg.DoneStopCount++;
+                }
+                else if (done == "length")
+                {
+                    agg.DoneLengthCount++;
+                }
+                else
+                {
+                    agg.DoneOtherCount++;
+                }
+            }
+
             agg.UpdateDates(responseTime);
         }
 
@@ -3174,14 +3286,64 @@ HAVING COUNT(se.id) >= 2";
         foreach (var agg in aggregates.Values)
         {
             UpsertModelStats(conn, agg.ModelName, agg.Operation, agg.CountUsed, agg.CountSuccessed, agg.CountFailed,
-                agg.TotalSuccessTimeSecs, agg.TotalFailTimeSecs, agg.LastOperationDate, agg.FirstOperationDate);
+                agg.TotalSuccessTimeSecs, agg.TotalFailTimeSecs, agg.LastOperationDate, agg.FirstOperationDate,
+                agg.DurationTotalCount, agg.DurationTotalTime, agg.RuntimeTotalCount, agg.PromptEvalCountTotal,
+                agg.PromptEvalDurationTotal, agg.EvalCountTotal, agg.EvalDurationTotal, agg.TotalDurationTotal,
+                agg.LoadDurationTotal, agg.DoneStopCount, agg.DoneLengthCount, agg.DoneOtherCount);
         }
 
-        MergeStoryEvaluationOperations(conn);
+        //MergeStoryEvaluationOperations(conn);
+        //MergeNormalizedOperationBuckets(conn);
 
         conn.Execute("UPDATE Log SET Examined = 1 WHERE Id IN @Ids", new { Ids = responses.Select(r => r.Id).ToList() });
 
         return responses.Count;
+    }
+
+    public (bool success, int pendingBefore, int pendingAfter, int processedTotal, string? error) FlushModelStatsFromPendingLogs(int batchSize = 500, int maxBatches = 2000)
+    {
+        var safeBatchSize = Math.Max(1, batchSize);
+        var safeMaxBatches = Math.Max(1, maxBatches);
+
+        try
+        {
+            var pendingBefore = GetPendingModelResponseLogsCount();
+            var pending = pendingBefore;
+            var processedTotal = 0;
+            var batches = 0;
+
+            while (pending > 0 && batches < safeMaxBatches)
+            {
+                var processed = UpdateModelStatsFromUnexaminedLogs(safeBatchSize);
+                batches++;
+                processedTotal += Math.Max(0, processed);
+
+                if (processed <= 0)
+                {
+                    break;
+                }
+
+                pending = GetPendingModelResponseLogsCount();
+            }
+
+            var pendingAfter = GetPendingModelResponseLogsCount();
+            var ok = pendingAfter == 0;
+            return (
+                success: ok,
+                pendingBefore: pendingBefore,
+                pendingAfter: pendingAfter,
+                processedTotal: processedTotal,
+                error: ok ? null : $"Restano {pendingAfter} log ModelResponse/ModelCompletion non analizzati.");
+        }
+        catch (Exception ex)
+        {
+            return (
+                success: false,
+                pendingBefore: 0,
+                pendingAfter: GetPendingModelResponseLogsCount(),
+                processedTotal: 0,
+                error: ex.Message);
+        }
     }
 
     public List<ModelStatsRecord> GetModelStats()
@@ -3193,6 +3355,206 @@ HAVING COUNT(se.id) >= 2";
             .ToList();
     }
 
+    public void RefreshModelStatsFromAllLogs()
+    {
+        using var wrapper = CreateDbContextWrapper();
+        var context = wrapper.Context;
+
+        var responses = context.Logs
+            .Where(l =>
+                (l.Category == "ModelResponse" || l.Category == "ModelCompletion") &&
+                l.AgentName != null && l.AgentName != "" &&
+                l.Id != null)
+            .OrderBy(l => l.Id)
+            .Select(l => new ModelLogResponse(
+                l.Id!.Value,
+                l.ThreadId,
+                l.Ts,
+                l.Message,
+                l.ThreadScope,
+                l.Result,
+                l.ModelName,
+                l.DurationSecs))
+            .ToList();
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        conn.Execute("DELETE FROM stats_models;");
+
+        if (responses.Count == 0)
+        {
+            return;
+        }
+
+        var threadIds = responses
+            .Select(r => r.ThreadId)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToList();
+
+        var requests = context.Logs
+            .Where(l => l.Category == "ModelRequest" && l.ThreadId.HasValue && threadIds.Contains(l.ThreadId.Value))
+            .Select(l => new ModelLogRequest(
+                l.ThreadId!.Value,
+                l.Ts,
+                l.Message,
+                l.ModelName))
+            .ToList();
+
+        var requestMap = new Dictionary<(int ThreadId, string ModelName), List<DateTime>>();
+        foreach (var req in requests)
+        {
+            var modelName = req.ModelName ?? ParseModelName(req.Message);
+            if (string.IsNullOrWhiteSpace(modelName)) continue;
+            if (!TryParseLogTime(req.Ts, out var ts)) continue;
+
+            var key = (req.ThreadId, modelName);
+            if (!requestMap.TryGetValue(key, out var list))
+            {
+                list = new List<DateTime>();
+                requestMap[key] = list;
+            }
+            list.Add(ts);
+        }
+
+        foreach (var list in requestMap.Values)
+        {
+            list.Sort();
+        }
+
+        var aggregates = new Dictionary<string, ModelStatsAggregate>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var resp in responses)
+        {
+            var modelName = resp.ModelName ?? ParseModelName(resp.Message) ?? "unknown";
+            var operation = NormalizeOperation(resp.ThreadScope);
+            var result = (resp.Result ?? string.Empty).Trim().ToUpperInvariant();
+            var success = string.Equals(result, "SUCCESS", StringComparison.OrdinalIgnoreCase);
+
+            if (!TryParseLogTime(resp.Ts, out var responseTime))
+            {
+                responseTime = DateTime.UtcNow;
+            }
+
+            double? durationSecs = null;
+            if (resp.DurationSecs.HasValue && resp.DurationSecs.Value > 0)
+            {
+                durationSecs = resp.DurationSecs.Value;
+            }
+            else if (resp.ThreadId.HasValue && requestMap.TryGetValue((resp.ThreadId.Value, modelName), out var reqTimes))
+            {
+                var reqTime = FindLatestRequestBefore(reqTimes, responseTime);
+                if (reqTime.HasValue)
+                {
+                    durationSecs = Math.Max(0, (responseTime - reqTime.Value).TotalSeconds);
+                }
+            }
+
+            var key = $"{modelName}||{operation}";
+            if (!aggregates.TryGetValue(key, out var agg))
+            {
+                agg = new ModelStatsAggregate(modelName, operation);
+                aggregates[key] = agg;
+            }
+
+            agg.CountUsed++;
+            if (success)
+            {
+                agg.CountSuccessed++;
+                if (durationSecs.HasValue)
+                {
+                    agg.TotalSuccessTimeSecs += durationSecs.Value;
+                }
+            }
+            else
+            {
+                agg.CountFailed++;
+                if (durationSecs.HasValue)
+                {
+                    agg.TotalFailTimeSecs += durationSecs.Value;
+                }
+            }
+
+            if (resp.DurationSecs.HasValue && resp.DurationSecs.Value > 0)
+            {
+                agg.DurationTotalCount++;
+                agg.DurationTotalTime += resp.DurationSecs.Value;
+            }
+
+            if (TryExtractRuntimeMetricsFromResponseMessage(resp.Message, out var runtime))
+            {
+                agg.RuntimeTotalCount++;
+                agg.PromptEvalCountTotal += runtime.PromptEvalCount;
+                agg.PromptEvalDurationTotal += runtime.PromptEvalDurationSecs;
+                agg.EvalCountTotal += runtime.EvalCount;
+                agg.EvalDurationTotal += runtime.EvalDurationSecs;
+                agg.TotalDurationTotal += runtime.TotalDurationSecs;
+                agg.LoadDurationTotal += runtime.LoadDurationSecs;
+
+                var done = (runtime.DoneReason ?? string.Empty).Trim().ToLowerInvariant();
+                if (done == "stop")
+                {
+                    agg.DoneStopCount++;
+                }
+                else if (done == "length")
+                {
+                    agg.DoneLengthCount++;
+                }
+                else
+                {
+                    agg.DoneOtherCount++;
+                }
+            }
+
+            agg.UpdateDates(responseTime);
+        }
+
+        foreach (var agg in aggregates.Values)
+        {
+            conn.Execute(@"
+INSERT INTO stats_models (
+    model_name, operation, count_used, count_successed, count_failed,
+    total_success_time_secs, total_fail_time_secs, last_operation_date, first_operation_date,
+    duration_total_count, duration_total_time, runtime_total_count, prompt_eval_count_total,
+    prompt_eval_duration_total, eval_count_total, eval_duration_total, total_duration_total,
+    load_duration_total, done_stop_count, done_length_count, done_other_count
+) VALUES (
+    @ModelName, @Operation, @CountUsed, @CountSuccessed, @CountFailed,
+    @TotalSuccessTimeSecs, @TotalFailTimeSecs, @LastOperationDate, @FirstOperationDate,
+    @DurationTotalCount, @DurationTotalTime, @RuntimeTotalCount, @PromptEvalCountTotal,
+    @PromptEvalDurationTotal, @EvalCountTotal, @EvalDurationTotal, @TotalDurationTotal,
+    @LoadDurationTotal, @DoneStopCount, @DoneLengthCount, @DoneOtherCount
+);", new
+            {
+                agg.ModelName,
+                agg.Operation,
+                agg.CountUsed,
+                agg.CountSuccessed,
+                agg.CountFailed,
+                agg.TotalSuccessTimeSecs,
+                agg.TotalFailTimeSecs,
+                agg.LastOperationDate,
+                agg.FirstOperationDate,
+                agg.DurationTotalCount,
+                agg.DurationTotalTime,
+                agg.RuntimeTotalCount,
+                agg.PromptEvalCountTotal,
+                agg.PromptEvalDurationTotal,
+                agg.EvalCountTotal,
+                agg.EvalDurationTotal,
+                agg.TotalDurationTotal,
+                agg.LoadDurationTotal,
+                agg.DoneStopCount,
+                agg.DoneLengthCount,
+                agg.DoneOtherCount
+            });
+        }
+
+        MergeStoryEvaluationOperations(conn);
+        MergeNormalizedOperationBuckets(conn);
+    }
+
     private static string? ParseModelName(string? message)
     {
         if (string.IsNullOrWhiteSpace(message)) return null;
@@ -3201,6 +3563,115 @@ HAVING COUNT(se.id) >= 2";
         var end = message.IndexOf(']', start + 1);
         if (end <= start + 1) return null;
         return message.Substring(start + 1, end - start - 1).Trim();
+    }
+
+    private static void EnsureStatsModelsColumn(System.Data.IDbConnection conn, string columnName, string columnDefinition)
+    {
+        if (string.IsNullOrWhiteSpace(columnName) || string.IsNullOrWhiteSpace(columnDefinition))
+        {
+            return;
+        }
+
+        var hasColumn = conn.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('stats_models') WHERE name='{columnName}'") > 0;
+        if (hasColumn)
+        {
+            return;
+        }
+
+        conn.Execute($"ALTER TABLE stats_models ADD COLUMN {columnName} {columnDefinition}");
+        Console.WriteLine($"[DB] Migration: added {columnName} column to stats_models");
+    }
+
+    private static bool TryExtractRuntimeMetricsFromResponseMessage(string? message, out RuntimeMetrics metrics)
+    {
+        metrics = new RuntimeMetrics(0, 0, 0, 0, 0, 0, null);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        var raw = message!;
+        var start = raw.IndexOf('{');
+        var end = raw.LastIndexOf('}');
+        if (start < 0 || end <= start)
+        {
+            return false;
+        }
+
+        var jsonText = raw.Substring(start, (end - start) + 1);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonText);
+            var root = doc.RootElement;
+
+            long promptEvalCount = TryReadLong(root, "prompt_eval_count");
+            long evalCount = TryReadLong(root, "eval_count");
+            double promptEvalDurationSecs = ToSecondsFromNs(TryReadLong(root, "prompt_eval_duration"));
+            double evalDurationSecs = ToSecondsFromNs(TryReadLong(root, "eval_duration"));
+            double totalDurationSecs = ToSecondsFromNs(TryReadLong(root, "total_duration"));
+            double loadDurationSecs = ToSecondsFromNs(TryReadLong(root, "load_duration"));
+            var doneReason = TryReadString(root, "done_reason");
+
+            var hasAny = promptEvalCount > 0 || evalCount > 0 ||
+                         promptEvalDurationSecs > 0 || evalDurationSecs > 0 ||
+                         totalDurationSecs > 0 || loadDurationSecs > 0 ||
+                         !string.IsNullOrWhiteSpace(doneReason);
+            if (!hasAny)
+            {
+                return false;
+            }
+
+            metrics = new RuntimeMetrics(
+                PromptEvalCount: promptEvalCount,
+                PromptEvalDurationSecs: promptEvalDurationSecs,
+                EvalCount: evalCount,
+                EvalDurationSecs: evalDurationSecs,
+                TotalDurationSecs: totalDurationSecs,
+                LoadDurationSecs: loadDurationSecs,
+                DoneReason: doneReason);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static long TryReadLong(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop))
+        {
+            return 0;
+        }
+
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt64(out var n))
+        {
+            return n;
+        }
+
+        if (prop.ValueKind == JsonValueKind.String && long.TryParse(prop.GetString(), out n))
+        {
+            return n;
+        }
+
+        return 0;
+    }
+
+    private static string? TryReadString(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var prop))
+        {
+            return null;
+        }
+
+        return prop.ValueKind == JsonValueKind.String ? prop.GetString() : null;
+    }
+
+    private static double ToSecondsFromNs(long ns)
+    {
+        if (ns <= 0) return 0;
+        return ns / 1_000_000_000.0;
     }
 
     private static bool TryParseLogTime(string? ts, out DateTime time)
@@ -3247,7 +3718,8 @@ GROUP BY model_name
         {
             UpsertModelStats(conn, row.ModelName, row.Operation, (int)row.CountUsed, (int)row.CountSuccessed,
                 (int)row.CountFailed, (double)row.TotalSuccessTimeSecs, (double)row.TotalFailTimeSecs,
-                row.LastOperationDate as string, row.FirstOperationDate as string);
+                row.LastOperationDate as string, row.FirstOperationDate as string,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
         conn.Execute(@"
@@ -3256,19 +3728,198 @@ WHERE operation LIKE 'story_evaluation\_%' ESCAPE '\';
 ");
     }
 
+    private static void MergeNormalizedOperationBuckets(System.Data.IDbConnection conn)
+    {
+        var rows = conn.Query<ModelStatsRecord>(@"
+SELECT
+    model_name AS ModelName,
+    operation AS Operation,
+    count_used AS CountUsed,
+    count_successed AS CountSuccessed,
+    count_failed AS CountFailed,
+    total_success_time_secs AS TotalSuccessTimeSecs,
+    total_fail_time_secs AS TotalFailTimeSecs,
+    last_operation_date AS LastOperationDate,
+    first_operation_date AS FirstOperationDate,
+    duration_total_count AS DurationTotalCount,
+    duration_total_time AS DurationTotalTime,
+    runtime_total_count AS RuntimeTotalCount,
+    prompt_eval_count_total AS PromptEvalCountTotal,
+    prompt_eval_duration_total AS PromptEvalDurationTotal,
+    eval_count_total AS EvalCountTotal,
+    eval_duration_total AS EvalDurationTotal,
+    total_duration_total AS TotalDurationTotal,
+    load_duration_total AS LoadDurationTotal,
+    done_stop_count AS DoneStopCount,
+    done_length_count AS DoneLengthCount,
+    done_other_count AS DoneOtherCount
+FROM stats_models
+").ToList();
+
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        var grouped = rows
+            .GroupBy(r => new
+            {
+                Model = (r.ModelName ?? string.Empty).Trim(),
+                Operation = NormalizeOperationForDisplay(r.Operation)
+            })
+            .Select(g => new ModelStatsRecord
+            {
+                ModelName = g.Key.Model,
+                Operation = g.Key.Operation,
+                CountUsed = g.Sum(x => x.CountUsed ?? 0),
+                CountSuccessed = g.Sum(x => x.CountSuccessed ?? 0),
+                CountFailed = g.Sum(x => x.CountFailed ?? 0),
+                TotalSuccessTimeSecs = g.Sum(x => x.TotalSuccessTimeSecs ?? 0.0),
+                TotalFailTimeSecs = g.Sum(x => x.TotalFailTimeSecs ?? 0.0),
+                DurationTotalCount = g.Sum(x => x.DurationTotalCount ?? 0),
+                DurationTotalTime = g.Sum(x => x.DurationTotalTime ?? 0.0),
+                RuntimeTotalCount = g.Sum(x => x.RuntimeTotalCount ?? 0),
+                PromptEvalCountTotal = g.Sum(x => x.PromptEvalCountTotal ?? 0),
+                PromptEvalDurationTotal = g.Sum(x => x.PromptEvalDurationTotal ?? 0.0),
+                EvalCountTotal = g.Sum(x => x.EvalCountTotal ?? 0),
+                EvalDurationTotal = g.Sum(x => x.EvalDurationTotal ?? 0.0),
+                TotalDurationTotal = g.Sum(x => x.TotalDurationTotal ?? 0.0),
+                LoadDurationTotal = g.Sum(x => x.LoadDurationTotal ?? 0.0),
+                DoneStopCount = g.Sum(x => x.DoneStopCount ?? 0),
+                DoneLengthCount = g.Sum(x => x.DoneLengthCount ?? 0),
+                DoneOtherCount = g.Sum(x => x.DoneOtherCount ?? 0),
+                LastOperationDate = g
+                    .Select(x => x.LastOperationDate)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .OrderByDescending(x => x, StringComparer.Ordinal)
+                    .FirstOrDefault(),
+                FirstOperationDate = g
+                    .Select(x => x.FirstOperationDate)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .OrderBy(x => x, StringComparer.Ordinal)
+                    .FirstOrDefault()
+            })
+            .ToList();
+
+        conn.Execute("DELETE FROM stats_models;");
+        foreach (var row in grouped)
+        {
+            conn.Execute(@"
+INSERT INTO stats_models (
+    model_name, operation, count_used, count_successed, count_failed,
+    total_success_time_secs, total_fail_time_secs, last_operation_date, first_operation_date,
+    duration_total_count, duration_total_time, runtime_total_count, prompt_eval_count_total,
+    prompt_eval_duration_total, eval_count_total, eval_duration_total, total_duration_total,
+    load_duration_total, done_stop_count, done_length_count, done_other_count
+) VALUES (
+    @ModelName, @Operation, @CountUsed, @CountSuccessed, @CountFailed,
+    @TotalSuccessTimeSecs, @TotalFailTimeSecs, @LastOperationDate, @FirstOperationDate,
+    @DurationTotalCount, @DurationTotalTime, @RuntimeTotalCount, @PromptEvalCountTotal,
+    @PromptEvalDurationTotal, @EvalCountTotal, @EvalDurationTotal, @TotalDurationTotal,
+    @LoadDurationTotal, @DoneStopCount, @DoneLengthCount, @DoneOtherCount
+);", row);
+        }
+    }
+
     private static string NormalizeOperation(string? threadScope)
     {
-        if (string.IsNullOrWhiteSpace(threadScope)) return "unknown";
-        if (threadScope.StartsWith("story_evaluation_", StringComparison.OrdinalIgnoreCase))
+        return NormalizeOperationForDisplay(threadScope);
+    }
+
+    public static string NormalizeOperationForDisplay(string? operation)
+    {
+        if (string.IsNullOrWhiteSpace(operation))
+        {
+            return "unknown";
+        }
+
+        var value = operation.Trim();
+        if (value.StartsWith("story_evaluation_", StringComparison.OrdinalIgnoreCase))
         {
             return "story_evaluation";
         }
-        return threadScope;
+
+        if (value.StartsWith("storyeval_", StringComparison.OrdinalIgnoreCase))
+        {
+            return "story_evaluation";
+        }
+
+        if (value.IndexOf('/') >= 0)
+        {
+            var parts = value.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2 && parts[0].Equals("story", StringComparison.OrdinalIgnoreCase))
+            {
+                return CommandOperationNameResolver.Normalize(parts[1]);
+            }
+
+            for (var i = parts.Length - 1; i >= 0; i--)
+            {
+                if (!long.TryParse(parts[i], out _))
+                {
+                    return CommandOperationNameResolver.Normalize(parts[i]);
+                }
+            }
+        }
+
+        var normalized = CommandOperationNameResolver.Normalize(value);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return "unknown";
+        }
+
+        var noNumericSuffix = Regex.Replace(normalized, @"_\d+$", string.Empty);
+        return string.IsNullOrWhiteSpace(noNumericSuffix) ? normalized : noNumericSuffix;
+    }
+
+    public static string? TryInferOperationFromMessage(string? message, string? category = null)
+    {
+        if (!string.IsNullOrWhiteSpace(message))
+        {
+            var startEnd = Regex.Match(message, @"\b(?:START|END|RETRY|CANCEL)\s+([A-Za-z0-9_\/]+)");
+            if (startEnd.Success)
+            {
+                return NormalizeOperationForDisplay(startEnd.Groups[1].Value);
+            }
+
+            var opEq = Regex.Match(message, @"\boperation\s*=\s*([A-Za-z0-9_\/]+)", RegexOptions.IgnoreCase);
+            if (opEq.Success)
+            {
+                return NormalizeOperationForDisplay(opEq.Groups[1].Value);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            if (category.Equals("StoryEvaluation", StringComparison.OrdinalIgnoreCase))
+            {
+                return "story_evaluation";
+            }
+            if (category.Equals("RepetitionValidation", StringComparison.OrdinalIgnoreCase))
+            {
+                return "repetition_validation";
+            }
+            if (category.Equals("llama.cpp", StringComparison.OrdinalIgnoreCase))
+            {
+                return "llama_runtime";
+            }
+            if (category.Equals("ModelRequest", StringComparison.OrdinalIgnoreCase) ||
+                category.Equals("ModelResponse", StringComparison.OrdinalIgnoreCase) ||
+                category.Equals("ModelPrompt", StringComparison.OrdinalIgnoreCase) ||
+                category.Equals("ModelCompletion", StringComparison.OrdinalIgnoreCase))
+            {
+                return "chat";
+            }
+        }
+
+        return null;
     }
 
     private static void UpsertModelStats(System.Data.IDbConnection conn, string modelName, string operation,
         int countUsed, int countSuccessed, int countFailed, double totalSuccessTimeSecs, double totalFailTimeSecs,
-        string? lastOperationDate, string? firstOperationDate)
+        string? lastOperationDate, string? firstOperationDate, int durationTotalCount, double durationTotalTime,
+        int runtimeTotalCount, long promptEvalCountTotal, double promptEvalDurationTotal, long evalCountTotal,
+        double evalDurationTotal, double totalDurationTotal, double loadDurationTotal, int doneStopCount,
+        int doneLengthCount, int doneOtherCount)
     {
         var updated = conn.Execute(@"
 UPDATE stats_models SET
@@ -3277,6 +3928,18 @@ UPDATE stats_models SET
     count_failed = count_failed + @CountFailed,
     total_success_time_secs = total_success_time_secs + @TotalSuccessTimeSecs,
     total_fail_time_secs = total_fail_time_secs + @TotalFailTimeSecs,
+    duration_total_count = duration_total_count + @DurationTotalCount,
+    duration_total_time = duration_total_time + @DurationTotalTime,
+    runtime_total_count = runtime_total_count + @RuntimeTotalCount,
+    prompt_eval_count_total = prompt_eval_count_total + @PromptEvalCountTotal,
+    prompt_eval_duration_total = prompt_eval_duration_total + @PromptEvalDurationTotal,
+    eval_count_total = eval_count_total + @EvalCountTotal,
+    eval_duration_total = eval_duration_total + @EvalDurationTotal,
+    total_duration_total = total_duration_total + @TotalDurationTotal,
+    load_duration_total = load_duration_total + @LoadDurationTotal,
+    done_stop_count = done_stop_count + @DoneStopCount,
+    done_length_count = done_length_count + @DoneLengthCount,
+    done_other_count = done_other_count + @DoneOtherCount,
     last_operation_date = CASE
         WHEN last_operation_date IS NULL OR @LastOperationDate > last_operation_date
             THEN @LastOperationDate
@@ -3297,6 +3960,18 @@ WHERE model_name = @ModelName AND operation = @Operation;",
                 CountFailed = countFailed,
                 TotalSuccessTimeSecs = totalSuccessTimeSecs,
                 TotalFailTimeSecs = totalFailTimeSecs,
+                DurationTotalCount = durationTotalCount,
+                DurationTotalTime = durationTotalTime,
+                RuntimeTotalCount = runtimeTotalCount,
+                PromptEvalCountTotal = promptEvalCountTotal,
+                PromptEvalDurationTotal = promptEvalDurationTotal,
+                EvalCountTotal = evalCountTotal,
+                EvalDurationTotal = evalDurationTotal,
+                TotalDurationTotal = totalDurationTotal,
+                LoadDurationTotal = loadDurationTotal,
+                DoneStopCount = doneStopCount,
+                DoneLengthCount = doneLengthCount,
+                DoneOtherCount = doneOtherCount,
                 LastOperationDate = lastOperationDate,
                 FirstOperationDate = firstOperationDate
             });
@@ -3309,11 +3984,17 @@ WHERE model_name = @ModelName AND operation = @Operation;",
         conn.Execute(@"
 INSERT INTO stats_models (
     model_name, operation, count_used, count_successed, count_failed,
-    total_success_time_secs, total_fail_time_secs, last_operation_date, first_operation_date
+    total_success_time_secs, total_fail_time_secs, last_operation_date, first_operation_date,
+    duration_total_count, duration_total_time, runtime_total_count, prompt_eval_count_total,
+    prompt_eval_duration_total, eval_count_total, eval_duration_total, total_duration_total,
+    load_duration_total, done_stop_count, done_length_count, done_other_count
 )
 VALUES (
     @ModelName, @Operation, @CountUsed, @CountSuccessed, @CountFailed,
-    @TotalSuccessTimeSecs, @TotalFailTimeSecs, @LastOperationDate, @FirstOperationDate
+    @TotalSuccessTimeSecs, @TotalFailTimeSecs, @LastOperationDate, @FirstOperationDate,
+    @DurationTotalCount, @DurationTotalTime, @RuntimeTotalCount, @PromptEvalCountTotal,
+    @PromptEvalDurationTotal, @EvalCountTotal, @EvalDurationTotal, @TotalDurationTotal,
+    @LoadDurationTotal, @DoneStopCount, @DoneLengthCount, @DoneOtherCount
 );",
             new
             {
@@ -3324,6 +4005,18 @@ VALUES (
                 CountFailed = countFailed,
                 TotalSuccessTimeSecs = totalSuccessTimeSecs,
                 TotalFailTimeSecs = totalFailTimeSecs,
+                DurationTotalCount = durationTotalCount,
+                DurationTotalTime = durationTotalTime,
+                RuntimeTotalCount = runtimeTotalCount,
+                PromptEvalCountTotal = promptEvalCountTotal,
+                PromptEvalDurationTotal = promptEvalDurationTotal,
+                EvalCountTotal = evalCountTotal,
+                EvalDurationTotal = evalDurationTotal,
+                TotalDurationTotal = totalDurationTotal,
+                LoadDurationTotal = loadDurationTotal,
+                DoneStopCount = doneStopCount,
+                DoneLengthCount = doneLengthCount,
+                DoneOtherCount = doneOtherCount,
                 LastOperationDate = lastOperationDate,
                 FirstOperationDate = firstOperationDate
             });
@@ -3365,11 +4058,32 @@ VALUES (
             totalSuccessTimeSecs: 0,
             totalFailTimeSecs: 0,
             lastOperationDate: now,
-            firstOperationDate: now);
+            firstOperationDate: now,
+            durationTotalCount: 0,
+            durationTotalTime: 0,
+            runtimeTotalCount: 0,
+            promptEvalCountTotal: 0,
+            promptEvalDurationTotal: 0,
+            evalCountTotal: 0,
+            evalDurationTotal: 0,
+            totalDurationTotal: 0,
+            loadDurationTotal: 0,
+            doneStopCount: 0,
+            doneLengthCount: 0,
+            doneOtherCount: 0);
     }
 
-      private sealed record ModelLogResponse(long Id, int? ThreadId, string Ts, string Message, string? ThreadScope, string? Result, string? ModelName);
-      private sealed record ModelLogRequest(int ThreadId, string Ts, string Message, string? ModelName);
+    private sealed record RuntimeMetrics(
+        long PromptEvalCount,
+        double PromptEvalDurationSecs,
+        long EvalCount,
+        double EvalDurationSecs,
+        double TotalDurationSecs,
+        double LoadDurationSecs,
+        string? DoneReason);
+
+    private sealed record ModelLogResponse(long Id, int? ThreadId, string Ts, string Message, string? ThreadScope, string? Result, string? ModelName, int? DurationSecs);
+    private sealed record ModelLogRequest(int ThreadId, string Ts, string Message, string? ModelName);
 
     private sealed class ModelStatsAggregate
     {
@@ -3380,6 +4094,18 @@ VALUES (
         public int CountFailed { get; set; }
         public double TotalSuccessTimeSecs { get; set; }
         public double TotalFailTimeSecs { get; set; }
+        public int DurationTotalCount { get; set; }
+        public double DurationTotalTime { get; set; }
+        public int RuntimeTotalCount { get; set; }
+        public long PromptEvalCountTotal { get; set; }
+        public double PromptEvalDurationTotal { get; set; }
+        public long EvalCountTotal { get; set; }
+        public double EvalDurationTotal { get; set; }
+        public double TotalDurationTotal { get; set; }
+        public double LoadDurationTotal { get; set; }
+        public int DoneStopCount { get; set; }
+        public int DoneLengthCount { get; set; }
+        public int DoneOtherCount { get; set; }
         public string? FirstOperationDate { get; private set; }
         public string? LastOperationDate { get; private set; }
 
@@ -3483,7 +4209,7 @@ VALUES (
         return (step.RunId, asset.StepId);
     }
 
-    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, int? serieId = null, int? serieEpisode = null)
+    public long InsertSingleStory(string prompt, string story, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, int? serieId = null, int? serieEpisode = null, long? parentStoryId = null)
     {
         using var context = CreateDbContext();
         var ts = DateTime.UtcNow.ToString("o");
@@ -3503,6 +4229,7 @@ VALUES (
         var storyRecord = new StoryRecord
         {
             StoryId = null,
+            ParentStoryId = parentStoryId,
             GenerationId = genId,
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
@@ -3558,7 +4285,7 @@ VALUES (
         return storyRecord.Id;
     }
 
-    public long InsertSingleStory(string prompt, string story, long? storyId, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, int? serieId = null, int? serieEpisode = null)
+    public long InsertSingleStory(string prompt, string story, long? storyId, int? modelId = null, int? agentId = null, double score = 0.0, string? eval = null, int approved = 0, int? statusId = null, string? memoryKey = null, string? title = null, int? serieId = null, int? serieEpisode = null, long? parentStoryId = null)
     {
         using var context = CreateDbContext();
         var ts = DateTime.UtcNow.ToString("o");
@@ -3577,6 +4304,7 @@ VALUES (
         var storyRecord = new StoryRecord
         {
             StoryId = storyId,
+            ParentStoryId = parentStoryId,
             GenerationId = genId,
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
@@ -3633,7 +4361,7 @@ VALUES (
 
     public void UpdateStorySeriesInfo(long storyId, int? serieId, int? serieEpisode, bool allowSeriesUpdate = false)
     {
-        if (!serieId.HasValue && !serieEpisode.HasValue) return;
+        if (!allowSeriesUpdate && !serieId.HasValue && !serieEpisode.HasValue) return;
         using var context = CreateDbContext();
         var story = context.Stories.Find(storyId);
         if (story == null) return;
@@ -4265,6 +4993,7 @@ WHERE agent_id IS NOT NULL
         using var context = CreateDbContext();
         var existing = context.TtsVoices.Find(v.Id);
         if (existing == null) return;
+        if (string.IsNullOrWhiteSpace(v.Provider)) v.Provider = "localtts";
         v.UpdatedAt = DateTime.UtcNow.ToString("o");
         context.Entry(existing).CurrentValues.SetValues(v);
         context.SaveChanges();
@@ -4275,6 +5004,7 @@ WHERE agent_id IS NOT NULL
         if (v == null) throw new ArgumentNullException(nameof(v));
         using var context = CreateDbContext();
         var now = DateTime.UtcNow.ToString("o");
+        if (string.IsNullOrWhiteSpace(v.Provider)) v.Provider = "localtts";
         v.CreatedAt = now;
         v.UpdatedAt = now;
         context.TtsVoices.Add(v);
@@ -4296,6 +5026,7 @@ WHERE agent_id IS NOT NULL
         {
             existing.Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name;
             existing.Model = model;
+            existing.Provider = string.IsNullOrWhiteSpace(v.Provider) ? "localtts" : v.Provider;
             existing.Language = v.Language;
             existing.Gender = v.Gender;
             existing.Age = v.Age;
@@ -4314,6 +5045,7 @@ WHERE agent_id IS NOT NULL
                 VoiceId = v.Id,
                 Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name,
                 Model = model,
+                Provider = string.IsNullOrWhiteSpace(v.Provider) ? "localtts" : v.Provider,
                 Language = v.Language,
                 Gender = v.Gender,
                 Age = v.Age,
@@ -4369,6 +5101,7 @@ WHERE agent_id IS NOT NULL
                         // Preserve: Score (user can adjust), Archetype (user can override), Notes (user can override), Disabled (user preference)
                         existing.Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name;
                         existing.Model = v.Model;
+                        existing.Provider = string.IsNullOrWhiteSpace(v.Provider) ? "localtts" : v.Provider;
                         existing.Language = v.Language;
                         existing.Gender = v.Gender;
                         existing.Age = !string.IsNullOrWhiteSpace(v.Age) ? v.Age : v.AgeRange;
@@ -4399,6 +5132,7 @@ WHERE agent_id IS NOT NULL
                             VoiceId = v.Id,
                             Name = string.IsNullOrWhiteSpace(v.Name) ? v.Id : v.Name,
                             Model = v.Model,
+                            Provider = string.IsNullOrWhiteSpace(v.Provider) ? "localtts" : v.Provider,
                             Language = v.Language,
                             Gender = v.Gender,
                             Age = !string.IsNullOrWhiteSpace(v.Age) ? v.Age : v.AgeRange,
@@ -4474,6 +5208,11 @@ WHERE agent_id IS NOT NULL
                 voice.Notes = notes;
                 changed = true;
             }
+            if (string.IsNullOrWhiteSpace(voice.Provider))
+            {
+                voice.Provider = "localtts";
+                changed = true;
+            }
             if (changed) toUpdate.Add(voice);
         }
         if (toUpdate.Count == 0) return;
@@ -4485,6 +5224,7 @@ WHERE agent_id IS NOT NULL
             {
                 existing.Archetype = voice.Archetype;
                 existing.Notes = voice.Notes;
+                existing.Provider = string.IsNullOrWhiteSpace(voice.Provider) ? "localtts" : voice.Provider;
             }
         }
         context.SaveChanges();
@@ -4582,6 +5322,7 @@ WHERE agent_id IS NOT NULL
                     var model = e.TryGetProperty("model", out var pm) ? pm.GetString() : null;
                     var speaker = e.TryGetProperty("speaker", out var ps) && ps.ValueKind != JsonValueKind.Null ? ps.GetString() : null;
                     var language = e.TryGetProperty("language", out var pl) ? pl.GetString() : null;
+                    var provider = e.TryGetProperty("provider", out var pprovider) ? pprovider.GetString() : null;
                     var gender = e.TryGetProperty("gender", out var pg) ? pg.GetString() : null;
                     var age = e.TryGetProperty("age_range", out var pa) ? pa.GetString() : (e.TryGetProperty("age", out var pa2) ? pa2.GetString() : null);
                     var sample = e.TryGetProperty("sample", out var psample) ? psample.GetString() : null;
@@ -4596,6 +5337,7 @@ WHERE agent_id IS NOT NULL
                     {
                         Id = vid,
                         Name = name,
+                        Provider = string.IsNullOrWhiteSpace(provider) ? "localtts" : provider,
                         Language = language,
                         Gender = gender,
                         Age = age,
@@ -4693,6 +5435,21 @@ CREATE TABLE IF NOT EXISTS usage_state (
             Console.WriteLine($"[DB] Warning: unable to add story_revised to stories: {ex.Message}");
         }
 
+        // Migration: add parent_story_id column to stories if missing
+        try
+        {
+            var hasParentStoryId = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='parent_story_id'") > 0;
+            if (!hasParentStoryId)
+            {
+                Console.WriteLine("[DB] Migration: adding parent_story_id column to stories");
+                conn.Execute("ALTER TABLE stories ADD COLUMN parent_story_id INTEGER NULL");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add parent_story_id to stories: {ex.Message}");
+        }
+
         // Migration: add Result column to Log if missing
         try
         {
@@ -4738,6 +5495,17 @@ CREATE TABLE IF NOT EXISTS usage_state (
             Console.WriteLine($"[DB] Warning: unable to add Examined column to Log: {ex.Message}");
         }
 
+        // Data normalization: keep legacy/null Log values compatible with EF model mapping.
+        try
+        {
+            conn.Execute("UPDATE Log SET Examined = 0 WHERE Examined IS NULL");
+            conn.Execute("UPDATE Log SET durationSecs = 1 WHERE durationSecs IS NULL OR durationSecs < 1");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to normalize Log legacy NULLs: {ex.Message}");
+        }
+
         // Migration: add StepNumber and MaxStep columns to Log for multi-step tracking
         try
         {
@@ -4777,6 +5545,18 @@ CREATE TABLE IF NOT EXISTS stats_models (
     total_fail_time_secs REAL NOT NULL DEFAULT 0,
     last_operation_date TEXT NULL,
     first_operation_date TEXT NULL,
+    duration_total_count INTEGER NOT NULL DEFAULT 0,
+    duration_total_time REAL NOT NULL DEFAULT 0,
+    runtime_total_count INTEGER NOT NULL DEFAULT 0,
+    prompt_eval_count_total INTEGER NOT NULL DEFAULT 0,
+    prompt_eval_duration_total REAL NOT NULL DEFAULT 0,
+    eval_count_total INTEGER NOT NULL DEFAULT 0,
+    eval_duration_total REAL NOT NULL DEFAULT 0,
+    total_duration_total REAL NOT NULL DEFAULT 0,
+    load_duration_total REAL NOT NULL DEFAULT 0,
+    done_stop_count INTEGER NOT NULL DEFAULT 0,
+    done_length_count INTEGER NOT NULL DEFAULT 0,
+    done_other_count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (model_name, operation)
 );
 ");
@@ -4785,6 +5565,53 @@ CREATE TABLE IF NOT EXISTS stats_models (
         catch (Exception ex)
         {
             Console.WriteLine($"[DB] Warning: unable to create stats_models table: {ex.Message}");
+        }
+
+        // Migration: ensure duration aggregate columns exist on stats_models
+        try
+        {
+            var hasDurationTotalCount = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stats_models') WHERE name='duration_total_count'") > 0;
+            if (!hasDurationTotalCount)
+            {
+                conn.Execute("ALTER TABLE stats_models ADD COLUMN duration_total_count INTEGER NOT NULL DEFAULT 0");
+                Console.WriteLine("[DB] Migration: added duration_total_count column to stats_models");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add duration_total_count to stats_models: {ex.Message}");
+        }
+
+        try
+        {
+            var hasDurationTotalTime = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stats_models') WHERE name='duration_total_time'") > 0;
+            if (!hasDurationTotalTime)
+            {
+                conn.Execute("ALTER TABLE stats_models ADD COLUMN duration_total_time REAL NOT NULL DEFAULT 0");
+                Console.WriteLine("[DB] Migration: added duration_total_time column to stats_models");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add duration_total_time to stats_models: {ex.Message}");
+        }
+
+        try
+        {
+            EnsureStatsModelsColumn(conn, "runtime_total_count", "INTEGER NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "prompt_eval_count_total", "INTEGER NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "prompt_eval_duration_total", "REAL NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "eval_count_total", "INTEGER NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "eval_duration_total", "REAL NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "total_duration_total", "REAL NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "load_duration_total", "REAL NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "done_stop_count", "INTEGER NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "done_length_count", "INTEGER NOT NULL DEFAULT 0");
+            EnsureStatsModelsColumn(conn, "done_other_count", "INTEGER NOT NULL DEFAULT 0");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to ensure runtime columns on stats_models: {ex.Message}");
         }
 
         // Migration: create app_events table and seed default event types
@@ -4844,8 +5671,8 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 try
                 {
                     conn.Execute(@"
-                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context, Result, ResultFailReason, Examined)
-                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL, NULL, NULL, 0
+                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context, Result, ResultFailReason, Examined, durationSecs)
+                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL, NULL, NULL, 0, 1
                         FROM logs l
                         WHERE NOT EXISTS (
                             SELECT 1 FROM Log existing 
@@ -4889,11 +5716,12 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
             conn.Execute("ALTER TABLE Log ADD COLUMN ThreadScope TEXT");
         }
 
-        // Migration: Add archetype and notes columns to tts_voices if missing
+        // Migration: Add archetype, notes and provider columns to tts_voices if missing
         try
         {
             var hasArchetype = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('tts_voices') WHERE name='archetype'");
             var hasNotes = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('tts_voices') WHERE name='notes'");
+            var hasProvider = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('tts_voices') WHERE name='provider'");
             if (hasArchetype == 0)
             {
                 Console.WriteLine("[DB] Adding archetype column to tts_voices");
@@ -4904,10 +5732,16 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 Console.WriteLine("[DB] Adding notes column to tts_voices");
                 conn.Execute("ALTER TABLE tts_voices ADD COLUMN notes TEXT");
             }
+            if (hasProvider == 0)
+            {
+                Console.WriteLine("[DB] Adding provider column to tts_voices");
+                conn.Execute("ALTER TABLE tts_voices ADD COLUMN provider TEXT NOT NULL DEFAULT 'localtts'");
+            }
+            conn.Execute("UPDATE tts_voices SET provider = 'localtts' WHERE provider IS NULL OR TRIM(provider) = ''");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DB] Warning: failed to add archetype/notes to tts_voices: {ex.Message}");
+            Console.WriteLine($"[DB] Warning: failed to add archetype/notes/provider to tts_voices: {ex.Message}");
         }
 
         // Migration: Rename group_name to test_group in test_definitions if needed
@@ -5169,6 +6003,9 @@ CREATE TABLE stories_evaluations (
     action_score INTEGER DEFAULT 0,
     action_defects TEXT,
     total_score REAL DEFAULT 0,
+    story_length_chars INTEGER DEFAULT 0,
+    lenght_penality_chars_limit INTEGER DEFAULT 0,
+    lenght_penality_percentage_applyed REAL DEFAULT 0,
     raw_json TEXT,
     model_id INTEGER NULL,
     agent_id INTEGER NULL,
@@ -5182,8 +6019,8 @@ CREATE TABLE stories_evaluations (
                 var actionDefectsExpr = oldHasActionDefects ? "action_defects" : (oldHasPacingDefects ? "pacing_defects" : "''");
 
                 var copySql = $@"
-INSERT INTO stories_evaluations (id, story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, raw_json, model_id, agent_id, ts)
-SELECT id, story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, {actionScoreExpr}, {actionDefectsExpr}, total_score, raw_json, model_id, agent_id, ts
+INSERT INTO stories_evaluations (id, story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, action_score, action_defects, total_score, story_length_chars, lenght_penality_chars_limit, lenght_penality_percentage_applyed, raw_json, model_id, agent_id, ts)
+SELECT id, story_id, narrative_coherence_score, narrative_coherence_defects, originality_score, originality_defects, emotional_impact_score, emotional_impact_defects, {actionScoreExpr}, {actionDefectsExpr}, total_score, 0, 0, 0, raw_json, model_id, agent_id, ts
 FROM stories_evaluations_old;";
                 conn.Execute(copySql);
 
@@ -5194,6 +6031,35 @@ FROM stories_evaluations_old;";
         catch (Exception ex)
         {
             Console.WriteLine($"[DB] Warning: failed to migrate stories_evaluations schema: {ex.Message}");
+        }
+
+        // Migration: add story length penalty metadata columns to stories_evaluations if missing
+        try
+        {
+            var hasStoryLengthChars = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories_evaluations') WHERE name='story_length_chars'") > 0;
+            if (!hasStoryLengthChars)
+            {
+                Console.WriteLine("[DB] Adding story_length_chars to stories_evaluations");
+                conn.Execute("ALTER TABLE stories_evaluations ADD COLUMN story_length_chars INTEGER DEFAULT 0");
+            }
+
+            var hasPenaltyLimit = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories_evaluations') WHERE name='lenght_penality_chars_limit'") > 0;
+            if (!hasPenaltyLimit)
+            {
+                Console.WriteLine("[DB] Adding lenght_penality_chars_limit to stories_evaluations");
+                conn.Execute("ALTER TABLE stories_evaluations ADD COLUMN lenght_penality_chars_limit INTEGER DEFAULT 0");
+            }
+
+            var hasPenaltyPercentage = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories_evaluations') WHERE name='lenght_penality_percentage_applyed'") > 0;
+            if (!hasPenaltyPercentage)
+            {
+                Console.WriteLine("[DB] Adding lenght_penality_percentage_applyed to stories_evaluations");
+                conn.Execute("ALTER TABLE stories_evaluations ADD COLUMN lenght_penality_percentage_applyed REAL DEFAULT 0");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to add story penalty columns to stories_evaluations: {ex.Message}");
         }
 
         // Migration: Add multi_step_template_id column to agents table
@@ -5546,6 +6412,22 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         {
             Console.WriteLine($"[DB] Warning: failed to seed SentimentMapper agent: {ex.Message}");
         }
+
+        // Migration: ensure writer_cino role exists
+        try
+        {
+            var hasRolesTable = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='roles'") > 0;
+            if (hasRolesTable)
+            {
+                conn.Execute(@"
+INSERT OR IGNORE INTO roles (ruolo, comando_collegato, created_at, updated_at)
+VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to ensure writer_cino role: {ex.Message}");
+        }
     }
 
     // Async batch insert for log entries. Will insert all provided entries in a single INSERT statement when possible.
@@ -5627,7 +6509,8 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
                       ChatText = chatTextSb.Length > 0 ? chatTextSb.ToString() : string.Empty,
                       Result = null,
                       ResultFailReason = null,
-                      Examined = false
+                      Examined = false,
+                      DurationSecs = 1
                   };
 
                 // Trim very large aggregated messages to avoid DB bloat
@@ -5656,7 +6539,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         await ((SqliteConnection)conn).OpenAsync();
 
         // Build a single INSERT ... VALUES (...),(...),... with uniquely named parameters to avoid collisions
-        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "model_name", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" };
+        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "model_name", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined", "durationSecs" };
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
 
@@ -5681,10 +6564,11 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             parameters.Add("@model_name" + i, e.ModelName);
             parameters.Add("@Context" + i, e.Context);
               parameters.Add("@analized" + i, e.Analized ? 1 : 0);
-              parameters.Add("@chat_text" + i, e.ChatText);
-              parameters.Add("@Result" + i, e.Result);
-              parameters.Add("@ResultFailReason" + i, e.ResultFailReason);
-              parameters.Add("@Examined" + i, e.Examined ? 1 : 0);
+            parameters.Add("@chat_text" + i, e.ChatText);
+            parameters.Add("@Result" + i, e.Result);
+            parameters.Add("@ResultFailReason" + i, e.ResultFailReason);
+            parameters.Add("@Examined" + i, e.Examined ? 1 : 0);
+            parameters.Add("@durationSecs" + i, Math.Max(1, e.DurationSecs ?? 1));
         }
 
         sb.Append(";");
@@ -5700,12 +6584,12 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             {
                 try
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: false);
+                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: false, includeDuration: !ex.Message.Contains("durationSecs", StringComparison.OrdinalIgnoreCase));
                     return;
                 }
                 catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false);
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: !(ex2.Message?.Contains("durationSecs", StringComparison.OrdinalIgnoreCase) ?? false));
                     return;
                 }
             }
@@ -5714,18 +6598,36 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             {
                 try
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true);
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true, includeDuration: !ex.Message.Contains("durationSecs", StringComparison.OrdinalIgnoreCase));
                     return;
                 }
                 catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false);
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: !(ex2.Message?.Contains("durationSecs", StringComparison.OrdinalIgnoreCase) ?? false));
+                }
+            }
+
+            if (ex.Message.Contains("durationSecs", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: true, includeDuration: false);
+                    return;
+                }
+                catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true, includeDuration: false);
+                    return;
+                }
+                catch (SqliteException ex3) when (ex3.Message != null && ex3.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: false);
                 }
             }
         }
     }
 
-    private static async Task TryInsertLogsAsync(IDbConnection conn, List<TinyGenerator.Models.LogEntry> list, bool includeStoryId, bool includeModelName)
+    private static async Task TryInsertLogsAsync(IDbConnection conn, List<TinyGenerator.Models.LogEntry> list, bool includeStoryId, bool includeModelName, bool includeDuration)
     {
         var cols = new List<string>
         {
@@ -5735,6 +6637,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         cols.AddRange(new[] { "ThreadScope", "AgentName" });
         if (includeModelName) cols.Add("model_name");
         cols.AddRange(new[] { "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" });
+        if (includeDuration) cols.Add("durationSecs");
 
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
@@ -5764,6 +6667,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             parameters.Add("@Result" + i, e.Result);
             parameters.Add("@ResultFailReason" + i, e.ResultFailReason);
             parameters.Add("@Examined" + i, e.Examined ? 1 : 0);
+            if (includeDuration) parameters.Add("@durationSecs" + i, Math.Max(1, e.DurationSecs ?? 1));
         }
 
         sb.Append(";");
@@ -5867,7 +6771,9 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         if (!string.IsNullOrWhiteSpace(category))
             query = query.Where(l => l.Category != null && l.Category.Contains(category));
 
-        return query.OrderByDescending(l => l.Id).Skip(offset).Take(limit).ToList();
+        var logs = query.OrderByDescending(l => l.Id).Skip(offset).Take(limit).ToList();
+        EnrichLogsForDisplay(logs);
+        return logs;
     }
 
     public IReadOnlyDictionary<string, AppEventDefinition> GetAppEventDefinitions()
@@ -5899,7 +6805,9 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             return new List<TinyGenerator.Models.LogEntry>();
 
         using var context = CreateDbContext();
-        return context.Logs.Where(l => l.ThreadId == threadNumericId).OrderBy(l => l.Id).Take(limit).ToList();
+        var logs = context.Logs.Where(l => l.ThreadId == threadNumericId).OrderBy(l => l.Id).Take(limit).ToList();
+        EnrichLogsForDisplay(logs);
+        return logs;
     }
 
     public void SetLogAnalyzed(string threadId, bool analyzed)
@@ -5923,6 +6831,49 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         if (story == null) return;
         story.Deleted = true;
         context.SaveChanges();
+    }
+
+    public bool DeleteStoryPhysicallyById(long id)
+    {
+        using var context = CreateDbContext();
+        var story = context.Stories.Find(id);
+        if (story == null) return false;
+
+        var evals = context.StoryEvaluations.Where(e => e.StoryId == id).ToList();
+        if (evals.Count > 0)
+        {
+            context.StoryEvaluations.RemoveRange(evals);
+        }
+
+        context.Stories.Remove(story);
+        context.SaveChanges();
+        return true;
+    }
+
+    public bool UpdateStoryScore(long id, double score, string? eval = null)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(id);
+        if (storyRecord == null) return false;
+
+        storyRecord.Score = Math.Round(score, 2);
+        if (eval != null)
+        {
+            storyRecord.Eval = eval;
+        }
+
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save score for story {id}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update score for story {id}: {fullMessage}", ex);
+        }
+
+        return true;
     }
 
     public void UpdateLatestModelResponseResult(int threadId, string result, string? failReason, bool examined)
@@ -6153,7 +7104,9 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
     public List<LogEntry> GetLogsByThreadId(int threadId)
     {
         using var context = CreateDbContext();
-        return context.Logs.Where(l => l.ThreadId == threadId).OrderByDescending(l => l.Id).ToList();
+        var logs = context.Logs.Where(l => l.ThreadId == threadId).OrderByDescending(l => l.Id).ToList();
+        EnrichLogsForDisplay(logs);
+        return logs;
     }
 
     public LogEntry? GetLogById(long id)
@@ -6161,12 +7114,78 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
         using var context = CreateDbContext();
         try
         {
-            return context.Logs.Find(id);
+            var log = context.Logs.Find(id);
+            if (log != null)
+            {
+                EnrichLogForDisplay(log);
+            }
+            return log;
         }
         catch
         {
             return null;
         }
+    }
+
+    private static void EnrichLogsForDisplay(IEnumerable<LogEntry> logs)
+    {
+        foreach (var log in logs)
+        {
+            EnrichLogForDisplay(log);
+        }
+    }
+
+    private static void EnrichLogForDisplay(LogEntry log)
+    {
+        if (log == null) return;
+
+        if (string.IsNullOrWhiteSpace(log.ThreadScope) ||
+            string.Equals(log.ThreadScope.Trim(), "unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            log.ThreadScope = TryInferOperationFromMessage(log.Message, log.Category) ?? "unknown";
+        }
+
+        if (string.IsNullOrWhiteSpace(log.AgentName))
+        {
+            var agentFromMsg = Regex.Match(log.Message ?? string.Empty, @"\bagent\s*=\s*([^;,\]\r\n]+)", RegexOptions.IgnoreCase);
+            if (agentFromMsg.Success)
+            {
+                log.AgentName = agentFromMsg.Groups[1].Value.Trim();
+            }
+            else
+            {
+                var op = NormalizeOperationForDisplay(log.ThreadScope);
+                log.AgentName = string.IsNullOrWhiteSpace(op) ? "system" : op;
+            }
+        }
+
+        if ((!log.StoryId.HasValue || log.StoryId.Value <= 0) && !string.IsNullOrWhiteSpace(log.ThreadScope))
+        {
+            var m1 = Regex.Match(log.ThreadScope, @"story_evaluation_(\d+)", RegexOptions.IgnoreCase);
+            if (m1.Success && long.TryParse(m1.Groups[1].Value, out var sid1))
+            {
+                log.StoryId = sid1;
+            }
+            else
+            {
+                var m2 = Regex.Match(log.ThreadScope, @"story\/[a-z0-9_]+\/(\d+)", RegexOptions.IgnoreCase);
+                if (m2.Success && long.TryParse(m2.Groups[1].Value, out var sid2))
+                {
+                    log.StoryId = sid2;
+                }
+            }
+        }
+
+        if ((!log.StoryId.HasValue || log.StoryId.Value <= 0) && !string.IsNullOrWhiteSpace(log.Message))
+        {
+            var bracketed = Regex.Match(log.Message, @"^\[(\d+)\]");
+            if (bracketed.Success && long.TryParse(bracketed.Groups[1].Value, out var sid3))
+            {
+                log.StoryId = sid3;
+            }
+        }
+
+        log.DurationSecs = Math.Max(1, log.DurationSecs ?? 1);
     }
 
     public List<SystemReport> GetRecentSystemReports(int limit = 5)

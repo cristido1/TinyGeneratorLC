@@ -110,6 +110,10 @@ namespace TinyGenerator.Pages.Stories
                 _stories.UpdateStoryCharacters(Id, Characters);
             }
             _stories.UpdateStoryTitle(Id, Title ?? string.Empty);
+            if (!SerieId.HasValue)
+            {
+                SerieEpisode = null;
+            }
             _database.UpdateStorySeriesInfo(Id, SerieId, SerieEpisode, allowSeriesUpdate: true);
             return RedirectToPage("/Stories/Details", new { id = Id });
         }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +24,6 @@ public sealed class GenerateNextChunkCommand : ICommand
     private readonly long _storyId;
     private readonly int _writerAgentId;
     private readonly DatabaseService _database;
-    private readonly ILangChainKernelFactory _kernelFactory;
     private readonly ICustomLogger? _logger;
     private readonly TextValidationService _textValidationService;
     private readonly IAgentCallService? _modelExecution;
@@ -45,7 +45,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         _storyId = storyId;
         _writerAgentId = writerAgentId;
         _database = database ?? throw new ArgumentNullException(nameof(database));
-        _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+        _ = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
         _logger = logger;
         _options = options ?? new GenerateChunkOptions();
         _tuning = tuning ?? new CommandTuningOptions();
@@ -93,14 +93,23 @@ public sealed class GenerateNextChunkCommand : ICommand
         }
 
         var prompt = BuildWriterPrompt(snap, phase, pov, _options);
-        var writerResult = await CallWriterWithStandardPatternAsync(writer, prompt, effectiveRunId, ct).ConfigureAwait(false);
+        var writerResult = await CallWriterWithStandardPatternAsync(writer, prompt, phase, effectiveRunId, ct).ConfigureAwait(false);
         var output = (writerResult.Text ?? string.Empty).Trim();
         var failureDelta = 0;
-        var canPersistWithValidatorFailure =
-            !writerResult.Success
-            && !string.IsNullOrWhiteSpace(output)
-            && !string.IsNullOrWhiteSpace(writerResult.Error)
-            && writerResult.Error.StartsWith("Cliffhanger validation", StringComparison.OrdinalIgnoreCase);
+
+        // If the only blocker is degenerative punctuation, try an automatic cleanup
+        // and continue the pipeline instead of hard-failing the step.
+        if (!writerResult.Success && !string.IsNullOrWhiteSpace(output) && IsDegenerativePunctuationError(writerResult.Error))
+        {
+            var fixedOutput = FixDegenerativePunctuation(output);
+            if (!string.Equals(output, fixedOutput, StringComparison.Ordinal))
+            {
+                _logger?.Append(effectiveRunId, "Applicata autocorrezione punteggiatura degenerativa sul chunk.");
+                output = fixedOutput;
+            }
+        }
+
+        var canPersistWithValidatorFailure = CanPersistWithValidatorFailure(writerResult);
 
         if (canPersistWithValidatorFailure)
         {
@@ -138,9 +147,75 @@ public sealed class GenerateNextChunkCommand : ICommand
         return new CommandResult(true, message);
     }
 
+    private static bool CanPersistWithValidatorFailure(CommandModelExecutionService.Result writerResult)
+    {
+        if (writerResult.Success || string.IsNullOrWhiteSpace(writerResult.Text) || string.IsNullOrWhiteSpace(writerResult.Error))
+        {
+            return false;
+        }
+
+        var error = writerResult.Error;
+        if (error.StartsWith("Cliffhanger validation", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Keep generation flowing when pacing is slower than expected:
+        // this remains a tracked validator failure but no longer hard-blocks chunk persistence.
+        if (error.Contains("troppi paragrafi senza azione", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (IsDegenerativePunctuationError(error))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsDegenerativePunctuationError(string? error)
+        => !string.IsNullOrWhiteSpace(error) &&
+           error.Contains("punteggiatura degenerativa", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsRelaxableForCurrentPhase(string? reason, string phase)
+    {
+        _ = reason;
+        _ = phase;
+        return false;
+    }
+
+    private static bool RequiresModelBasedValidation(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return false;
+        }
+
+        return reason.Contains("assenza di eventi reali", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FixDegenerativePunctuation(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var fixedText = text;
+        fixedText = Regex.Replace(fixedText, @"([!?])\1{1,}", "$1");
+        fixedText = Regex.Replace(fixedText, @"\.{4,}", "...");
+        fixedText = Regex.Replace(fixedText, @"[-—]{3,}", "—");
+        fixedText = Regex.Replace(fixedText, @"\s{2,}", " ");
+        fixedText = Regex.Replace(fixedText, @"[ \t]+(\r?\n)", "$1");
+        return fixedText.Trim();
+    }
+
     private async Task<CommandModelExecutionService.Result> CallWriterWithStandardPatternAsync(
         Agent writerAgent,
         string prompt,
+        string phase,
         string runId,
         CancellationToken ct)
     {
@@ -191,6 +266,24 @@ public sealed class GenerateNextChunkCommand : ICommand
                     var validation = _textValidationService.Validate(cleaned, storyHistory);
                     if (!validation.IsValid)
                     {
+                        if (RequiresModelBasedValidation(validation.Reason))
+                        {
+                            _logger?.Append(
+                                runId,
+                                $"Text validation delegata al response_checker ({agentIdentity}): {validation.Reason}",
+                                "warning");
+                            return new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                        }
+
+                        if (IsRelaxableForCurrentPhase(validation.Reason, phase))
+                        {
+                            _logger?.Append(
+                                runId,
+                                $"Text validation relax ({agentIdentity}): {validation.Reason} | phase={phase}",
+                                "warning");
+                            return new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                        }
+
                         return new CommandModelExecutionService.DeterministicValidationResult(
                             false,
                             $"Text validation ({agentIdentity}): {validation.Reason}");
@@ -488,6 +581,17 @@ public sealed class GenerateNextChunkCommand : ICommand
         sb.AppendLine("TEMA/CANONE (input utente):");
         sb.AppendLine(snap.Prompt);
 
+        var isFirstChunk = snap.CurrentChunkIndex <= 0;
+        if (isFirstChunk)
+        {
+            sb.AppendLine();
+            sb.AppendLine("APERTURA EPISODIO (OBBLIGATORIA PER QUESTO CHUNK):");
+            sb.AppendLine("- Inizia descrivendo chiaramente la situazione iniziale dell'episodio.");
+            sb.AppendLine("- Definisci contesto, luogo e condizione iniziale dei personaggi principali.");
+            sb.AppendLine("- Fai emergere subito la tensione o il problema di partenza.");
+            sb.AppendLine("- Evita di partire in medias res con eventi confusi senza setup minimo.");
+        }
+
         if (!string.IsNullOrWhiteSpace(snap.LastContext))
         {
             sb.AppendLine();
@@ -498,194 +602,6 @@ public sealed class GenerateNextChunkCommand : ICommand
         sb.AppendLine();
         sb.AppendLine("Ora scrivi il prossimo chunk:");
         return sb.ToString();
-    }
-
-    private async Task<string> CallWriterAsync(Agent writerAgent, string prompt, CancellationToken ct)
-    {
-        try
-        {
-            var orchestrator = _kernelFactory.GetOrchestratorForAgent(writerAgent.Id);
-            if (orchestrator == null)
-            {
-                _logger?.Log("Warning", "StateDriven", $"No orchestrator found for writer {writerAgent.Name}; continuing with direct chat bridge");
-            }
-
-            var bridge = _kernelFactory.CreateChatBridge(
-                writerAgent.ModelName ?? "qwen2.5:7b-instruct",
-                writerAgent.Temperature,
-                writerAgent.TopP,
-                writerAgent.RepeatPenalty,
-                writerAgent.TopK,
-                writerAgent.RepeatLastN,
-                writerAgent.NumPredict);
-
-            var systemMessage = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.";
-            var messages = new List<ConversationMessage>
-            {
-                new ConversationMessage { Role = "system", Content = systemMessage },
-                new ConversationMessage { Role = "user", Content = prompt }
-            };
-
-            var response = await bridge.CallModelWithToolsAsync(
-                messages,
-                new List<Dictionary<string, object>>(),
-                ct,
-                skipResponseChecker: true).ConfigureAwait(false);
-
-            var primary = response ?? string.Empty;
-
-            // Track primary model usage for this role (best-effort)
-            try
-            {
-                if (_scopeFactory != null && writerAgent.ModelId.HasValue && writerAgent.ModelId.Value > 0)
-                {
-                    using var trackScope = _scopeFactory.CreateScope();
-                    var trackingFallbackService = trackScope.ServiceProvider.GetService<ModelFallbackService>();
-                    if (trackingFallbackService != null)
-                    {
-                        var roleCodeForTracking = string.IsNullOrWhiteSpace(writerAgent.Role) ? "writer" : writerAgent.Role;
-                        trackingFallbackService.RecordPrimaryModelUsage(roleCodeForTracking, writerAgent.ModelId.Value, success: !string.IsNullOrWhiteSpace(primary));
-                    }
-                }
-            }
-            catch
-            {
-                // ignore tracking errors
-            }
-
-            if (!string.IsNullOrWhiteSpace(primary))
-            {
-                return primary;
-            }
-
-            // Try fallback models (model_roles) if primary returned empty.
-            if (_scopeFactory == null)
-            {
-                return primary;
-            }
-
-            using var scope = _scopeFactory.CreateScope();
-            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
-            if (fallbackService == null)
-            {
-                _logger?.Log("Warning", "StateDriven", "ModelFallbackService not available; cannot fallback.");
-                return primary;
-            }
-
-            var roleCode = string.IsNullOrWhiteSpace(writerAgent.Role) ? "writer" : writerAgent.Role;
-            var (fallbackResult, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync(
-                roleCode,
-                writerAgent.ModelId,
-                async modelRole =>
-                {
-                    var modelName = modelRole.Model?.Name;
-                    if (string.IsNullOrWhiteSpace(modelName))
-                    {
-                        throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
-                    }
-
-                    var candidateBridge = _kernelFactory.CreateChatBridge(
-                        modelName,
-                        writerAgent.Temperature,
-                        modelRole.TopP ?? writerAgent.TopP,
-                        writerAgent.RepeatPenalty,
-                        modelRole.TopK ?? writerAgent.TopK,
-                        writerAgent.RepeatLastN,
-                        writerAgent.NumPredict);
-
-                    var fallbackSystem = !string.IsNullOrWhiteSpace(modelRole.Instructions)
-                        ? modelRole.Instructions!
-                        : systemMessage;
-                    var fallbackMessages = new List<ConversationMessage>
-                    {
-                        new ConversationMessage { Role = "system", Content = fallbackSystem },
-                        new ConversationMessage { Role = "user", Content = prompt }
-                    };
-
-                    var fallbackResponse = await candidateBridge.CallModelWithToolsAsync(
-                        fallbackMessages,
-                        new List<Dictionary<string, object>>(),
-                        ct,
-                        skipResponseChecker: true).ConfigureAwait(false);
-
-                    return fallbackResponse ?? string.Empty;
-                },
-                validateResult: s => !string.IsNullOrWhiteSpace(s));
-
-            if (!string.IsNullOrWhiteSpace(fallbackResult) && successfulModelRole?.Model != null)
-            {
-                _logger?.Log("Info", "StateDriven", $"Fallback model succeeded: {successfulModelRole.Model.Name} (role={roleCode})");
-                return fallbackResult!;
-            }
-
-            return primary;
-        }
-        catch (Exception ex)
-        {
-            _logger?.Log("Error", "StateDriven", $"Writer call failed: {ex.Message}");
-            return string.Empty;
-        }
-    }
-
-    private static string ExtractAssistantContent(string? response)
-    {
-        var raw = response ?? string.Empty;
-        var trimmed = raw.Trim();
-        if (string.IsNullOrWhiteSpace(trimmed)) return string.Empty;
-
-        // Many backends return a JSON envelope (Ollama chat style / OpenAI style).
-        if (!trimmed.StartsWith("{", StringComparison.Ordinal) && !trimmed.StartsWith("[", StringComparison.Ordinal))
-        {
-            return raw;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(trimmed);
-            var root = doc.RootElement;
-
-            // Ollama chat format: { message: { content: "..." } }
-            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("message", out var msg))
-            {
-                if (msg.ValueKind == JsonValueKind.Object && msg.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
-                    return content.GetString() ?? string.Empty;
-                if (msg.ValueKind == JsonValueKind.String)
-                    return msg.GetString() ?? string.Empty;
-            }
-
-            // OpenAI chat format: { choices: [ { message: { content: "..." } } ] }
-            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array)
-            {
-                var first = choices.EnumerateArray().FirstOrDefault();
-                if (first.ValueKind == JsonValueKind.Object)
-                {
-                    if (first.TryGetProperty("message", out var choiceMsg) && choiceMsg.ValueKind == JsonValueKind.Object &&
-                        choiceMsg.TryGetProperty("content", out var choiceContent) && choiceContent.ValueKind == JsonValueKind.String)
-                    {
-                        return choiceContent.GetString() ?? string.Empty;
-                    }
-
-                    // Streaming-like delta format: { choices: [ { delta: { content: "..." } } ] }
-                    if (first.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object &&
-                        delta.TryGetProperty("content", out var deltaContent) && deltaContent.ValueKind == JsonValueKind.String)
-                    {
-                        return deltaContent.GetString() ?? string.Empty;
-                    }
-                }
-            }
-
-            // Some backends use { response: "..." } or { content: "..." }
-            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("response", out var resp) && resp.ValueKind == JsonValueKind.String)
-                return resp.GetString() ?? string.Empty;
-            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("content", out var rootContent) && rootContent.ValueKind == JsonValueKind.String)
-                return rootContent.GetString() ?? string.Empty;
-        }
-        catch
-        {
-            // If it's not valid JSON, keep raw.
-        }
-
-        return raw;
     }
 
     private static bool EndsInTension(string text, out string reason)

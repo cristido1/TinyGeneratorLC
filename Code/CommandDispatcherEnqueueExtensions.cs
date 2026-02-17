@@ -14,10 +14,11 @@ public static class CommandDispatcherEnqueueExtensions
         string? runId = null,
         string? threadScope = null,
         IReadOnlyDictionary<string, string>? metadata = null,
-        int priority = 2)
+        int priority = 2,
+        bool batch = false)
     {
         if (dispatcher == null) throw new ArgumentNullException(nameof(dispatcher));
-        var command = new DelegateCommand(operationName, handler, priority);
+        var command = new DelegateCommand(operationName, handler, priority, batch);
         return dispatcher.Enqueue(command, runId, threadScope, metadata, priority);
     }
 }

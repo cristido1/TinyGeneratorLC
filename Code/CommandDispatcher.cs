@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
+using System.Linq;
 using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Services
@@ -89,6 +90,7 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, CommandState> _completed = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task<CommandResult>> _completionTasks = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _commandCancellations = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, Task> _batchExecutions = new(StringComparer.OrdinalIgnoreCase);
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
@@ -124,7 +126,8 @@ namespace TinyGenerator.Services
                 runId,
                 threadScope,
                 metadata,
-                priority ?? command.Priority);
+                priority ?? command.Priority,
+                runAsBatch: command.Batch);
         }
 
         private CommandHandle EnqueueCore(
@@ -133,7 +136,8 @@ namespace TinyGenerator.Services
             string? runId = null,
             string? threadScope = null,
             IReadOnlyDictionary<string, string>? metadata = null,
-            int priority = 2)
+            int priority = 2,
+            bool runAsBatch = false)
         {
             if (handler == null) throw new ArgumentNullException(nameof(handler));
             if (_disposed) throw new ObjectDisposedException(nameof(CommandDispatcher));
@@ -146,16 +150,42 @@ namespace TinyGenerator.Services
 
             var opNumber = LogScope.GenerateOperationId();
             var enqueueSeq = Interlocked.Increment(ref _enqueueCounter);
-            var agentName = metadata != null && metadata.TryGetValue("agentName", out var an) ? an : null;
-            var agentRole = metadata != null && metadata.TryGetValue("agentRole", out var ar) ? ar : null;
+            var agentName = GetMetadataValue(metadata, "agentName", "AgentName", "agent");
+            var agentRole = GetMetadataValue(metadata, "agentRole", "AgentRole", "role");
+            var modelName = GetMetadataValue(metadata, "modelName", "ModelName", "model");
+
+            var database = _services.GetService(typeof(DatabaseService)) as DatabaseService;
+            var resolvedAgentId = TryGetMetadataInt(metadata, "agentId", "writerAgentId", "executorAgentId", "checkerAgentId");
+            if (database != null && resolvedAgentId.HasValue && resolvedAgentId.Value > 0)
+            {
+                var agent = database.GetAgentById(resolvedAgentId.Value);
+                if (agent != null)
+                {
+                    if (string.IsNullOrWhiteSpace(agentName))
+                    {
+                        agentName = agent.Name;
+                    }
+                    if (string.IsNullOrWhiteSpace(agentRole))
+                    {
+                        agentRole = agent.Role;
+                    }
+                    if (string.IsNullOrWhiteSpace(modelName))
+                    {
+                        modelName = agent.ModelName;
+                    }
+                }
+            }
+
+            if (database != null && string.IsNullOrWhiteSpace(modelName))
+            {
+                var modelId = TryGetMetadataInt(metadata, "modelId", "ModelId");
+                if (modelId.HasValue && modelId.Value > 0)
+                {
+                    modelName = database.GetModelInfoById(modelId.Value)?.Name;
+                }
+            }
             var commandCts = new CancellationTokenSource();
             var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, priority, enqueueSeq, commandCts, agentName, agentRole);
-
-            lock (_queueLock)
-            {
-                _queue.Enqueue(workItem, workItem);
-            }
-            _queueSemaphore.Release();
 
             var state = new CommandState
             {
@@ -163,16 +193,42 @@ namespace TinyGenerator.Services
                 OperationName = op,
                 ThreadScope = safeScope,
                 Metadata = metadata,
-                Status = "queued",
+                Status = runAsBatch ? "batch_queued" : "queued",
                 EnqueuedAt = DateTimeOffset.UtcNow,
                 AgentName = agentName,
-                ModelName = metadata != null && metadata.TryGetValue("modelName", out var mn) ? mn : null,
+                ModelName = modelName,
                 CurrentStep = metadata != null && metadata.TryGetValue("stepCurrent", out var sc) && int.TryParse(sc, out var c) ? c : null,
-                MaxStep = metadata != null && metadata.TryGetValue("stepMax", out var sm) && int.TryParse(sm, out var m) ? m : null
+                MaxStep = metadata != null && metadata.TryGetValue("stepMax", out var sm) && int.TryParse(sm, out var m) ? m : null,
+                MaxRetry = 0
             };
             _active[id] = state;
             _completionTasks[id] = workItem.Completion.Task;
             _commandCancellations[id] = commandCts;
+
+            if (runAsBatch)
+            {
+                var dispatcherToken = _cts?.Token ?? CancellationToken.None;
+                var batchTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await ProcessWorkItemAsync(workItem, dispatcherToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _batchExecutions.TryRemove(id, out _);
+                    }
+                }, CancellationToken.None);
+                _batchExecutions[id] = batchTask;
+            }
+            else
+            {
+                lock (_queueLock)
+                {
+                    _queue.Enqueue(workItem, workItem);
+                }
+                _queueSemaphore.Release();
+            }
 
             _ = BroadcastCommandsAsync();
 
@@ -223,7 +279,8 @@ namespace TinyGenerator.Services
 
             try
             {
-                await Task.WhenAll(_workers);
+                var batchTasks = _batchExecutions.Values.ToArray();
+                await Task.WhenAll(_workers.Concat(batchTasks));
             }
             catch { }
         }
@@ -315,9 +372,12 @@ namespace TinyGenerator.Services
                     state.StartedAt = DateTimeOffset.UtcNow;
                     state.TimeoutSec = timeoutSec;
                 }
-                await BroadcastCommandsAsync().ConfigureAwait(false);
-
                 var maxAttempts = Math.Max(1, policy.MaxAttempts);
+                if (_active.TryGetValue(workItem.RunId, out var runningState))
+                {
+                    runningState.MaxRetry = Math.Max(0, maxAttempts - 1);
+                }
+                await BroadcastCommandsAsync().ConfigureAwait(false);
                 CommandResult result;
 
                 for (int attempt = 1; attempt <= maxAttempts; attempt++)
@@ -507,7 +567,7 @@ Completed:
                     ThreadId: threadId,
                     StoryCorrelationId: storyCorrelationId,
                     AgentName: workItem.AgentName,
-                    ModelName: workItem.Metadata != null && workItem.Metadata.TryGetValue("modelName", out var mn) ? mn : null,
+                    ModelName: state?.ModelName ?? GetMetadataValue(workItem.Metadata, "modelName", "ModelName", "model"),
                     RetryCount: retryCount,
                     ExecutionTimeMs: durationMs,
                     RawLogRef: rawLogRef);
@@ -543,7 +603,8 @@ Completed:
                     s.MaxStep,
                     s.StepDescription,
                     s.RetryCount,
-                    s.ErrorMessage));
+                    s.ErrorMessage,
+                    s.MaxRetry));
             }
             
             // Aggiungi comandi completati (da mostrare per 5 minuti)
@@ -565,7 +626,8 @@ Completed:
                     s.MaxStep,
                     s.StepDescription,
                     s.RetryCount,
-                    s.ErrorMessage));
+                    s.ErrorMessage,
+                    s.MaxRetry));
             }
             
             list.Sort((a, b) => a.EnqueuedAt.CompareTo(b.EnqueuedAt));
@@ -693,6 +755,42 @@ Completed:
                 // Intentionally swallow exceptions from event subscribers
             }
         }
+
+        private static string? GetMetadataValue(IReadOnlyDictionary<string, string>? metadata, params string[] keys)
+        {
+            if (metadata == null || keys == null || keys.Length == 0) return null;
+
+            foreach (var key in keys)
+            {
+                if (metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+
+            foreach (var kvp in metadata)
+            {
+                foreach (var key in keys)
+                {
+                    if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(kvp.Value))
+                    {
+                        return kvp.Value;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static int? TryGetMetadataInt(IReadOnlyDictionary<string, string>? metadata, params string[] keys)
+        {
+            var raw = GetMetadataValue(metadata, keys);
+            if (int.TryParse(raw, out var value))
+            {
+                return value;
+            }
+            return null;
+        }
     }
 
     internal sealed class CommandState
@@ -713,6 +811,7 @@ Completed:
         public int RetryCount { get; set; }
         public string? ErrorMessage { get; set; }
         public int TimeoutSec { get; set; }
+        public int MaxRetry { get; set; }
     }
 }
 

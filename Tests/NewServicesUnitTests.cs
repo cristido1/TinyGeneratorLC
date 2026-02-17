@@ -415,7 +415,7 @@ internal sealed class RecordingLogger : ICustomLogger
     public string? CompletedResult { get; private set; }
     public List<string> Appended { get; } = new();
 
-    public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null) { }
+    public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null, int? durationSecs = null) { }
     public Task FlushAsync() => Task.CompletedTask;
     public void LogPrompt(string modelName, string prompt, string? agentName = null) { }
     public void LogResponse(string modelName, string response, string? agentName = null) { }

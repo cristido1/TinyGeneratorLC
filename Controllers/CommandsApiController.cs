@@ -87,14 +87,18 @@ namespace TinyGenerator.Controllers
                 storyId,
                 _database,
                 _kernelFactory,
-                _logger
+                _logger,
+                scopeFactory: _serviceProvider.GetService<IServiceScopeFactory>()
             );
 
             _dispatcher.Enqueue(
                 "SummarizeStory",
                 async ctx => {
-                    bool success = await cmd.ExecuteAsync(ctx.CancellationToken);
-                    return new CommandResult(success, success ? "Summary generated" : "Failed to generate summary");
+                    bool success = await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
+                    var message = success
+                        ? "Summary generated"
+                        : (string.IsNullOrWhiteSpace(cmd.LastError) ? "Failed to generate summary" : cmd.LastError);
+                    return new CommandResult(success, message);
                 },
                 runId: runId,
                 metadata: new Dictionary<string, string>
@@ -164,7 +168,8 @@ namespace TinyGenerator.Controllers
                 _kernelFactory,
                 _dispatcher,
                 _logger,
-                minScore
+                scopeFactory: _serviceProvider.GetService<IServiceScopeFactory>(),
+                minScore: minScore
             );
 
             // Accoda il comando batch che a sua volta accoderà i comandi individuali

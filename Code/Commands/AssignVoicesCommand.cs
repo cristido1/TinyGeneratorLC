@@ -96,7 +96,7 @@ public sealed partial class StoriesService
                                     string.Equals(c.Name, "Narrator", StringComparison.OrdinalIgnoreCase));
                                 if (seriesNarrator?.VoiceId.HasValue == true)
                                 {
-                                    selectedNarratorVoice = _service._database.GetTtsVoiceById(seriesNarrator.VoiceId.Value);
+                                    selectedNarratorVoice = allVoices.FirstOrDefault(v => v.Id == seriesNarrator.VoiceId.Value);
                                 }
                             }
                             catch

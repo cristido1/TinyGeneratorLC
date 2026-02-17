@@ -25,6 +25,10 @@ public class GeneraModel : PageModel
     private readonly CommandTuningOptions _tuning;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly TextValidationService _textValidationService;
+    private readonly IAgentCallService _modelExecution;
+    private readonly CinoOptions _cinoOptions;
+    private readonly RepetitionDetectionOptions _repetitionOptions;
+    private readonly EmbeddingRepetitionOptions _embeddingRepetitionOptions;
 
     public GeneraModel(
         DatabaseService database,
@@ -35,6 +39,10 @@ public class GeneraModel : PageModel
         ILogger<GeneraModel> logger,
         IOptions<CommandTuningOptions> tuningOptions,
         TextValidationService textValidationService,
+        IAgentCallService modelExecution,
+        IOptions<CinoOptions> cinoOptions,
+        IOptions<RepetitionDetectionOptions> repetitionOptions,
+        IOptions<EmbeddingRepetitionOptions> embeddingRepetitionOptions,
         MultiStepOrchestrationService? orchestrator = null,
         IServiceScopeFactory? scopeFactory = null)
     {
@@ -48,10 +56,23 @@ public class GeneraModel : PageModel
         _tuning = tuningOptions.Value ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory ?? throw new InvalidOperationException("IServiceScopeFactory not available");
         _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
+        _modelExecution = modelExecution ?? throw new ArgumentNullException(nameof(modelExecution));
+        _cinoOptions = cinoOptions?.Value ?? new CinoOptions();
+        _repetitionOptions = repetitionOptions?.Value ?? new RepetitionDetectionOptions();
+        _embeddingRepetitionOptions = embeddingRepetitionOptions?.Value ?? new EmbeddingRepetitionOptions();
     }
 
     [BindProperty]
     public string Prompt { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string CinoTitle { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string CinoPrompt { get; set; } = string.Empty;
+
+    [BindProperty]
+    public bool CinoUseResponseChecker { get; set; }
 
     [BindProperty]
     public string Writer { get; set; } = "All";
@@ -103,6 +124,8 @@ public class GeneraModel : PageModel
 
     public void OnGet()
     {
+        CinoUseResponseChecker = _cinoOptions.UseResponseChecker;
+
         // Load writer agents for dropdown (only those with a multi-step template)
         Agents = _database.ListAgents()
             .Where(a => a.IsActive && a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase) && a.MultiStepTemplateId.HasValue)
@@ -306,6 +329,47 @@ public class GeneraModel : PageModel
 
         try { await _customLogger.NotifyGroupAsync(genId.ToString(), "Started", "Full pipeline started", "info"); } catch { }
 
+        return new JsonResult(new { id = genId.ToString() });
+    }
+
+    public IActionResult OnPostStartCinoOptimize()
+    {
+        if (string.IsNullOrWhiteSpace(CinoTitle))
+        {
+            return BadRequest(new { error = "Il titolo è obbligatorio." });
+        }
+        if (string.IsNullOrWhiteSpace(CinoPrompt))
+        {
+            return BadRequest(new { error = "Il prompt è obbligatorio." });
+        }
+
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+
+        var cmd = new CinoOptimizeStoryCommand(
+            title: CinoTitle.Trim(),
+            prompt: CinoPrompt.Trim(),
+            database: _database,
+            storiesService: _storiesService,
+            modelExecution: _modelExecution,
+            dispatcher: _dispatcher,
+            options: _cinoOptions,
+            repetitionOptions: _repetitionOptions,
+            embeddingRepetitionOptions: _embeddingRepetitionOptions,
+            useResponseChecker: CinoUseResponseChecker,
+            logger: _customLogger);
+
+        _dispatcher.Enqueue(
+            "cino_optimize_story",
+            async ctx => await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId),
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "cino_optimize_story",
+                ["title"] = CinoTitle.Trim()
+            });
+
+        _customLogger.Append(genId.ToString(), "CINO avviato");
         return new JsonResult(new { id = genId.ToString() });
     }
 

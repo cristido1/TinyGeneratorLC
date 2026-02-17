@@ -200,6 +200,143 @@ namespace TinyGenerator
             }
         }
 
+        public static async Task<bool> TryRestartTtsAsync(IServiceHealthMonitor? healthMonitor = null, ILogger? logger = null, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                logger?.LogInformation("[Startup] Tentativo di riavvio del servizio TTS...");
+
+                var isHealthy = healthMonitor != null
+                    ? await healthMonitor.CheckTtsHealthAsync(cancellationToken)
+                    : await CheckTtsHealthAsync(logger, cancellationToken);
+                if (isHealthy)
+                {
+                    logger?.LogInformation("[Startup] TTS service is already running");
+                    return true;
+                }
+
+                static string? ResolveExistingPath(IEnumerable<string> candidates)
+                {
+                    foreach (var candidate in candidates)
+                    {
+                        if (File.Exists(candidate))
+                        {
+                            return candidate;
+                        }
+                    }
+                    return null;
+                }
+
+                async Task<bool> WaitUntilHealthyAsync(int maxWaitSeconds)
+                {
+                    for (int i = 0; i < maxWaitSeconds; i++)
+                    {
+                        await Task.Delay(1000, cancellationToken);
+                        var ready = healthMonitor != null
+                            ? await healthMonitor.CheckTtsHealthAsync(cancellationToken)
+                            : await CheckTtsHealthAsync(logger, cancellationToken);
+                        if (ready)
+                        {
+                            logger?.LogInformation("[Startup] TTS service is ready after {sec} seconds", i + 1);
+                            return true;
+                        }
+                    }
+
+                    logger?.LogWarning("[Startup] TTS health check failed after {sec}s", maxWaitSeconds);
+                    return false;
+                }
+
+                var cwd = Directory.GetCurrentDirectory();
+                var baseDir = AppContext.BaseDirectory;
+                var scriptCandidates = new[]
+                {
+                    Path.Combine(cwd, "start_tts.ps1"),
+                    Path.Combine(baseDir, "start_tts.ps1"),
+                    Path.Combine(cwd, "start_localtts.ps1"),
+                    Path.Combine(baseDir, "start_localtts.ps1"),
+                    Path.Combine(cwd, "start_tts.bat"),
+                    Path.Combine(baseDir, "start_tts.bat"),
+                    Path.Combine(cwd, "start_localtts.bat"),
+                    Path.Combine(baseDir, "start_localtts.bat")
+                };
+
+                var starterScript = ResolveExistingPath(scriptCandidates);
+                if (!string.IsNullOrWhiteSpace(starterScript))
+                {
+                    logger?.LogInformation("[Startup] Using TTS starter script: {script}", starterScript);
+                    var ext = Path.GetExtension(starterScript);
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = string.Equals(ext, ".ps1", StringComparison.OrdinalIgnoreCase) ? "powershell.exe" : "cmd.exe",
+                        Arguments = string.Equals(ext, ".ps1", StringComparison.OrdinalIgnoreCase)
+                            ? $"-ExecutionPolicy Bypass -File \"{starterScript}\""
+                            : $"/c \"{starterScript}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WorkingDirectory = Path.GetDirectoryName(starterScript)
+                    };
+
+                    var p = Process.Start(psi);
+                    if (p != null)
+                    {
+                        await p.WaitForExitAsync(cancellationToken);
+                        var stdout = await p.StandardOutput.ReadToEndAsync();
+                        var stderr = await p.StandardError.ReadToEndAsync();
+                        if (!string.IsNullOrWhiteSpace(stdout))
+                            logger?.LogInformation("[Startup] TTS starter stdout: {out}", stdout);
+                        if (!string.IsNullOrWhiteSpace(stderr))
+                            logger?.LogWarning("[Startup] TTS starter stderr: {err}", stderr);
+
+                        if (await WaitUntilHealthyAsync(30))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                var pythonCandidates = new[]
+                {
+                    Path.Combine(cwd, "app", "main.py"),
+                    Path.Combine(baseDir, "app", "main.py"),
+                    Path.Combine(cwd, "localTTS", "app", "main.py"),
+                    Path.Combine(baseDir, "localTTS", "app", "main.py")
+                };
+
+                var pythonScript = ResolveExistingPath(pythonCandidates);
+                if (!string.IsNullOrWhiteSpace(pythonScript))
+                {
+                    logger?.LogInformation("[Startup] Using localTTS Python script: {script}", pythonScript);
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "python",
+                        Arguments = $"\"{pythonScript}\"",
+                        RedirectStandardOutput = false,
+                        RedirectStandardError = false,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WorkingDirectory = Path.GetDirectoryName(pythonScript)
+                    };
+
+                    var p = Process.Start(psi);
+                    if (p != null && await WaitUntilHealthyAsync(30))
+                    {
+                        logger?.LogInformation("[Startup] TTS process started with PID={pid}", p.Id);
+                        return true;
+                    }
+                }
+
+                logger?.LogWarning("[Startup] Nessuno script/entrypoint TTS trovato per il riavvio automatico");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "[Startup] TryRestartTts failure: {msg}", ex.Message);
+                return false;
+            }
+        }
+
         /// <summary>
         /// DEPRECATED: Use IServiceHealthMonitor.CheckAudioCraftHealthAsync() instead.
         /// This method is kept for backward compatibility but creates a new HttpClient on each call.
@@ -215,6 +352,36 @@ namespace TinyGenerator
             catch (Exception ex)
             {
                 logger?.LogDebug("[Startup] AudioCraft health check failed: {msg}", ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// DEPRECATED: Use IServiceHealthMonitor.CheckTtsHealthAsync() instead.
+        /// This method is kept for backward compatibility but creates a new HttpClient on each call.
+        /// </summary>
+        public static async Task<bool> CheckTtsHealthAsync(ILogger? logger = null, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var ttsHost = Environment.GetEnvironmentVariable("TTS_HOST")
+                    ?? Environment.GetEnvironmentVariable("HOST")
+                    ?? "127.0.0.1";
+                var ttsPortRaw = Environment.GetEnvironmentVariable("TTS_PORT")
+                    ?? Environment.GetEnvironmentVariable("PORT")
+                    ?? "8004";
+                if (!int.TryParse(ttsPortRaw, out var ttsPort))
+                {
+                    ttsPort = 8004;
+                }
+
+                using var httpClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+                var response = await httpClient.GetAsync($"http://{ttsHost}:{ttsPort}/health", cancellationToken);
+                return response.IsSuccessStatusCode;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug("[Startup] TTS health check failed: {msg}", ex.Message);
                 return false;
             }
         }

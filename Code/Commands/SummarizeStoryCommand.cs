@@ -1,4 +1,5 @@
-using TinyGenerator.Models;
+﻿using TinyGenerator.Models;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace TinyGenerator.Services.Commands
 {
@@ -12,48 +13,57 @@ namespace TinyGenerator.Services.Commands
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly ICustomLogger _logger;
         private readonly IAgentResolutionService _agentResolutionService;
+        private readonly IServiceScopeFactory? _scopeFactory;
+        private readonly IAgentCallService? _modelExecution;
+        public string? LastError { get; private set; }
 
         public SummarizeStoryCommand(
             long storyId,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
             ICustomLogger logger,
-            IAgentResolutionService? agentResolutionService = null)
+            IAgentResolutionService? agentResolutionService = null,
+            IServiceScopeFactory? scopeFactory = null,
+            IAgentCallService? modelExecution = null)
         {
             _storyId = storyId;
             _database = database;
             _kernelFactory = kernelFactory;
             _logger = logger;
             _agentResolutionService = agentResolutionService ?? new AgentResolutionService(database);
+            _scopeFactory = scopeFactory;
+            _modelExecution = modelExecution;
         }
 
-        public async Task<bool> ExecuteAsync(CancellationToken ct = default)
+        public Task<bool> ExecuteAsync(CancellationToken ct = default)
+            => ExecuteAsync(ct, runId: null);
+
+        public async Task<bool> ExecuteAsync(CancellationToken ct, string? runId)
         {
+            LastError = null;
             _logger.Log("Information", "SummarizeStory", $"Starting summarization for story {_storyId}");
 
             try
             {
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 // 1. Carica la storia dal database
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 var story = _database.GetStoryById(_storyId);
                 if (story == null)
                 {
-                    _logger.Log("Error", "SummarizeStory", $"Story {_storyId} not found");
-                    return false;
+                    return Fail(runId, $"Story {_storyId} not found");
                 }
 
                 if (string.IsNullOrWhiteSpace(story.StoryRaw))
                 {
-                    _logger.Log("Error", "SummarizeStory", $"Story {_storyId} has no content to summarize");
-                    return false;
+                    return Fail(runId, $"Story {_storyId} has no content to summarize");
                 }
 
                 _logger.Log("Information", "SummarizeStory", $"Loaded story: '{story.Title}' ({story.CharCount} chars)");
 
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 // 2. Trova l'agente Story Summarizer
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 Agent? summarizerAgent = null;
                 try
                 {
@@ -75,15 +85,14 @@ namespace TinyGenerator.Services.Commands
 
                 if (summarizerAgent == null)
                 {
-                    _logger.Log("Error", "SummarizeStory", "No active Story Summarizer agent found");
-                    return false;
+                    return Fail(runId, "No active Story Summarizer agent found");
                 }
 
                 _logger.Log("Information", "SummarizeStory", $"Using agent: {summarizerAgent.Name} (ID: {summarizerAgent.Id}, Model: {summarizerAgent.ModelName})");
 
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 // 3. Ottieni orchestrator per l'agente summarizer
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 var orchestrator = _kernelFactory.GetOrchestratorForAgent(summarizerAgent.Id);
                 if (orchestrator == null)
                 {
@@ -95,69 +104,114 @@ namespace TinyGenerator.Services.Commands
                     
                     if (orchestrator == null)
                     {
-                        _logger.Log("Error", "SummarizeStory", $"Failed to create orchestrator for agent {summarizerAgent.Id}");
-                        return false;
+                        return Fail(runId, $"Failed to create orchestrator for agent {summarizerAgent.Id}");
                     }
                 }
 
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 // 4. Prepara il prompt per il summarizer
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 var summarizerPrompt = BuildSummarizerPrompt(story);
                 _logger.Log("Information", "SummarizeStory", $"Prompt prepared ({summarizerPrompt.Length} chars)");
 
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 // 5. Invoca l'orchestrator per generare il riassunto
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 _logger.Log("Information", "SummarizeStory", "Invoking summarizer agent...");
                 
-                // Per summarizer semplice, non servono tools - usa il bridge diretto
-                var bridge = _kernelFactory.CreateChatBridge(
-                    summarizerAgent.ModelName ?? "qwen2.5:7b-instruct",
-                    summarizerAgent.Temperature,
-                    summarizerAgent.TopP,
-                    summarizerAgent.RepeatPenalty,
-                    summarizerAgent.TopK,
-                    summarizerAgent.RepeatLastN,
-                    summarizerAgent.NumPredict);
-
-                var messages = new List<ConversationMessage>
+                var execution = _modelExecution;
+                if (execution == null && _scopeFactory != null)
                 {
-                    new ConversationMessage { Role = "user", Content = summarizerPrompt }
-                };
+                    using var scope = _scopeFactory.CreateScope();
+                    execution = scope.ServiceProvider.GetService<IAgentCallService>();
+                }
+                if (execution == null)
+                {
+                    execution = ServiceLocator.Services?.GetService<IAgentCallService>();
+                }
 
-                var result = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct);
-                var summary = result?.Trim() ?? "";
+                if (execution == null)
+                {
+                    return Fail(runId, "IAgentCallService non disponibile: chiamata diretta al modello disabilitata");
+                }
+
+                var modelResult = await execution.ExecuteAsync(
+                    new CommandModelExecutionService.Request
+                    {
+                        CommandKey = "summarize_story",
+                        Agent = summarizerAgent,
+                        RoleCode = CommandRoleCodes.Summarizer,
+                        Prompt = summarizerPrompt,
+                        SystemPrompt = summarizerAgent.Instructions ?? summarizerAgent.Prompt ?? "Sei un summarizer esperto.",
+                        MaxAttempts = 2,
+                        RetryDelaySeconds = 1,
+                        StepTimeoutSec = 60,
+                        UseResponseChecker = false,
+                        EnableFallback = true,
+                        DiagnoseOnFinalFailure = true,
+                        ExplainAfterAttempt = 1,
+                        RunId = $"summarize_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}",
+                        EnableDeterministicValidation = true,
+                        DeterministicValidator = output =>
+                        {
+                            var text = (output ?? string.Empty).Trim();
+                            return string.IsNullOrWhiteSpace(text)
+                                ? new CommandModelExecutionService.DeterministicValidationResult(false, "Riassunto vuoto")
+                                : new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                        }
+                    },
+                    ct);
+
+                var summary = (modelResult.Text ?? string.Empty).Trim();
 
                 if (string.IsNullOrWhiteSpace(summary))
                 {
-                    _logger.Log("Error", "SummarizeStory", "Summarizer returned empty result");
-                    return false;
+                    var reason = modelResult.Error ?? "n/a";
+                    return Fail(runId, $"Summarizer returned empty result: {reason}");
                 }
 
                 _logger.Log("Information", "SummarizeStory", $"Summary generated ({summary.Length} chars)");
 
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 // 6. Salva il riassunto nella storia
-                // ═══════════════════════════════════════════════════════════
+                // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 bool updated = _database.UpdateStorySummary(_storyId, summary);
                 if (updated)
                 {
-                    _logger.Log("Information", "SummarizeStory", $"✓ Summary saved for story {_storyId}");
+                    _logger.Log("Information", "SummarizeStory", $"âœ“ Summary saved for story {_storyId}");
+                    if (!string.IsNullOrWhiteSpace(runId))
+                    {
+                        _logger.Append(runId, $"Summary saved for story {_storyId} ({summary.Length} chars)");
+                    }
                     return true;
                 }
                 else
                 {
-                    _logger.Log("Error", "SummarizeStory", $"Failed to save summary for story {_storyId}");
-                    return false;
+                    return Fail(runId, $"Failed to save summary for story {_storyId}");
                 }
             }
             catch (Exception ex)
             {
-                _logger.Log("Error", "SummarizeStory", $"Exception during summarization: {ex.Message}");
+                LastError = $"Exception during summarization: {ex.Message}";
+                _logger.Log("Error", "SummarizeStory", LastError);
                 _logger.Log("Error", "SummarizeStory", ex.StackTrace ?? "");
+                if (!string.IsNullOrWhiteSpace(runId))
+                {
+                    _logger.Append(runId, LastError, "error");
+                }
                 return false;
             }
+        }
+
+        private bool Fail(string? runId, string message)
+        {
+            LastError = message;
+            _logger.Log("Error", "SummarizeStory", message);
+            if (!string.IsNullOrWhiteSpace(runId))
+            {
+                _logger.Append(runId, message, "error");
+            }
+            return false;
         }
 
         /// <summary>
@@ -181,3 +235,4 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
+

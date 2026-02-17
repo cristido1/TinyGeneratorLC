@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <NoWarn>$(NoWarn);CS7022</NoWarn>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <GenerateRazorAssemblyInfo>false</GenerateRazorAssemblyInfo>
+    <GenerateProvideApplicationPartFactoryAttribute>false</GenerateProvideApplicationPartFactoryAttribute>
   </PropertyGroup>
 
   <!-- Migrations are intentionally not compiled/used. Schema updates are handled explicitly (manual SQL). -->

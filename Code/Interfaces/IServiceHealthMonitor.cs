@@ -16,4 +16,11 @@ public interface IServiceHealthMonitor
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>True if service is healthy, false otherwise</returns>
     Task<bool> CheckAudioCraftHealthAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Check if TTS service is healthy and responding.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if service is healthy, false otherwise</returns>
+    Task<bool> CheckTtsHealthAsync(CancellationToken cancellationToken = default);
 }

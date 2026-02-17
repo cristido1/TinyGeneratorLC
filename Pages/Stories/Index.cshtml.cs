@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System;
 using System.Collections.Generic;
@@ -29,11 +29,19 @@ namespace TinyGenerator.Pages.Stories
         private readonly ICommandDispatcher _commandDispatcher;
         private readonly CommandTuningOptions _tuning;
         private readonly IOptionsMonitor<AutomaticOperationsOptions>? _idleAutoOptions;
+        private readonly IAgentCallService _modelExecution;
+        private readonly CinoOptions _cinoOptions;
+        private readonly RepetitionDetectionOptions _repetitionOptions;
+        private readonly EmbeddingRepetitionOptions _embeddingRepetitionOptions;
 
         public IndexModel(
             StoriesService stories,
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
+            IAgentCallService modelExecution,
+            IOptions<CinoOptions> cinoOptions,
+            IOptions<RepetitionDetectionOptions> repetitionOptions,
+            IOptions<EmbeddingRepetitionOptions> embeddingRepetitionOptions,
             IOptions<CommandTuningOptions> tuningOptions,
             IServiceScopeFactory? scopeFactory = null,
             ICustomLogger? customLogger = null,
@@ -44,6 +52,10 @@ namespace TinyGenerator.Pages.Stories
             _stories = stories;
             _database = database;
             _kernelFactory = kernelFactory;
+            _modelExecution = modelExecution ?? throw new ArgumentNullException(nameof(modelExecution));
+            _cinoOptions = cinoOptions?.Value ?? new CinoOptions();
+            _repetitionOptions = repetitionOptions?.Value ?? new RepetitionDetectionOptions();
+            _embeddingRepetitionOptions = embeddingRepetitionOptions?.Value ?? new EmbeddingRepetitionOptions();
             _scopeFactory = scopeFactory;
             _tuning = tuningOptions.Value ?? new CommandTuningOptions();
             _customLogger = customLogger;
@@ -114,7 +126,7 @@ namespace TinyGenerator.Pages.Stories
             try
             {
                 var changed = _database.RealignStoriesCreatorModelIds();
-                TempData["StatusMessage"] = $"Allineamento completato: aggiornate {changed} storie (model_id ← agent.model_id).";
+                TempData["StatusMessage"] = $"Allineamento completato: aggiornate {changed} storie (model_id â† agent.model_id).";
             }
             catch (Exception ex)
             {
@@ -236,7 +248,7 @@ namespace TinyGenerator.Pages.Stories
             {
                 var runId = _stories.EnqueueReviseStoryCommand(id, trigger: "stories_index", priority: 2, force: true);
                 TempData["StatusMessage"] = string.IsNullOrWhiteSpace(runId)
-                    ? "Revisione non accodata (forse già in coda o dispatcher non disponibile)."
+                    ? "Revisione non accodata (forse giÃ  in coda o dispatcher non disponibile)."
                     : $"Revisione accodata (run {runId}).";
             }
             catch (Exception ex)
@@ -282,7 +294,7 @@ namespace TinyGenerator.Pages.Stories
 
             if (updated.Count == 0)
             {
-                TempData["StatusMessage"] = "Nessuna storia aggiornata: tutti i record già coerenti o non mancanti di story_tags.";
+                TempData["StatusMessage"] = "Nessuna storia aggiornata: tutti i record giÃ  coerenti o non mancanti di story_tags.";
             }
             else
             {
@@ -314,16 +326,127 @@ namespace TinyGenerator.Pages.Stories
             return RedirectToPage();
         }
 
+        public IActionResult OnPostCinoOptimize(long id)
+        {
+            var story = _database.GetStoryById(id);
+            if (story == null)
+            {
+                TempData["ErrorMessage"] = $"Storia {id} non trovata.";
+                return RedirectToPage();
+            }
+
+            var sourceText = string.IsNullOrWhiteSpace(story.StoryRevised)
+                ? (story.StoryRaw ?? string.Empty)
+                : story.StoryRevised!;
+
+            if (string.IsNullOrWhiteSpace(sourceText))
+            {
+                TempData["ErrorMessage"] = $"Storia {id} senza testo utilizzabile per CINO.";
+                return RedirectToPage();
+            }
+
+            var title = string.IsNullOrWhiteSpace(story.Title) ? $"Story {id}" : story.Title!.Trim();
+            var runId = $"cino_optimize_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+
+            _customLogger?.Start(runId);
+            _customLogger?.Append(runId, $"Avvio CINO da storia {id}");
+
+            var cmd = new CinoOptimizeStoryCommand(
+                title: title,
+                prompt: sourceText,
+                database: _database,
+                storiesService: _stories,
+                modelExecution: _modelExecution,
+                dispatcher: _commandDispatcher,
+                options: _cinoOptions,
+                repetitionOptions: _repetitionOptions,
+                embeddingRepetitionOptions: _embeddingRepetitionOptions,
+                logger: _customLogger);
+
+            _commandDispatcher.Enqueue(
+                "cino_optimize_story",
+                async ctx => await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId),
+                runId: runId,
+                threadScope: $"story/cino_optimize_story/{id}",
+                metadata: new Dictionary<string, string>
+                {
+                    ["operation"] = "cino_optimize_story",
+                    ["storyId"] = id.ToString(),
+                    ["sourceStoryId"] = id.ToString(),
+                    ["title"] = title,
+                    ["targetScore"] = _cinoOptions.TargetScore.ToString(),
+                    ["maxDurationSec"] = _cinoOptions.MaxDurationSeconds.ToString(),
+                    ["minLengthGrowthPercent"] = _cinoOptions.MinLengthGrowthPercent.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                });
+
+            TempData["StatusMessage"] = $"CINO avviato da storia {id} (run {runId}).";
+            return RedirectToPage();
+        }
+
         public IActionResult OnPostCompleteStory(long id)
         {
+            var story = _database.GetStoryById(id);
+            if (story == null || story.Deleted)
+            {
+                TempData["ErrorMessage"] = $"Storia {id} non trovata.";
+                return RedirectToPage();
+            }
+
+            var statuses = _database.ListAllStoryStatuses() ?? new List<StoryStatus>();
+            var evaluatedStatus = statuses.FirstOrDefault(s => string.Equals(s.Code, "evaluated", StringComparison.OrdinalIgnoreCase));
+            if (evaluatedStatus == null)
+            {
+                TempData["ErrorMessage"] = "Status 'evaluated' non configurato.";
+                return RedirectToPage();
+            }
+
+            var currentStatus = story.StatusId.HasValue
+                ? statuses.FirstOrDefault(s => s.Id == story.StatusId.Value)
+                : null;
+            var currentStep = currentStatus?.Step ?? (story.StatusStep ?? 0);
+            if (currentStep < evaluatedStatus.Step)
+            {
+                TempData["ErrorMessage"] = "Completa storia e' disponibile solo per storie almeno valutate (status >= evaluated).";
+                return RedirectToPage();
+            }
+
             var runId = _stories.EnqueueAllNextStatusCommand(id, trigger: "manual_complete_story", priority: 3);
             if (string.IsNullOrWhiteSpace(runId))
             {
-                TempData["ErrorMessage"] = "Nessuna operazione disponibile o pipeline già in corso.";
+                TempData["ErrorMessage"] = "Nessuna operazione disponibile o pipeline gia in corso.";
             }
             else
             {
-                TempData["StatusMessage"] = $"Pipeline stati accodata (run {runId}).";
+                TempData["StatusMessage"] = $"Pipeline accodata fino al mix finale (run {runId}).";
+            }
+
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostResetToEvaluated(long id)
+        {
+            var story = _database.GetStoryById(id);
+            if (story == null || story.Deleted)
+            {
+                TempData["ErrorMessage"] = $"Storia {id} non trovata.";
+                return RedirectToPage();
+            }
+
+            var evals = _database.GetStoryEvaluations(id) ?? new List<StoryEvaluation>();
+            if (evals.Count == 0)
+            {
+                TempData["ErrorMessage"] = "Reset a evaluated non consentito: nessuna valutazione trovata.";
+                return RedirectToPage();
+            }
+
+            var ok = _stories.ForceResetToEvaluatedAndCleanup(story, out var msg);
+            if (!ok)
+            {
+                TempData["ErrorMessage"] = $"Reset a evaluated fallito: {msg}";
+            }
+            else
+            {
+                TempData["StatusMessage"] = $"Story {id} riportata a evaluated con cleanup completato.";
             }
 
             return RedirectToPage();
@@ -443,6 +566,7 @@ namespace TinyGenerator.Pages.Stories
                     kernelFactory,
                     _commandDispatcher,
                     _customLogger!,
+                    scopeFactory: _scopeFactory,
                     minScore: 60);
 
                 _commandDispatcher.Enqueue(
@@ -920,7 +1044,7 @@ namespace TinyGenerator.Pages.Stories
                     var alreadyQueued = IsExpertAlreadyQueued("add_ambient_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}). add_ambient_tags_to_story già in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}). add_ambient_tags_to_story giÃ  in coda/in esecuzione");
                     }
 
                     var expertRunId = $"add_ambient_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
@@ -986,7 +1110,7 @@ namespace TinyGenerator.Pages.Stories
                     var alreadyQueued = IsExpertAlreadyQueued("add_fx_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}). add_fx_tags_to_story già in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}). add_fx_tags_to_story giÃ  in coda/in esecuzione");
                     }
 
                     var expertRunId = $"add_fx_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
@@ -1052,7 +1176,7 @@ namespace TinyGenerator.Pages.Stories
                     var alreadyQueued = IsExpertAlreadyQueued("add_music_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}). add_music_tags_to_story già in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}). add_music_tags_to_story giÃ  in coda/in esecuzione");
                     }
 
                     var expertRunId = $"add_music_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
@@ -1162,16 +1286,10 @@ namespace TinyGenerator.Pages.Stories
 
         public IActionResult OnPostAdvanceStatus(long id)
         {
-            var runId = QueueStoryCommand(
-                id,
-                "advance_status",
-                async ctx =>
-                {
-                    var (success, message) = await _stories.ExecuteNextStatusOperationAsync(id, ctx.RunId);
-                    return new CommandResult(success, message ?? (success ? "Operazione completata" : "Operazione fallita"));
-                },
-                "Operazione di avanzamento avviata in background.");
-            TempData["StatusMessage"] = $"Operazione di avanzamento avviata (run {runId}).";
+            var chainId = _stories.EnqueueStatusChain(id);
+            TempData["StatusMessage"] = string.IsNullOrWhiteSpace(chainId)
+                ? "Nessuno stato successivo disponibile o catena gia attiva."
+                : $"Comando successivo accodato (chain {chainId}).";
             return RedirectToPage();
         }
 
@@ -1400,7 +1518,8 @@ namespace TinyGenerator.Pages.Stories
                     e.NarrativeCoherenceScore, e.NarrativeCoherenceDefects,
                     e.OriginalityScore, e.OriginalityDefects,
                     e.EmotionalImpactScore, e.EmotionalImpactDefects,
-                    e.ActionScore, e.ActionDefects
+                    e.ActionScore, e.ActionDefects,
+                    e.StoryLengthChars, e.LenghtPenalityCharsLimit, e.LenghtPenalityPercentageApplyed
                 }),
                 NextStatus = GetNextStatus(s) is StoryStatus ns ? new { ns.Id, ns.CaptionToExecute, ns.OperationType } : null,
                 Actions = GetActionsForStory(s)
@@ -1435,6 +1554,8 @@ namespace TinyGenerator.Pages.Stories
             
             // Revision (POST)
             actions.Add(new { id = "revise", title = "Revisione", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "Revise", id = s.Id }, Request.Scheme) });
+            actions.Add(new { id = "reset_to_evaluated", title = "Reset a evaluated (cleanup)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "ResetToEvaluated", id = s.Id }, Request.Scheme), confirm = true });
+            actions.Add(new { id = "cino_optimize", title = "Ottimizza con CINO", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "CinoOptimize", id = s.Id }, Request.Scheme), confirm = true });
 
             var evalCount = s.Evaluations?.Count ?? 0;
             if (!string.IsNullOrWhiteSpace(s.StoryRevised) && evalCount >= 2)
@@ -1521,7 +1642,7 @@ namespace TinyGenerator.Pages.Stories
                 });
             }
 
-            var ensureOrder = new[] { "revise", "add_tags", "regen_ambient_tags", "regen_fx_tags", "regen_music_tags" };
+            var ensureOrder = new[] { "revise", "cino_optimize", "add_tags", "regen_ambient_tags", "regen_fx_tags", "regen_music_tags" };
             var currentIndex = insertAfterIndex >= 0 ? insertAfterIndex + 1 : 0;
             foreach (var desiredId in ensureOrder)
             {
@@ -1576,5 +1697,6 @@ namespace TinyGenerator.Pages.Stories
         }
     }
 }
+
 
 

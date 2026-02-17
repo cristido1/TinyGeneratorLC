@@ -44,7 +44,7 @@ MODEL_MAPPINGS = {
     ],
     'tts_voices': [
         'id', 'voice_id', 'name', 'model', 'language', 'gender', 'age', 'confidence',
-        'score', 'tags', 'template_wav', 'archetype', 'notes', 'created_at', 'updated_at',
+        'score', 'tags', 'template_wav', 'provider', 'archetype', 'notes', 'created_at', 'updated_at',
         'RowVersion', 'sample_path', 'metadata', 'disabled'
     ],
     'test_definitions': [

@@ -190,7 +190,7 @@ namespace TinyGenerator.Tests
 
         private class TestLogger : TinyGenerator.Services.ICustomLogger
         {
-            public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null) { }
+            public void Log(string level, string category, string message, string? exception = null, string? state = null, string? result = null, int? durationSecs = null) { }
             public System.Threading.Tasks.Task FlushAsync() => System.Threading.Tasks.Task.CompletedTask;
             public void LogPrompt(string modelName, string prompt, string? agentName = null) { }
             public void LogResponse(string modelName, string response, string? agentName = null) { }

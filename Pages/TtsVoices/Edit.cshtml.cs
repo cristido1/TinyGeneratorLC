@@ -41,6 +41,7 @@ namespace TinyGenerator.Pages.TtsVoices
 
             // Copy allowed properties only (do not allow changing VoiceId or Model)
             existing.Name = Voice.Name;
+            existing.Provider = NormalizeProvider(Voice.Provider);
             existing.Language = Voice.Language;
             existing.Gender = Voice.Gender;
             existing.Age = Voice.Age;
@@ -57,6 +58,13 @@ namespace TinyGenerator.Pages.TtsVoices
 
             TempData["TtsVoiceMessage"] = "Voce aggiornata";
             return RedirectToPage("/TtsVoices/Index");
+        }
+
+        private static string NormalizeProvider(string? provider)
+        {
+            if (string.Equals(provider, "elevenlabs", StringComparison.OrdinalIgnoreCase))
+                return "elevenlabs";
+            return "localtts";
         }
     }
 }

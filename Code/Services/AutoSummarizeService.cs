@@ -79,6 +79,7 @@ namespace TinyGenerator.Services
                 var kernelFactory = scope.ServiceProvider.GetRequiredService<ILangChainKernelFactory>();
                 var dispatcher = scope.ServiceProvider.GetRequiredService<ICommandDispatcher>();
                 var customLogger = scope.ServiceProvider.GetService<ICustomLogger>();
+                var scopeFactory = scope.ServiceProvider.GetService<IServiceScopeFactory>();
 
                 var runId = Guid.NewGuid().ToString();
                 var cmd = new BatchSummarizeStoriesCommand(
@@ -86,6 +87,7 @@ namespace TinyGenerator.Services
                     kernelFactory,
                     dispatcher,
                     customLogger!,
+                    scopeFactory: scopeFactory,
                     minScore: 60);
 
                 dispatcher.Enqueue(

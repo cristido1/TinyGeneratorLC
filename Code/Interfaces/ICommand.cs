@@ -24,6 +24,7 @@ public interface ICommand
 {
     string CommandName => ToSnakeCase(GetType().Name);
     int Priority => 2;
+    bool Batch => false;
     event EventHandler<CommandProgressEventArgs>? Progress { add { } remove { } }
 
     Task<CommandResult> Execute(CommandContext context) => CommandExecutionFunction.Execute(this, context);

@@ -41,6 +41,7 @@ namespace TinyGenerator.Services
         public int? TopK { get; set; }
         public int? RepeatLastN { get; set; }
         public int? NumPredict { get; set; }
+        public int? NumCtx { get; set; }
         // If null, do not send any explicit max tokens parameter to the model.
         // This avoids forcing an unsafe default such as 8000. Set when required.
         public int? MaxResponseTokens { get; set; } = null;
@@ -1296,6 +1297,13 @@ namespace TinyGenerator.Services
                     if (!_noTopKModels.Contains(_modelId) && TopK.HasValue) requestBody["top_k"] = TopK.Value;
                     if (!_noRepeatLastNModels.Contains(_modelId) && RepeatLastN.HasValue) requestBody["repeat_last_n"] = RepeatLastN.Value;
                     if (!_noNumPredictModels.Contains(_modelId) && NumPredict.HasValue) requestBody["num_predict"] = NumPredict.Value;
+                    if (NumCtx.HasValue && NumCtx.Value > 0)
+                    {
+                        requestBody["options"] = new Dictionary<string, object>
+                        {
+                            { "num_ctx", NumCtx.Value }
+                        };
+                    }
 
                     if (ResponseFormat != null)
                     {

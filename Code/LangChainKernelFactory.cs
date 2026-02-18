@@ -360,6 +360,10 @@ namespace TinyGenerator.Services
                 if (topK.HasValue) bridge.TopK = topK.Value;
                 if (repeatLastN.HasValue) bridge.RepeatLastN = repeatLastN.Value;
                 if (numPredict.HasValue) bridge.NumPredict = numPredict.Value;
+                if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true && modelInfo.ContextToUse > 0)
+                {
+                    bridge.NumCtx = modelInfo.ContextToUse;
+                }
                 if (useMaxTokens)
                 {
                     var maxTokens = DetermineMaxTokensForModel(modelInfo);

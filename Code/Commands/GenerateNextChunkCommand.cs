@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
 
@@ -255,48 +256,47 @@ public sealed class GenerateNextChunkCommand : ICommand
                 RunId = runId,
                 DeterministicValidator = output =>
                 {
-                    var cleaned = (output ?? string.Empty).Trim();
-                    if (string.IsNullOrWhiteSpace(cleaned))
+                    var checks = new List<IDeterministicCheck>
                     {
-                        return new CommandModelExecutionService.DeterministicValidationResult(
-                            false,
-                            $"Risposta vuota ({agentIdentity})");
-                    }
-
-                    var validation = _textValidationService.Validate(cleaned, storyHistory);
-                    if (!validation.IsValid)
-                    {
-                        if (RequiresModelBasedValidation(validation.Reason))
+                        new CheckEmpty
                         {
-                            _logger?.Append(
-                                runId,
-                                $"Text validation delegata al response_checker ({agentIdentity}): {validation.Reason}",
-                                "warning");
-                            return new CommandModelExecutionService.DeterministicValidationResult(true, null);
-                        }
-
-                        if (IsRelaxableForCurrentPhase(validation.Reason, phase))
+                            Options = Options.Create<object>(new Dictionary<string, object>
+                            {
+                                ["ErrorMessage"] = $"Risposta vuota ({agentIdentity})"
+                            })
+                        },
+                        new CheckTextValidation
                         {
-                            _logger?.Append(
-                                runId,
-                                $"Text validation relax ({agentIdentity}): {validation.Reason} | phase={phase}",
-                                "warning");
-                            return new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                            Options = Options.Create<object>(new Dictionary<string, object>
+                            {
+                                ["TextValidationService"] = _textValidationService,
+                                ["StoryHistory"] = storyHistory,
+                                ["AgentIdentity"] = agentIdentity,
+                                ["RunId"] = runId,
+                                ["Phase"] = phase
+                            })
                         }
+                    };
 
-                        return new CommandModelExecutionService.DeterministicValidationResult(
-                            false,
-                            $"Text validation ({agentIdentity}): {validation.Reason}");
-                    }
-
-                    if (_options.RequireCliffhanger && !EndsInTension(cleaned, out var reason))
+                    if (_logger != null &&
+                        checks[1] is CheckTextValidation validationCheck &&
+                        validationCheck.Options?.Value is Dictionary<string, object> validationOptions)
                     {
-                        return new CommandModelExecutionService.DeterministicValidationResult(
-                            false,
-                            $"Cliffhanger validation ({agentIdentity}): {reason}");
+                        validationOptions["Logger"] = _logger;
                     }
 
-                    return new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                    if (_options.RequireCliffhanger)
+                    {
+                        checks.Add(new CheckCliffhangerEnding
+                        {
+                            Options = Options.Create<object>(new Dictionary<string, object>
+                            {
+                                ["AgentIdentity"] = agentIdentity
+                            })
+                        });
+                    }
+
+                    return CheckRunner.Execute(output, checks.ToArray());
                 },
                 RetryPromptFactory = BuildWriterRetryPrompt
             },

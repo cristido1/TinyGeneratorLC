@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
 
@@ -118,7 +119,16 @@ public sealed class GenerateRandomSeriesPromptCommand : ICommand
                 ExplainAfterAttempt = 2,
                 RunId = runId,
                 EnableDeterministicValidation = true,
-                DeterministicValidator = ValidatePromptOutput,
+                DeterministicValidator = output => CheckRunner.Execute(
+                    output,
+                    new CheckPromptLengthRange
+                    {
+                        Options = Options.Create<object>(new Dictionary<string, object>
+                        {
+                            ["MinLength"] = 40,
+                            ["MaxLength"] = 1800
+                        })
+                    }),
                 RetryPromptFactory = (_, reason) =>
                     $"Correggi la risposta precedente. Problema: {reason}. Restituisci solo il prompt finale in italiano, max 120 parole."
             };
@@ -227,27 +237,6 @@ public sealed class GenerateRandomSeriesPromptCommand : ICommand
             PromptStyle.SpaceMilitaryItalian => "generate_random_series_prompt_space_military_italian",
             _ => "generate_random_series_prompt"
         };
-    }
-
-    private static CommandModelExecutionService.DeterministicValidationResult ValidatePromptOutput(string output)
-    {
-        var normalized = NormalizePrompt(output);
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            return new CommandModelExecutionService.DeterministicValidationResult(false, "Risposta vuota");
-        }
-
-        if (normalized.Length < 40)
-        {
-            return new CommandModelExecutionService.DeterministicValidationResult(false, "Prompt troppo corto");
-        }
-
-        if (normalized.Length > 1800)
-        {
-            return new CommandModelExecutionService.DeterministicValidationResult(false, "Prompt troppo lungo");
-        }
-
-        return new CommandModelExecutionService.DeterministicValidationResult(true, null);
     }
 
     private static string NormalizePrompt(string? text)

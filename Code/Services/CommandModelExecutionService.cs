@@ -40,6 +40,8 @@ public sealed class CommandModelExecutionService : IAgentCallService
         public string? Error { get; init; }
         public string? ModelName { get; init; }
         public bool UsedFallback { get; init; }
+        public bool DeterministicFailure { get; init; }
+        public int AttemptsUsed { get; init; }
     }
 
     private readonly ILangChainKernelFactory _kernelFactory;
@@ -123,7 +125,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var modelName = ResolveModelName(request.Agent);
         if (string.IsNullOrWhiteSpace(modelName))
         {
-            return new Result { Success = false, Error = $"Agente {request.Agent.Name} senza modello configurato" };
+            return new Result { Success = false, Error = $"Agente {request.Agent.Name} senza modello configurato", DeterministicFailure = false, AttemptsUsed = 0 };
         }
 
         var settings = ResolveSettings(request);
@@ -136,7 +138,9 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 Text = primary.Text,
                 Error = primary.Error,
                 ModelName = modelName,
-                UsedFallback = false
+                UsedFallback = false,
+                DeterministicFailure = false,
+                AttemptsUsed = primary.AttemptsUsed
             };
         }
 
@@ -155,7 +159,9 @@ public sealed class CommandModelExecutionService : IAgentCallService
             Text = primary.Text,
             Error = primary.Error,
             ModelName = modelName,
-            UsedFallback = primary.UsedFallback
+            UsedFallback = primary.UsedFallback,
+            DeterministicFailure = primary.DeterministicFailure,
+            AttemptsUsed = primary.AttemptsUsed
         };
     }
 
@@ -166,6 +172,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var currentPrompt = request.Prompt ?? string.Empty;
         var lastError = "Risposta non valida";
         var lastOutput = string.Empty;
+        var hadDeterministicFailure = false;
         var explained = false;
         var responseValidation = _responseValidationOptions?.Value;
         var (_, responsePolicy) = ResolveResponsePolicy(request.CommandKey, responseValidation);
@@ -244,7 +251,14 @@ public sealed class CommandModelExecutionService : IAgentCallService
             if (!deterministic.IsValid)
             {
                 lastError = string.IsNullOrWhiteSpace(deterministic.Reason) ? "Check deterministico fallito" : deterministic.Reason!;
+                hadDeterministicFailure = true;
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito (deterministico): {lastError}");
+                _logger?.Log(
+                    "Warning",
+                    "DeterministicValidation",
+                    $"operation={request.CommandKey}; role={roleCode}; agent={request.Agent?.Name ?? "(unknown)"}; model={modelName}; attempt={attempt}; reason={lastError}",
+                    state: "deterministic_validation",
+                    result: "FAILED");
                 LogValidationFailureContext(
                     request,
                     roleCode,
@@ -323,7 +337,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
             {
                 Success = true,
                 Text = text,
-                ModelName = modelName
+                ModelName = modelName,
+                DeterministicFailure = false
+                ,
+                AttemptsUsed = attempt
             };
         }
 
@@ -338,7 +355,9 @@ public sealed class CommandModelExecutionService : IAgentCallService
             Success = false,
             Error = lastError,
             Text = lastOutput,
-            ModelName = modelName
+            ModelName = modelName,
+            DeterministicFailure = hadDeterministicFailure,
+            AttemptsUsed = maxAttempts
         };
     }
 
@@ -348,11 +367,12 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
         if (fallbackService == null)
         {
-            return new Result { Success = false, Error = "ModelFallbackService non disponibile" };
+            return new Result { Success = false, Error = "ModelFallbackService non disponibile", DeterministicFailure = false, AttemptsUsed = 0 };
         }
 
         foreach (var role in BuildFallbackRoleCandidates(request.RoleCode, request.Agent.Role))
         {
+            var fallbackAttemptsUsed = 0;
             var (text, successfulModelRole) = await fallbackService.ExecuteWithFallbackAsync<string>(
                 role,
                 request.Agent.ModelId,
@@ -386,6 +406,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     };
 
                     var result = await ExecuteOnModelAsync(req, settings, fallbackName, role, ct).ConfigureAwait(false);
+                    fallbackAttemptsUsed = result.AttemptsUsed;
                     if (!result.Success || string.IsNullOrWhiteSpace(result.Text))
                     {
                         throw new InvalidOperationException(result.Error ?? "Fallback result invalid");
@@ -403,12 +424,14 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     Success = true,
                     Text = text,
                     ModelName = successfulModelRole.Model.Name,
-                    UsedFallback = true
+                    UsedFallback = true,
+                    DeterministicFailure = false,
+                    AttemptsUsed = fallbackAttemptsUsed
                 };
             }
         }
 
-        return new Result { Success = false, Error = "Fallback fallito" };
+        return new Result { Success = false, Error = "Fallback fallito", DeterministicFailure = false, AttemptsUsed = 0 };
     }
 
     private async Task<string> CallModelTextAsync(

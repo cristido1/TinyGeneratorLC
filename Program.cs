@@ -315,6 +315,7 @@ builder.Services.AddSingleton<LogAnalysisService>();
 builder.Services.AddSingleton<SystemReportService>();
 builder.Services.AddSingleton<CommandModelExecutionService>();
 builder.Services.AddSingleton<IAgentCallService>(sp => sp.GetRequiredService<CommandModelExecutionService>());
+builder.Services.AddSingleton<ICallCenter, CallCenter>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
 builder.Services.AddTransient<LangChainTestService>();

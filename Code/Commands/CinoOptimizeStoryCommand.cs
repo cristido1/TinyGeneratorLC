@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 
 namespace TinyGenerator.Services.Commands;
@@ -292,40 +293,38 @@ public sealed class CinoOptimizeStoryCommand : ICommand
                 StepTimeoutSec = 180,
                 RunId = runId,
                 EnableDeterministicValidation = true,
-                DeterministicValidator = output =>
-                {
-                    var t = (output ?? string.Empty).Trim();
-                    if (string.IsNullOrWhiteSpace(t))
+                DeterministicValidator = output => CheckRunner.Execute(
+                    output,
+                    new CheckEmpty
                     {
-                        return new CommandModelExecutionService.DeterministicValidationResult(false, "Output vuoto");
-                    }
-
-                    if (t.Length < 300)
-                    {
-                        return new CommandModelExecutionService.DeterministicValidationResult(false, "Output troppo corto");
-                    }
-
-                    var minGrowthPercent = Math.Max(0, _options.MinLengthGrowthPercent);
-                    var sourceLength = (parentText ?? string.Empty).Trim().Length;
-                    if (sourceLength > 0 && minGrowthPercent > 0)
-                    {
-                        var requiredMinLength = (int)Math.Ceiling(sourceLength * (1d + (minGrowthPercent / 100d)));
-                        if (t.Length < requiredMinLength)
+                        Options = Options.Create<object>(new Dictionary<string, object>
                         {
-                            return new CommandModelExecutionService.DeterministicValidationResult(
-                                false,
-                                $"Output troppo corto rispetto al sorgente: richiesti almeno {requiredMinLength} caratteri ({minGrowthPercent:0.##}% oltre i {sourceLength} del sorgente), ottenuti {t.Length}");
-                        }
-                    }
-
-                    return new CommandModelExecutionService.DeterministicValidationResult(true);
-                }
+                            ["ErrorMessage"] = "Output vuoto"
+                        })
+                    },
+                    new CheckMinLength
+                    {
+                        Options = Options.Create<object>(new Dictionary<string, object>
+                        {
+                            ["MinLength"] = 300,
+                            ["ErrorMessage"] = "Output troppo corto"
+                        })
+                    },
+                    new CheckMinimumGrowthPercent
+                    {
+                        Options = Options.Create<object>(new Dictionary<string, object>
+                        {
+                            ["SourceText"] = parentText ?? string.Empty,
+                            ["MinGrowthPercent"] = Math.Max(0d, _options.MinLengthGrowthPercent)
+                        })
+                    })
             },
             ct).ConfigureAwait(false);
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.Text))
         {
-            _logger?.Append(runId, $"Writer {writer.Name} fallito: {result.Error ?? "errore sconosciuto"}", "warning");
+            var error = result.Error ?? "errore sconosciuto";
+            _logger?.Append(runId, $"Writer {writer.Name} fallito: {error}", "warning");
             return null;
         }
 

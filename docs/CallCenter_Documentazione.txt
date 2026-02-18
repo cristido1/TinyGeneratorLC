@@ -1,0 +1,142 @@
+CALL CENTER ARCHITECTURE – DOCUMENTAZIONE OPERATIVA
+
+OBIETTIVO Centralizzare tutte le chiamate agli agenti AI in una singola
+classe CallCenter con gestione uniforme di: - timeout - retry -
+deterministic checks - response checker - fallback agent - logging -
+statistiche modello
+
+======================================================== 1. INTERFACCE
+PRINCIPALI ========================================================
+
+ICallCenter Metodo principale: CallAgentAsync(storyId, threadId, agent,
+history, options, cancellationToken)
+
+Parametri: - storyId: id della storia - threadId: id thread
+conversazione - agent: istanza agente AI - history: cronologia chat -
+options: configurazioni operative - cancellationToken: token di
+annullamento
+
+Output: CallCenterResult
+
+------------------------------------------------------------------------
+
+CallCenterResult Campi: - Success (bool) - ResponseText (string) -
+UpdatedHistory (ChatHistory) - Attempts (int) - ModelUsed (string) -
+Duration (TimeSpan) - FailureReason (string opzionale)
+
+------------------------------------------------------------------------
+
+CallOptions Campi: - Timeout (TimeSpan) - MaxRetries (int) -
+UseResponseChecker (bool) - AskFailExplanation (bool) - AllowFallback
+(bool)
+
+======================================================== 2.
+DETERMINISTIC CHECK SYSTEM
+========================================================
+
+Interfaccia IDeterministicCheck - Rule: descrizione della regola -
+TextToCheck: testo da verificare - Execute(): ritorna
+IDeterministicResult
+
+Interfaccia IDeterministicResult - Successed (bool) - Message (string) -
+CheckDurationMs (long)
+
+------------------------------------------------------------------------
+
+CHECK OBBLIGATORIO GLOBALE
+
+NonEmptyResponseCheck Regola: La risposta NON può essere null, vuota o
+whitespace.
+
+Questo check è sempre eseguito come primo controllo.
+
+======================================================== 3. FLUSSO
+OPERATIVO DEL CALLCENTER
+========================================================
+
+STEP 1 – PREPARAZIONE - build request da history - avvio stopwatch
+totale - creazione CancellationToken con timeout
+
+STEP 2 – LOOP RETRY
+
+per ogni tentativo:
+
+1.  chiamata asincrona agent.GenerateAsync
+2.  gestione timeout con linked token
+3.  se timeout:
+    -   log FAILED timeout
+    -   aggiorna statistiche
+    -   continua retry
+4.  esegui NonEmptyResponseCheck se fallisce:
+    -   log deterministic_empty
+    -   aggiungi messaggio a history
+    -   aggiorna stats
+    -   retry
+5.  esegui deterministic checks da provider se fallisce:
+    -   log deterministic
+    -   aggiungi messaggio a history
+    -   aggiorna stats
+    -   retry
+6.  se attivo response checker:
+    -   esegui checker
+    -   se fallisce:
+        -   log checker
+        -   aggiungi messaggio a history
+        -   aggiorna stats
+        -   retry
+7.  SUCCESS:
+    -   log success
+    -   aggiorna stats
+    -   return risultato
+
+STEP 3 – FAIL EXPLANATION (opzionale) Se tutti i retry falliscono: -
+chiedere al modello spiegazione fallimento - log operation
+fail_explanation - aggiungere risposta alla history
+
+STEP 4 – FALLBACK AGENT (opzionale) - selezionare agent non ancora
+usato - ordinare per: 1) success_rate 2) velocità (tokens/sec) - evitare
+loop con HashSet modelli usati - ripartire dal loop retry
+
+STEP 5 – FAIL DEFINITIVO - return risultato con Success = false
+
+======================================================== 4. LOGGING
+========================================================
+
+UNICA TABELLA LOG (no sottotabelle)
+
+Campi suggeriti: - story_id - thread_id - agent_role - model -
+operation - attempt - status (SUCCESS/FAILED) - failure_type -
+failure_message - duration_ms - tokens_in - tokens_out - created_at
+
+======================================================== 5. MODEL STATS
+UPDATE ========================================================
+
+Ad ogni attempt: - success true/false - durata - operation - tipo errore
+
+Metriche consigliate: - success_rate - avg_duration -
+tokens_per_second - failure_distribution
+
+======================================================== 6. REGOLE
+ARCHITETTURALI OBBLIGATORIE
+========================================================
+
+1.  Nessun comando può chiamare agent.GenerateAsync direttamente
+2.  Tutte le chiamate passano dal CallCenter
+3.  I deterministic checks NON sono opzionali
+4.  Il check NonEmptyResponse è sempre attivo
+5.  Il fallback non può ciclare sugli stessi modelli
+6.  Ogni fallimento scrive il motivo nella conversazione
+7.  Ogni attempt aggiorna le statistiche del modello
+
+======================================================== 7. STRATEGIA DI
+MIGRAZIONE ========================================================
+
+Migrare un comando alla volta:
+
+Step per ogni comando: 1. rimuovere chiamata diretta agente 2.
+sostituire con CallCenter.CallAgentAsync 3. rimuovere retry locali 4.
+rimuovere timeout locali 5. testare deterministic check 6. verificare
+logging 7. verificare aggiornamento stats
+
+======================================================== FINE
+DOCUMENTAZIONE ========================================================

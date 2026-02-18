@@ -20,6 +20,7 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, bool> _completed = new();
         private readonly ConcurrentDictionary<string, string?> _result = new();
         private readonly ConcurrentDictionary<string, int> _busyModels = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, ConcurrentQueue<DateTime>> _pendingModelRequests = new(StringComparer.OrdinalIgnoreCase);
         private readonly IHubContext<ProgressHub>? _hubContext;
         private readonly ConcurrentDictionary<string, AppEventDefinition> _eventDefinitions = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<LogEntry> _buffer = new();
@@ -322,6 +323,10 @@ namespace TinyGenerator.Services
         {
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] REQUEST_JSON: {requestJson}";
+            var requestStartedAt = DateTime.UtcNow;
+            var effectiveThreadId = ResolveEffectiveThreadId(threadId);
+            var effectiveAgentName = ResolveAgentName(agentName, ResolveOperationScope(LogScope.Current, "ModelRequest", message), "ModelRequest");
+            EnqueueModelRequestStart(effectiveThreadId, effectiveAgentName, modelName, requestStartedAt);
             
             // Extract the LAST message from the conversation for cleaner chat display
             // This allows following the conversation flow, showing feedback messages during retries
@@ -360,6 +365,10 @@ namespace TinyGenerator.Services
         {
             if (!_logRequestResponse) return;
             var message = $"[{modelName}] RESPONSE_JSON: {responseJson}";
+            var responseReceivedAt = DateTime.UtcNow;
+            var effectiveThreadId = ResolveEffectiveThreadId(threadId);
+            var effectiveAgentName = ResolveAgentName(agentName, ResolveOperationScope(LogScope.Current, "ModelResponse", message), "ModelResponse");
+            var responseDurationSecs = TryComputeModelResponseDurationSeconds(effectiveThreadId, effectiveAgentName, modelName, responseReceivedAt);
             
             // Extract assistant content or function calls for cleaner chat display
             string chatText;
@@ -379,7 +388,7 @@ namespace TinyGenerator.Services
                     if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) && messageObj.TryGetProperty("content", out var toolContent))
                     {
                         chatText = toolContent.GetString() ?? responseJson;
-                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName);
+                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName, responseDurationSecs);
                         return;
                     }
 
@@ -415,7 +424,62 @@ namespace TinyGenerator.Services
                 chatText = responseJson;
             }
 
-            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName);
+            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName, responseDurationSecs);
+        }
+
+        private static int ResolveEffectiveThreadId(int? explicitThreadId)
+        {
+            if (explicitThreadId.HasValue && explicitThreadId.Value > 0)
+            {
+                return explicitThreadId.Value;
+            }
+
+            var scopedThreadId = LogScope.CurrentThreadId;
+            if (scopedThreadId.HasValue && scopedThreadId.Value > 0)
+            {
+                return scopedThreadId.Value;
+            }
+
+            return Environment.CurrentManagedThreadId;
+        }
+
+        private static string BuildModelTrafficKey(int threadId, string? agentName, string? modelName)
+        {
+            var safeAgent = string.IsNullOrWhiteSpace(agentName) ? "-" : agentName.Trim();
+            var safeModel = string.IsNullOrWhiteSpace(modelName) ? "-" : modelName.Trim();
+            return $"{threadId}|{safeAgent}|{safeModel}";
+        }
+
+        private void EnqueueModelRequestStart(int threadId, string? agentName, string? modelName, DateTime requestStartedAt)
+        {
+            if (threadId <= 0) return;
+            var key = BuildModelTrafficKey(threadId, agentName, modelName);
+            var queue = _pendingModelRequests.GetOrAdd(key, _ => new ConcurrentQueue<DateTime>());
+            queue.Enqueue(requestStartedAt);
+        }
+
+        private int? TryComputeModelResponseDurationSeconds(int threadId, string? agentName, string? modelName, DateTime responseReceivedAt)
+        {
+            if (threadId <= 0) return null;
+
+            var key = BuildModelTrafficKey(threadId, agentName, modelName);
+            if (!_pendingModelRequests.TryGetValue(key, out var queue))
+            {
+                return null;
+            }
+
+            if (!queue.TryDequeue(out var requestStartedAt))
+            {
+                return null;
+            }
+
+            if (queue.IsEmpty)
+            {
+                _pendingModelRequests.TryRemove(key, out _);
+            }
+
+            var elapsed = responseReceivedAt - requestStartedAt;
+            return Math.Max(1, (int)Math.Ceiling(Math.Max(0, elapsed.TotalSeconds)));
         }
 
         public void MarkLatestModelResponseResult(string result, string? failReason = null, bool? examined = null)

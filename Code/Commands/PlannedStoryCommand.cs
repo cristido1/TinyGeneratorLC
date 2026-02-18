@@ -1,6 +1,7 @@
-﻿using TinyGenerator.Models;
+using TinyGenerator.Models;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands
@@ -14,7 +15,7 @@ namespace TinyGenerator.Services.Commands
     /// 3. Validazione di ogni beat (lunghezza minima + coerenza)
     /// 4. Retry automatico del singolo beat se fallisce
     /// 5. Concatenazione finale di tutti i beat in story_raw
-    /// 6. Prosecuzione con il flow normale (formatter â†’ experts â†’ TTS)
+    /// 6. Prosecuzione con il flow normale (formatter → experts → TTS)
     /// </summary>
     public class PlannedStoryCommand : ICommand
     {
@@ -76,47 +77,47 @@ namespace TinyGenerator.Services.Commands
 
             try
             {
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 1: Valida planner e writer agents                       â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 1: Valida planner e writer agents                       ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 await BroadcastPhaseAsync("Fase 1/5: Validazione agenti...");
-                await LogAndNotifyAsync("ðŸŽ¬ Avvio generazione storia pianificata...");
+                await LogAndNotifyAsync("🎬 Avvio generazione storia pianificata...");
 
                 var plannerAgent = _database.GetAgentById(_plannerAgentId);
                 if (plannerAgent == null || !plannerAgent.IsActive)
                 {
-                    await LogAndNotifyAsync($"âŒ Planner agent {_plannerAgentId} non trovato o non attivo", "error");
+                    await LogAndNotifyAsync($"❌ Planner agent {_plannerAgentId} non trovato o non attivo", "error");
                     return;
                 }
 
                 if (!string.Equals(plannerAgent.Role, "planner", StringComparison.OrdinalIgnoreCase))
                 {
-                    await LogAndNotifyAsync($"âŒ L'agente {plannerAgent.Name} non ha ruolo 'planner'", "error");
+                    await LogAndNotifyAsync($"❌ L'agente {plannerAgent.Name} non ha ruolo 'planner'", "error");
                     return;
                 }
 
                 var writerAgent = _database.GetAgentById(_writerAgentId);
                 if (writerAgent == null || !writerAgent.IsActive)
                 {
-                    await LogAndNotifyAsync($"âŒ Writer agent {_writerAgentId} non trovato o non attivo", "error");
+                    await LogAndNotifyAsync($"❌ Writer agent {_writerAgentId} non trovato o non attivo", "error");
                     return;
                 }
 
-                await LogAndNotifyAsync($"ðŸ“ Planner: {plannerAgent.Name}");
-                await LogAndNotifyAsync($"âœï¸ Writer: {writerAgent.Name}");
+                await LogAndNotifyAsync($"📝 Planner: {plannerAgent.Name}");
+                await LogAndNotifyAsync($"✍️ Writer: {writerAgent.Name}");
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 2: Genera struttura narrativa con planner               â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 2: Genera struttura narrativa con planner               ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 await BroadcastPhaseAsync("Fase 2/5: Pianificazione narrativa...");
-                await LogAndNotifyAsync("ðŸ§  Generazione struttura narrativa (15 beat)...");
+                await LogAndNotifyAsync("🧠 Generazione struttura narrativa (15 beat)...");
 
                 var structurePrompt = BuildPlannerPrompt(_theme, _seriesName, _episodeNumber);
                 var structureJson = await CallPlannerAsync(plannerAgent, structurePrompt, threadId, ct);
 
                 if (string.IsNullOrWhiteSpace(structureJson))
                 {
-                    await LogAndNotifyAsync("âŒ Il planner non ha prodotto una struttura valida", "error");
+                    await LogAndNotifyAsync("❌ Il planner non ha prodotto una struttura valida", "error");
                     return;
                 }
 
@@ -124,17 +125,17 @@ namespace TinyGenerator.Services.Commands
                 var beatStructure = ParseBeatStructure(structureJson);
                 if (beatStructure == null || beatStructure.Count == 0)
                 {
-                    await LogAndNotifyAsync("âŒ Struttura JSON non valida o vuota", "error");
+                    await LogAndNotifyAsync("❌ Struttura JSON non valida o vuota", "error");
                     return;
                 }
 
-                await LogAndNotifyAsync($"âœ… Struttura generata: {beatStructure.Count} beat", "success");
+                await LogAndNotifyAsync($"✅ Struttura generata: {beatStructure.Count} beat", "success");
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 3: Genera testo per ogni beat                           â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 3: Genera testo per ogni beat                           ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 await BroadcastPhaseAsync($"Fase 3/5: Generazione {beatStructure.Count} beat...");
-                await LogAndNotifyAsync($"âœï¸ Inizio scrittura {beatStructure.Count} beat...");
+                await LogAndNotifyAsync($"✍️ Inizio scrittura {beatStructure.Count} beat...");
 
                 var generatedBeats = new List<string>();
                 int currentBeat = 0;
@@ -145,7 +146,7 @@ namespace TinyGenerator.Services.Commands
                     ct.ThrowIfCancellationRequested();
 
                     await BroadcastStepAsync(currentBeat, beatStructure.Count, $"Beat {currentBeat}: {beat.BeatName}");
-                    await LogAndNotifyAsync($"ðŸ“ Beat {currentBeat}/{beatStructure.Count}: {beat.BeatName}");
+                    await LogAndNotifyAsync($"📝 Beat {currentBeat}/{beatStructure.Count}: {beat.BeatName}");
 
                     var beatText = await GenerateBeatWithRetriesAsync(
                         writerAgent,
@@ -159,51 +160,51 @@ namespace TinyGenerator.Services.Commands
 
                     if (string.IsNullOrWhiteSpace(beatText))
                     {
-                        await LogAndNotifyAsync($"âŒ Beat {currentBeat} fallito dopo {_tuning.PlannedStory.BeatMaxRetries} tentativi", "error");
+                        await LogAndNotifyAsync($"❌ Beat {currentBeat} fallito dopo {_tuning.PlannedStory.BeatMaxRetries} tentativi", "error");
                         return;
                     }
 
                     generatedBeats.Add(beatText);
-                    await LogAndNotifyAsync($"âœ… Beat {currentBeat} completato ({beatText.Length} caratteri)", "success");
+                    await LogAndNotifyAsync($"✅ Beat {currentBeat} completato ({beatText.Length} caratteri)", "success");
                 }
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 4: Crea storia nel database                             â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 4: Crea storia nel database                             ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 await BroadcastPhaseAsync("Fase 4/5: Salvataggio storia...");
-                await LogAndNotifyAsync("ðŸ’¾ Creazione storia nel database...");
+                await LogAndNotifyAsync("💾 Creazione storia nel database...");
 
                 var fullStoryText = string.Join("\n\n", generatedBeats);
                 var storyId = await CreateStoryInDatabaseAsync(fullStoryText, structureJson, ct);
 
                 if (storyId == 0)
                 {
-                    await LogAndNotifyAsync("âŒ Creazione storia fallita", "error");
+                    await LogAndNotifyAsync("❌ Creazione storia fallita", "error");
                     return;
                 }
 
-                await LogAndNotifyAsync($"âœ… Storia {storyId} creata con successo", "success");
+                await LogAndNotifyAsync($"✅ Storia {storyId} creata con successo", "success");
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 5: Accodamento comandi post-generazione                 â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 5: Accodamento comandi post-generazione                 ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 await BroadcastPhaseAsync("Fase 5/5: Accodamento comandi post-generazione...");
-                await LogAndNotifyAsync("ðŸ“‹ Accodamento comandi formatter/experts...");
+                await LogAndNotifyAsync("📋 Accodamento comandi formatter/experts...");
 
                 // Enqueue AddVoiceTagsToStoryCommand (formatter + experts)
                 EnqueueTransformCommand(storyId);
 
-                await LogAndNotifyAsync("ðŸŽ‰ Generazione storia pianificata completata!", "success");
+                await LogAndNotifyAsync("🎉 Generazione storia pianificata completata!", "success");
                 await _logger.BroadcastTaskComplete(_generationId, "completed");
             }
             catch (OperationCanceledException)
             {
-                await LogAndNotifyAsync("âš ï¸ Generazione cancellata", "warning");
+                await LogAndNotifyAsync("⚠️ Generazione cancellata", "warning");
                 await _logger.BroadcastTaskComplete(_generationId, "cancelled");
             }
             catch (Exception ex)
             {
-                await LogAndNotifyAsync($"âŒ Errore: {ex.Message}", "error");
+                await LogAndNotifyAsync($"❌ Errore: {ex.Message}", "error");
                 _logger.Log("Error", "PlannedStory", $"Error: {ex.Message}", ex.ToString());
                 await _logger.BroadcastTaskComplete(_generationId, "failed");
             }
@@ -289,26 +290,16 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                     ExplainAfterAttempt = 1,
                     RunId = _generationId.ToString(),
                     EnableDeterministicValidation = true,
-                    DeterministicValidator = output =>
-                    {
-                        var normalized = NormalizePotentialJson(output);
-                        if (string.IsNullOrWhiteSpace(normalized))
+                    DeterministicValidator = output => CheckRunner.Execute(
+                        output,
+                        new CheckEmpty
                         {
-                            return new CommandModelExecutionService.DeterministicValidationResult(false, "Planner output vuoto");
-                        }
-
-                        try
-                        {
-                            using var doc = JsonDocument.Parse(normalized);
-                            return doc.RootElement.ValueKind == JsonValueKind.Array
-                                ? new CommandModelExecutionService.DeterministicValidationResult(true, null)
-                                : new CommandModelExecutionService.DeterministicValidationResult(false, "Planner output non e' un array JSON");
-                        }
-                        catch
-                        {
-                            return new CommandModelExecutionService.DeterministicValidationResult(false, "Planner output non parseabile come JSON");
-                        }
-                    }
+                            Options = Options.Create<object>(new Dictionary<string, object>
+                            {
+                                ["ErrorMessage"] = "Planner output vuoto"
+                            })
+                        },
+                        new CheckJsonArray())
                 };
 
                 var result = await execution.ExecuteAsync(request, ct);
@@ -380,16 +371,16 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                     {
                         lastError = "Il writer ha prodotto un output vuoto.";
                         _logger.MarkLatestModelResponseResult("FAILED", lastError);
-                        await LogAndNotifyAsync($"âš ï¸ Tentativo {attempt}/{maxRetries}: output vuoto", "warning");
+                        await LogAndNotifyAsync($"⚠️ Tentativo {attempt}/{maxRetries}: output vuoto", "warning");
                         continue;
                     }
 
                     // VALIDAZIONE 1: Lunghezza minima
                     if (beatText.Length < minBeatLength)
                     {
-                        lastError = $"Il testo Ã¨ troppo corto ({beatText.Length} caratteri). Devi scrivere ALMENO {minBeatLength} caratteri per sviluppare adeguatamente il beat.";
+                        lastError = $"Il testo è troppo corto ({beatText.Length} caratteri). Devi scrivere ALMENO {minBeatLength} caratteri per sviluppare adeguatamente il beat.";
                         _logger.MarkLatestModelResponseResult("FAILED", lastError);
-                        await LogAndNotifyAsync($"âš ï¸ Tentativo {attempt}/{maxRetries}: testo troppo corto ({beatText.Length} < {minBeatLength})", "warning");
+                        await LogAndNotifyAsync($"⚠️ Tentativo {attempt}/{maxRetries}: testo troppo corto ({beatText.Length} < {minBeatLength})", "warning");
                         continue;
                     }
 
@@ -398,7 +389,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                     {
                         lastError = "Il testo contiene anticipazioni di eventi futuri. Scrivi SOLO il contenuto del beat corrente, non anticipare beat successivi.";
                         _logger.MarkLatestModelResponseResult("FAILED", lastError);
-                        await LogAndNotifyAsync($"âš ï¸ Tentativo {attempt}/{maxRetries}: rilevate anticipazioni", "warning");
+                        await LogAndNotifyAsync($"⚠️ Tentativo {attempt}/{maxRetries}: rilevate anticipazioni", "warning");
                         continue;
                     }
 
@@ -422,7 +413,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
             }
 
             // Tutti i tentativi falliti
-            await LogAndNotifyAsync($"âŒ Beat {beatNumber} fallito dopo {maxRetries} tentativi: {lastError}", "error");
+            await LogAndNotifyAsync($"❌ Beat {beatNumber} fallito dopo {maxRetries} tentativi: {lastError}", "error");
             return string.Empty;
         }
 
@@ -457,7 +448,7 @@ REGOLE FONDAMENTALI:
 
             if (!string.IsNullOrWhiteSpace(errorFeedback) && attemptNumber > 1)
             {
-                prompt += $"\n\nâš ï¸ CORREZIONE RICHIESTA (tentativo {attemptNumber}/{_tuning.PlannedStory.BeatMaxRetries}):\n{errorFeedback}";
+                prompt += $"\n\n⚠️ CORREZIONE RICHIESTA (tentativo {attemptNumber}/{_tuning.PlannedStory.BeatMaxRetries}):\n{errorFeedback}";
             }
 
             prompt += "\n\nScrivi il testo del beat:";
@@ -499,16 +490,15 @@ REGOLE FONDAMENTALI:
                     ExplainAfterAttempt = 1,
                     RunId = _generationId.ToString(),
                     EnableDeterministicValidation = true,
-                    DeterministicValidator = output =>
-                    {
-                        var text = (output ?? string.Empty).Trim();
-                        if (string.IsNullOrWhiteSpace(text))
+                    DeterministicValidator = output => CheckRunner.Execute(
+                        output,
+                        new CheckEmpty
                         {
-                            return new CommandModelExecutionService.DeterministicValidationResult(false, "Writer output vuoto");
-                        }
-
-                        return new CommandModelExecutionService.DeterministicValidationResult(true, null);
-                    }
+                            Options = Options.Create<object>(new Dictionary<string, object>
+                            {
+                                ["ErrorMessage"] = "Writer output vuoto"
+                            })
+                        })
                 };
 
                 var result = await execution.ExecuteAsync(request, ct);
@@ -705,5 +695,6 @@ REGOLE FONDAMENTALI:
         }
     }
 }
+
 
 

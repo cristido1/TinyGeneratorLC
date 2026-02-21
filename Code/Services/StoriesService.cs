@@ -477,6 +477,109 @@ public sealed partial class StoriesService
         return _database.ListAllStoryStatuses();
     }
 
+    public bool TryChangeStatus(long storyId, string? functionName, string? runId = null)
+    {
+        if (storyId <= 0 || string.IsNullOrWhiteSpace(functionName))
+            return true;
+
+        var story = _database.GetStoryById(storyId);
+        if (story == null)
+        {
+            _logger?.LogWarning("Story {StoryId} not found while trying status transition for function '{FunctionName}'", storyId, functionName);
+            return false;
+        }
+
+        var normalizedFunction = NormalizeFunctionNameForStatusLookup(functionName);
+        if (string.IsNullOrWhiteSpace(normalizedFunction))
+            return true;
+
+        var statuses = _database.ListAllStoryStatuses()
+            .OrderBy(s => s.Step)
+            .ThenBy(s => s.Id)
+            .ToList();
+        if (statuses.Count == 0)
+            return true;
+
+        var target = statuses.FirstOrDefault(s =>
+            !string.IsNullOrWhiteSpace(s.FunctionName) &&
+            string.Equals(NormalizeFunctionNameForStatusLookup(s.FunctionName), normalizedFunction, StringComparison.OrdinalIgnoreCase));
+        if (target == null)
+        {
+            _logger?.LogDebug("No stories_status row found for function '{FunctionName}'", normalizedFunction);
+            return true;
+        }
+
+        StoryStatus? current = null;
+        if (story.StatusId.HasValue)
+        {
+            current = statuses.FirstOrDefault(s => s.Id == story.StatusId.Value);
+        }
+
+        var currentStep = current?.Step ?? int.MinValue;
+        if (target.Step <= currentStep)
+        {
+            return true;
+        }
+
+        if (string.Equals(target.Code, "evaluated", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalizedFunction, "evaluate_story", StringComparison.OrdinalIgnoreCase))
+        {
+            var evaluations = _database.GetStoryEvaluations(storyId) ?? new List<StoryEvaluation>();
+            if (evaluations.Count < 2)
+            {
+                _logger?.LogDebug("Skipping transition to evaluated for story {StoryId}: evaluations {Count}/2", storyId, evaluations.Count);
+                return true;
+            }
+        }
+
+        try
+        {
+            _database.UpdateStoryById(storyId, statusId: target.Id, updateStatus: true);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to update story {StoryId} to status {StatusCode} (function '{FunctionName}')", storyId, target.Code, normalizedFunction);
+            return false;
+        }
+
+        if (!target.DeleteNextItems)
+        {
+            return true;
+        }
+
+        var folderPath = ResolveStoryFolderPath(story);
+        try
+        {
+            CleanupNextItemsForStatus(storyId, target.Code ?? string.Empty, folderPath);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Cleanup for status {StatusCode} failed for story {StoryId}", target.Code, storyId);
+        }
+
+        return false;
+    }
+
+    private static string NormalizeFunctionNameForStatusLookup(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var text = value.Trim();
+        var slash = text.LastIndexOf('/');
+        if (slash >= 0 && slash < text.Length - 1)
+        {
+            text = text[(slash + 1)..];
+        }
+
+        if (long.TryParse(text, out _))
+        {
+            return string.Empty;
+        }
+
+        return text.Trim().ToLowerInvariant();
+    }
+
     public StoryStatus? GetNextStatusForStory(StoryRecord story, IReadOnlyList<StoryStatus>? statuses = null)
     {
         statuses ??= _database.ListAllStoryStatuses();
@@ -502,16 +605,16 @@ public sealed partial class StoriesService
         return ordered.FirstOrDefault(s => s.Step > current.Step);
     }
 
-    public string? EnqueueAllNextStatusCommand(long storyId, string trigger, int priority = 2, bool ignoreActiveChain = false)
+    public string? EnqueueAllNextStatusEnqueuer(long storyId, string trigger, int priority = 2, bool ignoreActiveChain = false)
     {
         var story = GetStoryById(storyId);
         if (story == null)
             return null;
 
-        return EnqueueAllNextStatusCommand(story, trigger, priority, ignoreActiveChain);
+        return EnqueueAllNextStatusEnqueuer(story, trigger, priority, ignoreActiveChain);
     }
 
-    public string? EnqueueAllNextStatusCommand(StoryRecord story, string trigger, int priority = 2, bool ignoreActiveChain = false)
+    public string? EnqueueAllNextStatusEnqueuer(StoryRecord story, string trigger, int priority = 2, bool ignoreActiveChain = false)
     {
         if (story == null) return null;
         if (_commandDispatcher == null) return null;
@@ -1491,7 +1594,7 @@ public sealed partial class StoriesService
             return true;
         }
 
-        return ApplyStatusTransitionWithCleanup(latestStory, "evaluated", runId);
+        return TryChangeStatus(storyId, "evaluate_story", runId);
     }
     private static string NormalizeEvaluatorOutput(string text)
     {
@@ -2677,7 +2780,7 @@ public sealed partial class StoriesService
         }
     }
 
-    public int EnqueueStoryEvaluations(long storyId, string trigger, int priority = 2, int maxEvaluators = 2)
+    public int StoryEvaluationsEnqueuer(long storyId, string trigger, int priority = 2, int maxEvaluators = 2)
     {
         try
         {

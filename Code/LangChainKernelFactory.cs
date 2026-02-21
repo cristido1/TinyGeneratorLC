@@ -265,10 +265,12 @@ namespace TinyGenerator.Services
             int? topK = null,
             int? repeatLastN = null,
             int? numPredict = null,
-            bool useMaxTokens = false)
+            bool useMaxTokens = false,
+            int? numCtx = null)
         {
             try
             {
+                var hasExplicitNumPredict = numPredict.HasValue;
                 var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
                 if (modelInfo == null)
                 {
@@ -360,9 +362,27 @@ namespace TinyGenerator.Services
                 if (topK.HasValue) bridge.TopK = topK.Value;
                 if (repeatLastN.HasValue) bridge.RepeatLastN = repeatLastN.Value;
                 if (numPredict.HasValue) bridge.NumPredict = numPredict.Value;
-                if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true && modelInfo.ContextToUse > 0)
+                if (numCtx.HasValue && numCtx.Value > 0)
+                {
+                    bridge.NumCtx = numCtx.Value;
+                }
+                else if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true && modelInfo.ContextToUse > 0)
                 {
                     bridge.NumCtx = modelInfo.ContextToUse;
+                }
+
+                if (!bridge.NumPredict.HasValue)
+                {
+                    if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        // Ollama: use all remaining context for generation.
+                        bridge.NumPredict = -2;
+                    }
+                    else if (modelInfo.Provider?.Equals("llama.cpp", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        // llama.cpp: unbounded generation unless externally stopped.
+                        bridge.NumPredict = -1;
+                    }
                 }
                 if (useMaxTokens)
                 {
@@ -379,6 +399,8 @@ namespace TinyGenerator.Services
                         }
                     }
                 }
+
+                ApplyGlobalOutputTokenFloor(bridge, hasExplicitNumPredict);
                 return bridge;
             }
             catch (Exception ex)
@@ -526,6 +548,29 @@ namespace TinyGenerator.Services
             if (modelInfo.ContextToUse > 0) return modelInfo.ContextToUse;
             if (modelInfo.MaxContext > 0) return modelInfo.MaxContext;
             return 32000;
+        }
+
+        private void ApplyGlobalOutputTokenFloor(LangChainChatBridge bridge, bool preserveExplicitNumPredict)
+        {
+            // 100.000 caratteri richiedono tipicamente ~25.000 token (stima conservativa 4 char/token).
+            // Usiamo un floor globale configurabile per evitare troncamenti troppo aggressivi.
+            var floorTokens = _config.GetValue<int?>("Generation:GlobalOutputTokenFloor") ?? 25000;
+            if (floorTokens <= 0)
+            {
+                return;
+            }
+
+            if (!bridge.MaxResponseTokens.HasValue || bridge.MaxResponseTokens.Value < floorTokens)
+            {
+                bridge.MaxResponseTokens = floorTokens;
+            }
+
+            // Negative values are sentinel values (-1/-2 = "no hard token cap" for local providers).
+            if (!preserveExplicitNumPredict &&
+                (!bridge.NumPredict.HasValue || (bridge.NumPredict.Value >= 0 && bridge.NumPredict.Value < floorTokens)))
+            {
+                bridge.NumPredict = floorTokens;
+            }
         }
     }
 }

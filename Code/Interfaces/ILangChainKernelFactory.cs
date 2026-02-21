@@ -65,6 +65,7 @@ namespace TinyGenerator.Services
         /// <param name="repeatLastN">Optional repeat_last_n value</param>
         /// <param name="numPredict">Optional num_predict value</param>
         /// <param name="useMaxTokens">If true, configure the bridge to use the maximum context/tokens allowed for the model.</param>
+        /// <param name="numCtx">Optional num_ctx/context window to use for this call.</param>
         /// <returns>Configured chat bridge for the model</returns>
         LangChainChatBridge CreateChatBridge(
             string model,
@@ -74,6 +75,7 @@ namespace TinyGenerator.Services
             int? topK = null,
             int? repeatLastN = null,
             int? numPredict = null,
-            bool useMaxTokens = false);
+            bool useMaxTokens = false,
+            int? numCtx = null);
     }
 }

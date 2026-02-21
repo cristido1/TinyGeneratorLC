@@ -23,7 +23,7 @@ public sealed class NextStatusEnqueuer : INextStatusEnqueuer
     {
         try
         {
-            var allowNext = _storiesService?.ApplyStatusTransitionWithCleanup(story, CommandStatusCodes.TaggedVoice, runId) ?? true;
+            var allowNext = _storiesService?.TryChangeStatus(story.Id, "add_voice_tags_to_story", runId) ?? true;
             if (!allowNext)
             {
                 _logger?.Append(runId, $"[story {commandStoryId}] next status enqueue skipped: delete_next_items attivo", "info");
@@ -80,7 +80,7 @@ public sealed class NextStatusEnqueuer : INextStatusEnqueuer
     {
         try
         {
-            var allowNext = _storiesService?.ApplyStatusTransitionWithCleanup(story, CommandStatusCodes.TaggedAmbient, runId) ?? true;
+            var allowNext = _storiesService?.TryChangeStatus(story.Id, "add_ambient_tags_to_story", runId) ?? true;
             if (!allowNext)
             {
                 _logger?.Append(runId, $"[story {commandStoryId}] next status enqueue skipped: delete_next_items attivo", "info");
@@ -137,7 +137,7 @@ public sealed class NextStatusEnqueuer : INextStatusEnqueuer
     {
         try
         {
-            var allowNext = _storiesService?.ApplyStatusTransitionWithCleanup(story, CommandStatusCodes.TaggedFx, runId) ?? true;
+            var allowNext = _storiesService?.TryChangeStatus(story.Id, "add_fx_tags_to_story", runId) ?? true;
             if (!allowNext)
             {
                 _logger?.Append(runId, $"[story {commandStoryId}] next status enqueue skipped: delete_next_items attivo", "info");
@@ -194,7 +194,7 @@ public sealed class NextStatusEnqueuer : INextStatusEnqueuer
     {
         try
         {
-            var allowNext = _storiesService?.ApplyStatusTransitionWithCleanup(story, CommandStatusCodes.Tagged, runId) ?? true;
+            var allowNext = _storiesService?.TryChangeStatus(story.Id, "add_music_tags_to_story", runId) ?? true;
             if (!allowNext)
             {
                 _logger?.Append(runId, $"[story {commandStoryId}] next status enqueue skipped: delete_next_items attivo", "info");

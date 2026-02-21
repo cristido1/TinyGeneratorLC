@@ -15,14 +15,14 @@ namespace TinyGenerator.Services;
 /// Esegue benchmark logico-aritmetico su 20 test e aggiorna intelliScore (1-10)
 /// e intelliTime (secondi totali di risposta del modello).
 /// </summary>
-public sealed class IntelligenceScoreTestService
+public sealed class IntelligenceScoreTestService : IModelScoreTestService
 {
     private const string CommandKey = "intelligence_test";
 
     private sealed record IntelligenceTestCase(int Number, string Prompt, Func<string, bool> Validator, string ExpectedHint);
 
     private readonly DatabaseService _database;
-    private readonly ILangChainKernelFactory _kernelFactory;
+    private readonly ITestCallCenter _testCallCenter;
     private readonly ICommandDispatcher _dispatcher;
     private readonly ICustomLogger? _logger;
     private readonly int _timeoutSec;
@@ -38,13 +38,13 @@ Nessuna spiegazione, nessun markdown, nessun testo extra.
 
     public IntelligenceScoreTestService(
         DatabaseService database,
-        ILangChainKernelFactory kernelFactory,
+        ITestCallCenter testCallCenter,
         ICommandDispatcher dispatcher,
         IConfiguration configuration,
         ICustomLogger? logger = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
-        _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+        _testCallCenter = testCallCenter ?? throw new ArgumentNullException(nameof(testCallCenter));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
 
         var configuredTimeout = configuration?.GetValue<int?>($"Commands:ByCommand:{CommandKey}:timeoutSec")
@@ -59,6 +59,11 @@ Nessuna spiegazione, nessun markdown, nessun testo extra.
         _logger = logger;
         _tests = BuildTests();
     }
+
+    public string ScoreOperation => CommandKey;
+    CommandHandle IModelScoreTestService.EnqueueForMissingModels() => EnqueueIntelligenceScoreForMissingModels();
+    CommandHandle IModelScoreTestService.EnqueueForModel(string modelName) => EnqueueIntelligenceScoreForModel(modelName);
+    CommandHandle? IModelScoreTestService.EnqueueForModel(int modelId) => EnqueueIntelligenceScoreForModel(modelId);
 
     public CommandHandle EnqueueIntelligenceScoreForMissingModels()
     {
@@ -175,9 +180,6 @@ Nessuna spiegazione, nessun markdown, nessun testo extra.
 
     private async Task<(int Score, int ElapsedSeconds, string Details)> TestSingleModelAsync(ModelInfo model, CommandContext ctx)
     {
-        var bridge = _kernelFactory.CreateChatBridge(model.Name, temperature: 0.1, topP: _topP, useMaxTokens: true);
-        bridge.MaxResponseTokens = bridge.MaxResponseTokens ?? 256;
-
         var passed = 0;
         long totalElapsedMs = 0;
         var failures = new List<string>();
@@ -193,21 +195,37 @@ Nessuna spiegazione, nessun markdown, nessun testo extra.
         {
             ctx.CancellationToken.ThrowIfCancellationRequested();
             var test = _tests[i];
-            var messages = new List<ConversationMessage>
-            {
-                new() { Role = "system", Content = SystemPrompt },
-                new() { Role = "user", Content = test.Prompt }
-            };
-
             var sw = Stopwatch.StartNew();
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(_timeoutSec));
+                var call = await _testCallCenter.CallAsync(new TestCallRequest
+                {
+                    Operation = CommandKey,
+                    ModelName = model.Name,
+                    SystemPrompt = SystemPrompt,
+                    Prompt = test.Prompt,
+                    Timeout = TimeSpan.FromSeconds(_timeoutSec),
+                    MaxRetries = 0,
+                    UseResponseChecker = false,
+                    AskFailExplanation = false,
+                    AllowFallback = false,
+                    Temperature = 0.1,
+                    TopP = _topP,
+                    NumPredict = 256
+                }, ctx.CancellationToken);
 
-                var response = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), timeoutCts.Token);
-                var (content, _) = LangChainChatBridge.ParseChatResponse(response);
-                var text = NormalizeResponseText(string.IsNullOrWhiteSpace(content) ? response : content!);
+                if (!call.Success)
+                {
+                    var callError = string.IsNullOrWhiteSpace(call.FailureReason)
+                        ? "errore chiamata modello"
+                        : call.FailureReason!;
+                    failures.Add($"T{test.Number:00}: {callError}");
+                    _logger?.Append(ctx.RunId, $"[FAIL T{test.Number:00}] {callError}", "error");
+                    _logger?.MarkLatestModelResponseResult("FAILED", callError, examined: true);
+                    continue;
+                }
+
+                var text = NormalizeResponseText(call.ResponseText);
 
                 if (test.Validator(text))
                 {
@@ -220,13 +238,6 @@ Nessuna spiegazione, nessun markdown, nessun testo extra.
                     _logger?.Append(ctx.RunId, $"[FAIL T{test.Number:00}] {err} | risposta: {text}", "error");
                     _logger?.MarkLatestModelResponseResult("FAILED", err, examined: true);
                 }
-            }
-            catch (OperationCanceledException) when (!ctx.CancellationToken.IsCancellationRequested)
-            {
-                var timeoutError = $"timeout domanda dopo {_timeoutSec}s";
-                failures.Add($"T{test.Number:00}: {timeoutError}");
-                _logger?.Append(ctx.RunId, $"[FAIL T{test.Number:00}] {timeoutError}", "error");
-                _logger?.MarkLatestModelResponseResult("FAILED", timeoutError, examined: true);
             }
             catch (Exception ex)
             {

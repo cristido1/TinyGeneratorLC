@@ -4,11 +4,11 @@ public sealed class CheckMinLength : CheckBase
 {
     public override string Rule => "Lunghezza minima testo.";
 
-    public override IDeterministicResult Execute()
+    public override IDeterministicResult Execute(string textToCheck)
     {
         var started = DateTime.UtcNow;
         var minLength = Math.Max(0, GetOption("MinLength", 0));
-        var normalized = (TextToCheck ?? string.Empty).Trim();
+        var normalized = (textToCheck ?? string.Empty).Trim();
         var ok = normalized.Length >= minLength;
         var defaultMessage = $"Output troppo corto: richiesti almeno {minLength} caratteri, ottenuti {normalized.Length}";
         var failMessage = GetOption("ErrorMessage", defaultMessage);
@@ -21,4 +21,3 @@ public sealed class CheckMinLength : CheckBase
         };
     }
 }
-

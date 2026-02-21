@@ -316,7 +316,7 @@ namespace TinyGenerator.Services
                         {
                             return new IdleTaskResult(false, null, reason ?? "nessuna storia revised da valutare", filter, candidateCount);
                         }
-                        var enqueuedCount = _stories.EnqueueStoryEvaluations(storyId, trigger: "idle_auto_revised", priority: Math.Max(1, opts.EvaluateRevised.Priority), maxEvaluators: 2);
+                        var enqueuedCount = _stories.StoryEvaluationsEnqueuer(storyId, trigger: "idle_auto_revised", priority: Math.Max(1, opts.EvaluateRevised.Priority), maxEvaluators: 2);
                         var title = _database.GetStoryById(storyId)?.Title;
                         return enqueuedCount > 0
                             ? new IdleTaskResult(true, storyId, null, filter, candidateCount, title)
@@ -428,7 +428,7 @@ namespace TinyGenerator.Services
                             return new IdleTaskResult(false, null, reason ?? "nessuna storia candidata", filter, count);
                         }
                         var title = _database.GetStoryById(storyId)?.Title;
-                        var runId = _stories.EnqueueAllNextStatusCommand(
+                        var runId = _stories.EnqueueAllNextStatusEnqueuer(
                             storyId,
                             trigger: "auto_complete_audio_pipeline",
                             priority: Math.Max(1, opts.AutoCompleteAudioPipeline.Priority),

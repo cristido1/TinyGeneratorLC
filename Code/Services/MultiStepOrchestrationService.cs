@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 using TinyGenerator.Skills;
 using TinyGenerator.Services.Commands;
@@ -2263,48 +2264,44 @@ RIASSUNTO:";
             string prompt,
             CancellationToken ct)
         {
-            var scopeFactory = _services.GetService(typeof(IServiceScopeFactory)) as IServiceScopeFactory;
-            if (scopeFactory == null)
+            var callCenter = ResolveCallCenter();
+            if (callCenter == null)
             {
-                _logger.Log("Warning", "MultiStep", "IServiceScopeFactory non disponibile per percorso standard summarizer");
+                _logger.Log("Warning", "MultiStep", "ICallCenter non disponibile per percorso standard summarizer");
                 return string.Empty;
             }
 
-            using var scope = scopeFactory.CreateScope();
-            var execution = scope.ServiceProvider.GetService(typeof(IAgentCallService)) as IAgentCallService;
-            if (execution == null)
-            {
-                _logger.Log("Warning", "MultiStep", "IAgentCallService non disponibile per percorso standard summarizer");
-                return string.Empty;
-            }
+            var history = new ChatHistory();
+            history.AddSystem(summarizerAgent.Instructions ?? summarizerAgent.Prompt ?? "Sei un summarizer esperto.");
+            history.AddUser(prompt);
 
-            var modelResult = await execution.ExecuteAsync(
-                new CommandModelExecutionService.Request
+            var options = new CallOptions
+            {
+                Operation = commandKey,
+                Timeout = TimeSpan.FromSeconds(90),
+                MaxRetries = 1,
+                UseResponseChecker = false,
+                AllowFallback = true,
+                AskFailExplanation = true,
+                SystemPromptOverride = summarizerAgent.Instructions ?? summarizerAgent.Prompt ?? "Sei un summarizer esperto."
+            };
+            options.DeterministicChecks.Add(new CheckEmpty
+            {
+                Options = Options.Create<object>(new Dictionary<string, object>
                 {
-                    CommandKey = commandKey,
-                    Agent = summarizerAgent,
-                    RoleCode = string.IsNullOrWhiteSpace(summarizerAgent.Role) ? "summarizer" : summarizerAgent.Role,
-                    Prompt = prompt,
-                    SystemPrompt = summarizerAgent.Instructions ?? summarizerAgent.Prompt ?? "Sei un summarizer esperto.",
-                    MaxAttempts = 2,
-                    RetryDelaySeconds = 1,
-                    StepTimeoutSec = 90,
-                    UseResponseChecker = false,
-                    EnableFallback = true,
-                    DiagnoseOnFinalFailure = true,
-                    ExplainAfterAttempt = 1,
-                    EnableDeterministicValidation = true,
-                    DeterministicValidator = output =>
-                    {
-                        var text = (output ?? string.Empty).Trim();
-                        return string.IsNullOrWhiteSpace(text)
-                            ? new CommandModelExecutionService.DeterministicValidationResult(false, "Summary vuoto")
-                            : new CommandModelExecutionService.DeterministicValidationResult(true, null);
-                    }
-                },
-                ct).ConfigureAwait(false);
+                    ["ErrorMessage"] = "Summary vuoto"
+                })
+            });
 
-            return modelResult.Text ?? string.Empty;
+            var result = await callCenter.CallAgentAsync(
+                storyId: 0,
+                threadId: commandKey.GetHashCode(StringComparison.Ordinal),
+                agent: summarizerAgent,
+                history: history,
+                options: options,
+                cancellationToken: ct).ConfigureAwait(false);
+
+            return result.Success ? (result.ResponseText ?? string.Empty) : string.Empty;
         }
 
         private async Task<bool> TryFallbackModelAsync(
@@ -2340,18 +2337,10 @@ RIASSUNTO:";
             {
                 var fullPrompt = string.IsNullOrEmpty(context) ? stepInstruction : $"{context}\n\n---\n\n{stepInstruction}";
                 var fallbackModelName = fallbackModel.Name;
-                var scopeFactory = _services.GetService(typeof(IServiceScopeFactory)) as IServiceScopeFactory;
-                if (scopeFactory == null)
+                var callCenter = ResolveCallCenter();
+                if (callCenter == null)
                 {
-                    _logger.Log("Warning", "MultiStep", "IServiceScopeFactory non disponibile: fallback standard disabilitato");
-                    return false;
-                }
-
-                using var scope = scopeFactory.CreateScope();
-                var modelExecution = scope.ServiceProvider.GetService(typeof(IAgentCallService)) as IAgentCallService;
-                if (modelExecution == null)
-                {
-                    _logger.Log("Warning", "MultiStep", "IAgentCallService non disponibile: fallback standard disabilitato");
+                    _logger.Log("Warning", "MultiStep", "ICallCenter non disponibile: fallback standard disabilitato");
                     return false;
                 }
 
@@ -2376,33 +2365,37 @@ RIASSUNTO:";
                     IsActive = currentAgent.IsActive
                 };
 
-                var modelResult = await modelExecution.ExecuteAsync(
-                    new CommandModelExecutionService.Request
-                    {
-                        CommandKey = "multi_step_fallback_step",
-                        Agent = fallbackAgent,
-                        RoleCode = string.IsNullOrWhiteSpace(currentAgent.Role) ? "writer" : currentAgent.Role,
-                        Prompt = fullPrompt,
-                        SystemPrompt = currentAgent.Instructions ?? currentAgent.Prompt ?? "Sei un assistente esperto.",
-                        MaxAttempts = 1,
-                        RetryDelaySeconds = 0,
-                        StepTimeoutSec = 1200,
-                        UseResponseChecker = false,
-                        EnableFallback = false,
-                        DiagnoseOnFinalFailure = true,
-                        ExplainAfterAttempt = 1,
-                        EnableDeterministicValidation = true,
-                        DeterministicValidator = text =>
-                        {
-                            var cleaned = (text ?? string.Empty).Trim();
-                            return string.IsNullOrWhiteSpace(cleaned)
-                                ? new CommandModelExecutionService.DeterministicValidationResult(false, "Fallback output vuoto")
-                                : new CommandModelExecutionService.DeterministicValidationResult(true, null);
-                        }
-                    },
-                    stepCts.Token).ConfigureAwait(false);
+                var history = new ChatHistory();
+                history.AddSystem(currentAgent.Instructions ?? currentAgent.Prompt ?? "Sei un assistente esperto.");
+                history.AddUser(fullPrompt);
 
-                var output = (modelResult.Text ?? string.Empty).Trim();
+                var options = new CallOptions
+                {
+                    Operation = "multi_step_fallback_step",
+                    Timeout = TimeSpan.FromSeconds(1200),
+                    MaxRetries = 0,
+                    UseResponseChecker = false,
+                    AllowFallback = false,
+                    AskFailExplanation = true,
+                    SystemPromptOverride = currentAgent.Instructions ?? currentAgent.Prompt ?? "Sei un assistente esperto."
+                };
+                options.DeterministicChecks.Add(new CheckEmpty
+                {
+                    Options = Options.Create<object>(new Dictionary<string, object>
+                    {
+                        ["ErrorMessage"] = "Fallback output vuoto"
+                    })
+                });
+
+                var callResult = await callCenter.CallAgentAsync(
+                    storyId: execution.EntityId ?? 0,
+                    threadId: threadId,
+                    agent: fallbackAgent,
+                    history: history,
+                    options: options,
+                    cancellationToken: stepCts.Token).ConfigureAwait(false);
+
+                var output = (callResult.ResponseText ?? string.Empty).Trim();
 
                 if (string.IsNullOrWhiteSpace(output)) return false;
 
@@ -2470,6 +2463,11 @@ RIASSUNTO:";
                 _logger.Log("Error", "MultiStep", $"Fallback model failed: {ex.Message}");
                 return false;
             }
+        }
+
+        private ICallCenter? ResolveCallCenter()
+        {
+            return _services.GetService(typeof(ICallCenter)) as ICallCenter;
         }
 
         public async Task<string> CompleteExecutionAsync(long executionId, int threadId)

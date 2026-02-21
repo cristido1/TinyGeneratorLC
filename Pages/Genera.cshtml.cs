@@ -111,8 +111,31 @@ public class GeneraModel : PageModel
     [BindProperty]
     public int StateNextChunkWriterAgentId { get; set; } = 0;
 
+    [BindProperty]
+    public string StateSingleTitle { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string StateSinglePrompt { get; set; } = string.Empty;
+
+    [BindProperty]
+    public int StateSingleNarrativeProfileId { get; set; } = 1;
+
+    [BindProperty]
+    public string? StateSinglePlannerMode { get; set; }
+
+    [BindProperty]
+    public int StateSingleWriterAgentId { get; set; } = 0;
+
+    [BindProperty]
+    public int StateSingleTargetMinutes { get; set; } = 20;
+
+    [BindProperty]
+    public int StateSingleWordsPerMinute { get; set; } = 150;
+
     public List<Agent> Agents { get; set; } = new();
     public List<Agent> StateWriterAgents { get; set; } = new();
+    public List<NarrativeProfile> NarrativeProfiles { get; set; } = new();
+    public List<string> PlannerModes { get; } = new() { "Off", "Assist", "Auto" };
     public List<TinyGenerator.Models.Series> SeriesList { get; set; } = new();
     public List<SeriesEpisode> SeriesEpisodes { get; set; } = new();
 
@@ -166,6 +189,29 @@ public class GeneraModel : PageModel
 
         SeriesList = _database.ListAllSeries();
         SeriesEpisodes = _database.ListAllSeriesEpisodes();
+        NarrativeProfiles = _database.ListNarrativeProfiles();
+
+        if (StateSingleNarrativeProfileId <= 0 && NarrativeProfiles.Count > 0)
+        {
+            StateSingleNarrativeProfileId = NarrativeProfiles[0].Id;
+        }
+        else if (StateSingleNarrativeProfileId > 0 && NarrativeProfiles.Count > 0 && !NarrativeProfiles.Any(p => p.Id == StateSingleNarrativeProfileId))
+        {
+            StateSingleNarrativeProfileId = NarrativeProfiles[0].Id;
+        }
+
+        if (!string.IsNullOrWhiteSpace(StateSinglePlannerMode))
+        {
+            var normalized = StateSinglePlannerMode.Trim();
+            if (!PlannerModes.Any(m => m.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
+            {
+                StateSinglePlannerMode = null;
+            }
+            else
+            {
+                StateSinglePlannerMode = PlannerModes.First(m => m.Equals(normalized, StringComparison.OrdinalIgnoreCase));
+            }
+        }
 
         if (SeriesId == 0 && SeriesList.Count > 0)
         {
@@ -192,6 +238,10 @@ public class GeneraModel : PageModel
         if (StateNextChunkWriterAgentId == 0 && StateWriterAgents.Count > 0)
         {
             StateNextChunkWriterAgentId = StateWriterAgents[0].Id;
+        }
+        if (StateSingleWriterAgentId == 0 && StateWriterAgents.Count > 0)
+        {
+            StateSingleWriterAgentId = StateWriterAgents[0].Id;
         }
         if (StateEpisodeId == 0)
         {
@@ -238,7 +288,7 @@ public class GeneraModel : PageModel
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
 
-        var cmd = new StartMultiStepStoryCommand(
+        var cmd = new StartMultiStepStoryEnqueuerCommand(
             Prompt,
             WriterAgentId,
             genId,
@@ -390,7 +440,7 @@ public class GeneraModel : PageModel
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
 
-        var cmd = new GenerateSeriesEpisodeFromDbCommand(
+        var cmd = new GenerateSeriesEpisodeFromDbEnqueuerCommand(
             SeriesId,
             EpisodeId,
             SeriesWriterAgentId,
@@ -714,6 +764,106 @@ public class GeneraModel : PageModel
                 ["storyId"] = StateStoryId.ToString(),
                 ["writerAgentId"] = writer.Id.ToString(),
                 ["writerName"] = writer.Name
+            },
+            priority: 2);
+
+        return new JsonResult(new { id = genId.ToString() });
+    }
+
+    public IActionResult OnPostStartStateSingleStoryAuto()
+    {
+        if (string.IsNullOrWhiteSpace(StateSingleTitle))
+        {
+            return BadRequest(new { error = "Il titolo è obbligatorio." });
+        }
+        if (string.IsNullOrWhiteSpace(StateSinglePrompt))
+        {
+            return BadRequest(new { error = "Il prompt è obbligatorio." });
+        }
+        if (StateSingleNarrativeProfileId <= 0)
+        {
+            return BadRequest(new { error = "NarrativeProfileId non valido." });
+        }
+        if (StateSingleWriterAgentId <= 0)
+        {
+            return BadRequest(new { error = "Seleziona un writer agent." });
+        }
+
+        var writer = _database.GetAgentById(StateSingleWriterAgentId);
+        if (writer == null) return BadRequest(new { error = "Writer agent non trovato." });
+
+        var minutes = StateSingleTargetMinutes <= 0 ? 20 : StateSingleTargetMinutes;
+        var wpm = StateSingleWordsPerMinute <= 0 ? 150 : StateSingleWordsPerMinute;
+
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+        _customLogger.Append(genId.ToString(), "▶️ Avvio storia singola state-driven...", "info");
+
+        _dispatcher.Enqueue(
+            "StateDrivenSingleStoryAuto",
+            async ctx =>
+            {
+                try
+                {
+                    var cmd = new GenerateStateDrivenSingleStoryCommand(
+                        theme: StateSinglePrompt.Trim(),
+                        title: StateSingleTitle.Trim(),
+                        narrativeProfileId: StateSingleNarrativeProfileId,
+                        plannerMode: string.IsNullOrWhiteSpace(StateSinglePlannerMode) ? null : StateSinglePlannerMode.Trim(),
+                        writerAgentId: writer.Id,
+                        targetMinutes: minutes,
+                        wordsPerMinute: wpm,
+                        database: _database,
+                        kernelFactory: _kernelFactory,
+                        storiesService: _storiesService,
+                        logger: _customLogger,
+                        textValidationService: _textValidationService,
+                        tuning: _tuning,
+                        scopeFactory: _scopeFactory);
+
+                    var result = await cmd.ExecuteAsync(runIdForProgress: genId.ToString(), ct: ctx.CancellationToken);
+                    if (!result.Success)
+                    {
+                        _customLogger.Append(genId.ToString(), "❌ " + result.Message, "error");
+                        await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
+                        _ = _customLogger.BroadcastTaskComplete(genId, "failed");
+                        return result;
+                    }
+
+                    if (cmd.StoryId > 0)
+                    {
+                        _customLogger.Append(genId.ToString(), $"✅ storyId={cmd.StoryId}", "success");
+                    }
+                    _customLogger.Append(genId.ToString(), "✅ " + result.Message, "success");
+                    await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
+                    _ = _customLogger.BroadcastTaskComplete(genId, "completed");
+                    return result;
+                }
+                catch (OperationCanceledException)
+                {
+                    _customLogger.Append(genId.ToString(), "⚠️ Operazione annullata.", "warning");
+                    await _customLogger.MarkCompletedAsync(genId.ToString(), "cancelled");
+                    _ = _customLogger.BroadcastTaskComplete(genId, "cancelled");
+                    return new CommandResult(false, "cancelled");
+                }
+                catch (Exception ex)
+                {
+                    _customLogger.Append(genId.ToString(), "❌ Errore: " + ex.Message, "error");
+                    await _customLogger.MarkCompletedAsync(genId.ToString(), ex.Message);
+                    _ = _customLogger.BroadcastTaskComplete(genId, "failed");
+                    return new CommandResult(false, ex.Message);
+                }
+            },
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "state_driven_single_story_auto",
+                ["writerAgentId"] = writer.Id.ToString(),
+                ["writerName"] = writer.Name,
+                ["targetMinutes"] = minutes.ToString(),
+                ["wordsPerMinute"] = wpm.ToString(),
+                ["narrativeProfileId"] = StateSingleNarrativeProfileId.ToString(),
+                ["title"] = StateSingleTitle.Trim()
             },
             priority: 2);
 

@@ -481,7 +481,7 @@ Completed:
 
 
                 _logger?.Log("Warning", "Command", $"[CmdID: {commandId}][{workItem.RunId}] 🚫 CANCEL {workItem.OperationName}: {oce.Message}", oce.ToString());
-                var result = new CommandResult(false, "Operazione annullata");
+                var result = new CommandResult(true, "Operazione annullata");
                 workItem.Completion.TrySetResult(result);
                 
                 if (_active.TryGetValue(workItem.RunId, out var cancelledState))
@@ -683,8 +683,9 @@ Completed:
                 cts.Cancel();
             }
 
-            if (state.Status == "queued")
+            if (state.Status == "queued" || state.Status == "running")
             {
+                var wasRunning = state.Status == "running";
                 state.Status = "cancelled";
                 state.CompletedAt = DateTimeOffset.UtcNow;
                 state.ErrorMessage = "Operazione annullata";
@@ -693,7 +694,7 @@ Completed:
                     : "nessun timeout policy configurato";
                 _logger?.Append(
                     runId,
-                    $"[cancelled] Comando annullato manualmente in coda; {timeoutInfo}",
+                    $"[cancelled] Comando annullato manualmente ({(wasRunning ? "in corso" : "in coda")}); {timeoutInfo}",
                     "warning");
             }
 

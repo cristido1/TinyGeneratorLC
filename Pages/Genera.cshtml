@@ -169,6 +169,72 @@
 </details>
 
 <details class="note-card" style="max-width:900px; margin-bottom:18px">
+    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Genera storia singola state-driven</summary>
+    <form id="stateSingleStoryForm">
+        @Html.AntiForgeryToken()
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+            <div style="min-width:280px; flex:1;">
+                <label for="StateSingleTitle" class="note-title">Titolo storia</label>
+                <input id="StateSingleTitle" name="StateSingleTitle" class="keep-input font-monospace" style="width:100%; padding:8px" value="@Model.StateSingleTitle" maxlength="160" required />
+            </div>
+            <div style="min-width:220px; flex:0 0 220px;">
+                <label for="StateSingleNarrativeProfileId" class="note-title">NarrativeProfileId</label>
+                <select id="StateSingleNarrativeProfileId" name="StateSingleNarrativeProfileId" class="keep-input" style="width:100%; padding:8px" required>
+                    @foreach (var profile in Model.NarrativeProfiles)
+                    {
+                        <option value="@profile.Id" selected="@(Model.StateSingleNarrativeProfileId == profile.Id ? "selected" : null)">
+                            @profile.Name (@profile.Id)
+                        </option>
+                    }
+                </select>
+            </div>
+            <div style="min-width:260px; flex:1;">
+                <label for="StateSingleWriterAgentId" class="note-title">Writer agent</label>
+                <select id="StateSingleWriterAgentId" name="StateSingleWriterAgentId" class="keep-input" style="width:100%; padding:8px" required>
+                    @foreach (var agent in Model.StateWriterAgents)
+                    {
+                        <option value="@agent.Id" selected="@(Model.StateSingleWriterAgentId == agent.Id ? "selected" : null)">@agent.Name</option>
+                    }
+                </select>
+            </div>
+        </div>
+        <div style="margin-bottom:10px;">
+            <label for="StateSinglePrompt" class="note-title">Prompt/tema</label>
+            <textarea id="StateSinglePrompt" name="StateSinglePrompt" class="keep-input font-monospace" rows="6" style="width:100%; padding:8px" required>@Model.StateSinglePrompt</textarea>
+        </div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+            <div style="min-width:170px; flex:0 0 170px;">
+                <label for="StateSingleTargetMinutes" class="note-title">Lunghezza (minuti TTS)</label>
+                <input id="StateSingleTargetMinutes" name="StateSingleTargetMinutes" class="keep-input" style="width:100%; padding:8px" value="@Model.StateSingleTargetMinutes" type="number" min="1" max="180" />
+            </div>
+            <div style="min-width:170px; flex:0 0 170px;">
+                <label for="StateSingleWordsPerMinute" class="note-title">Parole/minuto</label>
+                <input id="StateSingleWordsPerMinute" name="StateSingleWordsPerMinute" class="keep-input" style="width:100%; padding:8px" value="@Model.StateSingleWordsPerMinute" type="number" min="80" max="260" />
+            </div>
+            <div style="min-width:260px; flex:1;">
+                <label for="StateSinglePlannerMode" class="note-title">Planner mode (opzionale)</label>
+                <select id="StateSinglePlannerMode" name="StateSinglePlannerMode" class="keep-input" style="width:100%; padding:8px">
+                    <option value="">(Nessuno)</option>
+                    @foreach (var plannerMode in Model.PlannerModes)
+                    {
+                        <option value="@plannerMode" selected="@(string.Equals(Model.StateSinglePlannerMode, plannerMode, StringComparison.OrdinalIgnoreCase) ? "selected" : null)">
+                            @plannerMode
+                        </option>
+                    }
+                </select>
+            </div>
+        </div>
+        <div style="font-size:0.9em; color:#666; margin-bottom:8px">
+            Avvia una storia standalone in modalità state-driven e genera automaticamente i chunk fino alla durata target.
+        </div>
+        <div id="stateSingleStoryError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
+        <div style="display:flex; gap:8px;">
+            <button type="button" id="startStateSingleStoryBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia storia singola</button>
+        </div>
+    </form>
+</details>
+
+<details class="note-card" style="max-width:900px; margin-bottom:18px">
     <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Continua storia state-driven</summary>
     <form id="stateNextChunkForm">
         @Html.AntiForgeryToken()
@@ -218,6 +284,8 @@
     const startStateSeriesEpisodeBtn = document.getElementById('startStateSeriesEpisodeBtn');
     const startStateSeriesEpisodeAutoBtn = document.getElementById('startStateSeriesEpisodeAutoBtn');
     const stateSeriesEpisodeError = document.getElementById('stateSeriesEpisodeError');
+    const startStateSingleStoryBtn = document.getElementById('startStateSingleStoryBtn');
+    const stateSingleStoryError = document.getElementById('stateSingleStoryError');
 
     const stateStoryIdInput = document.getElementById('StateStoryId');
     const startStateNextChunkBtn = document.getElementById('startStateNextChunkBtn');
@@ -548,6 +616,37 @@
             const id = data.id;
             try { localStorage.setItem('lastGenId', id); } catch { }
             appendMessage('Chunk accodato. id: ' + id);
+            await loadHistory(id);
+            await connectSignalRAndJoin(id);
+        });
+    }
+
+    if (startStateSingleStoryBtn) {
+        startStateSingleStoryBtn.addEventListener('click', async () => {
+            if (stateSingleStoryError) {
+                stateSingleStoryError.textContent = '';
+                stateSingleStoryError.style.display = 'none';
+            }
+            clearMessages();
+            appendMessage('Avvio storia singola state-driven...');
+
+            const form = document.getElementById('stateSingleStoryForm');
+            const fd = new FormData(form);
+            const res = await fetch('?handler=StartStateSingleStoryAuto', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const text = await res.text();
+                if (stateSingleStoryError) {
+                    stateSingleStoryError.textContent = text;
+                    stateSingleStoryError.style.display = 'block';
+                }
+                appendMessage('Errore avvio: ' + text, 'error');
+                return;
+            }
+
+            const data = await res.json();
+            const id = data.id;
+            try { localStorage.setItem('lastGenId', id); } catch { }
+            appendMessage('Storia singola state-driven accodata. id: ' + id);
             await loadHistory(id);
             await connectSignalRAndJoin(id);
         });

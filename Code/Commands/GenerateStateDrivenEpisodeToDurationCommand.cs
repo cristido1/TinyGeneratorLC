@@ -85,6 +85,13 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand : ICommand
 
         _logger?.Append(runIdForProgress ?? string.Empty,
             $"[story {_storyId}] Target ~{_targetMinutes} min TTS => ~{targetWords} parole (wpm={_wordsPerMinute}). StartWords={currentWords}.");
+        TryUpdateProgress(
+            runIdForProgress,
+            current: Math.Min(maxChunks, snap.CurrentChunkIndex),
+            max: maxChunks,
+            phase: snap.CurrentPhase,
+            currentWords: currentWords,
+            targetWords: targetWords);
 
         for (var i = 0; i < maxChunks; i++)
         {
@@ -135,6 +142,13 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand : ICommand
             var result = await chunkCmd.ExecuteAsync(ct).ConfigureAwait(false);
             if (!result.Success)
             {
+                TryUpdateProgress(
+                    runIdForProgress,
+                    current: Math.Min(maxChunks, i),
+                    max: maxChunks,
+                    phase: "ERROR",
+                    currentWords: currentWords,
+                    targetWords: targetWords);
                 return new CommandResult(false, $"Auto-episode stopped: {result.Message}");
             }
 
@@ -146,6 +160,15 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand : ICommand
             }
 
             currentWords = CountWords(assembled.ToString());
+            var afterSnap = _database.GetStateDrivenStorySnapshot(_storyId);
+            var doneChunks = Math.Min(maxChunks, afterSnap?.CurrentChunkIndex ?? (i + 1));
+            TryUpdateProgress(
+                runIdForProgress,
+                current: doneChunks,
+                max: maxChunks,
+                phase: afterSnap?.CurrentPhase,
+                currentWords: currentWords,
+                targetWords: targetWords);
 
             if (isFinal || currentWords >= targetWords)
             {
@@ -164,6 +187,14 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand : ICommand
             return new CommandResult(false, $"Failed to finalize story: {completeError}");
         }
 
+        TryUpdateProgress(
+            runIdForProgress,
+            current: maxChunks,
+            max: maxChunks,
+            phase: "COMPLETATO",
+            currentWords: CountWords(finalText),
+            targetWords: targetWords);
+
         // Enqueue post-episode state-driven pipeline (canon/delta/continuity/state/recap).
         _storiesService.EnqueueStateDrivenPostEpisodePipeline(_storyId, trigger: "state_driven_episode_completed", priority: 3);
 
@@ -175,6 +206,32 @@ public sealed class GenerateStateDrivenEpisodeToDurationCommand : ICommand
             : $"Episode completed (storyId={_storyId}). Revision queued: {reviseRunId} (evaluations will follow).";
 
         return new CommandResult(true, msg);
+    }
+
+    private void TryUpdateProgress(
+        string? runId,
+        int current,
+        int max,
+        string? phase,
+        int currentWords,
+        int targetWords)
+    {
+        if (string.IsNullOrWhiteSpace(runId)) return;
+        if (_storiesService.CommandDispatcher == null) return;
+
+        try
+        {
+            var safeCurrent = Math.Max(0, Math.Min(max, current));
+            var safeMax = Math.Max(1, max);
+            var safePhase = string.IsNullOrWhiteSpace(phase) ? "-" : phase.Trim();
+            var remaining = Math.Max(0, targetWords - Math.Max(0, currentWords));
+            var desc = $"phase={safePhase}|words={Math.Max(0, currentWords)}/{Math.Max(1, targetWords)}|remaining={remaining}";
+            _storiesService.CommandDispatcher.UpdateStep(runId, safeCurrent, safeMax, desc);
+        }
+        catch
+        {
+            // best-effort UI progress update
+        }
     }
 
     private static int CountWords(string text)

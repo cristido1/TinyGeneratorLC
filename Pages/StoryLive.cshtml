@@ -1,0 +1,123 @@
+@page "{id:long?}"
+@model TinyGenerator.Pages.StoryLiveModel
+@{
+    ViewData["Title"] = "Story Live";
+}
+
+<style>
+    .live-wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    .live-head { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+    .live-card { border: 1px solid #d9d9d9; border-radius: 8px; background: #fff; padding: 10px 12px; }
+    .live-label { font-size: 12px; text-transform: uppercase; color: #6c757d; }
+    .live-value { font-size: 15px; font-weight: 600; color: #222; word-break: break-word; }
+    .live-status { margin-bottom: 12px; font-size: 13px; color: #495057; }
+    .live-output {
+        min-height: 55vh;
+        white-space: pre-wrap;
+        border: 1px solid #d9d9d9;
+        border-radius: 8px;
+        background: #fbfbfb;
+        padding: 14px;
+        font-size: 15px;
+        line-height: 1.45;
+        overflow: auto;
+    }
+</style>
+
+<div class="live-wrap">
+    <div class="live-head">
+        <div class="live-card">
+            <div class="live-label">Titolo Storia</div>
+            <div class="live-value" id="storyTitle">@Model.StoryTitle</div>
+        </div>
+        <div class="live-card">
+            <div class="live-label">Agente</div>
+            <div class="live-value" id="agentName">In attesa...</div>
+        </div>
+        <div class="live-card">
+            <div class="live-label">Modello</div>
+            <div class="live-value" id="modelName">In attesa...</div>
+        </div>
+    </div>
+
+    <div class="live-status" id="liveStatus">Connessione in corso...</div>
+    <div class="live-output" id="liveOutput"></div>
+</div>
+
+@section Scripts {
+<script>
+(() => {
+    let currentStoryId = @Model.StoryId;
+    const initialGroup = currentStoryId > 0 ? `story_live_${currentStoryId}` : null;
+    const out = document.getElementById('liveOutput');
+    const statusEl = document.getElementById('liveStatus');
+    const titleEl = document.getElementById('storyTitle');
+    const agentEl = document.getElementById('agentName');
+    const modelEl = document.getElementById('modelName');
+
+    function setStatus(text) {
+        if (statusEl) statusEl.textContent = text;
+    }
+
+    function appendChunk(text) {
+        if (!out || !text) return;
+        out.textContent += text;
+        out.scrollTop = out.scrollHeight;
+    }
+
+    function matchesStory(payload) {
+        const incoming = payload && payload.storyId ? Number(payload.storyId) : 0;
+        if (currentStoryId <= 0 && incoming > 0) {
+            currentStoryId = incoming;
+            return true;
+        }
+        return incoming > 0 && incoming === Number(currentStoryId);
+    }
+
+    const connection = new signalR.HubConnectionBuilder()
+        .withUrl('/storyLiveHub')
+        .withAutomaticReconnect()
+        .build();
+
+    connection.on('StoryLiveStarted', payload => {
+        if (!payload || !matchesStory(payload)) return;
+        if (titleEl && payload.title) titleEl.textContent = payload.title;
+        if (agentEl) agentEl.textContent = payload.agentName || 'N/A';
+        if (modelEl) modelEl.textContent = payload.modelName || 'N/A';
+        if (out) out.textContent = '';
+        setStatus('Streaming in corso...');
+    });
+
+    connection.on('StoryLiveChunk', payload => {
+        if (!payload || !matchesStory(payload)) return;
+        appendChunk(payload.chunk || '');
+    });
+
+    connection.on('StoryLiveCompleted', payload => {
+        if (!payload || !matchesStory(payload)) return;
+        setStatus('Completato. In attesa di eventuali nuovi tentativi...');
+    });
+
+    connection.on('StoryLiveFailed', payload => {
+        if (!payload || !matchesStory(payload)) return;
+        const err = payload && payload.error ? payload.error : 'Errore durante la generazione';
+        setStatus(`Fallito: ${err}`);
+    });
+
+    async function start() {
+        try {
+            await connection.start();
+            if (initialGroup) {
+                await connection.invoke('JoinGroup', initialGroup);
+            }
+            setStatus(initialGroup ? 'Connesso. In attesa di output...' : 'Connesso. In attesa di una storia in streaming...');
+        } catch (e) {
+            console.error(e);
+            setStatus('Errore connessione live.');
+        }
+    }
+
+    start();
+})();
+</script>
+}

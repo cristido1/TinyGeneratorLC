@@ -374,11 +374,12 @@ internal sealed class FakeKernelFactory : ILangChainKernelFactory
         int? topK = null,
         int? repeatLastN = null,
         int? numPredict = null,
-        bool useMaxTokens = false)
+        bool useMaxTokens = false,
+        int? numCtx = null)
     {
         var handler = new FakeHttpMessageHandler(_responseFactory);
         var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(5) };
-        return new LangChainChatBridge(
+        var bridge = new LangChainChatBridge(
             "http://localhost",
             model,
             apiKey: "test-key",
@@ -386,6 +387,8 @@ internal sealed class FakeKernelFactory : ILangChainKernelFactory
             logger: null,
             forceOllama: true,
             services: null);
+        bridge.NumCtx = numCtx;
+        return bridge;
     }
 }
 

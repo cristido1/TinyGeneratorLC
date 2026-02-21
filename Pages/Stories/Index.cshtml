@@ -134,7 +134,11 @@
                         <td data-col="assets">
                             @if (!string.IsNullOrWhiteSpace(s.StoryTagged)) { <span title="Story tagged" class="text-dark me-1"><i class="bi bi-tags-fill"></i></span>; }
                             @if (s.GeneratedTtsJson) { <span title="TTS JSON" class="text-primary me-1"><i class="bi bi-file-earmark-text-fill"></i></span>; }
-                            @if (s.GeneratedTts) { <span title="TTS audio" class="text-success me-1"><i class="bi bi-volume-up-fill"></i></span>; }
+                            @if (s.GeneratedTts) {
+                                <button type="button" class="btn btn-sm btn-link p-0 me-1 tts-playlist-btn" data-story-id="@s.Id" title="Ascolta sequenza TTS (anteprima)">
+                                    <i class="bi bi-play-circle-fill" style="color:#198754;font-size:1.2rem;"></i>
+                                </button>
+                            }
                             @if (s.GeneratedAmbient) { <span title="Ambience" class="text-info me-1"><i class="bi bi-cloud-fill"></i></span>; }
                             @if (s.GeneratedEffects) { <span title="FX" class="text-warning me-1"><i class="bi bi-lightning-charge-fill"></i></span>; }
                             @if (s.GeneratedMusic) { <span title="Music" class="text-muted me-1"><i class="bi bi-music-note-beamed"></i></span>; }

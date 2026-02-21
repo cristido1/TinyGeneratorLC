@@ -103,11 +103,11 @@ public sealed partial class StoryMainCommands
         }
     }
 
-    private sealed class EvaluateStoryCommand : StoriesService.IStoryCommand
+    private sealed class EvaluateStoryEnqueuerCommand : StoriesService.IStoryCommand
     {
         private readonly StoriesService _service;
 
-        public EvaluateStoryCommand(StoriesService service) => _service = service;
+        public EvaluateStoryEnqueuerCommand(StoriesService service) => _service = service;
 
         public bool RequireStoryText => true;
         public bool EnsureFolder => false;
@@ -130,58 +130,24 @@ public sealed partial class StoryMainCommands
                 return (false, "Nessun agente valutatore configurato");
             }
 
+            if (_service.CommandDispatcher != null)
+            {
+                var enqueued = _service.StoryEvaluationsEnqueuer(
+                    story.Id,
+                    trigger: "status_flow",
+                    priority: 2,
+                    maxEvaluators: evaluators.Count);
+
+                return enqueued > 0
+                    ? (true, $"Valutazioni accodate: {enqueued}")
+                    : (false, "Nessuna valutazione accodata");
+            }
+
             return await RunParallelAsync(story, evaluators);
         }
 
         private async Task<(bool success, string? message)> RunParallelAsync(StoryRecord story, List<Agent> evaluators)
         {
-            if (_service.CommandDispatcher != null)
-            {
-                var enqueued = new List<string>();
-                foreach (var evaluator in evaluators)
-                {
-                    try
-                    {
-                        var runId = $"evaluate_story_{story.Id}_agent_{evaluator.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-                        var meta = new Dictionary<string, string>
-                        {
-                            ["storyId"] = story.Id.ToString(),
-                            ["agentId"] = evaluator.Id.ToString(),
-                            ["agentName"] = evaluator.Name ?? string.Empty,
-                            ["operation"] = "evaluate_story"
-                        };
-
-                        _service.CommandDispatcher.Enqueue(
-                            "evaluate_story",
-                            async ctx =>
-                            {
-                                try
-                                {
-                                    var (success, score, error) = await _service.EvaluateStoryWithAgentAsync(story.Id, evaluator.Id);
-                                    var msg = success ? $"Valutazione completata. Score: {score:F2}" : $"Valutazione fallita: {error}";
-                                    return new CommandResult(success, msg);
-                                }
-                                catch (Exception ex)
-                                {
-                                    return new CommandResult(false, ex.Message);
-                                }
-                            },
-                            runId: runId,
-                            threadScope: $"story/evaluate/agent_{evaluator.Id}",
-                            metadata: meta);
-
-                        enqueued.Add($"{evaluator.Name ?? ("Evaluator " + evaluator.Id)} ({runId})");
-                    }
-                    catch (Exception ex)
-                    {
-                        _service.Logger?.LogWarning(ex, "Failed to enqueue evaluation for story {StoryId} agent {AgentId}", story.Id, evaluator.Id);
-                    }
-                }
-
-                var msg = enqueued.Count > 0 ? $"Valutazioni accodate: {string.Join("; ", enqueued)}" : "Nessuna valutazione accodata";
-                return (enqueued.Count > 0, msg);
-            }
-
             var tasks = evaluators.Select(async evaluator =>
             {
                 try
@@ -387,7 +353,7 @@ public sealed partial class StoryMainCommands
 
                 var runIdSkip = _service.CurrentDispatcherRunId;
                 var storySkip = _service.GetStoryById(context.Story.Id) ?? context.Story;
-                _service.ApplyStatusTransitionWithCleanup(storySkip, "ambient_generated", runIdSkip);
+                _service.TryChangeStatus(storySkip.Id, "generate_ambience_audio", runIdSkip);
                 return (true, "Generazione rumori ambientali disattivata da impostazioni: step saltato.");
             }
 
@@ -404,8 +370,7 @@ public sealed partial class StoryMainCommands
                 var (success, message) = await _service.GenerateAmbienceAudioInternalAsync(context, runId);
                 if (success)
                 {
-                    var story = _service.GetStoryById(context.Story.Id) ?? context.Story;
-                    _service.ApplyStatusTransitionWithCleanup(story, "ambient_generated", runId);
+                    _service.TryChangeStatus(context.Story.Id, "generate_ambience_audio", runId);
                 }
                 return (success, message);
             }
@@ -440,8 +405,7 @@ public sealed partial class StoryMainCommands
                 var (success, message) = await _service.GenerateFxAudioInternalAsync(context, runId);
                 if (success)
                 {
-                    var story = _service.GetStoryById(context.Story.Id) ?? context.Story;
-                    _service.ApplyStatusTransitionWithCleanup(story, "fx_generated", runId);
+                    _service.TryChangeStatus(context.Story.Id, "generate_fx_audio", runId);
                 }
                 return (success, message);
             }
@@ -476,8 +440,7 @@ public sealed partial class StoryMainCommands
                 var (success, message) = await _service.GenerateMusicInternalAsync(context, runId);
                 if (success)
                 {
-                    var story = _service.GetStoryById(context.Story.Id) ?? context.Story;
-                    _service.ApplyStatusTransitionWithCleanup(story, "music_generated", runId);
+                    _service.TryChangeStatus(context.Story.Id, "generate_music", runId);
                 }
                 return (success, message);
             }

@@ -18,12 +18,12 @@ namespace TinyGenerator.Services;
 /// Esegue benchmark di instruction-following sui prompt in docs/instructions_test.txt
 /// e aggiorna il campo InstructionScore nella tabella models (scala 1-10).
 /// </summary>
-public sealed class InstructionScoreTestService
+public sealed class InstructionScoreTestService : IModelScoreTestService
 {
     private sealed record InstructionTestCase(int Number, string Prompt);
 
     private readonly DatabaseService _database;
-    private readonly ILangChainKernelFactory _kernelFactory;
+    private readonly ITestCallCenter _testCallCenter;
     private readonly ICommandDispatcher _dispatcher;
     private readonly ICustomLogger? _logger;
     private readonly IReadOnlyList<InstructionTestCase> _tests;
@@ -38,14 +38,14 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
 
     public InstructionScoreTestService(
         DatabaseService database,
-        ILangChainKernelFactory kernelFactory,
+        ITestCallCenter testCallCenter,
         ICommandDispatcher dispatcher,
         IConfiguration configuration,
         IHostEnvironment hostEnvironment,
         ICustomLogger? logger = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
-        _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+        _testCallCenter = testCallCenter ?? throw new ArgumentNullException(nameof(testCallCenter));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         var configuredTimeout = configuration?.GetValue<int?>("Commands:ByCommand:instruction_score:Tuning:QuestionTimeoutSeconds");
         _questionTimeoutSeconds = Math.Clamp(configuredTimeout ?? 45, 1, 600);
@@ -56,6 +56,11 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
         var path = Path.Combine(hostEnvironment.ContentRootPath, "docs", "instructions_test.txt");
         _tests = LoadTestsFromFile(path);
     }
+
+    public string ScoreOperation => "instruction_score";
+    CommandHandle IModelScoreTestService.EnqueueForMissingModels() => EnqueueInstructionScoreForMissingModels();
+    CommandHandle IModelScoreTestService.EnqueueForModel(string modelName) => EnqueueInstructionScoreForModel(modelName);
+    CommandHandle? IModelScoreTestService.EnqueueForModel(int modelId) => EnqueueInstructionScoreForModel(modelId);
 
     public CommandHandle EnqueueInstructionScoreForMissingModels()
     {
@@ -189,9 +194,6 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
 
     private async Task<(int Score, string Details)> TestSingleModelAsync(ModelInfo model, CommandContext ctx)
     {
-        var bridge = _kernelFactory.CreateChatBridge(model.Name, temperature: 0.1, topP: _topP, useMaxTokens: true);
-        bridge.MaxResponseTokens = bridge.MaxResponseTokens ?? 900;
-
         var passed = 0;
         var failures = new List<string>();
         _dispatcher.UpdateOperationName(ctx.RunId, $"instructionScore:{model.Name}");
@@ -205,19 +207,36 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
         {
             ctx.CancellationToken.ThrowIfCancellationRequested();
             var test = _tests[i];
-            var messages = new List<ConversationMessage>
-            {
-                new() { Role = "system", Content = SystemPrompt },
-                new() { Role = "user", Content = test.Prompt }
-            };
-
             try
             {
-                using var questionTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
-                questionTimeoutCts.CancelAfter(TimeSpan.FromSeconds(_questionTimeoutSeconds));
-                var response = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), questionTimeoutCts.Token);
-                var (content, _) = LangChainChatBridge.ParseChatResponse(response);
-                var text = NormalizeResponseText(string.IsNullOrWhiteSpace(content) ? response : content!);
+                var call = await _testCallCenter.CallAsync(new TestCallRequest
+                {
+                    Operation = "instruction_score",
+                    ModelName = model.Name,
+                    SystemPrompt = SystemPrompt,
+                    Prompt = test.Prompt,
+                    Timeout = TimeSpan.FromSeconds(_questionTimeoutSeconds),
+                    MaxRetries = 0,
+                    UseResponseChecker = false,
+                    AskFailExplanation = false,
+                    AllowFallback = false,
+                    Temperature = 0.1,
+                    TopP = _topP,
+                    NumPredict = 900
+                }, ctx.CancellationToken);
+
+                if (!call.Success)
+                {
+                    var callError = string.IsNullOrWhiteSpace(call.FailureReason)
+                        ? "errore chiamata modello"
+                        : call.FailureReason!;
+                    failures.Add($"T{test.Number:00}: {callError}");
+                    _logger?.Append(ctx.RunId, $"[FAIL T{test.Number:00}] {callError}", "error");
+                    _logger?.MarkLatestModelResponseResult("FAILED", callError, examined: true);
+                    continue;
+                }
+
+                var text = NormalizeResponseText(call.ResponseText);
 
                 var (ok, error) = Validate(test.Number, text);
                 if (ok)
@@ -230,13 +249,6 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
                     _logger?.Append(ctx.RunId, $"[FAIL T{test.Number:00}] {error} | risposta: {text}", "error");
                     _logger?.MarkLatestModelResponseResult("FAILED", error, examined: true);
                 }
-            }
-            catch (OperationCanceledException) when (!ctx.CancellationToken.IsCancellationRequested)
-            {
-                var timeoutError = $"timeout domanda dopo {_questionTimeoutSeconds}s";
-                failures.Add($"T{test.Number:00}: {timeoutError}");
-                _logger?.Append(ctx.RunId, $"[FAIL T{test.Number:00}] {timeoutError}", "error");
-                _logger?.MarkLatestModelResponseResult("FAILED", timeoutError, examined: true);
             }
             catch (Exception ex)
             {

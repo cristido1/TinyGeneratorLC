@@ -5,10 +5,10 @@ namespace TinyGenerator.Services;
 public abstract class CheckBase : IDeterministicCheck
 {
     public abstract string Rule { get; }
-    public string TextToCheck { get; set; } = string.Empty;
+    public virtual string GenericErrorDescription => Rule;
     public IOptions<object>? Options { get; set; }
 
-    public abstract IDeterministicResult Execute();
+    public abstract IDeterministicResult Execute(string textToCheck);
 
     protected T GetOption<T>(string key, T defaultValue = default!)
     {
@@ -59,4 +59,3 @@ public abstract class CheckBase : IDeterministicCheck
         return null;
     }
 }
-

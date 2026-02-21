@@ -4,10 +4,10 @@ public sealed class CheckMinimumGrowthPercent : CheckBase
 {
     public override string Rule => "Crescita minima del testo rispetto al sorgente.";
 
-    public override IDeterministicResult Execute()
+    public override IDeterministicResult Execute(string textToCheck)
     {
         var started = DateTime.UtcNow;
-        var normalized = (TextToCheck ?? string.Empty).Trim();
+        var normalized = (textToCheck ?? string.Empty).Trim();
         var sourceText = GetOption("SourceText", string.Empty)?.Trim() ?? string.Empty;
         var minGrowthPercent = Math.Max(0d, GetOption("MinGrowthPercent", 0d));
         var sourceLength = sourceText.Length;
@@ -33,4 +33,3 @@ public sealed class CheckMinimumGrowthPercent : CheckBase
         };
     }
 }
-

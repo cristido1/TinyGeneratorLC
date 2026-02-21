@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System;
 using System.Collections.Generic;
@@ -126,7 +126,7 @@ namespace TinyGenerator.Pages.Stories
             try
             {
                 var changed = _database.RealignStoriesCreatorModelIds();
-                TempData["StatusMessage"] = $"Allineamento completato: aggiornate {changed} storie (model_id â† agent.model_id).";
+                TempData["StatusMessage"] = $"Allineamento completato: aggiornate {changed} storie (model_id ← agent.model_id).";
             }
             catch (Exception ex)
             {
@@ -248,7 +248,7 @@ namespace TinyGenerator.Pages.Stories
             {
                 var runId = _stories.EnqueueReviseStoryCommand(id, trigger: "stories_index", priority: 2, force: true);
                 TempData["StatusMessage"] = string.IsNullOrWhiteSpace(runId)
-                    ? "Revisione non accodata (forse giÃ  in coda o dispatcher non disponibile)."
+                    ? "Revisione non accodata (forse già in coda o dispatcher non disponibile)."
                     : $"Revisione accodata (run {runId}).";
             }
             catch (Exception ex)
@@ -294,7 +294,7 @@ namespace TinyGenerator.Pages.Stories
 
             if (updated.Count == 0)
             {
-                TempData["StatusMessage"] = "Nessuna storia aggiornata: tutti i record giÃ  coerenti o non mancanti di story_tags.";
+                TempData["StatusMessage"] = "Nessuna storia aggiornata: tutti i record già coerenti o non mancanti di story_tags.";
             }
             else
             {
@@ -410,7 +410,7 @@ namespace TinyGenerator.Pages.Stories
                 return RedirectToPage();
             }
 
-            var runId = _stories.EnqueueAllNextStatusCommand(id, trigger: "manual_complete_story", priority: 3);
+            var runId = _stories.EnqueueAllNextStatusEnqueuer(id, trigger: "manual_complete_story", priority: 3);
             if (string.IsNullOrWhiteSpace(runId))
             {
                 TempData["ErrorMessage"] = "Nessuna operazione disponibile o pipeline gia in corso.";
@@ -561,7 +561,7 @@ namespace TinyGenerator.Pages.Stories
                     return RedirectToPage();
                 }
 
-                var cmd = new BatchSummarizeStoriesCommand(
+                var cmd = new BatchSummarizeStoriesEnqueuerCommand(
                     _database,
                     kernelFactory,
                     _commandDispatcher,
@@ -839,7 +839,7 @@ namespace TinyGenerator.Pages.Stories
                     });
                 }
 
-                return new JsonResult(new { items, gapMs = 2000 });
+                return new JsonResult(new { items, gapMs = 1000 });
             }
             catch (Exception ex)
             {
@@ -1044,7 +1044,7 @@ namespace TinyGenerator.Pages.Stories
                     var alreadyQueued = IsExpertAlreadyQueued("add_ambient_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}). add_ambient_tags_to_story giÃ  in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi RUMORI (v{nextVersion}). add_ambient_tags_to_story già in coda/in esecuzione");
                     }
 
                     var expertRunId = $"add_ambient_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
@@ -1110,7 +1110,7 @@ namespace TinyGenerator.Pages.Stories
                     var alreadyQueued = IsExpertAlreadyQueued("add_fx_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}). add_fx_tags_to_story giÃ  in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi FX (v{nextVersion}). add_fx_tags_to_story già in coda/in esecuzione");
                     }
 
                     var expertRunId = $"add_fx_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
@@ -1176,7 +1176,7 @@ namespace TinyGenerator.Pages.Stories
                     var alreadyQueued = IsExpertAlreadyQueued("add_music_tags_to_story", id);
                     if (alreadyQueued)
                     {
-                        return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}). add_music_tags_to_story giÃ  in coda/in esecuzione");
+                        return new CommandResult(true, $"Ripuliti {removed} blocchi MUSICA (v{nextVersion}). add_music_tags_to_story già in coda/in esecuzione");
                     }
 
                     var expertRunId = $"add_music_tags_to_story_{id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";

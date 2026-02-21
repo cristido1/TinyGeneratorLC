@@ -1,7 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands
@@ -15,7 +17,7 @@ namespace TinyGenerator.Services.Commands
         private readonly long _storyId;
         private readonly CommandTuningOptions _tuning;
         private readonly IAgentResolutionService _agentResolutionService;
-        private readonly IChunkProcessingService _chunkProcessingService;
+        private readonly ICallCenter _callCenter;
         private readonly IStoryTaggingPipelineService _storyTaggingPipelineService;
         private readonly INextStatusEnqueuer _nextStatusEnqueuer;
         private readonly ICustomLogger? _logger;
@@ -28,7 +30,7 @@ namespace TinyGenerator.Services.Commands
         public AddAmbientTagsToStoryCommand(
             long storyId,
             IAgentResolutionService agentResolutionService,
-            IChunkProcessingService chunkProcessingService,
+            ICallCenter callCenter,
             IStoryTaggingPipelineService storyTaggingPipelineService,
             INextStatusEnqueuer nextStatusEnqueuer,
             ICustomLogger? logger = null,
@@ -37,7 +39,7 @@ namespace TinyGenerator.Services.Commands
         {
             _storyId = storyId;
             _agentResolutionService = agentResolutionService ?? throw new ArgumentNullException(nameof(agentResolutionService));
-            _chunkProcessingService = chunkProcessingService ?? throw new ArgumentNullException(nameof(chunkProcessingService));
+            _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
             _storyTaggingPipelineService = storyTaggingPipelineService ?? throw new ArgumentNullException(nameof(storyTaggingPipelineService));
             _nextStatusEnqueuer = nextStatusEnqueuer ?? throw new ArgumentNullException(nameof(nextStatusEnqueuer));
             _logger = logger;
@@ -56,13 +58,14 @@ namespace TinyGenerator.Services.Commands
             : this(
                 storyId,
                 new AgentResolutionService(database),
-                new ChunkProcessingService(kernelFactory, storiesService?.ScopeFactory, logger),
+                ResolveOrCreateCallCenter(database, storiesService, logger),
                 new StoryTaggingPipelineService(database),
                 new NextStatusEnqueuer(storiesService, logger),
                 logger,
                 tuning,
                 () => storiesService?.CurrentDispatcherRunId)
         {
+            _ = kernelFactory;
         }
 
         public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)
@@ -88,44 +91,69 @@ namespace TinyGenerator.Services.Commands
 
                 telemetry.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
 
-                var currentModelId = resolvedAgent.ModelId;
-                var currentModelName = resolvedAgent.ModelName;
-                var triedModelNames = resolvedAgent.TriedModelNames;
-
                 var ambientTags = new List<StoryTaggingService.StoryTagEntry>();
+                var currentModelName = resolvedAgent.ModelName;
+                var minAmbientTags = Math.Max(0, _tuning.AmbientExpert.MinAmbientTagsPerChunkRequirement);
 
                 for (int i = 0; i < preparation.Chunks.Count; i++)
                 {
                     ct.ThrowIfCancellationRequested();
                     var chunk = preparation.Chunks[i];
-                    telemetry.ReportProgress(i + 1, preparation.Chunks.Count, $"Adding ambient tags chunk {i + 1}/{preparation.Chunks.Count}");
+                    var chunkIndex = i + 1;
+                    var chunkCount = preparation.Chunks.Count;
+                    telemetry.ReportProgress(chunkIndex, chunkCount, $"Adding ambient tags chunk {chunkIndex}/{chunkCount}");
 
-                    var chunkResult = await _chunkProcessingService.ProcessAsync(
-                        new ChunkProcessRequest(
-                            resolvedAgent.Agent,
-                            CommandRoleCodes.AmbientExpert,
-                            systemPrompt,
-                            chunk.Text,
-                            i + 1,
-                            preparation.Chunks.Count,
-                            effectiveRunId,
-                            currentModelId,
-                            currentModelName,
-                            triedModelNames,
-                            _tuning.AmbientExpert,
-                            telemetry,
-                            CommandScopePaths.AddAmbientTagsToStory),
-                        ct).ConfigureAwait(false);
-
-                    currentModelId = chunkResult.ModelId;
-                    currentModelName = chunkResult.ModelName;
-
-                    if (string.IsNullOrWhiteSpace(chunkResult.MappingText))
+                    var history = new ChatHistory();
+                    if (!string.IsNullOrWhiteSpace(systemPrompt))
                     {
-                        return Fail(telemetry, effectiveRunId, $"Ambient expert returned empty text for chunk {i + 1}/{preparation.Chunks.Count}");
+                        history.AddSystem(systemPrompt);
+                    }
+                    history.AddUser(chunk.Text);
+
+                    var callOptions = new CallOptions
+                    {
+                        Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.AmbientExpert.RequestTimeoutSeconds)),
+                        MaxRetries = Math.Max(0, _tuning.AmbientExpert.MaxAttemptsPerChunk - 1),
+                        UseResponseChecker = true,
+                        AskFailExplanation = _tuning.AmbientExpert.DiagnoseOnFinalFailure,
+                        AllowFallback = _tuning.AmbientExpert.EnableFallback,
+                        Operation = CommandScopePaths.AddAmbientTagsToStory,
+                        SystemPromptOverride = systemPrompt
+                    };
+                    callOptions.DeterministicChecks.Add(new CheckAmbientTagMinimumCount
+                    {
+                        Options = Options.Create<object>(new Dictionary<string, object>
+                        {
+                            ["MinAmbientTags"] = minAmbientTags,
+                            ["ErrorMessage"] = $"Hai inserito solo {{count}} tag [RUMORI]. Devi inserirne almeno {minAmbientTags} per chunk {chunkIndex}/{chunkCount}."
+                        })
+                    });
+
+                    var callResult = await _callCenter.CallAgentAsync(
+                        storyId: _storyId,
+                        threadId: BuildThreadId(_storyId, chunkIndex),
+                        agent: resolvedAgent.Agent,
+                        history: history,
+                        options: callOptions,
+                        cancellationToken: ct).ConfigureAwait(false);
+
+                    if (!callResult.Success)
+                    {
+                        var reason = callResult.FailureReason ?? $"Ambient expert returned empty text for chunk {chunkIndex}/{chunkCount}";
+                        return Fail(telemetry, effectiveRunId, reason);
                     }
 
-                    var parsed = _storyTaggingPipelineService.ParseAmbientMapping(chunkResult.MappingText);
+                    if (!string.IsNullOrWhiteSpace(callResult.ModelUsed))
+                    {
+                        currentModelName = callResult.ModelUsed;
+                    }
+
+                    var parsed = _storyTaggingPipelineService.ParseAmbientMapping(callResult.ResponseText.Trim());
+
+                    telemetry.Append(
+                        effectiveRunId,
+                        $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalAmbient={parsed.Count}; model={currentModelName}");
+
                     ambientTags.AddRange(parsed);
                 }
 
@@ -172,6 +200,37 @@ namespace TinyGenerator.Services.Commands
             telemetry.MarkCompleted(runId, "failed");
             return new CommandResult(false, message);
         }
+
+        private static ICallCenter ResolveOrCreateCallCenter(DatabaseService database, StoriesService? storiesService, ICustomLogger? logger)
+        {
+            var rootCallCenter = ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter;
+            if (rootCallCenter != null)
+            {
+                return rootCallCenter;
+            }
+
+            IAgentCallService? agentCallService = null;
+            if (storiesService?.ScopeFactory != null)
+            {
+                using var scope = storiesService.ScopeFactory.CreateScope();
+                agentCallService = scope.ServiceProvider.GetService<IAgentCallService>();
+            }
+
+            agentCallService ??= ServiceLocator.Services?.GetService(typeof(IAgentCallService)) as IAgentCallService;
+            if (agentCallService == null)
+            {
+                throw new InvalidOperationException("ICallCenter/IAgentCallService non disponibile per AddAmbientTagsToStoryCommand.");
+            }
+
+            return new CallCenter(agentCallService, database, logger);
+        }
+
+        private static int BuildThreadId(long storyId, int chunkIndex)
+        {
+            unchecked
+            {
+                return ((int)(storyId % int.MaxValue) * 397) ^ chunkIndex;
+            }
+        }
     }
 }
-

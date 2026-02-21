@@ -27,6 +27,7 @@ public sealed class GenerateNextChunkCommand : ICommand
     private readonly DatabaseService _database;
     private readonly ICustomLogger? _logger;
     private readonly TextValidationService _textValidationService;
+    private readonly ICallCenter? _callCenter;
     private readonly IAgentCallService? _modelExecution;
     private readonly GenerateChunkOptions _options;
     private readonly IServiceScopeFactory? _scopeFactory;
@@ -41,7 +42,8 @@ public sealed class GenerateNextChunkCommand : ICommand
         GenerateChunkOptions? options = null,
         CommandTuningOptions? tuning = null,
         IServiceScopeFactory? scopeFactory = null,
-        IAgentCallService? modelExecution = null)
+        IAgentCallService? modelExecution = null,
+        ICallCenter? callCenter = null)
     {
         _storyId = storyId;
         _writerAgentId = writerAgentId;
@@ -51,6 +53,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         _options = options ?? new GenerateChunkOptions();
         _tuning = tuning ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory;
+        _callCenter = callCenter;
         _modelExecution = modelExecution;
         _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
     }
@@ -180,23 +183,6 @@ public sealed class GenerateNextChunkCommand : ICommand
         => !string.IsNullOrWhiteSpace(error) &&
            error.Contains("punteggiatura degenerativa", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsRelaxableForCurrentPhase(string? reason, string phase)
-    {
-        _ = reason;
-        _ = phase;
-        return false;
-    }
-
-    private static bool RequiresModelBasedValidation(string? reason)
-    {
-        if (string.IsNullOrWhiteSpace(reason))
-        {
-            return false;
-        }
-
-        return reason.Contains("assenza di eventi reali", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static string FixDegenerativePunctuation(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -220,19 +206,13 @@ public sealed class GenerateNextChunkCommand : ICommand
         string runId,
         CancellationToken ct)
     {
-        var execution = _modelExecution;
-        if (execution == null && _scopeFactory != null)
-        {
-            using var scope = _scopeFactory.CreateScope();
-            execution = scope.ServiceProvider.GetService<IAgentCallService>();
-        }
-
-        if (execution == null)
+        var callCenter = ResolveCallCenter();
+        if (callCenter == null)
         {
             return new CommandModelExecutionService.Result
             {
                 Success = false,
-                Error = "CommandModelExecutionService non disponibile"
+                Error = "CallCenter non disponibile"
             };
         }
 
@@ -240,78 +220,139 @@ public sealed class GenerateNextChunkCommand : ICommand
         var commandKey = ResolveCommandKey();
         var storyHistory = BuildStoryHistorySnapshot();
         var agentIdentity = BuildAgentIdentity(writerAgent);
+        var maxAttempts = Math.Max(1, _tuning.GenerateNextChunk.MaxAttempts);
+        var systemPrompt = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.";
+        var history = new ChatHistory();
+        history.AddSystem(systemPrompt);
+        history.AddUser(prompt);
 
-        return await execution.ExecuteAsync(
-            new CommandModelExecutionService.Request
+        string lastError = "Writer returned empty output";
+        string lastOutput = string.Empty;
+        string modelUsed = ResolveModelName(writerAgent) ?? string.Empty;
+        var hadDeterministicFailure = false;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var options = new CallOptions
             {
-                CommandKey = commandKey,
-                Agent = writerAgent,
-                RoleCode = roleCode,
-                Prompt = prompt,
-                SystemPrompt = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.",
-                MaxAttempts = Math.Max(1, _tuning.GenerateNextChunk.MaxAttempts),
+                Operation = commandKey,
+                Timeout = TimeSpan.FromSeconds(180),
+                MaxRetries = 0,
                 UseResponseChecker = true,
-                EnableFallback = true,
-                DiagnoseOnFinalFailure = true,
-                RunId = runId,
-                DeterministicValidator = output =>
+                AllowFallback = true,
+                AskFailExplanation = true,
+                SystemPromptOverride = systemPrompt
+            };
+            options.DeterministicChecks.Add(new CheckEmpty
+            {
+                Options = Options.Create<object>(new Dictionary<string, object>
                 {
-                    var checks = new List<IDeterministicCheck>
-                    {
-                        new CheckEmpty
-                        {
-                            Options = Options.Create<object>(new Dictionary<string, object>
-                            {
-                                ["ErrorMessage"] = $"Risposta vuota ({agentIdentity})"
-                            })
-                        },
-                        new CheckTextValidation
-                        {
-                            Options = Options.Create<object>(new Dictionary<string, object>
-                            {
-                                ["TextValidationService"] = _textValidationService,
-                                ["StoryHistory"] = storyHistory,
-                                ["AgentIdentity"] = agentIdentity,
-                                ["RunId"] = runId,
-                                ["Phase"] = phase
-                            })
-                        }
-                    };
+                    ["ErrorMessage"] = $"Risposta vuota ({agentIdentity})"
+                })
+            });
 
-                    if (_logger != null &&
-                        checks[1] is CheckTextValidation validationCheck &&
-                        validationCheck.Options?.Value is Dictionary<string, object> validationOptions)
-                    {
-                        validationOptions["Logger"] = _logger;
-                    }
+            var callResult = await callCenter.CallAgentAsync(
+                storyId: _storyId,
+                threadId: BuildThreadId(_storyId, attempt),
+                agent: writerAgent,
+                history: history,
+                options: options,
+                cancellationToken: ct).ConfigureAwait(false);
 
-                    if (_options.RequireCliffhanger)
-                    {
-                        checks.Add(new CheckCliffhangerEnding
-                        {
-                            Options = Options.Create<object>(new Dictionary<string, object>
-                            {
-                                ["AgentIdentity"] = agentIdentity
-                            })
-                        });
-                    }
+            if (!string.IsNullOrWhiteSpace(callResult.ModelUsed))
+            {
+                modelUsed = callResult.ModelUsed;
+            }
 
-                    return CheckRunner.Execute(output, checks.ToArray());
-                },
-                RetryPromptFactory = BuildWriterRetryPrompt
-            },
-            ct).ConfigureAwait(false);
+            if (!callResult.Success || string.IsNullOrWhiteSpace(callResult.ResponseText))
+            {
+                lastError = callResult.FailureReason ?? "Writer returned empty output";
+                _logger?.Append(runId, $"[{roleCode}] Tentativo {attempt}/{maxAttempts} fallito: {lastError}", "warning");
+                if (attempt < maxAttempts)
+                {
+                    history.AddUser(BuildRetryConversationPrompt(lastError));
+                }
+                continue;
+            }
+
+            var cleaned = callResult.ResponseText.Trim();
+            lastOutput = cleaned;
+
+            var checks = new List<IDeterministicCheck>
+            {
+                new CheckTextValidation
+                {
+                    Options = Options.Create<object>(new Dictionary<string, object>
+                    {
+                        ["TextValidationService"] = _textValidationService,
+                        ["StoryHistory"] = storyHistory,
+                        ["AgentIdentity"] = agentIdentity,
+                        ["RunId"] = runId,
+                        ["Phase"] = phase,
+                        ["Logger"] = _logger as object ?? new object()
+                    })
+                }
+            };
+
+            if (_options.RequireCliffhanger)
+            {
+                checks.Add(new CheckCliffhangerEnding
+                {
+                    Options = Options.Create<object>(new Dictionary<string, object>
+                    {
+                        ["AgentIdentity"] = agentIdentity
+                    })
+                });
+            }
+
+            var deterministic = CheckRunner.Execute(cleaned, checks.ToArray());
+            if (!deterministic.IsValid)
+            {
+                hadDeterministicFailure = true;
+                lastError = deterministic.Reason ?? "Check deterministico fallito";
+                _logger?.Append(runId, $"[{roleCode}] Tentativo {attempt}/{maxAttempts} fallito (deterministico): {lastError}", "warning");
+                _logger?.MarkLatestModelResponseResult("FAILED", lastError);
+
+                if (attempt < maxAttempts)
+                {
+                    history.AddAssistant(cleaned);
+                    history.AddUser(BuildRetryConversationPrompt(lastError));
+                }
+
+                continue;
+            }
+
+            return new CommandModelExecutionService.Result
+            {
+                Success = true,
+                Text = cleaned,
+                ModelName = modelUsed,
+                UsedFallback = !string.Equals(modelUsed, ResolveModelName(writerAgent), StringComparison.OrdinalIgnoreCase),
+                DeterministicFailure = false,
+                AttemptsUsed = attempt
+            };
+        }
+
+        return new CommandModelExecutionService.Result
+        {
+            Success = false,
+            Error = lastError,
+            Text = lastOutput,
+            ModelName = modelUsed,
+            UsedFallback = !string.Equals(modelUsed, ResolveModelName(writerAgent), StringComparison.OrdinalIgnoreCase),
+            DeterministicFailure = hadDeterministicFailure,
+            AttemptsUsed = maxAttempts
+        };
     }
 
-    private static string BuildWriterRetryPrompt(string originalPrompt, string reason)
+    private static string BuildRetryConversationPrompt(string reason)
     {
         var sb = new StringBuilder();
         sb.AppendLine("ATTENZIONE: il tuo output precedente NON era valido.");
         sb.AppendLine("Motivo: " + reason);
         sb.AppendLine("Rigenera la risposta COMPLETA rispettando tutti i vincoli.");
-        sb.AppendLine();
-        sb.AppendLine("PROMPT ORIGINALE:");
-        sb.AppendLine(originalPrompt.Trim());
         return sb.ToString();
     }
 
@@ -352,15 +393,10 @@ public sealed class GenerateNextChunkCommand : ICommand
 
         var current = NormalizePhaseToken(snap.CurrentPhase);
 
-        // First chunk: optional per-episode initial phase, otherwise first in grammar.
+        // First chunk: force AMBIENTE to establish setting early (audio-first requirement).
         if (string.IsNullOrWhiteSpace(current))
         {
-            var initial = NormalizePhaseToken(snap.EpisodeInitialPhase);
-            if (!string.IsNullOrWhiteSpace(initial) && allowed.Contains(initial, StringComparer.OrdinalIgnoreCase))
-            {
-                return initial;
-            }
-            return allowed[0];
+            return "AMBIENTE";
         }
 
         // Next = next in succession (circular).
@@ -389,7 +425,8 @@ public sealed class GenerateNextChunkCommand : ICommand
     private static List<string> ParseSuccessioneStatiOrDefault(string? csv)
     {
         static bool IsAllowed(string s) =>
-            s.Equals("AZIONE", StringComparison.OrdinalIgnoreCase)
+            s.Equals("AMBIENTE", StringComparison.OrdinalIgnoreCase)
+            || s.Equals("AZIONE", StringComparison.OrdinalIgnoreCase)
             || s.Equals("STASI", StringComparison.OrdinalIgnoreCase)
             || s.Equals("ERRORE", StringComparison.OrdinalIgnoreCase)
             || s.Equals("EFFETTO", StringComparison.OrdinalIgnoreCase);
@@ -416,12 +453,15 @@ public sealed class GenerateNextChunkCommand : ICommand
 
         var p = phase.Trim();
         // Normalize legacy internal names to the 4-state vocabulary.
+        if (p.Equals("Environment", StringComparison.OrdinalIgnoreCase)) return "AMBIENTE";
+        if (p.Equals("Ambiente", StringComparison.OrdinalIgnoreCase)) return "AMBIENTE";
         if (p.Equals("Action", StringComparison.OrdinalIgnoreCase)) return "AZIONE";
         if (p.Equals("Stall", StringComparison.OrdinalIgnoreCase)) return "STASI";
         if (p.Equals("Error", StringComparison.OrdinalIgnoreCase)) return "ERRORE";
         if (p.Equals("Consequence", StringComparison.OrdinalIgnoreCase)) return "EFFETTO";
 
         // Accept already-normalized tokens.
+        if (p.Equals("AMBIENTE", StringComparison.OrdinalIgnoreCase)) return "AMBIENTE";
         if (p.Equals("AZIONE", StringComparison.OrdinalIgnoreCase)) return "AZIONE";
         if (p.Equals("STASI", StringComparison.OrdinalIgnoreCase)) return "STASI";
         if (p.Equals("ERRORE", StringComparison.OrdinalIgnoreCase)) return "ERRORE";
@@ -462,6 +502,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         // Deterministic base drain (kept conservative).
         var drain = phase switch
         {
+            "AMBIENTE" => 0,
             "STASI" => 1,
             "ERRORE" => 1,
             "EFFETTO" => 2,
@@ -527,12 +568,21 @@ public sealed class GenerateNextChunkCommand : ICommand
             sb.AppendLine($"- Lunghezza target: circa {options.TargetWords.Value} parole (tolleranza ±20%).");
         }
         sb.AppendLine("- NON aggiungere sezioni meta (es. 'capitolo', 'fine', 'riassunto').");
+        sb.AppendLine("- Se introduci un CAMBIO DI AMBIENTAZIONE, devi descrivere subito il nuovo ambiente (spazio + elementi sonori percepibili) prima che l'azione prosegua.");
         sb.AppendLine();
         sb.AppendLine("REGOLA SULLO STATO:");
+        sb.AppendLine("- AMBIENTE: focalizza scena, spazio sonoro, elementi fisici percepibili (luoghi, distanza, superfici, rumori, atmosfera concreta), senza chiudere eventi.");
         sb.AppendLine("- AZIONE: qualcuno fa qualcosa che cambia la situazione. L’azione deve cambiare la situazione in modo visibile o creare nuove conseguenze. Spostarsi o parlare NON basta se non genera un problema, un rischio o una nuova direzione.");
         sb.AppendLine("- STASI: pausa, dialogo, riflessione, attesa.");
         sb.AppendLine("- ERRORE: deve accadere un EVENTO NEGATIVO NUOVO e CONCRETO che peggiora la situazione.");
         sb.AppendLine("- EFFETTO: si vedono le conseguenze dirette di un evento accaduto prima.");
+        sb.AppendLine();
+        sb.AppendLine("ESEMPI DI STATO AMBIENTE:");
+        sb.AppendLine("- Definisci chiaramente spazio, luce, suoni, odori e disposizione dei personaggi.");
+        sb.AppendLine("- Evidenzia subito gli elementi sonori utili al rendering audio.");
+        sb.AppendLine("- Inserisci una tensione latente che prepara l'azione successiva.");
+        sb.AppendLine("Non valido:");
+        sb.AppendLine("- Restare nel puramente estetico senza introdurre un rischio o una direzione narrativa.");
         sb.AppendLine();
         sb.AppendLine("ESEMPI DI STATO AZIONE:");
         sb.AppendLine("- Un personaggio prende una decisione rischiosa e agisce subito.");
@@ -673,6 +723,58 @@ public sealed class GenerateNextChunkCommand : ICommand
         catch
         {
             return string.Empty;
+        }
+    }
+
+    private ICallCenter? ResolveCallCenter()
+    {
+        if (_callCenter != null)
+        {
+            return _callCenter;
+        }
+
+        var rootCallCenter = ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter;
+        if (rootCallCenter != null)
+        {
+            return rootCallCenter;
+        }
+
+        var execution = _modelExecution;
+        if (execution == null && _scopeFactory != null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            execution = scope.ServiceProvider.GetService<IAgentCallService>();
+        }
+
+        execution ??= ServiceLocator.Services?.GetService(typeof(IAgentCallService)) as IAgentCallService;
+        if (execution == null)
+        {
+            return null;
+        }
+
+        return new CallCenter(execution, _database, _logger);
+    }
+
+    private string? ResolveModelName(Agent agent)
+    {
+        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        {
+            return agent.ModelName.Trim();
+        }
+
+        if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
+        {
+            return _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+        }
+
+        return null;
+    }
+
+    private static int BuildThreadId(long storyId, int attempt)
+    {
+        unchecked
+        {
+            return ((int)(storyId % int.MaxValue) * 613) ^ attempt;
         }
     }
 

@@ -134,11 +134,12 @@ namespace TinyGenerator.Pages.Agents
                 return new JsonResult(new { title = "Fallback non trovato", description = string.Empty }) { StatusCode = 404 };
             }
 
+            var instructions = string.IsNullOrWhiteSpace(mr.Instructions) ? "-" : mr.Instructions!;
             var description =
                 $"Modello: {mr.Model?.Name ?? "-"}\n" +
                 $"Ruolo: {mr.Role?.Ruolo ?? "-"}\n" +
                 $"Primary: {(mr.IsPrimary ? "Yes" : "No")}\n" +
-                $"Istruzioni: {(string.IsNullOrWhiteSpace(mr.Instructions) ? "-" : mr.Instructions)}\n" +
+                $"Istruzioni: {instructions}\n" +
                 $"Top-P: {(mr.TopP.HasValue ? mr.TopP.Value.ToString("0.00") : "-")}\n" +
                 $"Top-K: {(mr.TopK.HasValue ? mr.TopK.Value.ToString() : "-")}\n" +
                 $"Enabled: {(mr.Enabled ? "Yes" : "No")}\n" +
@@ -153,8 +154,56 @@ namespace TinyGenerator.Pages.Agents
             return new JsonResult(new
             {
                 title = $"Fallback #{mr.Id}",
-                description
+                description,
+                id = mr.Id,
+                modelName = mr.Model?.Name ?? "-",
+                roleName = mr.Role?.Ruolo ?? "-",
+                isPrimary = mr.IsPrimary,
+                instructions,
+                topP = mr.TopP,
+                topK = mr.TopK,
+                enabled = mr.Enabled
             });
+        }
+
+        public IActionResult OnGetErrors(int id)
+        {
+            if (id <= 0)
+            {
+                return new JsonResult(new { ok = false, error = "Invalid id", rows = Array.Empty<object>() }) { StatusCode = 400 };
+            }
+
+            var rows = _database.ListModelRoleErrors(id, 200)
+                .Select(e => new
+                {
+                    id = e.Id,
+                    errorType = e.ErrorType,
+                    errorText = e.ErrorText,
+                    errorCount = e.ErrorCount,
+                    dateInsert = e.DateInsert,
+                    dateLast = e.DateLast,
+                    dateInsertFmt = FormatDateTime(e.DateInsert),
+                    dateLastFmt = FormatDateTime(e.DateLast)
+                })
+                .ToList();
+
+            return new JsonResult(new { ok = true, rows });
+        }
+
+        public IActionResult OnPostDeleteError([FromBody] DeleteErrorRequest input)
+        {
+            if (input is null || input.ErrorId <= 0)
+            {
+                return new JsonResult(new { ok = false, error = "Invalid error id" }) { StatusCode = 400 };
+            }
+
+            var deleted = _database.DeleteModelRoleError(input.ErrorId);
+            if (!deleted)
+            {
+                return new JsonResult(new { ok = false, error = "Error row not found" }) { StatusCode = 404 };
+            }
+
+            return new JsonResult(new { ok = true });
         }
 
         public IActionResult OnPostDelete([FromBody] DeleteRequest input)
@@ -196,6 +245,29 @@ namespace TinyGenerator.Pages.Agents
             return new JsonResult(new { ok = true, enabled = entity.Enabled });
         }
 
+        public IActionResult OnPostUpdate([FromBody] UpdateRequest input)
+        {
+            if (input is null || input.Id <= 0)
+            {
+                return new JsonResult(new { ok = false, error = "Invalid id" }) { StatusCode = 400 };
+            }
+
+            var entity = _context.ModelRoles.Find(input.Id);
+            if (entity == null)
+            {
+                return new JsonResult(new { ok = false, error = "Not found" }) { StatusCode = 404 };
+            }
+
+            entity.Instructions = string.IsNullOrWhiteSpace(input.Instructions) ? null : input.Instructions.Trim();
+            entity.TopP = input.TopP;
+            entity.TopK = input.TopK;
+            entity.Enabled = input.Enabled;
+            entity.UpdatedAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            _context.SaveChanges();
+
+            return new JsonResult(new { ok = true });
+        }
+
         public string FormatLastUse(string? lastUse)
         {
             if (string.IsNullOrWhiteSpace(lastUse)) return "-";
@@ -204,6 +276,16 @@ namespace TinyGenerator.Pages.Agents
                 return parsed.ToString("dd/MM HH:mm");
             }
             return "-";
+        }
+
+        private static string FormatDateTime(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "-";
+            if (DateTime.TryParse(value, out var parsed))
+            {
+                return parsed.ToString("dd/MM/yyyy HH:mm:ss");
+            }
+            return value;
         }
 
         private static string FormatPositiveDouble(double value, int decimals)
@@ -286,6 +368,20 @@ namespace TinyGenerator.Pages.Agents
         {
             public int Id { get; set; }
             public bool Enabled { get; set; }
+        }
+
+        public class UpdateRequest
+        {
+            public int Id { get; set; }
+            public string? Instructions { get; set; }
+            public double? TopP { get; set; }
+            public int? TopK { get; set; }
+            public bool Enabled { get; set; }
+        }
+
+        public class DeleteErrorRequest
+        {
+            public long ErrorId { get; set; }
         }
 
         public record RowAction(string Id, string Title, string Method, string Url, bool Confirm = false);

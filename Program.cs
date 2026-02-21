@@ -316,6 +316,8 @@ builder.Services.AddSingleton<SystemReportService>();
 builder.Services.AddSingleton<CommandModelExecutionService>();
 builder.Services.AddSingleton<IAgentCallService>(sp => sp.GetRequiredService<CommandModelExecutionService>());
 builder.Services.AddSingleton<ICallCenter, CallCenter>();
+builder.Services.AddSingleton<ITestCallCenter, TestCallCenter>();
+builder.Services.AddSingleton<TestCallCanter>();
 
 // Test execution service (LangChain-based, replaces deprecated SK TestService)
 builder.Services.AddTransient<LangChainTestService>();
@@ -628,6 +630,7 @@ app.UseAuthorization();
 
 // SignalR hubs
 app.MapHub<ProgressHub>("/progressHub");
+app.MapHub<StoryLiveHub>("/storyLiveHub");
 
 app.MapRazorPages();
 app.MapControllers();

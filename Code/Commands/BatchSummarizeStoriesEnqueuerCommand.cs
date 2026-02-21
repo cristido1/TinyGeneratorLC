@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using TinyGenerator.Models;
 
 namespace TinyGenerator.Services.Commands
@@ -7,8 +7,10 @@ namespace TinyGenerator.Services.Commands
     /// Comando batch che accoda riassunti per tutte le storie con valutazione >= 60.
     /// Termina immediatamente dopo aver accodato i comandi, senza attendere il completamento.
     /// </summary>
-    public class BatchSummarizeStoriesCommand : ICommand
+    public class BatchSummarizeStoriesEnqueuerCommand : ICommand
     {
+        public bool Batch => true;
+
         private readonly DatabaseService _database;
         private readonly ILangChainKernelFactory _kernelFactory;
         private readonly ICommandEnqueuer _dispatcher;
@@ -16,7 +18,7 @@ namespace TinyGenerator.Services.Commands
         private readonly IServiceScopeFactory? _scopeFactory;
         private readonly int _minScore;
 
-        public BatchSummarizeStoriesCommand(
+        public BatchSummarizeStoriesEnqueuerCommand(
             DatabaseService database,
             ILangChainKernelFactory kernelFactory,
             ICommandEnqueuer dispatcher,

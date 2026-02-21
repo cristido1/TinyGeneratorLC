@@ -29,8 +29,26 @@ public sealed class CommandModelExecutionService : IAgentCallService
         public int? CheckerTimeoutSec { get; set; }
         public bool? EnableDeterministicValidation { get; set; }
         public string? RunId { get; set; }
+        public object? ResponseFormat { get; set; }
         public Func<string, DeterministicValidationResult>? DeterministicValidator { get; set; }
         public Func<string, string, string>? RetryPromptFactory { get; set; }
+        public Func<AttemptFailure, CancellationToken, Task>? AttemptFailureCallback { get; set; }
+        public bool EnableStreamingOutput { get; set; }
+        public Func<string, Task>? StreamChunkCallback { get; set; }
+    }
+
+    public sealed class AttemptFailure
+    {
+        public string RoleCode { get; init; } = string.Empty;
+        public string ModelName { get; init; } = string.Empty;
+        public int Attempt { get; init; }
+        public int MaxAttempts { get; init; }
+        public string Reason { get; init; } = string.Empty;
+        public bool IsDeterministic { get; init; }
+        public bool IsChecker { get; init; }
+        public string PromptSent { get; init; } = string.Empty;
+        public string ResponseText { get; init; } = string.Empty;
+        public List<int>? ViolatedRules { get; init; }
     }
 
     public sealed class Result
@@ -129,7 +147,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         }
 
         var settings = ResolveSettings(request);
-        var primary = await ExecuteOnModelAsync(request, settings, modelName, request.RoleCode, ct).ConfigureAwait(false);
+        var primary = await ExecuteOnModelAsync(request, settings, modelName, request.RoleCode, ct, request.Agent.ModelId).ConfigureAwait(false);
         if (primary.Success)
         {
             return new Result
@@ -165,7 +183,13 @@ public sealed class CommandModelExecutionService : IAgentCallService
         };
     }
 
-    private async Task<Result> ExecuteOnModelAsync(Request request, ExecutionSettings settings, string modelName, string roleCode, CancellationToken ct)
+    private async Task<Result> ExecuteOnModelAsync(
+        Request request,
+        ExecutionSettings settings,
+        string modelName,
+        string roleCode,
+        CancellationToken ct,
+        int? modelIdOverride = null)
     {
         var maxAttempts = settings.MaxAttempts;
         var delayMs = Math.Max(0, settings.RetryDelaySeconds) * 1000;
@@ -193,14 +217,18 @@ public sealed class CommandModelExecutionService : IAgentCallService
             string text;
             try
             {
+                var systemPrompt = BuildSystemPromptWithDynamic(request, modelName, roleCode, modelIdOverride);
                 text = await CallModelTextAsync(
                     modelName,
                     request.Agent,
                     roleCode,
-                    request.SystemPrompt ?? BuildSystemPrompt(request.Agent),
+                    systemPrompt,
                     currentPrompt,
                     request.CommandKey,
+                    request.ResponseFormat,
                     skipResponseChecker: true,
+                    enableStreaming: request.EnableStreamingOutput,
+                    streamChunkCallback: request.StreamChunkCallback,
                     attemptToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested && settings.StepTimeoutSec > 0 && attemptCts.IsCancellationRequested)
@@ -208,6 +236,19 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 lastError = $"Timeout fase dopo {settings.StepTimeoutSec}s";
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito: {lastError}");
                 MarkLatestAttemptResult(modelName, request.Agent!, "FAILED", lastError, examined: true);
+                await NotifyAttemptFailureAsync(
+                    request,
+                    modelName,
+                    roleCode,
+                    attempt,
+                    maxAttempts,
+                    lastError,
+                    deterministic: false,
+                    checker: false,
+                    currentPrompt,
+                    lastOutput,
+                    null,
+                    CancellationToken.None).ConfigureAwait(false);
                 if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
@@ -218,6 +259,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
             }
             catch (OperationCanceledException)
             {
+                if (ct.IsCancellationRequested)
+                {
+                    await TryStopLlamaCppOnCancellationAsync(modelName).ConfigureAwait(false);
+                }
                 throw;
             }
             catch (Exception ex)
@@ -225,6 +270,19 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 lastError = ex.Message;
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} eccezione: {lastError}");
                 MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
+                await NotifyAttemptFailureAsync(
+                    request,
+                    modelName,
+                    roleCode,
+                    attempt,
+                    maxAttempts,
+                    lastError,
+                    deterministic: false,
+                    checker: false,
+                    currentPrompt,
+                    lastOutput,
+                    null,
+                    CancellationToken.None).ConfigureAwait(false);
                 if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
@@ -269,6 +327,19 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     promptSent: currentPrompt,
                     responseText: lastOutput);
                 MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
+                await NotifyAttemptFailureAsync(
+                    request,
+                    modelName,
+                    roleCode,
+                    attempt,
+                    maxAttempts,
+                    lastError,
+                    deterministic: true,
+                    checker: false,
+                    currentPrompt,
+                    lastOutput,
+                    null,
+                    CancellationToken.None).ConfigureAwait(false);
                 if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
@@ -305,6 +376,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 if (!checkerResult.IsValid)
                 {
                     lastError = string.IsNullOrWhiteSpace(checkerResult.Reason) ? "response_checker invalid" : checkerResult.Reason!;
+                    var checkerTrackingReason = BuildCheckerTrackingReason(checkerResult);
                     _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito (checker): {lastError}");
                     LogValidationFailureContext(
                         request,
@@ -316,6 +388,19 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         promptSent: currentPrompt,
                         responseText: lastOutput);
                     MarkLatestAttemptResult(modelName, request.Agent!, "FAILED", lastError, examined: true);
+                    await NotifyAttemptFailureAsync(
+                        request,
+                        modelName,
+                        roleCode,
+                        attempt,
+                        maxAttempts,
+                        checkerTrackingReason,
+                        deterministic: false,
+                        checker: true,
+                        currentPrompt,
+                        lastOutput,
+                        checkerResult.ViolatedRules,
+                        CancellationToken.None).ConfigureAwait(false);
                     if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                     {
                         await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
@@ -402,10 +487,11 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         EnableDeterministicValidation = settings.EnableDeterministicValidation,
                         RunId = request.RunId,
                         DeterministicValidator = request.DeterministicValidator,
-                        RetryPromptFactory = request.RetryPromptFactory
+                        RetryPromptFactory = request.RetryPromptFactory,
+                        AttemptFailureCallback = request.AttemptFailureCallback
                     };
 
-                    var result = await ExecuteOnModelAsync(req, settings, fallbackName, role, ct).ConfigureAwait(false);
+                    var result = await ExecuteOnModelAsync(req, settings, fallbackName, role, ct, modelRole.ModelId).ConfigureAwait(false);
                     fallbackAttemptsUsed = result.AttemptsUsed;
                     if (!result.Success || string.IsNullOrWhiteSpace(result.Text))
                     {
@@ -441,7 +527,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
         string systemPrompt,
         string prompt,
         string? operationScope,
+        object? responseFormat,
         bool skipResponseChecker,
+        bool enableStreaming,
+        Func<string, Task>? streamChunkCallback,
         CancellationToken ct)
     {
         var bridge = _kernelFactory.CreateChatBridge(
@@ -451,7 +540,23 @@ public sealed class CommandModelExecutionService : IAgentCallService
             agent.RepeatPenalty,
             agent.TopK,
             agent.RepeatLastN,
-            agent.NumPredict);
+            agent.NumPredict,
+            useMaxTokens: false,
+            numCtx: ResolveNumCtxForAgent(agent, modelName));
+        bridge.ResponseFormat = responseFormat;
+        bridge.EnableStreaming = enableStreaming && streamChunkCallback != null;
+        bridge.StreamChunkCallbackAsync = streamChunkCallback;
+        try
+        {
+            Console.WriteLine(
+                $"[StoryLive TRACE] CallModelTextAsync role={roleCode} model={modelName} " +
+                $"enableStreamingRequested={enableStreaming} callback_present={streamChunkCallback != null} " +
+                $"bridge_enable_streaming={bridge.EnableStreaming}");
+        }
+        catch
+        {
+            // No-op: tracing must not break command execution.
+        }
 
         var messages = new List<ConversationMessage>
         {
@@ -475,8 +580,28 @@ public sealed class CommandModelExecutionService : IAgentCallService
             new List<Dictionary<string, object>>(),
             ct,
             skipResponseChecker: skipResponseChecker).ConfigureAwait(false);
+        try
+        {
+            Console.WriteLine(
+                $"[StoryLive TRACE] CallModelTextAsync response_received role={roleCode} model={modelName} " +
+                $"response_json_len={(responseJson?.Length ?? 0)}");
+        }
+        catch
+        {
+            // No-op: tracing must not break command execution.
+        }
 
         var (text, _) = LangChainChatBridge.ParseChatResponse(responseJson);
+        try
+        {
+            Console.WriteLine(
+                $"[StoryLive TRACE] CallModelTextAsync parsed_text role={roleCode} model={modelName} " +
+                $"text_len={(text?.Length ?? 0)}");
+        }
+        catch
+        {
+            // No-op: tracing must not break command execution.
+        }
         return text ?? string.Empty;
     }
 
@@ -520,7 +645,9 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 request.Agent.RepeatPenalty,
                 request.Agent.TopK,
                 request.Agent.RepeatLastN,
-                request.Agent.NumPredict);
+                request.Agent.NumPredict,
+                useMaxTokens: false,
+                numCtx: ResolveNumCtxForAgent(request.Agent, modelName));
 
             var sb = new StringBuilder();
             sb.AppendLine("Spiega in 3-6 righe perche la tua risposta precedente ha fallito e cosa farai per correggerla.");
@@ -1308,6 +1435,97 @@ public sealed class CommandModelExecutionService : IAgentCallService
         => !string.IsNullOrWhiteSpace(agent.Instructions) ? agent.Instructions! :
            !string.IsNullOrWhiteSpace(agent.Prompt) ? agent.Prompt! : "Sei un assistente esperto.";
 
+    private string BuildSystemPromptWithDynamic(Request request, string modelName, string roleCode, int? modelIdOverride)
+    {
+        var basePrompt = (request.SystemPrompt ?? BuildSystemPrompt(request.Agent)).Trim();
+        var modelId = ResolveModelId(modelIdOverride, request.Agent!, modelName);
+        if (!modelId.HasValue || modelId.Value <= 0)
+        {
+            return basePrompt;
+        }
+
+        var frequentErrors = _database.ListTopModelRoleErrors(modelId.Value, null, roleCode, 10);
+        if (frequentErrors.Count == 0)
+        {
+            return basePrompt;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine(basePrompt);
+        sb.AppendLine();
+        sb.AppendLine("NON RIPETERE QUESTI ERRORI:");
+        foreach (var err in frequentErrors)
+        {
+            sb.AppendLine($"- ({err.ErrorCount}) {err.ErrorText}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private int? ResolveModelId(int? modelIdOverride, Agent agent, string? modelName)
+    {
+        if (modelIdOverride.HasValue && modelIdOverride.Value > 0)
+        {
+            return modelIdOverride.Value;
+        }
+
+        if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
+        {
+            return agent.ModelId.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(modelName))
+        {
+            return _database.GetModelIdByName(modelName);
+        }
+
+        return null;
+    }
+
+    private static async Task NotifyAttemptFailureAsync(
+        Request request,
+        string modelName,
+        string roleCode,
+        int attempt,
+        int maxAttempts,
+        string reason,
+        bool deterministic,
+        bool checker,
+        string promptSent,
+        string responseText,
+        List<int>? violatedRules,
+        CancellationToken ct)
+    {
+        var callback = request.AttemptFailureCallback;
+        if (callback == null)
+        {
+            return;
+        }
+
+        try
+        {
+            await callback(
+                new AttemptFailure
+                {
+                    RoleCode = roleCode,
+                    ModelName = modelName,
+                    Attempt = attempt,
+                    MaxAttempts = maxAttempts,
+                    Reason = reason ?? string.Empty,
+                    IsDeterministic = deterministic,
+                    IsChecker = checker,
+                    PromptSent = promptSent ?? string.Empty,
+                    ResponseText = responseText ?? string.Empty,
+                    ViolatedRules = violatedRules
+                },
+                ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // best-effort callback
+        }
+    }
+
     private string? ResolveModelName(Agent agent)
     {
         if (!string.IsNullOrWhiteSpace(agent.ModelName)) return agent.ModelName;
@@ -1316,6 +1534,55 @@ public sealed class CommandModelExecutionService : IAgentCallService
     }
 
     private static string requestScope(string roleCode) => $"command/{roleCode}";
+
+    private static string BuildCheckerTrackingReason(ValidationResult checkerResult)
+    {
+        if (checkerResult?.ViolatedRules != null && checkerResult.ViolatedRules.Count > 0)
+        {
+            var rules = checkerResult.ViolatedRules
+                .Where(r => r > 0)
+                .Distinct()
+                .OrderBy(r => r)
+                .ToList();
+            if (rules.Count > 0)
+            {
+                return $"rules:{string.Join(",", rules)}";
+            }
+        }
+
+        return "rules:unknown";
+    }
+
+    private int? ResolveNumCtxForAgent(Agent? agent, string? modelName)
+    {
+        try
+        {
+            if (agent?.ModelId is > 0)
+            {
+                var model = _database.GetModelInfoById(agent.ModelId.Value);
+                if (model?.ContextToUse is > 0)
+                {
+                    return model.ContextToUse;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(modelName))
+            {
+                var model = _database.ListModels()
+                    .FirstOrDefault(m => string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase));
+                if (model?.ContextToUse is > 0)
+                {
+                    return model.ContextToUse;
+                }
+            }
+        }
+        catch
+        {
+            // best-effort
+        }
+
+        return null;
+    }
 
     private static List<string> BuildFallbackRoleCandidates(string roleCode, string? agentRole)
     {
@@ -1348,6 +1615,33 @@ public sealed class CommandModelExecutionService : IAgentCallService
                && value.Trim().Equals("response_checker", StringComparison.OrdinalIgnoreCase);
 
         return Match(roleCode) || Match(agentRole);
+    }
+
+    private async Task TryStopLlamaCppOnCancellationAsync(string modelName)
+    {
+        try
+        {
+            var info = _database.ListModels().FirstOrDefault(m =>
+                string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase));
+            if (info == null || !string.Equals(info.Provider?.Trim(), "llama.cpp", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var llama = scope.ServiceProvider.GetService<LlamaService>();
+            if (llama == null)
+            {
+                return;
+            }
+
+            await Task.Run(() => llama.StopServer()).ConfigureAwait(false);
+            _logger?.Log("Information", "CommandModelExecution", $"Cancellation received: llama.cpp server stopped for model={modelName}");
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log("Warning", "CommandModelExecution", $"Cancellation received but llama.cpp stop failed for model={modelName}: {ex.Message}");
+        }
     }
 
     private void MarkLatestAttemptResult(string modelName, Agent agent, string result, string? failReason, bool examined)

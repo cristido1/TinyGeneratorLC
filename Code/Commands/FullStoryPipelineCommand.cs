@@ -377,7 +377,7 @@ namespace TinyGenerator.Services.Commands
                 return false;
             }
 
-            var chainId = _storiesService.EnqueueAllNextStatusCommand(storyId, trigger: "full_pipeline", priority: 3);
+            var chainId = _storiesService.EnqueueAllNextStatusEnqueuer(storyId, trigger: "full_pipeline", priority: 3);
             if (string.IsNullOrWhiteSpace(chainId))
             {
                 await LogAndNotifyAsync("❌ Impossibile accodare la catena completa di stati", "error");

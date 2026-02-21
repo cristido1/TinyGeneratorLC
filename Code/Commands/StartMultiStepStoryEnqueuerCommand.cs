@@ -1,10 +1,12 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using TinyGenerator.Models;
 
 namespace TinyGenerator.Services.Commands
 {
-    public class StartMultiStepStoryCommand : ICommand
+    public class StartMultiStepStoryEnqueuerCommand : ICommand
     {
+        public bool Batch => true;
+
         private readonly string _theme;
         private readonly string? _title;
         private readonly int _writerAgentId;
@@ -14,7 +16,7 @@ namespace TinyGenerator.Services.Commands
         private readonly ICommandEnqueuer _dispatcher;
         private readonly ICustomLogger _logger;
 
-        public StartMultiStepStoryCommand(
+        public StartMultiStepStoryEnqueuerCommand(
             string theme,
             int writerAgentId,
             Guid generationId,
@@ -107,7 +109,7 @@ namespace TinyGenerator.Services.Commands
                     executorAgentId: agent.Id,
                     checkerAgentId: null, // Use default checker from task_types
                     configOverrides: configOverrides,
-                    initialContext: _theme, // â† Pass user theme as initial context!
+                    initialContext: _theme, // ← Pass user theme as initial context!
                     threadId: threadId,
                     templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions
                 );

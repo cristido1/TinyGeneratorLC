@@ -348,6 +348,7 @@
                     || opLower.includes('intelligence_test');
                 const isIntelligenceTestCommand = opLower.includes('intelligence_test') || opLower.includes('intelligence_score');
                 const isCinoCommand = opLower.includes('cino_optimize_story');
+                const isStateDrivenCommand = opLower.includes('state_driven');
                 const hasStep = currentStep !== undefined && currentStep !== null && maxStep !== undefined && maxStep !== null;
                 const scoreMatch = /(?:score\s*parziale|parziale)\s+(\d+\/10)/i.exec(stepDesc);
                 const runningScore = scoreMatch ? scoreMatch[1] : '';
@@ -490,6 +491,24 @@
                         <div style="font-size:10px; color:#444; margin-top:2px;">Tempo usato: ${cinoProgressPercent}%</div>
                     </div>`
                     : '';
+                const statePhaseRaw = (stepKv.phase || '').toString().trim();
+                const statePhase = statePhaseRaw || 'N/A';
+                const stateWords = (stepKv.words || '').toString().trim();
+                const stateRemaining = (stepKv.remaining || '').toString().trim();
+                const stateProgressPercent = (isStateDrivenCommand && hasStep && maxStep > 0)
+                    ? Math.max(0, Math.min(100, Math.round((currentStep / maxStep) * 100)))
+                    : null;
+                const stateInfo = isStateDrivenCommand
+                    ? `<div style="font-size:11px; color:#111; margin-top:4px; user-select:text;">Stato: ${escapeHtml(statePhase)}${stateWords ? ` • Parole: ${escapeHtml(stateWords)}` : ''}${stateRemaining ? ` • Rimanenti: ${escapeHtml(stateRemaining)}` : ''}</div>`
+                    : '';
+                const stateProgressBar = stateProgressPercent !== null
+                    ? `<div style="margin-top:4px;">
+                        <div style="height:6px; background:#e2e8f0; border-radius:999px; overflow:hidden;">
+                            <div style="height:100%; width:${stateProgressPercent}%; background:#16a34a;"></div>
+                        </div>
+                        <div style="font-size:10px; color:#444; margin-top:2px;">Completamento: ${stateProgressPercent}%</div>
+                    </div>`
+                    : '';
                 const cinoInfo = isCinoCommand ? `
                     <div style="font-size:11px; color:#111; margin-top:4px; user-select:text;">
                         Writer: ${escapeHtml(cinoWriter)}${cinoModel ? ` • Model: ${escapeHtml(cinoModel)}` : ''}
@@ -550,6 +569,8 @@
                         </div>
                         ${isCinoCommand ? retryInfoLine : ''}
                         ${cinoInfo}
+                        ${stateInfo}
+                        ${stateProgressBar}
                         ${progressInfo}
                         ${autoInfo}
                         ${errorMsg}
@@ -579,7 +600,11 @@
                 // This panel doesn't use them, but registering no-op handlers
                 // avoids noisy "No client method with the name ..." warnings.
                 connection.on('ProgressAppended', () => { });
+                connection.on('ProgressCompleted', () => { });
+                connection.on('progresscompleted', () => { });
                 connection.on('BusyModelsUpdated', () => { });
+                connection.on('LogEntriesAppended', () => { });
+                connection.on('logentriesappended', () => { });
 
                 connection.on('CommandListUpdated', cmds => {
                     console.log('[CommandPanel] CommandListUpdated received');

@@ -35,6 +35,7 @@ namespace TinyGenerator.Services.Commands
         private readonly ICustomLogger _logger;
         private readonly IServiceScopeFactory? _scopeFactory;
         private readonly IAgentCallService? _modelExecution;
+        private readonly ICallCenter? _callCenter;
 
         public PlannedStoryCommand(
             int plannerAgentId,
@@ -51,6 +52,7 @@ namespace TinyGenerator.Services.Commands
             ICustomLogger logger,
             IServiceScopeFactory? scopeFactory = null,
             IAgentCallService? modelExecution = null,
+            ICallCenter? callCenter = null,
             CommandTuningOptions? tuning = null)
         {
             _plannerAgentId = plannerAgentId;
@@ -67,6 +69,7 @@ namespace TinyGenerator.Services.Commands
             _logger = logger;
             _scopeFactory = scopeFactory;
             _modelExecution = modelExecution;
+            _callCenter = callCenter;
             _tuning = tuning ?? new CommandTuningOptions();
         }
 
@@ -261,49 +264,45 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
             _ = threadId;
             try
             {
-                var execution = _modelExecution;
-                if (execution == null && _scopeFactory != null)
+                var callCenter = ResolveCallCenter();
+                if (callCenter == null)
                 {
-                    using var scope = _scopeFactory.CreateScope();
-                    execution = scope.ServiceProvider.GetService<IAgentCallService>();
-                }
-
-                if (execution == null)
-                {
-                    _logger.Log("Error", "PlannedStory", "IAgentCallService non disponibile per planner");
+                    _logger.Log("Error", "PlannedStory", "ICallCenter non disponibile per planner");
                     return string.Empty;
                 }
 
-                var request = new CommandModelExecutionService.Request
-                {
-                    CommandKey = "planned_story_planner",
-                    Agent = plannerAgent,
-                    RoleCode = string.IsNullOrWhiteSpace(plannerAgent.Role) ? "planner" : plannerAgent.Role,
-                    Prompt = prompt,
-                    SystemPrompt = plannerAgent.Instructions ?? plannerAgent.Prompt ?? "Sei un planner narrativo esperto.",
-                    MaxAttempts = 2,
-                    RetryDelaySeconds = 1,
-                    StepTimeoutSec = 90,
-                    UseResponseChecker = false,
-                    EnableFallback = true,
-                    DiagnoseOnFinalFailure = true,
-                    ExplainAfterAttempt = 1,
-                    RunId = _generationId.ToString(),
-                    EnableDeterministicValidation = true,
-                    DeterministicValidator = output => CheckRunner.Execute(
-                        output,
-                        new CheckEmpty
-                        {
-                            Options = Options.Create<object>(new Dictionary<string, object>
-                            {
-                                ["ErrorMessage"] = "Planner output vuoto"
-                            })
-                        },
-                        new CheckJsonArray())
-                };
+                var history = new ChatHistory();
+                history.AddSystem(plannerAgent.Instructions ?? plannerAgent.Prompt ?? "Sei un planner narrativo esperto.");
+                history.AddUser(prompt);
 
-                var result = await execution.ExecuteAsync(request, ct);
-                return result.Success ? (result.Text ?? string.Empty) : string.Empty;
+                var options = new CallOptions
+                {
+                    Operation = "planned_story_planner",
+                    Timeout = TimeSpan.FromSeconds(90),
+                    MaxRetries = 1,
+                    UseResponseChecker = false,
+                    AllowFallback = true,
+                    AskFailExplanation = true,
+                    SystemPromptOverride = plannerAgent.Instructions ?? plannerAgent.Prompt ?? "Sei un planner narrativo esperto."
+                };
+                options.DeterministicChecks.Add(new CheckEmpty
+                {
+                    Options = Options.Create<object>(new Dictionary<string, object>
+                    {
+                        ["ErrorMessage"] = "Planner output vuoto"
+                    })
+                });
+                options.DeterministicChecks.Add(new CheckJsonArray());
+
+                var result = await callCenter.CallAgentAsync(
+                    storyId: 0,
+                    threadId: $"planned_story_planner:{_generationId}".GetHashCode(StringComparison.Ordinal),
+                    agent: plannerAgent,
+                    history: history,
+                    options: options,
+                    cancellationToken: ct).ConfigureAwait(false);
+
+                return result.Success ? (result.ResponseText ?? string.Empty) : string.Empty;
             }
             catch (Exception ex)
             {
@@ -461,48 +460,44 @@ REGOLE FONDAMENTALI:
             _ = threadId;
             try
             {
-                var execution = _modelExecution;
-                if (execution == null && _scopeFactory != null)
+                var callCenter = ResolveCallCenter();
+                if (callCenter == null)
                 {
-                    using var scope = _scopeFactory.CreateScope();
-                    execution = scope.ServiceProvider.GetService<IAgentCallService>();
-                }
-
-                if (execution == null)
-                {
-                    _logger.Log("Error", "PlannedStory", "IAgentCallService non disponibile per writer");
+                    _logger.Log("Error", "PlannedStory", "ICallCenter non disponibile per writer");
                     return string.Empty;
                 }
 
-                var request = new CommandModelExecutionService.Request
-                {
-                    CommandKey = "planned_story_writer",
-                    Agent = writerAgent,
-                    RoleCode = string.IsNullOrWhiteSpace(writerAgent.Role) ? "writer" : writerAgent.Role,
-                    Prompt = prompt,
-                    SystemPrompt = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.",
-                    MaxAttempts = 2,
-                    RetryDelaySeconds = 1,
-                    StepTimeoutSec = 90,
-                    UseResponseChecker = false,
-                    EnableFallback = true,
-                    DiagnoseOnFinalFailure = true,
-                    ExplainAfterAttempt = 1,
-                    RunId = _generationId.ToString(),
-                    EnableDeterministicValidation = true,
-                    DeterministicValidator = output => CheckRunner.Execute(
-                        output,
-                        new CheckEmpty
-                        {
-                            Options = Options.Create<object>(new Dictionary<string, object>
-                            {
-                                ["ErrorMessage"] = "Writer output vuoto"
-                            })
-                        })
-                };
+                var history = new ChatHistory();
+                history.AddSystem(writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.");
+                history.AddUser(prompt);
 
-                var result = await execution.ExecuteAsync(request, ct);
-                return result.Success ? (result.Text ?? string.Empty) : string.Empty;
+                var options = new CallOptions
+                {
+                    Operation = "planned_story_writer",
+                    Timeout = TimeSpan.FromSeconds(90),
+                    MaxRetries = 1,
+                    UseResponseChecker = false,
+                    AllowFallback = true,
+                    AskFailExplanation = true,
+                    SystemPromptOverride = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto."
+                };
+                options.DeterministicChecks.Add(new CheckEmpty
+                {
+                    Options = Options.Create<object>(new Dictionary<string, object>
+                    {
+                        ["ErrorMessage"] = "Writer output vuoto"
+                    })
+                });
+
+                var result = await callCenter.CallAgentAsync(
+                    storyId: 0,
+                    threadId: $"planned_story_writer:{_generationId}".GetHashCode(StringComparison.Ordinal),
+                    agent: writerAgent,
+                    history: history,
+                    options: options,
+                    cancellationToken: ct).ConfigureAwait(false);
+
+                return result.Success ? (result.ResponseText ?? string.Empty) : string.Empty;
             }
             catch (Exception ex)
             {
@@ -605,6 +600,35 @@ REGOLE FONDAMENTALI:
             if (firstSentence.Length > 50)
                 return firstSentence.Substring(0, 50) + "...";
             return firstSentence;
+        }
+
+        private ICallCenter? ResolveCallCenter()
+        {
+            if (_callCenter != null)
+            {
+                return _callCenter;
+            }
+
+            var rootCallCenter = ServiceLocator.Services?.GetService<ICallCenter>();
+            if (rootCallCenter != null)
+            {
+                return rootCallCenter;
+            }
+
+            var execution = _modelExecution;
+            if (execution == null && _scopeFactory != null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                execution = scope.ServiceProvider.GetService<IAgentCallService>();
+            }
+
+            execution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
+            if (execution == null)
+            {
+                return null;
+            }
+
+            return new CallCenter(execution, _database, _logger);
         }
 
         private void EnqueueTransformCommand(long storyId)

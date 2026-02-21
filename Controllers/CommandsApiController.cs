@@ -163,7 +163,7 @@ namespace TinyGenerator.Controllers
         {
             var runId = Guid.NewGuid().ToString();
 
-            var cmd = new BatchSummarizeStoriesCommand(
+            var cmd = new BatchSummarizeStoriesEnqueuerCommand(
                 _database,
                 _kernelFactory,
                 _dispatcher,
@@ -174,7 +174,7 @@ namespace TinyGenerator.Controllers
 
             // Accoda il comando batch che a sua volta accoderà i comandi individuali
             _dispatcher.Enqueue(
-                "BatchSummarizeStories",
+                "BatchSummarizeStoriesEnqueuer",
                 async ctx => await cmd.ExecuteAsync(ctx.CancellationToken),
                 runId: runId,
                 metadata: new Dictionary<string, string>

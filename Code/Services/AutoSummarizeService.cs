@@ -82,7 +82,7 @@ namespace TinyGenerator.Services
                 var scopeFactory = scope.ServiceProvider.GetService<IServiceScopeFactory>();
 
                 var runId = Guid.NewGuid().ToString();
-                var cmd = new BatchSummarizeStoriesCommand(
+                var cmd = new BatchSummarizeStoriesEnqueuerCommand(
                     database,
                     kernelFactory,
                     dispatcher,

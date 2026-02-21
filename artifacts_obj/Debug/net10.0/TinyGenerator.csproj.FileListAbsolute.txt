@@ -1,6 +1,0 @@
-C:\Users\User\Documents\ai\TinyGeneratorLC\artifacts_obj\Debug\net10.0\TinyGenerator.csproj.AssemblyReference.cache
-C:\Users\User\Documents\ai\TinyGeneratorLC\artifacts_obj\Debug\net10.0\rpswa.dswa.cache.json
-C:\Users\User\Documents\ai\TinyGeneratorLC\artifacts_obj\Debug\net10.0\TinyGenerator.GeneratedMSBuildEditorConfig.editorconfig
-C:\Users\User\Documents\ai\TinyGeneratorLC\artifacts_obj\Debug\net10.0\TinyGenerator.csproj.CoreCompileInputs.cache
-C:\Users\User\Documents\ai\TinyGeneratorLC\artifacts_obj\Debug\net10.0\TinyGenerator.MvcApplicationPartsAssemblyInfo.cache
-C:\Users\User\Documents\ai\TinyGeneratorLC\artifacts_obj\Debug\net10.0\TinyGenerator.sourcelink.json

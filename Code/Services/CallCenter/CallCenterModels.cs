@@ -38,6 +38,7 @@ public sealed class CallOptions
     // Extra metadata for policy routing/logging in the centralized executor.
     public string Operation { get; set; } = "call_center";
     public string? SystemPromptOverride { get; set; }
+    public object? ResponseFormat { get; set; }
 
     // Additional deterministic checks executed after the mandatory NonEmpty check.
     public List<IDeterministicCheck> DeterministicChecks { get; } = new();
@@ -64,13 +65,13 @@ public sealed class DeterministicResult : IDeterministicResult
 public sealed class NonEmptyResponseCheck : IDeterministicCheck
 {
     public string Rule => "La risposta NON puo essere null, vuota o whitespace.";
-    public string TextToCheck { get; set; } = string.Empty;
+    public string GenericErrorDescription => "Risposta vuota";
     public Microsoft.Extensions.Options.IOptions<object>? Options { get; set; }
 
-    public IDeterministicResult Execute()
+    public IDeterministicResult Execute(string textToCheck)
     {
         var started = DateTime.UtcNow;
-        var ok = !string.IsNullOrWhiteSpace(TextToCheck);
+        var ok = !string.IsNullOrWhiteSpace(textToCheck);
         return new DeterministicResult
         {
             Successed = ok,

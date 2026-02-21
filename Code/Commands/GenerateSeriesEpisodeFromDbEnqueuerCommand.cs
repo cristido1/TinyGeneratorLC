@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using TinyGenerator.Models;
 
@@ -7,8 +7,10 @@ namespace TinyGenerator.Services.Commands
     /// <summary>
     /// Generate a series episode using series + characters + episode data from DB.
     /// </summary>
-    public sealed class GenerateSeriesEpisodeFromDbCommand : ICommand
+    public sealed class GenerateSeriesEpisodeFromDbEnqueuerCommand : ICommand
     {
+        public bool Batch => true;
+
         private readonly int _serieId;
         private readonly int _episodeId;
         private readonly int _writerAgentId;
@@ -18,7 +20,7 @@ namespace TinyGenerator.Services.Commands
         private readonly ICommandEnqueuer _dispatcher;
         private readonly ICustomLogger _logger;
 
-        public GenerateSeriesEpisodeFromDbCommand(
+        public GenerateSeriesEpisodeFromDbEnqueuerCommand(
             int serieId,
             int episodeId,
             int writerAgentId,

@@ -1037,6 +1037,294 @@ public sealed class DatabaseService
         }
     }
 
+    public int? GetModelIdByName(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return null;
+        }
+
+        using var context = CreateDbContext();
+        try
+        {
+            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
+            return model?.Id;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public List<ModelRoleErrorEntry> ListTopModelRoleErrors(int? modelId, string? modelName, string? roleCode, int limit = 10)
+    {
+        var result = new List<ModelRoleErrorEntry>();
+        var modelRoleId = ResolveModelRoleId(modelId, modelName, roleCode);
+        if (!modelRoleId.HasValue || modelRoleId.Value <= 0)
+        {
+            return result;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            const string sql = @"
+SELECT id AS Id,
+       parent_id AS ParentId,
+       error_text AS ErrorText,
+       error_type AS ErrorType,
+       error_count AS ErrorCount,
+       date_insert AS DateInsert,
+       date_last AS DateLast
+FROM model_roles_errors
+WHERE parent_id = @parentId
+ORDER BY error_count DESC, date_last DESC, id DESC
+LIMIT @limitRows;";
+
+            return conn.Query<ModelRoleErrorEntry>(sql, new
+            {
+                parentId = modelRoleId.Value,
+                limitRows = Math.Max(1, limit)
+            }).ToList();
+        }
+        catch
+        {
+            return result;
+        }
+    }
+
+    public int? ResolveModelRoleId(int? modelId, string? modelName, string? roleCode)
+    {
+        if (string.IsNullOrWhiteSpace(roleCode))
+        {
+            return null;
+        }
+
+        var resolvedModelId = modelId;
+        if ((!resolvedModelId.HasValue || resolvedModelId.Value <= 0) && !string.IsNullOrWhiteSpace(modelName))
+        {
+            resolvedModelId = GetModelIdByName(modelName);
+        }
+
+        if (!resolvedModelId.HasValue || resolvedModelId.Value <= 0)
+        {
+            return null;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            const string sql = @"
+SELECT mr.id
+FROM model_roles mr
+JOIN roles r ON r.id = mr.role_id
+WHERE mr.model_id = @modelId
+  AND lower(trim(r.ruolo)) = lower(trim(@roleCode))
+ORDER BY mr.is_primary DESC, mr.id ASC
+LIMIT 1;";
+
+            return conn.ExecuteScalar<int?>(sql, new
+            {
+                modelId = resolvedModelId.Value,
+                roleCode = roleCode.Trim()
+            });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public int? ResolveOrCreateModelRoleId(int? modelId, string? modelName, string? roleCode)
+    {
+        if (string.IsNullOrWhiteSpace(roleCode))
+        {
+            return null;
+        }
+
+        var resolvedModelId = modelId;
+        if ((!resolvedModelId.HasValue || resolvedModelId.Value <= 0) && !string.IsNullOrWhiteSpace(modelName))
+        {
+            resolvedModelId = GetModelIdByName(modelName);
+        }
+
+        if (!resolvedModelId.HasValue || resolvedModelId.Value <= 0)
+        {
+            return null;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            var normalizedRole = roleCode.Trim();
+            var roleId = conn.ExecuteScalar<int?>(
+                "SELECT id FROM roles WHERE lower(trim(ruolo)) = lower(trim(@roleCode)) LIMIT 1",
+                new { roleCode = normalizedRole });
+
+            var now = DateTime.UtcNow.ToString("o");
+            if (!roleId.HasValue || roleId.Value <= 0)
+            {
+                conn.Execute(
+                    @"INSERT INTO roles (ruolo, created_at, updated_at)
+                      VALUES (@roleCode, @now, @now)",
+                    new { roleCode = normalizedRole, now });
+
+                roleId = conn.ExecuteScalar<int?>("SELECT last_insert_rowid();");
+            }
+
+            if (!roleId.HasValue || roleId.Value <= 0)
+            {
+                return null;
+            }
+
+            var existingId = conn.ExecuteScalar<int?>(
+                @"SELECT id
+                  FROM model_roles
+                  WHERE model_id = @modelId AND role_id = @roleId
+                  ORDER BY is_primary DESC, id ASC
+                  LIMIT 1",
+                new { modelId = resolvedModelId.Value, roleId = roleId.Value });
+
+            if (existingId.HasValue && existingId.Value > 0)
+            {
+                return existingId;
+            }
+
+            conn.Execute(
+                @"INSERT INTO model_roles
+                    (model_id, role_id, is_primary, enabled, created_at, updated_at)
+                  VALUES
+                    (@modelId, @roleId, 1, 1, @now, @now)",
+                new { modelId = resolvedModelId.Value, roleId = roleId.Value, now });
+
+            return conn.ExecuteScalar<int?>("SELECT last_insert_rowid();");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public bool UpsertModelRoleError(int parentId, string? errorText, string? errorType)
+    {
+        if (parentId <= 0 || string.IsNullOrWhiteSpace(errorText) || string.IsNullOrWhiteSpace(errorType))
+        {
+            return false;
+        }
+
+        var normalizedText = errorText.Trim();
+        var normalizedType = errorType.Trim().ToLowerInvariant();
+        if (normalizedType != "deterministic" &&
+            normalizedType != "checker" &&
+            normalizedType != "timeout" &&
+            normalizedType != "exception")
+        {
+            return false;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            var now = DateTime.UtcNow.ToString("o");
+            const string updateSql = @"
+UPDATE model_roles_errors
+SET error_count = error_count + 1,
+    date_last = @now
+WHERE parent_id = @parentId
+  AND error_text = @errorText
+  AND error_type = @errorType;";
+            var affected = conn.Execute(updateSql, new
+            {
+                parentId,
+                errorText = normalizedText,
+                errorType = normalizedType,
+                now
+            });
+            if (affected > 0)
+            {
+                return true;
+            }
+
+            const string insertSql = @"
+INSERT INTO model_roles_errors (parent_id, error_text, error_type, error_count, date_insert, date_last)
+VALUES (@parentId, @errorText, @errorType, 1, @now, @now);";
+            conn.Execute(insertSql, new
+            {
+                parentId,
+                errorText = normalizedText,
+                errorType = normalizedType,
+                now
+            });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public List<ModelRoleErrorEntry> ListModelRoleErrors(int parentId, int maxRows = 200)
+    {
+        var result = new List<ModelRoleErrorEntry>();
+        if (parentId <= 0)
+        {
+            return result;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            const string sql = @"
+SELECT id AS Id,
+       parent_id AS ParentId,
+       error_text AS ErrorText,
+       error_type AS ErrorType,
+       error_count AS ErrorCount,
+       date_insert AS DateInsert,
+       date_last AS DateLast
+FROM model_roles_errors
+WHERE parent_id = @parentId
+ORDER BY date_last DESC, id DESC
+LIMIT @limitRows;";
+
+            return conn.Query<ModelRoleErrorEntry>(sql, new
+            {
+                parentId,
+                limitRows = Math.Max(1, maxRows)
+            }).ToList();
+        }
+        catch
+        {
+            return result;
+        }
+    }
+
+    public bool DeleteModelRoleError(long errorId)
+    {
+        if (errorId <= 0)
+        {
+            return false;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            const string sql = "DELETE FROM model_roles_errors WHERE id = @id;";
+            var affected = conn.Execute(sql, new { id = errorId });
+            return affected > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public void UpsertModel(ModelInfo model)
     {
         if (model == null || string.IsNullOrWhiteSpace(model.Name)) return;
@@ -1394,9 +1682,10 @@ public sealed class DatabaseService
     public TinyGenerator.Models.Agent? GetAgentByRole(string role)
     {
         if (string.IsNullOrWhiteSpace(role)) return null;
+        var normalizedRole = role.Trim().ToLower();
         using var context = CreateDbContext();
         return context.Agents
-            .Where(a => a.Role.ToLower() == role.ToLower())
+            .Where(a => (a.Role ?? string.Empty).Trim().ToLower() == normalizedRole)
             .OrderByDescending(a => a.IsActive)
             .ThenBy(a => a.Id)
             .FirstOrDefault();
@@ -1620,6 +1909,15 @@ public sealed class DatabaseService
         if (id <= 0) return null;
         using var context = CreateDbContext();
         return context.TipoPlannings.Find(id);
+    }
+
+    public List<NarrativeProfile> ListNarrativeProfiles()
+    {
+        using var context = CreateDbContext();
+        return context.NarrativeProfiles
+            .AsNoTracking()
+            .OrderBy(p => p.Name)
+            .ToList();
     }
 
     public int EnsureSeriesFoldersOnDisk(string contentRootPath)

@@ -13,6 +13,8 @@ bin/
 obj/
 out/
 artifacts/
+artifact*/
+**/artifact*/
 
 # Visual Studio cache/options
 *.cache

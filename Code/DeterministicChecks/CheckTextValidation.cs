@@ -4,7 +4,7 @@ public sealed class CheckTextValidation : CheckBase
 {
     public override string Rule => "Validazione testuale narrativa.";
 
-    public override IDeterministicResult Execute()
+    public override IDeterministicResult Execute(string textToCheck)
     {
         var started = DateTime.UtcNow;
         var service = GetOptionRaw("TextValidationService") as TextValidationService;
@@ -19,7 +19,7 @@ public sealed class CheckTextValidation : CheckBase
         var agentIdentity = GetOption("AgentIdentity", string.Empty);
         var logger = GetOptionRaw("Logger") as ICustomLogger;
 
-        var text = (TextToCheck ?? string.Empty).Trim();
+        var text = (textToCheck ?? string.Empty).Trim();
         var validation = service.Validate(text, storyHistory);
         if (validation.IsValid)
         {
@@ -78,4 +78,3 @@ public sealed class CheckTextValidation : CheckBase
             CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds)
         };
 }
-

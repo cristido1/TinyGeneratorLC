@@ -39,5 +39,7 @@ public static class CommandScopePaths
 {
     public const string AddAmbientTagsToStory = "story/add_ambient_tags_to_story";
     public const string AddVoiceTagsToStory = "story/add_voice_tags_to_story";
+    public const string AddFxTagsToStory = "story/add_fx_tags_to_story";
+    public const string AddMusicTagsToStory = "story/add_music_tags_to_story";
 }
 

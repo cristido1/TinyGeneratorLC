@@ -22,7 +22,7 @@ public sealed class GenerateRandomSeriesPromptCommand : ICommand
 
     private readonly DatabaseService _database;
     private readonly ICustomLogger? _logger;
-    private readonly IAgentCallService? _modelExecution;
+    private readonly ICallCenter? _callCenter;
     private readonly PromptStyle _style;
 
     public string? GeneratedPrompt { get; private set; }
@@ -34,12 +34,26 @@ public sealed class GenerateRandomSeriesPromptCommand : ICommand
         DatabaseService database,
         PromptStyle style = PromptStyle.Standard,
         ICustomLogger? logger = null,
-        IAgentCallService? modelExecution = null)
+        ICallCenter? callCenter = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _style = style;
         _logger = logger;
-        _modelExecution = modelExecution;
+        _callCenter = callCenter;
+    }
+
+    // Backward-compatible overload for call sites still passing IAgentCallService.
+    public GenerateRandomSeriesPromptCommand(
+        DatabaseService database,
+        PromptStyle style,
+        ICustomLogger? logger,
+        IAgentCallService? modelExecution)
+        : this(
+            database,
+            style,
+            logger,
+            callCenter: modelExecution == null ? null : new CallCenter(modelExecution, database, logger))
+    {
     }
 
     public async Task<CommandResult> ExecuteAsync(string? runId = null, CancellationToken ct = default)
@@ -100,54 +114,61 @@ public sealed class GenerateRandomSeriesPromptCommand : ICommand
 
     private async Task<string> GeneratePromptTextAsync(Agent writer, string modelName, string runId, CancellationToken ct)
     {
-        var execution = _modelExecution ?? ServiceLocator.Services?.GetService(typeof(IAgentCallService)) as IAgentCallService;
-        if (execution != null)
+        var callCenter = _callCenter
+            ?? ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter;
+        if (callCenter != null)
         {
-            var request = new CommandModelExecutionService.Request
+            var history = new ChatHistory();
+            history.AddSystem(BuildSystemPrompt(writer, _style));
+            history.AddUser(BuildUserPrompt(_style));
+
+            var options = new CallOptions
             {
-                CommandKey = ResolveCommandKey(_style),
-                Agent = writer,
-                RoleCode = string.IsNullOrWhiteSpace(writer.Role) ? "writer" : writer.Role,
-                Prompt = BuildUserPrompt(_style),
-                SystemPrompt = BuildSystemPrompt(writer, _style),
-                MaxAttempts = 2,
-                RetryDelaySeconds = 1,
-                StepTimeoutSec = 45,
+                Operation = ResolveCommandKey(_style),
+                Timeout = TimeSpan.FromSeconds(45),
+                MaxRetries = 1,
                 UseResponseChecker = false,
-                EnableFallback = true,
-                DiagnoseOnFinalFailure = true,
-                ExplainAfterAttempt = 2,
-                RunId = runId,
-                EnableDeterministicValidation = true,
-                DeterministicValidator = output => CheckRunner.Execute(
-                    output,
-                    new CheckPromptLengthRange
-                    {
-                        Options = Options.Create<object>(new Dictionary<string, object>
-                        {
-                            ["MinLength"] = 40,
-                            ["MaxLength"] = 1800
-                        })
-                    }),
-                RetryPromptFactory = (_, reason) =>
-                    $"Correggi la risposta precedente. Problema: {reason}. Restituisci solo il prompt finale in italiano, max 120 parole."
+                AllowFallback = true,
+                AskFailExplanation = true,
+                SystemPromptOverride = BuildSystemPrompt(writer, _style)
             };
-
-            var result = await execution.ExecuteAsync(request, ct).ConfigureAwait(false);
-            if (!result.Success || string.IsNullOrWhiteSpace(result.Text))
+            options.DeterministicChecks.Add(new CheckEmpty
             {
-                throw new InvalidOperationException(result.Error ?? "Risposta writer vuota");
+                Options = Options.Create<object>(new Dictionary<string, object>
+                {
+                    ["ErrorMessage"] = "Risposta vuota"
+                })
+            });
+            options.DeterministicChecks.Add(new CheckPromptLengthRange
+            {
+                Options = Options.Create<object>(new Dictionary<string, object>
+                {
+                    ["MinLength"] = 40,
+                    ["MaxLength"] = 1800
+                })
+            });
+
+            var result = await callCenter.CallAgentAsync(
+                storyId: 0,
+                threadId: ResolveCommandKey(_style).GetHashCode(StringComparison.Ordinal),
+                agent: writer,
+                history: history,
+                options: options,
+                cancellationToken: ct).ConfigureAwait(false);
+            if (!result.Success || string.IsNullOrWhiteSpace(result.ResponseText))
+            {
+                throw new InvalidOperationException(result.FailureReason ?? "Risposta writer vuota");
             }
 
-            if (!string.IsNullOrWhiteSpace(result.ModelName))
+            if (!string.IsNullOrWhiteSpace(result.ModelUsed))
             {
-                SelectedModelName = result.ModelName;
+                SelectedModelName = result.ModelUsed;
             }
 
-            return result.Text;
+            return result.ResponseText;
         }
 
-        throw new InvalidOperationException("IAgentCallService non disponibile: chiamata diretta al modello disabilitata.");
+        throw new InvalidOperationException("ICallCenter non disponibile: chiamata centralizzata disabilitata.");
     }
 
     private static bool IsEligibleWriter(Agent agent)

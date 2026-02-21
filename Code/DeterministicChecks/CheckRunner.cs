@@ -19,13 +19,16 @@ public static class CheckRunner
                 continue;
             }
 
-            check.TextToCheck = text;
-            var result = check.Execute();
+            var result = check.Execute(text);
             if (!result.Successed)
             {
-                var reason = string.IsNullOrWhiteSpace(result.Message)
-                    ? $"Deterministic check failed: {check.Rule}"
+                var generic = string.IsNullOrWhiteSpace(check.GenericErrorDescription)
+                    ? check.Rule
+                    : check.GenericErrorDescription;
+                var detail = string.IsNullOrWhiteSpace(result.Message)
+                    ? "failed"
                     : result.Message;
+                var reason = $"GENERIC_ERROR: {generic} | DETAIL: {detail}";
                 return new CommandModelExecutionService.DeterministicValidationResult(false, reason);
             }
         }
@@ -33,4 +36,3 @@ public static class CheckRunner
         return new CommandModelExecutionService.DeterministicValidationResult(true, null);
     }
 }
-

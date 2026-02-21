@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Text;
+using System.IO;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
@@ -47,6 +48,8 @@ namespace TinyGenerator.Services
         public int? MaxResponseTokens { get; set; } = null;
         // OpenAI-style response_format (usato per forzare JSON schema)
         public object? ResponseFormat { get; set; }
+        public bool EnableStreaming { get; set; } = false;
+        public Func<string, Task>? StreamChunkCallbackAsync { get; set; }
 
         private readonly HashSet<string> _noTemperatureModels;
         private readonly HashSet<string> _noRepeatPenaltyModels;
@@ -172,7 +175,7 @@ namespace TinyGenerator.Services
                     lastResponseJson = await CallModelWithToolsOnceAsync(messages, tools, ct, requestId).ConfigureAwait(false);
                     AppendAssistantResponseToHistory(messages, lastResponseJson);
                 }
-                catch (OperationCanceledException oce) when (options.EnableFallback && !string.IsNullOrWhiteSpace(agentRole))
+                catch (OperationCanceledException oce) when (!ct.IsCancellationRequested && options.EnableFallback && !string.IsNullOrWhiteSpace(agentRole))
                 {
                     _logger?.Log("Warning", "ResponseValidation",
                         $"Primary model '{_modelId}' cancelled/timed out for role '{agentRole}'. Trying fallback models. Details: {oce.Message}");
@@ -945,11 +948,16 @@ namespace TinyGenerator.Services
                 var content = lastUser;
                 var startMarker = "RIGHE DI DIALOGO";
                 var endMarker = "TESTO COMPLETO";
-
-                var start = content.IndexOf(startMarker, StringComparison.OrdinalIgnoreCase);
+                var start = content.LastIndexOf(startMarker, StringComparison.OrdinalIgnoreCase);
                 if (start < 0) return set;
+
                 var end = content.IndexOf(endMarker, start, StringComparison.OrdinalIgnoreCase);
-                if (end < 0) return set;
+                if (end < 0)
+                {
+                    end = content.Length;
+                }
+
+                if (end <= start) return set;
 
                 var section = content.Substring(start, end - start);
                 section = section.Replace("\r\n", "\n").Replace('\r', '\n');
@@ -1284,26 +1292,45 @@ namespace TinyGenerator.Services
                 if (isOllama)
                 {
                     _logger?.Log("Debug", "LangChainBridge", $"[ReqID: {requestId}] Routing a Ollama ({tools.Count} tools)");
+                    var ollamaStreaming = EnableStreaming && StreamChunkCallbackAsync != null;
+                    try
+                    {
+                        Console.WriteLine(
+                            $"[StoryLive TRACE] bridge_route req={requestId} provider=ollama model={_modelId} " +
+                            $"enable_streaming={EnableStreaming} callback_present={StreamChunkCallbackAsync != null} " +
+                            $"ollama_stream_field={ollamaStreaming}");
+                    }
+                    catch
+                    {
+                        // No-op tracing
+                    }
                     
                     var requestBody = new Dictionary<string, object>
                     {
                         { "model", _modelId },
                         { "messages", messages.Select(m => new { role = m.Role, content = m.Content }).ToList() },
-                        { "stream", false },
-                        { "temperature", Temperature },
-                        { "top_p", TopP }
+                        { "stream", ollamaStreaming }
                     };
-                    if (!_noRepeatPenaltyModels.Contains(_modelId) && RepeatPenalty.HasValue) requestBody["repeat_penalty"] = RepeatPenalty.Value;
-                    if (!_noTopKModels.Contains(_modelId) && TopK.HasValue) requestBody["top_k"] = TopK.Value;
-                    if (!_noRepeatLastNModels.Contains(_modelId) && RepeatLastN.HasValue) requestBody["repeat_last_n"] = RepeatLastN.Value;
-                    if (!_noNumPredictModels.Contains(_modelId) && NumPredict.HasValue) requestBody["num_predict"] = NumPredict.Value;
-                    if (NumCtx.HasValue && NumCtx.Value > 0)
+
+                    var options = new Dictionary<string, object>
                     {
-                        requestBody["options"] = new Dictionary<string, object>
-                        {
-                            { "num_ctx", NumCtx.Value }
-                        };
+                        { "temperature", Temperature },
+                        { "top_p", TopP },
+                        { "num_keep", 0 },
+                        { "mirostat", 0 },
+                        { "stop", Array.Empty<string>() }
+                    };
+
+                    if (!_noRepeatPenaltyModels.Contains(_modelId) && RepeatPenalty.HasValue) options["repeat_penalty"] = RepeatPenalty.Value;
+                    if (!_noTopKModels.Contains(_modelId) && TopK.HasValue) options["top_k"] = TopK.Value;
+                    if (!_noRepeatLastNModels.Contains(_modelId) && RepeatLastN.HasValue) options["repeat_last_n"] = RepeatLastN.Value;
+                    if (!_noNumPredictModels.Contains(_modelId))
+                    {
+                        options["num_predict"] = NumPredict ?? -2;
                     }
+                    if (NumCtx.HasValue && NumCtx.Value > 0) options["num_ctx"] = NumCtx.Value;
+
+                    requestBody["options"] = options;
 
                     if (ResponseFormat != null)
                     {
@@ -1325,6 +1352,16 @@ namespace TinyGenerator.Services
                 else
                 {
                     _logger?.Log("Debug", "LangChainBridge", $"[ReqID: {requestId}] Routing a OpenAI-compatible endpoint");
+                    try
+                    {
+                        Console.WriteLine(
+                            $"[StoryLive TRACE] bridge_route req={requestId} provider=openai_compatible model={_modelId} " +
+                            $"enable_streaming={EnableStreaming} callback_present={StreamChunkCallbackAsync != null} (streaming live non gestito qui)");
+                    }
+                    catch
+                    {
+                        // No-op tracing
+                    }
                     
                     // Determine if model uses new parameter name (o1, gpt-4o series)
                     bool usesNewTokenParam = _modelId.Contains("o1", StringComparison.OrdinalIgnoreCase) ||
@@ -1436,9 +1473,27 @@ namespace TinyGenerator.Services
                 }
 
                 var response = await _httpClient.SendAsync(httpRequest, ct);
-                
-                var responseContent = await response.Content.ReadAsStringAsync(ct);
-                
+                var useOllamaStreamingResponse = isOllama && EnableStreaming && StreamChunkCallbackAsync != null;
+                try
+                {
+                    Console.WriteLine(
+                        $"[StoryLive TRACE] bridge_http_response req={requestId} model={_modelId} status={(int)response.StatusCode} " +
+                        $"is_ollama={isOllama} use_ollama_streaming_response={useOllamaStreamingResponse}");
+                }
+                catch
+                {
+                    // No-op tracing
+                }
+                string responseContent;
+                if (useOllamaStreamingResponse && response.IsSuccessStatusCode)
+                {
+                    responseContent = await ReadOllamaStreamedResponseAsync(response, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    responseContent = await response.Content.ReadAsStringAsync(ct);
+                }
+
                 _logger?.Log("Info", "LangChainBridge", $"Model responded (status={response.StatusCode})");
                 _logger?.LogResponseJson(_modelId, responseContent, currentThreadId, LogScope.CurrentAgentName);
                 // capture response for possible error diagnostics only
@@ -1550,6 +1605,148 @@ namespace TinyGenerator.Services
                     await _logger.ModelRequestFinishedAsync(_modelId).ConfigureAwait(false);
                 }
             }
+        }
+
+        private async Task<string> ReadOllamaStreamedResponseAsync(HttpResponseMessage response, CancellationToken ct)
+        {
+            var contentBuilder = new StringBuilder();
+            var streamChunks = 0;
+            string? doneReason = null;
+            long? totalDuration = null;
+            long? loadDuration = null;
+            long? promptEvalCount = null;
+            long? promptEvalDuration = null;
+            long? evalCount = null;
+            long? evalDuration = null;
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var reader = new StreamReader(stream);
+            try
+            {
+                Console.WriteLine($"[StoryLive TRACE] ollama_stream_start model={_modelId}");
+            }
+            catch
+            {
+                // No-op tracing
+            }
+            while (!reader.EndOfStream)
+            {
+                ct.ThrowIfCancellationRequested();
+                var line = await reader.ReadLineAsync().ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+
+                    if (root.TryGetProperty("message", out var msg) &&
+                        msg.ValueKind == JsonValueKind.Object &&
+                        msg.TryGetProperty("content", out var contentEl))
+                    {
+                        var delta = contentEl.GetString() ?? string.Empty;
+                        if (!string.IsNullOrEmpty(delta))
+                        {
+                            streamChunks++;
+                            try
+                            {
+                                Console.WriteLine($"[StoryLive TRACE] ollama_stream_delta model={_modelId} chunk_no={streamChunks} len={delta.Length}");
+                            }
+                            catch
+                            {
+                                // No-op tracing
+                            }
+                            contentBuilder.Append(delta);
+                            if (StreamChunkCallbackAsync != null)
+                            {
+                                try
+                                {
+                                    try
+                                    {
+                                        Console.WriteLine($"[StoryLive TRACE] ollama_stream_callback_invoke model={_modelId} chunk_no={streamChunks}");
+                                    }
+                                    catch
+                                    {
+                                        // No-op tracing
+                                    }
+                                    await StreamChunkCallbackAsync(delta).ConfigureAwait(false);
+                                }
+                                catch
+                                {
+                                    // best-effort streaming callback
+                                }
+                            }
+                        }
+                    }
+
+                    if (root.TryGetProperty("done_reason", out var doneReasonEl) && doneReasonEl.ValueKind == JsonValueKind.String)
+                    {
+                        doneReason = doneReasonEl.GetString();
+                    }
+                    if (root.TryGetProperty("total_duration", out var totalDurEl) && totalDurEl.ValueKind == JsonValueKind.Number && totalDurEl.TryGetInt64(out var td))
+                    {
+                        totalDuration = td;
+                    }
+                    if (root.TryGetProperty("load_duration", out var loadDurEl) && loadDurEl.ValueKind == JsonValueKind.Number && loadDurEl.TryGetInt64(out var ld))
+                    {
+                        loadDuration = ld;
+                    }
+                    if (root.TryGetProperty("prompt_eval_count", out var pecEl) && pecEl.ValueKind == JsonValueKind.Number && pecEl.TryGetInt64(out var pec))
+                    {
+                        promptEvalCount = pec;
+                    }
+                    if (root.TryGetProperty("prompt_eval_duration", out var pedEl) && pedEl.ValueKind == JsonValueKind.Number && pedEl.TryGetInt64(out var ped))
+                    {
+                        promptEvalDuration = ped;
+                    }
+                    if (root.TryGetProperty("eval_count", out var ecEl) && ecEl.ValueKind == JsonValueKind.Number && ecEl.TryGetInt64(out var ec))
+                    {
+                        evalCount = ec;
+                    }
+                    if (root.TryGetProperty("eval_duration", out var edEl) && edEl.ValueKind == JsonValueKind.Number && edEl.TryGetInt64(out var ed))
+                    {
+                        evalDuration = ed;
+                    }
+                }
+                catch
+                {
+                    // Ignore malformed partial lines
+                }
+            }
+
+            var payload = new Dictionary<string, object?>
+            {
+                ["message"] = new Dictionary<string, object?>
+                {
+                    ["role"] = "assistant",
+                    ["content"] = contentBuilder.ToString()
+                },
+                ["done"] = true
+            };
+
+            if (!string.IsNullOrWhiteSpace(doneReason)) payload["done_reason"] = doneReason;
+            if (totalDuration.HasValue) payload["total_duration"] = totalDuration.Value;
+            if (loadDuration.HasValue) payload["load_duration"] = loadDuration.Value;
+            if (promptEvalCount.HasValue) payload["prompt_eval_count"] = promptEvalCount.Value;
+            if (promptEvalDuration.HasValue) payload["prompt_eval_duration"] = promptEvalDuration.Value;
+            if (evalCount.HasValue) payload["eval_count"] = evalCount.Value;
+            if (evalDuration.HasValue) payload["eval_duration"] = evalDuration.Value;
+
+            try
+            {
+                Console.WriteLine(
+                    $"[StoryLive TRACE] ollama_stream_end model={_modelId} chunks={streamChunks} " +
+                    $"content_len={contentBuilder.Length} done_reason={doneReason ?? "(null)"}");
+            }
+            catch
+            {
+                // No-op tracing
+            }
+
+            return JsonSerializer.Serialize(payload);
         }
 
         /// <summary>

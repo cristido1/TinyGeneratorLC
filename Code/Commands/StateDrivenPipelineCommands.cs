@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 using TinyGenerator.Services.Text;
 
@@ -1011,49 +1012,77 @@ internal static class StateDrivenPipelineHelpers
         _ = kernelFactory;
         _ = modelName;
 
-        async Task<AgentResponse> ExecuteWithAsync(IAgentCallService agentCall)
-        {
-            var result = await agentCall.ExecuteAsync(
-                new CommandModelExecutionService.Request
-                {
-                    CommandKey = roleCode,
-                    Agent = agent,
-                    RoleCode = roleCode,
-                    Prompt = userPrompt,
-                    SystemPrompt = systemPrompt,
-                    UseResponseChecker = !skipResponseChecker,
-                    EnableFallback = allowInternalFallback,
-                    DiagnoseOnFinalFailure = true,
-                    ExplainAfterAttempt = 0,
-                    RunId = LogScope.CurrentThreadId?.ToString()
-                },
-                ct).ConfigureAwait(false);
-
-            if (result.Success && !string.IsNullOrWhiteSpace(result.Text))
-            {
-                return AgentResponse.Ok(result.Text!);
-            }
-
-            return AgentResponse.Fail(result.Error ?? "Risposta vuota dal modello");
-        }
-
+        ICallCenter? callCenter = null;
         if (scopeFactory != null)
         {
-            using var agentScope = scopeFactory.CreateScope();
-            var agentCall = agentScope.ServiceProvider.GetService<IAgentCallService>();
-            if (agentCall != null)
+            using var scope = scopeFactory.CreateScope();
+            callCenter = scope.ServiceProvider.GetService<ICallCenter>();
+            if (callCenter == null)
             {
-                return await ExecuteWithAsync(agentCall).ConfigureAwait(false);
+                var scopedAgentCall = scope.ServiceProvider.GetService<IAgentCallService>();
+                if (scopedAgentCall != null)
+                {
+                    var scopedDb = scope.ServiceProvider.GetService<DatabaseService>();
+                    if (scopedDb != null)
+                    {
+                        callCenter = new CallCenter(scopedAgentCall, scopedDb);
+                    }
+                }
             }
         }
 
-        var rootAgentCall = ServiceLocator.Services?.GetService<IAgentCallService>();
-        if (rootAgentCall != null)
+        callCenter ??= ServiceLocator.Services?.GetService<ICallCenter>();
+        if (callCenter == null)
         {
-            return await ExecuteWithAsync(rootAgentCall).ConfigureAwait(false);
+            var rootAgentCall = ServiceLocator.Services?.GetService<IAgentCallService>();
+            var rootDb = ServiceLocator.Services?.GetService<DatabaseService>();
+            if (rootAgentCall != null && rootDb != null)
+            {
+                callCenter = new CallCenter(rootAgentCall, rootDb);
+            }
         }
 
-        return AgentResponse.Fail("IAgentCallService non disponibile nel scope: chiamata diretta al modello disabilitata");
+        if (callCenter == null)
+        {
+            return AgentResponse.Fail("ICallCenter non disponibile nel scope: chiamata centralizzata disabilitata");
+        }
+
+        var history = new ChatHistory();
+        history.AddSystem(systemPrompt);
+        history.AddUser(userPrompt);
+
+        var options = new CallOptions
+        {
+            Operation = roleCode,
+            Timeout = TimeSpan.FromSeconds(120),
+            MaxRetries = 1,
+            UseResponseChecker = !skipResponseChecker,
+            AllowFallback = allowInternalFallback,
+            AskFailExplanation = true,
+            SystemPromptOverride = systemPrompt
+        };
+        options.DeterministicChecks.Add(new CheckEmpty
+        {
+            Options = Options.Create<object>(new Dictionary<string, object>
+            {
+                ["ErrorMessage"] = $"Risposta vuota per {roleCode}"
+            })
+        });
+
+        var result = await callCenter.CallAgentAsync(
+            storyId: 0,
+            threadId: $"{roleCode}:{LogScope.CurrentThreadId}".GetHashCode(StringComparison.Ordinal),
+            agent: agent,
+            history: history,
+            options: options,
+            cancellationToken: ct).ConfigureAwait(false);
+
+        if (result.Success && !string.IsNullOrWhiteSpace(result.ResponseText))
+        {
+            return AgentResponse.Ok(result.ResponseText);
+        }
+
+        return AgentResponse.Fail(result.FailureReason ?? "Risposta vuota dal modello");
     }
 
     public static bool TryExtractJson(string raw, JsonValueKind expectedKind, out string json, out string error)

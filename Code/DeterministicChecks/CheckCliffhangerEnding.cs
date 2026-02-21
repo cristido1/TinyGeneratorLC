@@ -4,11 +4,11 @@ public sealed class CheckCliffhangerEnding : CheckBase
 {
     public override string Rule => "Il chunk deve terminare in tensione aperta (cliffhanger).";
 
-    public override IDeterministicResult Execute()
+    public override IDeterministicResult Execute(string textToCheck)
     {
         var started = DateTime.UtcNow;
         var agentIdentity = GetOption("AgentIdentity", string.Empty);
-        var text = (TextToCheck ?? string.Empty).Trim();
+        var text = (textToCheck ?? string.Empty).Trim();
 
         if (EndsInTension(text, out var reason))
         {
@@ -71,4 +71,3 @@ public sealed class CheckCliffhangerEnding : CheckBase
         return false;
     }
 }
-

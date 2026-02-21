@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using TinyGenerator.Models;
 
@@ -8,8 +8,10 @@ namespace TinyGenerator.Services.Commands
     /// Comando per generare un nuovo episodio di una serie esistente.
     /// Carica i dati della serie dal database e li usa come contesto per la generazione.
     /// </summary>
-    public class GenerateSeriesEpisodeCommand : ICommand
+    public class GenerateSeriesEpisodeEnqueuerCommand : ICommand
     {
+        public bool Batch => true;
+
         private readonly int _serieId;
         private readonly int _writerAgentId;
         private readonly Guid _generationId;
@@ -19,7 +21,7 @@ namespace TinyGenerator.Services.Commands
         private readonly ICustomLogger _logger;
         private readonly string? _customPrompt; // Prompt aggiuntivo opzionale per questo episodio specifico
 
-        public GenerateSeriesEpisodeCommand(
+        public GenerateSeriesEpisodeEnqueuerCommand(
             int serieId,
             int writerAgentId,
             Guid generationId,
@@ -48,9 +50,9 @@ namespace TinyGenerator.Services.Commands
 
             try
             {
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 1: Carica serie dal database                            â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 1: Carica serie dal database                            ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 var serie = _database.GetSeriesById(_serieId);
                 if (serie == null)
                 {
@@ -58,9 +60,9 @@ namespace TinyGenerator.Services.Commands
                     return;
                 }
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 2: Carica agente writer                                 â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 2: Carica agente writer                                 ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 var agent = _database.GetAgentById(_writerAgentId);
                 if (agent == null)
                 {
@@ -93,9 +95,9 @@ namespace TinyGenerator.Services.Commands
                     ? _database.GetTipoPlanningById(serie.DefaultTipoPlanningId.Value)
                     : null;
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 3: Costruisci prompt con i dati della serie            â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 3: Costruisci prompt con i dati della serie            ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 var seriesContext = SeriesEpisodeCommandSupport.BuildSeriesContext(
                     serie,
                     plannerMethod,
@@ -109,9 +111,9 @@ namespace TinyGenerator.Services.Commands
                 // Titolo dell'episodio: "Serie - Episodio N"
                 var episodeTitle = $"{serie.Titolo} - Episodio {episodeNumber}";
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 4: Build config con serie_id e episode number          â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 4: Build config con serie_id e episode number          ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 var configOverrides = SeriesEpisodeExecutionSupport.BuildConfigOverridesForNextEpisode(
                     _serieId,
                     episodeNumber,
@@ -124,9 +126,9 @@ namespace TinyGenerator.Services.Commands
                 // Store model info for later use (id-only)
                 int? modelId = agent.ModelId;
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 5: Start task execution                                 â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 5: Start task execution                                 ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 var executionId = await _orchestrator.StartTaskExecutionAsync(
                     taskType: "story",
                     entityId: null, // Story will be created on success
@@ -134,16 +136,16 @@ namespace TinyGenerator.Services.Commands
                     executorAgentId: agent.Id,
                     checkerAgentId: null,
                     configOverrides: configOverrides,
-                    initialContext: seriesContext, // â† Context della serie!
+                    initialContext: seriesContext, // ← Context della serie!
                     threadId: threadId,
                     templateInstructions: string.IsNullOrWhiteSpace(template.Instructions) ? null : template.Instructions
                 );
 
                 _logger.Log("Information", "SeriesEpisode", $"Started task execution {executionId} for episode {episodeNumber}");
 
-                // â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
-                // â•‘ FASE 6: Enqueue execution command                            â•‘
-                // â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+                // ╔══════════════════════════════════════════════════════════════╗
+                // ║ FASE 6: Enqueue execution command                            ║
+                // ╚══════════════════════════════════════════════════════════════╝
                 SeriesEpisodeExecutionSupport.EnqueueExecuteMultiStepTask(
                     _dispatcher,
                     _generationId,

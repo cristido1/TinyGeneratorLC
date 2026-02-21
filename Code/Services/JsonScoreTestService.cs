@@ -15,10 +15,10 @@ namespace TinyGenerator.Services;
 /// tramite l'opzione response_format con json_schema. Aggiorna il campo JsonScore nella
 /// tabella models (0-10).
 /// </summary>
-public sealed class JsonScoreTestService
+public sealed class JsonScoreTestService : IModelScoreTestService
 {
     private readonly DatabaseService _database;
-    private readonly ILangChainKernelFactory _kernelFactory;
+    private readonly ITestCallCenter _testCallCenter;
     private readonly ICommandDispatcher _dispatcher;
     private readonly ICustomLogger? _logger;
 
@@ -143,15 +143,20 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
 
     public JsonScoreTestService(
         DatabaseService database,
-        ILangChainKernelFactory kernelFactory,
+        ITestCallCenter testCallCenter,
         ICommandDispatcher dispatcher,
         ICustomLogger? logger = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
-        _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+        _testCallCenter = testCallCenter ?? throw new ArgumentNullException(nameof(testCallCenter));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _logger = logger;
     }
+
+    public string ScoreOperation => "json_score";
+    CommandHandle IModelScoreTestService.EnqueueForMissingModels() => EnqueueJsonScoreForMissingModels();
+    CommandHandle IModelScoreTestService.EnqueueForModel(string modelName) => EnqueueJsonScoreForModel(modelName);
+    CommandHandle? IModelScoreTestService.EnqueueForModel(int modelId) => EnqueueJsonScoreForModel(modelId);
 
     public CommandHandle EnqueueJsonScoreForMissingModels()
     {
@@ -287,12 +292,10 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
 
     private async Task<(int Score, string Details)> TestSingleModelAsync(ModelInfo model, CommandContext ctx)
     {
-        var bridge = _kernelFactory.CreateChatBridge(model.Name, temperature: 0.1, topP: 1.0, useMaxTokens: true);
         var provider = model.Provider?.Trim();
-        bridge.ResponseFormat = string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase)
+        var responseFormat = string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase)
             ? ResponseFormatSchemaOllama
             : ResponseFormatSchemaOpenAi;
-        bridge.MaxResponseTokens = bridge.MaxResponseTokens ?? 256;
 
         int score = 0;
         var errors = new List<string>();
@@ -303,17 +306,37 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
         {
             ctx.CancellationToken.ThrowIfCancellationRequested();
             var test = _tests[i];
-            var messages = new List<ConversationMessage>
-            {
-                new() { Role = "system", Content = SystemPrompt },
-                new() { Role = "user", Content = test.Prompt }
-            };
-
             try
             {
-                var response = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ctx.CancellationToken);
-                var (content, _) = LangChainChatBridge.ParseChatResponse(response);
-                var text = string.IsNullOrWhiteSpace(content) ? response : content!;
+                var call = await _testCallCenter.CallAsync(new TestCallRequest
+                {
+                    Operation = "json_score",
+                    ModelName = model.Name,
+                    SystemPrompt = SystemPrompt,
+                    Prompt = test.Prompt,
+                    Timeout = TimeSpan.FromSeconds(60),
+                    MaxRetries = 0,
+                    UseResponseChecker = false,
+                    AskFailExplanation = false,
+                    AllowFallback = false,
+                    ResponseFormat = responseFormat,
+                    Temperature = 0.1,
+                    TopP = 1.0,
+                    NumPredict = 256
+                }, ctx.CancellationToken);
+
+                if (!call.Success)
+                {
+                    var err = string.IsNullOrWhiteSpace(call.FailureReason)
+                        ? "errore chiamata modello"
+                        : call.FailureReason!;
+                    errors.Add($"Q{i + 1}: {err}");
+                    _logger?.Append(ctx.RunId, $"[FAIL Q{i + 1}] {err}", "error");
+                    _logger?.MarkLatestModelResponseResult("FAILED", err, examined: true);
+                    continue;
+                }
+
+                var text = call.ResponseText;
 
                 var validation = ValidateResponse(text, test);
                 if (validation.IsValid)
@@ -331,6 +354,7 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
             {
                 errors.Add($"Q{i + 1}: errore chiamata modello - {ex.Message}");
                 _logger?.Append(ctx.RunId, $"[FAIL Q{i + 1}] Errore chiamata modello: {ex.Message}", "error");
+                _logger?.MarkLatestModelResponseResult("FAILED", ex.Message, examined: true);
             }
 
             _dispatcher.UpdateStep(ctx.RunId, i + 1, _tests.Count, $"[{model.Name}] Domanda {i + 1}/{_tests.Count} \u2022 parziale {score}");

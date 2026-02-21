@@ -1,9 +1,11 @@
 (function(window){
     function initTts() {
+        let gapTimer = null;
         document.addEventListener('click', function(e){
-            if (e.target && e.target.classList.contains('tts-playlist-btn')) {
+            const btn = e.target && e.target.closest ? e.target.closest('.tts-playlist-btn') : null;
+            if (btn) {
                 e.preventDefault();
-                const storyId = e.target.dataset.storyId;
+                const storyId = btn.dataset.storyId;
                 fetch(window.location.pathname + '?handler=TtsPlaylist&id=' + storyId)
                     .then(r => r.json())
                     .then(async data => {
@@ -16,6 +18,7 @@
 
                         // Playlist items: url, character, text, durationMs (optional)
                         const items = data.items;
+                        const gapMs = Number(data?.gapMs ?? 1000) > 0 ? Number(data.gapMs) : 1000;
 
                         // Build cumulative durations (in seconds). If durationMs missing, try to load metadata.
                         let totalSeconds = 0;
@@ -93,10 +96,17 @@
 
                         // On ended -> advance to next segment
                         audio.onended = () => {
+                            if (gapTimer) {
+                                clearTimeout(gapTimer);
+                                gapTimer = null;
+                            }
                             if (idx + 1 < items.length) {
                                 idx++;
                                 segmentOffset = 0;
-                                playSegmentAt(idx, 0);
+                                gapTimer = setTimeout(() => {
+                                    gapTimer = null;
+                                    playSegmentAt(idx, 0);
+                                }, gapMs);
                             }
                         };
 

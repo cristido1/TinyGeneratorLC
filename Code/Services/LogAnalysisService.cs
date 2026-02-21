@@ -11,16 +11,16 @@ namespace TinyGenerator.Services
     public class LogAnalysisService
     {
         private readonly DatabaseService _database;
-        private readonly ILangChainKernelFactory _kernelFactory;
+        private readonly ICallCenter _callCenter;
         private readonly ICustomLogger? _logger;
 
         public LogAnalysisService(
             DatabaseService database,
-            ILangChainKernelFactory kernelFactory,
+            ICallCenter callCenter,
             ICustomLogger? logger = null)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
-            _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+            _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
             _logger = logger;
         }
 
@@ -53,25 +53,6 @@ namespace TinyGenerator.Services
             if (string.IsNullOrWhiteSpace(modelName))
                 return (false, "Impossibile determinare il modello per l'agente log_analyzer");
 
-            LangChainChatBridge bridge;
-            try
-            {
-                bridge = _kernelFactory.CreateChatBridge(
-                    modelName,
-                    agent.Temperature,
-                    agent.TopP,
-                    agent.RepeatPenalty,
-                    agent.TopK,
-                    agent.RepeatLastN,
-                    agent.NumPredict,
-                    useMaxTokens: true);
-            }
-            catch (Exception ex)
-            {
-                _logger?.Log("Error", "LogAnalyzer", $"Errore creazione chat bridge: {ex.Message}");
-                return (false, $"Errore creazione bridge: {ex.Message}");
-            }
-
             var systemMessage = BuildSystemMessage(agent);
             var userPrompt = BuildUserPrompt(scope, logs, agent.Prompt);
 
@@ -79,20 +60,39 @@ namespace TinyGenerator.Services
             _database.DeleteLogAnalysesByThread(threadId);
             _database.SetLogAnalyzed(threadId, false);
 
-            var messages = new List<ConversationMessage>
-            {
-                new ConversationMessage { Role = "system", Content = systemMessage },
-                new ConversationMessage { Role = "user", Content = userPrompt }
-            };
-
-            string responseJson;
+            string textContent;
             try
             {
-                using var analyzerScope = LogScope.Push(scope, null, null, null, agent.Name, agentRole: "log_analyzer");
-                responseJson = await bridge.CallModelWithToolsAsync(
-                    messages,
-                    new List<Dictionary<string, object>>(),
-                    cancellationToken);
+                var history = new ChatHistory();
+                history.AddSystem(systemMessage);
+                history.AddUser(userPrompt);
+
+                var options = new CallOptions
+                {
+                    Operation = "log_analysis",
+                    Timeout = TimeSpan.FromSeconds(180),
+                    MaxRetries = 1,
+                    UseResponseChecker = false,
+                    AskFailExplanation = true,
+                    AllowFallback = true,
+                    SystemPromptOverride = systemMessage
+                };
+                options.DeterministicChecks.Add(new CheckAlwaysSuccess());
+
+                var callResult = await _callCenter.CallAgentAsync(
+                    storyId: 0,
+                    threadId: threadId.GetHashCode(StringComparison.Ordinal),
+                    agent: agent,
+                    history: history,
+                    options: options,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                if (!callResult.Success)
+                {
+                    return (false, $"Analisi non riuscita: {callResult.FailureReason ?? "n/a"}");
+                }
+
+                textContent = callResult.ResponseText;
             }
             catch (Exception ex)
             {
@@ -100,7 +100,6 @@ namespace TinyGenerator.Services
                 return (false, $"Analisi non riuscita: {ex.Message}");
             }
 
-            var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
             if (string.IsNullOrWhiteSpace(textContent))
             {
                 return (false, "Il modello non ha fornito una risposta utile");
@@ -139,40 +138,40 @@ namespace TinyGenerator.Services
             if (string.IsNullOrWhiteSpace(modelName))
                 return (false, "Impossibile determinare il modello per l'agente log_analyzer");
 
-            LangChainChatBridge bridge;
-            try
-            {
-                bridge = _kernelFactory.CreateChatBridge(
-                    modelName,
-                    agent.Temperature,
-                    agent.TopP,
-                    agent.RepeatPenalty,
-                    agent.TopK,
-                    agent.RepeatLastN,
-                    agent.NumPredict,
-                    useMaxTokens: true);
-            }
-            catch (Exception ex)
-            {
-                _logger?.Log("Error", "LogAnalyzer", $"Errore creazione chat bridge: {ex.Message}");
-                return (false, $"Errore creazione bridge: {ex.Message}");
-            }
-
             var systemMessage = BuildFailureSystemPrompt();
-            var messages = new List<ConversationMessage>
-            {
-                new ConversationMessage { Role = "system", Content = systemMessage },
-                new ConversationMessage { Role = "user", Content = failureContext }
-            };
-
-            string responseJson;
+            string textContent;
             try
             {
-                using var analyzerScope = LogScope.Push("log_analyzer_failure", null, null, null, agent.Name, agentRole: "log_analyzer");
-                responseJson = await bridge.CallModelWithToolsAsync(
-                    messages,
-                    new List<Dictionary<string, object>>(),
-                    cancellationToken);
+                var history = new ChatHistory();
+                history.AddSystem(systemMessage);
+                history.AddUser(failureContext);
+
+                var options = new CallOptions
+                {
+                    Operation = "log_analysis_failure",
+                    Timeout = TimeSpan.FromSeconds(180),
+                    MaxRetries = 1,
+                    UseResponseChecker = false,
+                    AskFailExplanation = true,
+                    AllowFallback = true,
+                    SystemPromptOverride = systemMessage
+                };
+                options.DeterministicChecks.Add(new CheckAlwaysSuccess());
+
+                var callResult = await _callCenter.CallAgentAsync(
+                    storyId: 0,
+                    threadId: "log_analyzer_failure".GetHashCode(StringComparison.Ordinal),
+                    agent: agent,
+                    history: history,
+                    options: options,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                if (!callResult.Success)
+                {
+                    return (false, $"Analisi non riuscita: {callResult.FailureReason ?? "n/a"}");
+                }
+
+                textContent = callResult.ResponseText;
             }
             catch (Exception ex)
             {
@@ -180,7 +179,6 @@ namespace TinyGenerator.Services
                 return (false, $"Analisi non riuscita: {ex.Message}");
             }
 
-            var (textContent, _) = LangChainChatBridge.ParseChatResponse(responseJson);
             if (string.IsNullOrWhiteSpace(textContent))
             {
                 return (false, "Il modello non ha fornito una risposta utile");

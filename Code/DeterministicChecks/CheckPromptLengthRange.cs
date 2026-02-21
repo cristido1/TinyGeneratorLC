@@ -6,10 +6,10 @@ public sealed class CheckPromptLengthRange : CheckBase
 {
     public override string Rule => "Prompt normalizzato con range di lunghezza valido.";
 
-    public override IDeterministicResult Execute()
+    public override IDeterministicResult Execute(string textToCheck)
     {
         var started = DateTime.UtcNow;
-        var normalized = NormalizePrompt(TextToCheck);
+        var normalized = NormalizePrompt(textToCheck);
         var minLength = Math.Max(0, GetOption("MinLength", 0));
         var maxLength = Math.Max(minLength, GetOption("MaxLength", int.MaxValue));
 
@@ -59,4 +59,3 @@ public sealed class CheckPromptLengthRange : CheckBase
             CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds)
         };
 }
-

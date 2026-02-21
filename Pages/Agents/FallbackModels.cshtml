@@ -67,6 +67,7 @@
     .fallback-rate-good { color: var(--bs-success); }
     .fallback-rate-mid { color: var(--bs-warning); }
     .fallback-rate-bad { color: var(--bs-danger); }
+
 </style>
 
 <div class="mb-3">
@@ -183,6 +184,9 @@
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
                             <ul class="dropdown-menu dropdown-menu-end">
                                 <li>
+                                    <button type="button" class="dropdown-item" data-action="edit">Modifica</button>
+                                </li>
+                                <li>
                                     <button type="button" class="dropdown-item" data-action="toggle-enabled">@toggleLabel</button>
                                 </li>
                                 @if (!mr.IsPrimary)
@@ -198,6 +202,52 @@
             }
         </tbody>
     </table>
+</div>
+
+<div class="modal fade" id="editFallbackModal" tabindex="-1" aria-labelledby="editFallbackModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editFallbackModalLabel">Modifica fallback model_role</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-id" />
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <label class="form-label small">Modello</label>
+                        <input type="text" id="edit-model" class="form-control form-control-sm" readonly />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Ruolo</label>
+                        <input type="text" id="edit-role" class="form-control form-control-sm" readonly />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Top-P</label>
+                        <input type="number" id="edit-topP" class="form-control form-control-sm" step="0.01" min="0" max="1" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Top-K</label>
+                        <input type="number" id="edit-topK" class="form-control form-control-sm" step="1" min="0" />
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label small">Instructions</label>
+                        <textarea id="edit-instructions" class="form-control form-control-sm" rows="4"></textarea>
+                    </div>
+                    <div class="col-md-12">
+                        <div class="form-check mt-2">
+                            <input type="checkbox" id="edit-enabled" class="form-check-input" />
+                            <label class="form-check-label small" for="edit-enabled">Enabled</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Annulla</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-save-edit">Salva</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -385,6 +435,7 @@
                         '<div class="dropdown">' +
                             '<button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>' +
                             '<ul class="dropdown-menu dropdown-menu-end">' +
+                                '<li><button type="button" class="dropdown-item" data-action="edit">Modifica</button></li>' +
                                 '<li><button type="button" class="dropdown-item" data-action="toggle-enabled">' + escapeHtml(toggleLabel) + '</button></li>' +
                                 deleteLi +
                             '</ul>' +
@@ -444,7 +495,7 @@
                     if (!target) return;
 
                     var action = target.getAttribute('data-action') || '';
-                    if (action !== 'delete' && action !== 'toggle-enabled') return;
+                    if (action !== 'delete' && action !== 'toggle-enabled' && action !== 'edit') return;
 
                     var rowEl = target.closest('tr');
                     if (!rowEl) return;
@@ -503,9 +554,75 @@
                             if (toggleBtn) toggleBtn.textContent = effectiveEnabled ? 'Disabilita' : 'Abilita';
 
                             showMessage('success', effectiveEnabled ? 'Modello abilitato.' : 'Modello disabilitato.');
+                            return;
+                        }
+
+                        if (action === 'edit') {
+                            clearMessage();
+                            var detailResp = await fetch('?handler=Detail&id=' + encodeURIComponent(id), { credentials: 'same-origin' });
+                            if (!detailResp.ok) {
+                                var detailErr = await detailResp.text();
+                                throw new Error(detailErr || 'Errore caricamento dettaglio');
+                            }
+                            var detail = await detailResp.json();
+
+                            document.getElementById('edit-id').value = String(detail.id || id);
+                            document.getElementById('edit-model').value = detail.modelName || '';
+                            document.getElementById('edit-role').value = detail.roleName || '';
+                            document.getElementById('edit-topP').value = (detail.topP === null || detail.topP === undefined) ? '' : String(detail.topP);
+                            document.getElementById('edit-topK').value = (detail.topK === null || detail.topK === undefined) ? '' : String(detail.topK);
+                            document.getElementById('edit-instructions').value = (detail.instructions && detail.instructions !== '-') ? detail.instructions : '';
+                            document.getElementById('edit-enabled').checked = !!detail.enabled;
+
+                            var modalEl = document.getElementById('editFallbackModal');
+                            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+                            modal.show();
                         }
                     } catch (err) {
                         showMessage('danger', err.message || 'Errore operazione');
+                    }
+                });
+            }
+
+            var saveEditBtn = document.getElementById('btn-save-edit');
+            if (saveEditBtn) {
+                saveEditBtn.addEventListener('click', async function () {
+                    clearMessage();
+                    var id = parseInt(document.getElementById('edit-id').value || '0', 10);
+                    if (!id) {
+                        showMessage('danger', 'Id non valido');
+                        return;
+                    }
+
+                    var payload = {
+                        id: id,
+                        instructions: document.getElementById('edit-instructions').value || null,
+                        topP: document.getElementById('edit-topP').value ? parseFloat(document.getElementById('edit-topP').value) : null,
+                        topK: document.getElementById('edit-topK').value ? parseInt(document.getElementById('edit-topK').value, 10) : null,
+                        enabled: !!document.getElementById('edit-enabled').checked
+                    };
+
+                    try {
+                        var resp = await fetch('?handler=Update', {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            body: JSON.stringify(payload),
+                            credentials: 'same-origin'
+                        });
+                        if (!resp.ok) {
+                            var errText = await resp.text();
+                            throw new Error(errText || 'Errore salvataggio');
+                        }
+                        var result = await resp.json();
+                        if (!result.ok) throw new Error(result.error || 'Errore salvataggio');
+
+                        var modalEl = document.getElementById('editFallbackModal');
+                        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+                        modal.hide();
+                        showMessage('success', 'Fallback aggiornato.');
+                        window.location.reload();
+                    } catch (err) {
+                        showMessage('danger', err.message || 'Errore salvataggio');
                     }
                 });
             }
@@ -526,12 +643,95 @@
                 fetch('?handler=Detail&id=' + encodeURIComponent(id))
                     .then(function(r) { return r.json(); })
                     .then(function(data) {
+                        var instructions = data.instructions || '-';
+                        var errorsContainerId = 'mr-errors-' + String(data.id || id);
                         var html = '<div class="card"><div class="card-body">' +
-                            '<h5 class="card-title">' + (data.title || '') + '</h5>' +
-                            '<p class="card-text" style="white-space: pre-wrap;">' + (data.description || '') + '</p>' +
+                            '<h5 class="card-title">' + escapeHtml(data.title || '') + '</h5>' +
+                            '<div class="small text-muted mb-2">' +
+                                'Modello: <strong>' + escapeHtml(data.modelName || '-') + '</strong> | ' +
+                                'Ruolo: <strong>' + escapeHtml(data.roleName || '-') + '</strong> | ' +
+                                'Primary: <strong>' + (data.isPrimary ? 'Yes' : 'No') + '</strong>' +
+                            '</div>' +
+                            '<div class="mb-2"><div class="fw-semibold">Istruzioni</div><pre class="mb-0" style="white-space: pre-wrap;">' + escapeHtml(instructions) + '</pre></div>' +
+                            '<div class="mt-3"><div class="fw-semibold mb-2">Errori (ultimi per data_last)</div><div id="' + escapeHtml(errorsContainerId) + '" class="small text-muted">Caricamento errori...</div></div>' +
+                            '<div class="mt-2"><div class="fw-semibold">Dettagli</div><pre class="mb-0" style="white-space: pre-wrap;">' + escapeHtml(data.description || '') + '</pre></div>' +
                             '</div></div>';
                         row.child(html).show();
                         $tr.addClass('shown');
+
+                        fetch('?handler=Errors&id=' + encodeURIComponent(data.id || id), { credentials: 'same-origin' })
+                            .then(function(resp) { return resp.ok ? resp.json() : Promise.reject(new Error('Errore caricamento errori')); })
+                            .then(function(payload) {
+                                var target = document.getElementById(errorsContainerId);
+                                if (!target) return;
+                                var rows = payload && payload.rows ? payload.rows : [];
+                                if (!rows.length) {
+                                    target.innerHTML = '<span class="text-muted">Nessun errore registrato.</span>';
+                                    return;
+                                }
+
+                                var lines = rows.map(function(e) {
+                                    return '<tr>' +
+                                        '<td>' + escapeHtml(e.errorType || '-') + '</td>' +
+                                        '<td class="text-end">' + escapeHtml(String(e.errorCount || 0)) + '</td>' +
+                                        '<td>' + escapeHtml(e.dateLastFmt || '-') + '</td>' +
+                                        '<td><div style="white-space: pre-wrap;">' + escapeHtml(e.errorText || '-') + '</div></td>' +
+                                        '<td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger" data-action="delete-error" data-error-id="' + escapeHtml(String(e.id || 0)) + '">Elimina</button></td>' +
+                                    '</tr>';
+                                }).join('');
+
+                                target.innerHTML =
+                                    '<div class="table-responsive">' +
+                                        '<table class="table table-sm table-striped mb-0">' +
+                                            '<thead><tr><th>Type</th><th class="text-end">Count</th><th>Date Last</th><th>Error Text</th><th class="text-end">Azioni</th></tr></thead>' +
+                                            '<tbody>' + lines + '</tbody>' +
+                                        '</table>' +
+                                    '</div>';
+
+                                if (!target.dataset.deleteBound) {
+                                    target.addEventListener('click', async function(evt) {
+                                        var btn = evt.target && evt.target.closest ? evt.target.closest('button[data-action="delete-error"]') : null;
+                                        if (!btn) return;
+                                        var errorId = parseInt(btn.getAttribute('data-error-id') || '0', 10);
+                                        if (!errorId) return;
+                                        if (!confirm('Confermi eliminazione di questo errore?')) return;
+
+                                        try {
+                                            var delResp = await fetch('?handler=DeleteError', {
+                                                method: 'POST',
+                                                headers: getHeaders(),
+                                                body: JSON.stringify({ errorId: errorId }),
+                                                credentials: 'same-origin'
+                                            });
+
+                                            if (!delResp.ok) {
+                                                var delTxt = await delResp.text();
+                                                throw new Error(delTxt || 'Errore eliminazione');
+                                            }
+
+                                            var delResult = await delResp.json();
+                                            if (!delResult.ok) throw new Error(delResult.error || 'Errore eliminazione');
+
+                                            var tr = btn.closest('tr');
+                                            if (tr) tr.remove();
+                                            var tbody = target.querySelector('tbody');
+                                            if (!tbody || !tbody.querySelector('tr')) {
+                                                target.innerHTML = '<span class="text-muted">Nessun errore registrato.</span>';
+                                            }
+                                            showMessage('success', 'Errore eliminato.');
+                                        } catch (err) {
+                                            showMessage('danger', (err && err.message) ? err.message : 'Errore eliminazione');
+                                        }
+                                    });
+                                    target.dataset.deleteBound = '1';
+                                }
+                            })
+                            .catch(function() {
+                                var target = document.getElementById(errorsContainerId);
+                                if (target) {
+                                    target.innerHTML = '<span class="text-danger">Errore caricando la lista errori.</span>';
+                                }
+                            });
                     });
             });
 

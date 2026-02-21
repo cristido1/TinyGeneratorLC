@@ -31,7 +31,7 @@ public sealed partial class StoryMainCommands
                 {
                     "tts_json" or "tts" => new StoriesService.GenerateTtsSchemaCommand(_service),
                     "tts_voice" or "voice" => new StoriesService.AssignVoicesCommand(_service),
-                    "evaluator" or "story_evaluator" or "writer_evaluator" => new EvaluateStoryCommand(_service),
+                    "evaluator" or "story_evaluator" or "writer_evaluator" => new EvaluateStoryEnqueuerCommand(_service),
                     "revisor" => new ReviseStoryCommand(_service),
                     "formatter" => new TagStoryCommand(_service),
                     "ambient_expert" => new AddAmbientTagsToStoryStateCommand(_service),
@@ -43,7 +43,7 @@ public sealed partial class StoryMainCommands
                 var functionName = status.FunctionName?.ToLowerInvariant();
                 return functionName switch
                 {
-                    "evaluate_story" => new EvaluateStoryCommand(_service),
+                    "evaluate_story" => new EvaluateStoryEnqueuerCommand(_service),
                     "tag_story" => new TagStoryCommand(_service),
                     "add_ambient_tags_to_story" => new AddAmbientTagsToStoryStateCommand(_service),
                     "add_fx_tags_to_story" => new AddFxTagsToStoryStateCommand(_service),

@@ -147,7 +147,7 @@ public sealed partial class StoriesService
                 }
                 var summaryMessage = summaryBuilder.ToString().Trim();
 
-                var allowNext = _service.ApplyStatusTransitionWithCleanup(story, "tts_schema_generated", null);
+                var allowNext = _service.TryChangeStatus(story.Id, "generate_tts_schema", null);
 
                 _service._logger?.LogInformation(
                     "TTS schema generato per storia {StoryId}: {Characters} personaggi, {Phrases} frasi",

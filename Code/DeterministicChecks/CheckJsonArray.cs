@@ -6,10 +6,10 @@ public sealed class CheckJsonArray : CheckBase
 {
     public override string Rule => "Output deve essere un array JSON valido.";
 
-    public override IDeterministicResult Execute()
+    public override IDeterministicResult Execute(string textToCheck)
     {
         var started = DateTime.UtcNow;
-        var normalized = NormalizePotentialJson(TextToCheck);
+        var normalized = NormalizePotentialJson(textToCheck);
         if (string.IsNullOrWhiteSpace(normalized))
         {
             return Build(false, "Planner output vuoto", started);
@@ -56,4 +56,3 @@ public sealed class CheckJsonArray : CheckBase
             CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds)
         };
 }
-

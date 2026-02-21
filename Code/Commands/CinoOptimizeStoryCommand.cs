@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 
@@ -13,6 +14,7 @@ public sealed class CinoOptimizeStoryCommand : ICommand
     private readonly IAgentCallService _modelExecution;
     private readonly ICommandDispatcher? _dispatcher;
     private readonly ICustomLogger? _logger;
+    private readonly ICallCenter? _callCenter;
     private readonly CinoOptions _options;
     private readonly bool _useResponseChecker;
     private readonly RepetitionDetectionOptions _repetitionOptions;
@@ -28,6 +30,7 @@ public sealed class CinoOptimizeStoryCommand : ICommand
         CinoOptions options,
         RepetitionDetectionOptions? repetitionOptions = null,
         EmbeddingRepetitionOptions? embeddingRepetitionOptions = null,
+        ICallCenter? callCenter = null,
         bool? useResponseChecker = null,
         ICustomLogger? logger = null)
     {
@@ -40,6 +43,7 @@ public sealed class CinoOptimizeStoryCommand : ICommand
         _options = options ?? new CinoOptions();
         _repetitionOptions = repetitionOptions ?? new RepetitionDetectionOptions();
         _embeddingRepetitionOptions = embeddingRepetitionOptions ?? new EmbeddingRepetitionOptions();
+        _callCenter = callCenter;
         _useResponseChecker = useResponseChecker ?? _options.UseResponseChecker;
         _logger = logger;
     }
@@ -276,59 +280,69 @@ public sealed class CinoOptimizeStoryCommand : ICommand
 
     private async Task<string?> GenerateCandidateAsync(Agent writer, string parentText, string runId, CancellationToken ct)
     {
+        var callCenter = ResolveCallCenter();
+        if (callCenter == null)
+        {
+            _logger?.Append(runId, $"Writer {writer.Name} fallito: CallCenter non disponibile", "warning");
+            return null;
+        }
+
         var systemPrompt = BuildSystemPrompt(writer);
         var prompt = BuildWriterPrompt(parentText);
-        var result = await _modelExecution.ExecuteAsync(
-            new CommandModelExecutionService.Request
-            {
-                CommandKey = "cino_optimize_story_writer",
-                Agent = writer,
-                RoleCode = string.IsNullOrWhiteSpace(writer.Role) ? "writer_cino" : writer.Role,
-                Prompt = prompt,
-                SystemPrompt = systemPrompt,
-                UseResponseChecker = _useResponseChecker,
-                EnableFallback = true,
-                DiagnoseOnFinalFailure = true,
-                ExplainAfterAttempt = 2,
-                StepTimeoutSec = 180,
-                RunId = runId,
-                EnableDeterministicValidation = true,
-                DeterministicValidator = output => CheckRunner.Execute(
-                    output,
-                    new CheckEmpty
-                    {
-                        Options = Options.Create<object>(new Dictionary<string, object>
-                        {
-                            ["ErrorMessage"] = "Output vuoto"
-                        })
-                    },
-                    new CheckMinLength
-                    {
-                        Options = Options.Create<object>(new Dictionary<string, object>
-                        {
-                            ["MinLength"] = 300,
-                            ["ErrorMessage"] = "Output troppo corto"
-                        })
-                    },
-                    new CheckMinimumGrowthPercent
-                    {
-                        Options = Options.Create<object>(new Dictionary<string, object>
-                        {
-                            ["SourceText"] = parentText ?? string.Empty,
-                            ["MinGrowthPercent"] = Math.Max(0d, _options.MinLengthGrowthPercent)
-                        })
-                    })
-            },
-            ct).ConfigureAwait(false);
+        var history = new ChatHistory();
+        history.AddSystem(systemPrompt);
+        history.AddUser(prompt);
 
-        if (!result.Success || string.IsNullOrWhiteSpace(result.Text))
+        var options = new CallOptions
         {
-            var error = result.Error ?? "errore sconosciuto";
+            Operation = "cino_optimize_story_writer",
+            Timeout = TimeSpan.FromSeconds(180),
+            MaxRetries = 2,
+            UseResponseChecker = _useResponseChecker,
+            AllowFallback = true,
+            AskFailExplanation = true,
+            SystemPromptOverride = systemPrompt
+        };
+        options.DeterministicChecks.Add(new CheckEmpty
+        {
+            Options = Options.Create<object>(new Dictionary<string, object>
+            {
+                ["ErrorMessage"] = "Output vuoto"
+            })
+        });
+        options.DeterministicChecks.Add(new CheckMinLength
+        {
+            Options = Options.Create<object>(new Dictionary<string, object>
+            {
+                ["MinLength"] = 300,
+                ["ErrorMessage"] = "Output troppo corto"
+            })
+        });
+        options.DeterministicChecks.Add(new CheckMinimumGrowthPercent
+        {
+            Options = Options.Create<object>(new Dictionary<string, object>
+            {
+                ["SourceText"] = parentText ?? string.Empty,
+                ["MinGrowthPercent"] = Math.Max(0d, _options.MinLengthGrowthPercent)
+            })
+        });
+
+        var result = await callCenter.CallAgentAsync(
+            storyId: 0,
+            threadId: $"cino_optimize_story_writer:{writer.Id}:{runId}".GetHashCode(StringComparison.Ordinal),
+            agent: writer,
+            history: history,
+            options: options,
+            cancellationToken: ct).ConfigureAwait(false);
+
+        if (!result.Success || string.IsNullOrWhiteSpace(result.ResponseText))
+        {
+            var error = result.FailureReason ?? "errore sconosciuto";
             _logger?.Append(runId, $"Writer {writer.Name} fallito: {error}", "warning");
             return null;
         }
 
-        return result.Text.Trim();
+        return result.ResponseText.Trim();
     }
 
     private async Task<CandidateEvaluation?> EvaluateStoryAsync(long storyId, IReadOnlyList<Agent> evaluators, CancellationToken ct, string? runId = null)
@@ -553,6 +567,22 @@ public sealed class CinoOptimizeStoryCommand : ICommand
         }
 
         return "-";
+    }
+
+    private ICallCenter? ResolveCallCenter()
+    {
+        if (_callCenter != null)
+        {
+            return _callCenter;
+        }
+
+        var rootCallCenter = ServiceLocator.Services?.GetService<ICallCenter>();
+        if (rootCallCenter != null)
+        {
+            return rootCallCenter;
+        }
+
+        return new CallCenter(_modelExecution, _database, _logger);
     }
 
     private void ReportCinoProgress(

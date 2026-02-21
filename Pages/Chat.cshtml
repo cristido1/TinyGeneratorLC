@@ -126,7 +126,10 @@
                 </select>
                 @if (!string.IsNullOrEmpty(Model?.SelectedModel) && Model?.SelectedModelInfo != null)
                 {
-                    <div class="small-info">@Model.SelectedModelInfo.Provider • @Model.SelectedModelInfo.MaxContext tokens</div>
+                    var contextToUse = Model.SelectedModelInfo.ContextToUse > 0
+                        ? Model.SelectedModelInfo.ContextToUse
+                        : Model.SelectedModelInfo.MaxContext;
+                    <div class="small-info">@Model.SelectedModelInfo.Provider • @contextToUse tokens</div>
                 }
             </form>
         </div>

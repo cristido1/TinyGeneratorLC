@@ -88,9 +88,9 @@
             <td class="timestamp">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</td>
             <td class="level">@log.Level</td>
             <td class="source">
-                @if(log.Source == "ModelResponse"){
+                @if(log.Source == "ModelResponse" || log.Source == "ModelCompletion"){
                     <span class="badge bg-warning"><i class="bi bi-chevron-left"></i> Response</span>
-                } else if(log.Source == "ModelRequest"){
+                } else if(log.Source == "ModelRequest" || log.Source == "ModelPrompt"){
                     <span class="badge bg-success">Request <i class="bi bi-chevron-right"></i></span>
                 } else{
                     <span>@log.Source</span>
@@ -285,7 +285,10 @@
                 var row = table.row(dataIndex).node();
                 if (!row) return true;
                 var source = row.getAttribute('data-source');
-                return source === 'ModelResponse' || source === 'ModelRequest';
+                return source === 'ModelResponse'
+                    || source === 'ModelRequest'
+                    || source === 'ModelCompletion'
+                    || source === 'ModelPrompt';
             });
             table.draw();
 

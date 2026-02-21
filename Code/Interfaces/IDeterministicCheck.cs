@@ -10,7 +10,7 @@ public interface IDeterministicResult
 public interface IDeterministicCheck
 {
     string Rule { get; }
-    string TextToCheck { get; set; }
+    string GenericErrorDescription { get; }
     Microsoft.Extensions.Options.IOptions<object>? Options { get; set; }
-    IDeterministicResult Execute();
+    IDeterministicResult Execute(string textToCheck);
 }

@@ -15,7 +15,8 @@ public sealed class GenerateNewSerieCommand : ICommand
     private readonly DatabaseService _database;
     private readonly IAgentResolutionService _agentResolutionService;
     private readonly ICustomLogger? _logger;
-    private readonly IAgentCallService? _modelExecution;
+    private readonly ICallCenter? _callCenter;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private readonly SeriesGenerationOptions _options;
 
     public GenerateNewSerieCommand(
@@ -27,18 +28,20 @@ public sealed class GenerateNewSerieCommand : ICommand
         IServiceScopeFactory? scopeFactory = null,
         ICommandEnqueuer? dispatcher = null,
         IAgentCallService? modelExecution = null,
-        IAgentResolutionService? agentResolutionService = null)
+        IAgentResolutionService? agentResolutionService = null,
+        ICallCenter? callCenter = null)
     {
         _prompt = prompt ?? string.Empty;
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _agentResolutionService = agentResolutionService ?? new AgentResolutionService(database);
         _logger = logger;
-        _modelExecution = modelExecution;
+        _callCenter = callCenter;
+        _scopeFactory = scopeFactory;
         _options = optionsMonitor?.CurrentValue ?? new SeriesGenerationOptions();
 
         _ = kernelFactory;
-        _ = scopeFactory;
         _ = dispatcher;
+        _ = modelExecution;
     }
 
     public async Task<CommandResult> ExecuteAsync(string? runId = null, CancellationToken ct = default)
@@ -63,7 +66,7 @@ public sealed class GenerateNewSerieCommand : ICommand
 
             var parser = new SeriesTagParser();
             var validationRules = new SeriesValidationRules(parser, _options);
-            var agentCaller = new SeriesAgentCaller(_modelExecution, validationRules, _logger);
+            var agentCaller = new SeriesAgentCaller(ResolveCallCenter(), validationRules, _logger);
             var workflow = new SeriesGenerationWorkflow(_options, parser, validationRules, agentCaller);
             var assembler = new SeriesDomainAssembler(parser);
             var repository = new SeriesRepository(_database);
@@ -170,5 +173,34 @@ public sealed class GenerateNewSerieCommand : ICommand
         }
 
         return _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+    }
+
+    private ICallCenter? ResolveCallCenter()
+    {
+        if (_callCenter != null)
+        {
+            return _callCenter;
+        }
+
+        var fromRoot = ServiceLocator.Services?.GetService<ICallCenter>();
+        if (fromRoot != null)
+        {
+            return fromRoot;
+        }
+
+        IAgentCallService? execution = null;
+        if (_scopeFactory != null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            execution = scope.ServiceProvider.GetService<IAgentCallService>();
+        }
+
+        execution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
+        if (execution == null)
+        {
+            return null;
+        }
+
+        return new CallCenter(execution, _database, _logger);
     }
 }

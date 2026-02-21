@@ -48,11 +48,11 @@ namespace TinyGenerator.Pages
                 if (string.IsNullOrWhiteSpace(Theme))
                     Theme = "A mysterious adventure in the enchanted forest";
 
-                _logger?.Log("Warning", "LangChainTest", "Legacy LangChainStoryGenerationService removed. Use StartMultiStepStoryCommand flow instead.");
+                _logger?.Log("Warning", "LangChainTest", "Legacy LangChainStoryGenerationService removed. Use StartMultiStepStoryEnqueuerCommand flow instead.");
                 Result = new StoryGenerationResult
                 {
                     Success = false,
-                    Message = "Legacy LangChainStoryGenerationService has been removed. Use the multi-step command flow (StartMultiStepStoryCommand)."
+                    Message = "Legacy LangChainStoryGenerationService has been removed. Use the multi-step command flow (StartMultiStepStoryEnqueuerCommand)."
                 };
             }
             catch (Exception ex)

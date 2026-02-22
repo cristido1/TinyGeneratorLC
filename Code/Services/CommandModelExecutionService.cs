@@ -46,9 +46,11 @@ public sealed class CommandModelExecutionService : IAgentCallService
         public string Reason { get; init; } = string.Empty;
         public bool IsDeterministic { get; init; }
         public bool IsChecker { get; init; }
+        public string SystemPromptSent { get; init; } = string.Empty;
         public string PromptSent { get; init; } = string.Empty;
         public string ResponseText { get; init; } = string.Empty;
         public List<int>? ViolatedRules { get; init; }
+        public List<string>? ViolatedRuleDetails { get; init; }
     }
 
     public sealed class Result
@@ -194,6 +196,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var maxAttempts = settings.MaxAttempts;
         var delayMs = Math.Max(0, settings.RetryDelaySeconds) * 1000;
         var currentPrompt = request.Prompt ?? string.Empty;
+        var lastSystemPrompt = request.SystemPrompt ?? BuildSystemPrompt(request.Agent);
         var lastError = "Risposta non valida";
         var lastOutput = string.Empty;
         var hadDeterministicFailure = false;
@@ -218,6 +221,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             try
             {
                 var systemPrompt = BuildSystemPromptWithDynamic(request, modelName, roleCode, modelIdOverride);
+                lastSystemPrompt = systemPrompt;
                 text = await CallModelTextAsync(
                     modelName,
                     request.Agent,
@@ -245,8 +249,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     lastError,
                     deterministic: false,
                     checker: false,
+                    lastSystemPrompt,
                     currentPrompt,
                     lastOutput,
+                    null,
                     null,
                     CancellationToken.None).ConfigureAwait(false);
                 if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
@@ -279,8 +285,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     lastError,
                     deterministic: false,
                     checker: false,
+                    lastSystemPrompt,
                     currentPrompt,
                     lastOutput,
+                    null,
                     null,
                     CancellationToken.None).ConfigureAwait(false);
                 if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
@@ -336,8 +344,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     lastError,
                     deterministic: true,
                     checker: false,
+                    lastSystemPrompt,
                     currentPrompt,
                     lastOutput,
+                    null,
                     null,
                     CancellationToken.None).ConfigureAwait(false);
                 if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
@@ -377,6 +387,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 {
                     lastError = string.IsNullOrWhiteSpace(checkerResult.Reason) ? "response_checker invalid" : checkerResult.Reason!;
                     var checkerTrackingReason = BuildCheckerTrackingReason(checkerResult);
+                    var checkerRuleDetails = BuildCheckerRuleDetails(checkerResult, rules);
                     _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito (checker): {lastError}");
                     LogValidationFailureContext(
                         request,
@@ -397,9 +408,11 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         checkerTrackingReason,
                         deterministic: false,
                         checker: true,
+                        lastSystemPrompt,
                         currentPrompt,
                         lastOutput,
                         checkerResult.ViolatedRules,
+                        checkerRuleDetails,
                         CancellationToken.None).ConfigureAwait(false);
                     if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
                     {
@@ -469,10 +482,40 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
                     }
 
+                    var fallbackAgent = new Agent
+                    {
+                        Id = request.Agent.Id,
+                        Name = request.Agent.Name,
+                        Role = request.Agent.Role,
+                        ModelId = request.Agent.ModelId,
+                        ModelName = request.Agent.ModelName,
+                        VoiceId = request.Agent.VoiceId,
+                        Skills = request.Agent.Skills,
+                        Config = request.Agent.Config,
+                        JsonResponseFormat = request.Agent.JsonResponseFormat,
+                        Prompt = request.Agent.Prompt,
+                        Instructions = request.Agent.Instructions,
+                        ExecutionPlan = request.Agent.ExecutionPlan,
+                        IsActive = request.Agent.IsActive,
+                        CreatedAt = request.Agent.CreatedAt,
+                        UpdatedAt = request.Agent.UpdatedAt,
+                        Notes = request.Agent.Notes,
+                        Temperature = request.Agent.Temperature,
+                        TopP = modelRole.TopP ?? request.Agent.TopP,
+                        RepeatPenalty = request.Agent.RepeatPenalty,
+                        TopK = modelRole.TopK ?? request.Agent.TopK,
+                        RepeatLastN = request.Agent.RepeatLastN,
+                        NumPredict = request.Agent.NumPredict,
+                        Thinking = modelRole.Thinking ?? request.Agent.Thinking,
+                        MultiStepTemplateId = request.Agent.MultiStepTemplateId,
+                        Priority = request.Agent.Priority,
+                        AllowedProfiles = request.Agent.AllowedProfiles
+                    };
+
                     var req = new Request
                     {
                         CommandKey = request.CommandKey,
-                        Agent = request.Agent,
+                        Agent = fallbackAgent,
                         RoleCode = role,
                         Prompt = request.Prompt,
                         SystemPrompt = !string.IsNullOrWhiteSpace(modelRole.Instructions) ? modelRole.Instructions : request.SystemPrompt,
@@ -541,6 +584,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             agent.TopK,
             agent.RepeatLastN,
             agent.NumPredict,
+            agent.Thinking,
             useMaxTokens: false,
             numCtx: ResolveNumCtxForAgent(agent, modelName));
         bridge.ResponseFormat = responseFormat;
@@ -646,6 +690,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 request.Agent.TopK,
                 request.Agent.RepeatLastN,
                 request.Agent.NumPredict,
+                request.Agent.Thinking,
                 useMaxTokens: false,
                 numCtx: ResolveNumCtxForAgent(request.Agent, modelName));
 
@@ -1453,10 +1498,12 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var sb = new StringBuilder();
         sb.AppendLine(basePrompt);
         sb.AppendLine();
-        sb.AppendLine("NON RIPETERE QUESTI ERRORI:");
+        sb.AppendLine("IN PASSATO HAI COMMESSO QUESTI ERRORI, NON RIPETERLI:");
         foreach (var err in frequentErrors)
         {
-            sb.AppendLine($"- ({err.ErrorCount}) {err.ErrorText}");
+            var count = Math.Max(0, err.ErrorCount);
+            var emphasis = count > 0 ? new string('!', count / 5) : string.Empty;
+            sb.AppendLine($"- {err.ErrorText} (l'hai commesso {count} volte{emphasis})");
         }
 
         return sb.ToString().TrimEnd();
@@ -1491,9 +1538,11 @@ public sealed class CommandModelExecutionService : IAgentCallService
         string reason,
         bool deterministic,
         bool checker,
+        string systemPromptSent,
         string promptSent,
         string responseText,
         List<int>? violatedRules,
+        List<string>? violatedRuleDetails,
         CancellationToken ct)
     {
         var callback = request.AttemptFailureCallback;
@@ -1514,9 +1563,11 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     Reason = reason ?? string.Empty,
                     IsDeterministic = deterministic,
                     IsChecker = checker,
+                    SystemPromptSent = systemPromptSent ?? string.Empty,
                     PromptSent = promptSent ?? string.Empty,
                     ResponseText = responseText ?? string.Empty,
-                    ViolatedRules = violatedRules
+                    ViolatedRules = violatedRules,
+                    ViolatedRuleDetails = violatedRuleDetails
                 },
                 ct).ConfigureAwait(false);
         }
@@ -1551,6 +1602,31 @@ public sealed class CommandModelExecutionService : IAgentCallService
         }
 
         return "rules:unknown";
+    }
+
+    private static List<string>? BuildCheckerRuleDetails(
+        ValidationResult checkerResult,
+        IReadOnlyList<ResponseValidationRule> rules)
+    {
+        if (checkerResult?.ViolatedRules == null || checkerResult.ViolatedRules.Count == 0 || rules == null || rules.Count == 0)
+        {
+            return null;
+        }
+
+        var byId = rules
+            .Where(r => r != null && r.Id > 0 && !string.IsNullOrWhiteSpace(r.Text))
+            .GroupBy(r => r.Id)
+            .ToDictionary(g => g.Key, g => g.First().Text!.Trim());
+
+        var details = checkerResult.ViolatedRules
+            .Where(id => id > 0)
+            .Distinct()
+            .OrderBy(id => id)
+            .Where(byId.ContainsKey)
+            .Select(id => $"REGOLA {id}: {byId[id]}")
+            .ToList();
+
+        return details.Count > 0 ? details : null;
     }
 
     private int? ResolveNumCtxForAgent(Agent? agent, string? modelName)

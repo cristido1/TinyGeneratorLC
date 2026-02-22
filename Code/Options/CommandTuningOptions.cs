@@ -62,6 +62,7 @@ public sealed class CommandTuningOptions
         public int MaxAttemptsPerChunk { get; set; } = 3;
         // Formatter V2: number of correction retries after the first attempt.
         public int FormatterV2CorrectionRetries { get; set; } = 3;
+        public int MaxDialogueLinesPerFormatterRequest { get; set; } = 10;
         public int MaxOverlapChars { get; set; } = 8000;
         public int MinTagsPerChunkRequirement { get; set; } = 3;
         public bool EnableFallback { get; set; } = true;

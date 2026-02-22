@@ -1267,6 +1267,48 @@ VALUES (@parentId, @errorText, @errorType, 1, @now, @now);";
         }
     }
 
+    public bool RecordModelRoleUsage(string? roleCode, int? modelId, string? modelName, bool success)
+    {
+        if (string.IsNullOrWhiteSpace(roleCode))
+        {
+            return false;
+        }
+
+        var modelRoleId = ResolveOrCreateModelRoleId(modelId, modelName, roleCode);
+        if (!modelRoleId.HasValue || modelRoleId.Value <= 0)
+        {
+            return false;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            var now = DateTime.UtcNow.ToString("o");
+            const string sql = @"
+UPDATE model_roles
+SET use_count = COALESCE(use_count, 0) + 1,
+    use_successed = COALESCE(use_successed, 0) + CASE WHEN @successFlag = 1 THEN 1 ELSE 0 END,
+    use_failed = COALESCE(use_failed, 0) + CASE WHEN @successFlag = 1 THEN 0 ELSE 1 END,
+    last_use = @now,
+    updated_at = @now
+WHERE id = @id;";
+
+            var affected = conn.Execute(sql, new
+            {
+                id = modelRoleId.Value,
+                successFlag = success ? 1 : 0,
+                now
+            });
+
+            return affected > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public List<ModelRoleErrorEntry> ListModelRoleErrors(int parentId, int maxRows = 200)
     {
         var result = new List<ModelRoleErrorEntry>();
@@ -6135,10 +6177,17 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 Console.WriteLine("[DB] Adding num_predict column to agents");
                 conn.Execute("ALTER TABLE agents ADD COLUMN num_predict INTEGER DEFAULT NULL");
             }
+
+            var hasAgentThinking = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='thinking'");
+            if (hasAgentThinking == 0)
+            {
+                Console.WriteLine("[DB] Adding thinking column to agents");
+                conn.Execute("ALTER TABLE agents ADD COLUMN thinking INTEGER NULL");
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DB] Warning: failed to add temperature/top_p/repeat_penalty/top_k/repeat_last_n/num_predict to agents: {ex.Message}");
+            Console.WriteLine($"[DB] Warning: failed to add temperature/top_p/repeat_penalty/top_k/repeat_last_n/num_predict/thinking to agents: {ex.Message}");
         }
 
         // Migration: Add note column to models if not exists
@@ -6256,11 +6305,17 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 EnsureModelRoleColumn(conn, "total_gen_time_ns", "INTEGER");
                 EnsureModelRoleColumn(conn, "total_load_time_ns", "INTEGER");
                 EnsureModelRoleColumn(conn, "total_total_time_ns", "INTEGER");
+
+                var hasModelRoleThinking = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('model_roles') WHERE lower(name)=lower('thinking')");
+                if (hasModelRoleThinking == 0)
+                {
+                    conn.Execute("ALTER TABLE model_roles ADD COLUMN thinking INTEGER NULL");
+                }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DB] Warning: failed to add model_roles performance columns: {ex.Message}");
+            Console.WriteLine($"[DB] Warning: failed to add model_roles performance/thinking columns: {ex.Message}");
         }
 
         // Migration: Rename test_code to test_group if needed

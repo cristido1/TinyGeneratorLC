@@ -16,6 +16,7 @@ namespace TinyGenerator.Pages.Agents
         public List<TinyGenerator.Models.TtsVoice> Voices { get; set; } = new();
         public List<TinyGenerator.Models.ModelInfo> Models { get; set; } = new();
         public List<TinyGenerator.Models.StepTemplate> StepTemplates { get; set; } = new();
+        public List<string> ResponseFormatFiles { get; set; } = new();
         [BindProperty]
         public int? SelectedModelId { get; set; }
         [BindProperty]
@@ -39,6 +40,7 @@ namespace TinyGenerator.Pages.Agents
             Agent = a;
             Voices = _database.ListTtsVoices();
             StepTemplates = _database.ListStepTemplates();
+            ResponseFormatFiles = LoadResponseFormatFiles();
 
             // Show enabled models, but keep agent's assigned model visible even if it's currently disabled
             Models = _database.ListModels()
@@ -76,6 +78,7 @@ namespace TinyGenerator.Pages.Agents
             Voices = _database.ListTtsVoices();
             Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
             StepTemplates = _database.ListStepTemplates();
+            ResponseFormatFiles = LoadResponseFormatFiles();
             
             // Handle empty string for MultiStepTemplateId (convert to null)
             if (Agent.MultiStepTemplateId.HasValue && Agent.MultiStepTemplateId.Value == 0)
@@ -84,6 +87,15 @@ namespace TinyGenerator.Pages.Agents
             }
             
             if (!ModelState.IsValid) return Page();
+            if (!string.IsNullOrWhiteSpace(Agent.JsonResponseFormat))
+            {
+                var selected = Agent.JsonResponseFormat.Trim();
+                if (!ResponseFormatFiles.Contains(selected, StringComparer.OrdinalIgnoreCase))
+                {
+                    ModelState.AddModelError("Agent.JsonResponseFormat", "Formato risposta JSON non valido.");
+                    return Page();
+                }
+            }
             // Validate JSON fields
             try
             {
@@ -128,7 +140,31 @@ namespace TinyGenerator.Pages.Agents
                 Voices = _database.ListTtsVoices();
                 Models = _database.ListModels().Where(m => m.Enabled || (Agent.ModelId.HasValue && m.Id == Agent.ModelId.Value)).ToList();
                 StepTemplates = _database.ListStepTemplates();
+                ResponseFormatFiles = LoadResponseFormatFiles();
                 return Page();
+            }
+        }
+
+        private static List<string> LoadResponseFormatFiles()
+        {
+            try
+            {
+                var rfDir = Path.Combine(Directory.GetCurrentDirectory(), "response_formats");
+                if (!Directory.Exists(rfDir))
+                {
+                    return new List<string>();
+                }
+
+                return Directory.GetFiles(rfDir, "*.json")
+                    .Select(Path.GetFileName)
+                    .Where(f => !string.IsNullOrWhiteSpace(f))
+                    .Select(f => f!)
+                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+            catch
+            {
+                return new List<string>();
             }
         }
     }

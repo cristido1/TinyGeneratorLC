@@ -54,7 +54,8 @@ namespace TinyGenerator.Pages.Agents
                     loadRatio = mr.LoadRatio,
                     successRate = (mr.SuccessRate * 100).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
                     lastUse = FormatLastUse(mr.LastUse),
-                    enabled = mr.Enabled
+                    enabled = mr.Enabled,
+                    thinking = mr.Thinking
                 })
                 .ToList();
 
@@ -81,6 +82,7 @@ namespace TinyGenerator.Pages.Agents
                 Instructions = string.IsNullOrWhiteSpace(input.Instructions) ? null : input.Instructions.Trim(),
                 TopP = input.TopP,
                 TopK = input.TopK,
+                Thinking = input.Thinking,
                 Enabled = input.Enabled,
                 CreatedAt = now,
                 UpdatedAt = now
@@ -117,7 +119,8 @@ namespace TinyGenerator.Pages.Agents
                         loadRatio = hydrated.LoadRatio,
                         successRate = (hydrated.SuccessRate * 100).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
                         lastUse = FormatLastUse(hydrated.LastUse),
-                        enabled = hydrated.Enabled
+                        enabled = hydrated.Enabled,
+                        thinking = hydrated.Thinking
                     }
             });
         }
@@ -142,6 +145,7 @@ namespace TinyGenerator.Pages.Agents
                 $"Istruzioni: {instructions}\n" +
                 $"Top-P: {(mr.TopP.HasValue ? mr.TopP.Value.ToString("0.00") : "-")}\n" +
                 $"Top-K: {(mr.TopK.HasValue ? mr.TopK.Value.ToString() : "-")}\n" +
+                $"Thinking: {FormatThinking(mr.Thinking)}\n" +
                 $"Enabled: {(mr.Enabled ? "Yes" : "No")}\n" +
                 $"Ultimo uso: {FormatLastUse(mr.LastUse)}\n" +
                 $"Prompt tokens: {mr.TotalPromptTokens}\n" +
@@ -162,7 +166,8 @@ namespace TinyGenerator.Pages.Agents
                 instructions,
                 topP = mr.TopP,
                 topK = mr.TopK,
-                enabled = mr.Enabled
+                enabled = mr.Enabled,
+                thinking = mr.Thinking
             });
         }
 
@@ -261,6 +266,7 @@ namespace TinyGenerator.Pages.Agents
             entity.Instructions = string.IsNullOrWhiteSpace(input.Instructions) ? null : input.Instructions.Trim();
             entity.TopP = input.TopP;
             entity.TopK = input.TopK;
+            entity.Thinking = input.Thinking;
             entity.Enabled = input.Enabled;
             entity.UpdatedAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             _context.SaveChanges();
@@ -298,6 +304,11 @@ namespace TinyGenerator.Pages.Agents
         {
             if (ratio <= 0) return "-";
             return (ratio * 100.0).ToString("0.0", CultureInfo.InvariantCulture) + "%";
+        }
+
+        private static string FormatThinking(bool? thinking)
+        {
+            return thinking.HasValue ? (thinking.Value ? "true" : "false") : "null";
         }
 
         private void LoadReferenceData()
@@ -356,6 +367,7 @@ namespace TinyGenerator.Pages.Agents
             public string? Instructions { get; set; }
             public double? TopP { get; set; }
             public int? TopK { get; set; }
+            public bool? Thinking { get; set; }
             public bool Enabled { get; set; } = true;
         }
 
@@ -376,6 +388,7 @@ namespace TinyGenerator.Pages.Agents
             public string? Instructions { get; set; }
             public double? TopP { get; set; }
             public int? TopK { get; set; }
+            public bool? Thinking { get; set; }
             public bool Enabled { get; set; }
         }
 

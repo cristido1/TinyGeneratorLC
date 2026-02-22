@@ -5,7 +5,6 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using System.Threading.Tasks;
-using System.Threading;
 using TinyGenerator.Models;
 using TinyGenerator.Services.Commands;
 
@@ -15,9 +14,10 @@ public sealed partial class StoriesService
 {
     /// <summary>
     /// Command that assigns TTS voices to characters in a story's tts_schema.json.
-    /// Narrator gets a random voice with archetype "narratore".
-    /// Characters get voices matching gender and closest age, preferring higher scores.
-    /// Each character must have a distinct voice.
+    /// Rules:
+    /// - Narratore must use only voices with archetype "narratore".
+    /// - A voiceId can be assigned to one character only.
+    /// - Character voice must match required gender.
     /// </summary>
     internal sealed class AssignVoicesCommand : IStoryCommand, ICommand
     {
@@ -41,18 +41,20 @@ public sealed partial class StoriesService
                 if (!File.Exists(schemaPath))
                     return Task.FromResult<(bool, string?)>((false, "File tts_schema.json mancante: genera prima lo schema TTS"));
 
-                // Load TTS schema
                 var schemaJson = File.ReadAllText(schemaPath);
                 var schema = JsonSerializer.Deserialize<TtsSchema>(schemaJson, SchemaJsonOptions);
                 if (schema?.Characters == null || schema.Characters.Count == 0)
                     return Task.FromResult<(bool, string?)>((false, "Nessun personaggio definito nello schema TTS"));
 
-                // Load available voices from database (only enabled voices for assignment)
                 var allVoices = _service._database.ListTtsVoices(onlyEnabled: true);
                 if (allVoices == null || allVoices.Count == 0)
                     return Task.FromResult<(bool, string?)>((false, "Nessuna voce disponibile nella tabella tts_voices"));
 
-                // Load story characters for age/gender info
+                var voicesById = allVoices
+                    .Where(v => !string.IsNullOrWhiteSpace(v.VoiceId))
+                    .GroupBy(v => v.VoiceId!, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
                 var storyCharacters = new List<StoryCharacter>();
                 if (!string.IsNullOrWhiteSpace(story.Characters))
                 {
@@ -62,150 +64,90 @@ public sealed partial class StoriesService
                     }
                     catch
                     {
-                        // Best effort - proceed without character metadata
+                        // Best effort.
                     }
                 }
 
-                // Track used voice IDs to ensure uniqueness
                 var usedVoiceIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var errors = new List<string>();
                 int assignedCount = 0;
+                int replacedCount = 0;
 
-                // 1. Assign narrator voice first (series narrator -> appsettings default -> archetype fallback)
-                var narrator = schema.Characters.FirstOrDefault(c =>
-                    string.Equals(c.Name, "Narratore", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(c.Name, "Narrator", StringComparison.OrdinalIgnoreCase));
-
+                var narrator = schema.Characters.FirstOrDefault(c => IsNarratorName(c.Name));
                 if (narrator != null)
                 {
-                    if (!string.IsNullOrWhiteSpace(narrator.VoiceId))
+                    var original = narrator.VoiceId;
+                    var selectedNarrator = SelectNarratorVoice(story, narrator, allVoices, voicesById, usedVoiceIds);
+                    if (selectedNarrator == null)
                     {
-                        usedVoiceIds.Add(narrator.VoiceId);
+                        errors.Add("Narratore: nessuna voce disponibile con archetype='narratore'.");
                     }
                     else
                     {
-                        TinyGenerator.Models.TtsVoice? selectedNarratorVoice = null;
+                        narrator.VoiceId = selectedNarrator.VoiceId;
+                        narrator.Voice = selectedNarrator.Name;
+                        if (string.IsNullOrWhiteSpace(narrator.Gender))
+                            narrator.Gender = NormalizeGender(selectedNarrator.Gender);
 
-                        // Series narrator voice (if defined)
-                        if (story.SerieId.HasValue)
-                        {
-                            try
-                            {
-                                var seriesChars = _service._database.ListSeriesCharacters(story.SerieId.Value);
-                                var seriesNarrator = seriesChars.FirstOrDefault(c =>
-                                    string.Equals(c.Name, "Narratore", StringComparison.OrdinalIgnoreCase) ||
-                                    string.Equals(c.Name, "Narrator", StringComparison.OrdinalIgnoreCase));
-                                if (seriesNarrator?.VoiceId.HasValue == true)
-                                {
-                                    selectedNarratorVoice = allVoices.FirstOrDefault(v => v.Id == seriesNarrator.VoiceId.Value);
-                                }
-                            }
-                            catch
-                            {
-                                // best-effort
-                            }
-                        }
-
-                        // Appsettings default narrator voice (by name or voiceId)
-                        if (selectedNarratorVoice == null)
-                        {
-                            var defaultVoiceId = _service.GetNarratorDefaultVoiceId();
-                            if (!string.IsNullOrWhiteSpace(defaultVoiceId))
-                            {
-                                selectedNarratorVoice = _service.FindVoiceByNameOrId(allVoices, defaultVoiceId);
-                            }
-                        }
-
-                        // Fallback: pick archetype narrator voice (if any), else best available male voice
-                        if (selectedNarratorVoice == null)
-                        {
-                            var narratorVoices = allVoices
-                                .Where(v => !string.IsNullOrWhiteSpace(v.Archetype) &&
-                                           v.Archetype.Equals("narratore", StringComparison.OrdinalIgnoreCase) &&
-                                           !string.IsNullOrWhiteSpace(v.VoiceId))
-                                .ToList();
-
-                            if (narratorVoices.Count > 0)
-                            {
-                                selectedNarratorVoice = narratorVoices[Random.Shared.Next(narratorVoices.Count)];
-                            }
-                            else
-                            {
-                                selectedNarratorVoice = PickBestAvailableVoice("male", null, allVoices, usedVoiceIds);
-                            }
-                        }
-
-                        if (selectedNarratorVoice != null)
-                        {
-                            narrator.VoiceId = selectedNarratorVoice.VoiceId;
-                            narrator.Voice = selectedNarratorVoice.Name;
-                            narrator.Gender = selectedNarratorVoice.Gender ?? "";
-                            usedVoiceIds.Add(selectedNarratorVoice.VoiceId);
-                            assignedCount++;
-                        }
+                        usedVoiceIds.Add(selectedNarrator.VoiceId);
+                        assignedCount++;
+                        if (!string.Equals(original, selectedNarrator.VoiceId, StringComparison.OrdinalIgnoreCase))
+                            replacedCount++;
                     }
                 }
 
-                // 2. Assign voices to other characters
                 foreach (var character in schema.Characters)
                 {
                     context.CancellationToken.ThrowIfCancellationRequested();
-                    // Skip narrator (already assigned) and characters with existing voice
-                    if (string.Equals(character.Name, "Narratore", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(character.Name, "Narrator", StringComparison.OrdinalIgnoreCase))
+                    if (IsNarratorName(character.Name))
                         continue;
 
-                    if (!string.IsNullOrWhiteSpace(character.VoiceId))
-                    {
-                        usedVoiceIds.Add(character.VoiceId);
-                        continue;
-                    }
-
-                    // Find matching story character for age/gender info
                     var storyChar = storyCharacters.FirstOrDefault(sc =>
                         string.Equals(sc.Name, character.Name, StringComparison.OrdinalIgnoreCase) ||
                         (sc.Aliases?.Any(a => string.Equals(a, character.Name, StringComparison.OrdinalIgnoreCase)) == true));
 
-                    // Determine gender (from story character or TTS character)
-                    var gender = storyChar?.Gender ?? character.Gender;
-                    if (string.IsNullOrWhiteSpace(gender))
-                        gender = "male"; // Default fallback
+                    var targetGender = NormalizeGender(storyChar?.Gender ?? character.Gender);
+                    if (string.IsNullOrWhiteSpace(targetGender))
+                        targetGender = "male";
 
-                    // Determine age (from story character)
-                    var age = storyChar?.Age;
+                    var original = character.VoiceId;
+                    TinyGenerator.Models.TtsVoice? selected = null;
 
-                    // Pick best voice matching criteria
-                    var selectedVoice = PickBestAvailableVoice(gender, age, allVoices, usedVoiceIds);
-                    if (selectedVoice != null)
+                    if (!string.IsNullOrWhiteSpace(original) &&
+                        voicesById.TryGetValue(original, out var existing) &&
+                        !usedVoiceIds.Contains(existing.VoiceId) &&
+                        !IsNarratorVoice(existing) &&
+                        VoiceGenderMatches(existing, targetGender))
                     {
-                        character.VoiceId = selectedVoice.VoiceId;
-                        character.Voice = selectedVoice.Name;
-                        if (string.IsNullOrWhiteSpace(character.Gender))
-                            character.Gender = selectedVoice.Gender ?? "";
-                        usedVoiceIds.Add(selectedVoice.VoiceId);
-                        assignedCount++;
+                        selected = existing;
                     }
                     else
                     {
-                        _service._logger?.LogWarning(
-                            "No available voice for character {Name} (gender={Gender}, age={Age})",
-                            character.Name, gender, age ?? "unknown");
+                        selected = PickBestCharacterVoice(targetGender, storyChar?.Age, allVoices, usedVoiceIds);
                     }
+
+                    if (selected == null)
+                    {
+                        errors.Add($"{character.Name}: nessuna voce disponibile (gender richiesto: {targetGender}).");
+                        continue;
+                    }
+
+                    character.VoiceId = selected.VoiceId;
+                    character.Voice = selected.Name;
+                    character.Gender = targetGender;
+
+                    usedVoiceIds.Add(selected.VoiceId);
+                    assignedCount++;
+                    if (!string.Equals(original, selected.VoiceId, StringComparison.OrdinalIgnoreCase))
+                        replacedCount++;
                 }
 
-                // Validate: all characters must have a voice
-                var missingVoices = schema.Characters
-                    .Where(c => string.IsNullOrWhiteSpace(c.VoiceId))
-                    .Select(c => c.Name ?? "<senza nome>")
-                    .ToList();
-
-                if (missingVoices.Any())
+                if (errors.Count > 0)
                 {
                     return Task.FromResult<(bool, string?)>((false,
-                        $"Non è stato possibile assegnare voci a: {string.Join(", ", missingVoices)}. " +
-                        $"Aggiungi altre voci nella tabella tts_voices."));
+                        $"Assegnazione voci fallita: {string.Join(" | ", errors)}"));
                 }
 
-                // Check for duplicate voices
                 var duplicates = schema.Characters
                     .Where(c => !string.IsNullOrWhiteSpace(c.VoiceId))
                     .GroupBy(c => c.VoiceId!, StringComparer.OrdinalIgnoreCase)
@@ -215,10 +157,10 @@ public sealed partial class StoriesService
 
                 if (duplicates.Any())
                 {
-                    _service._logger?.LogWarning("Duplicate voices assigned: {Duplicates}", string.Join("; ", duplicates));
+                    return Task.FromResult<(bool, string?)>((false,
+                        $"Violazione unicita voiceId: {string.Join("; ", duplicates)}"));
                 }
 
-                // Save updated schema
                 var outputOptions = new JsonSerializerOptions
                 {
                     WriteIndented = true,
@@ -229,11 +171,11 @@ public sealed partial class StoriesService
                 _service.SaveSanitizedTtsSchemaJson(schemaPath, updatedJson);
 
                 _service._logger?.LogInformation(
-                    "Assigned {Count} voices to characters in story {StoryId}",
-                    assignedCount, story.Id);
+                    "Assigned/revalidated voices for story {StoryId}: assigned={Assigned}, replaced={Replaced}, total={Total}",
+                    story.Id, assignedCount, replacedCount, schema.Characters.Count);
 
                 return Task.FromResult<(bool, string?)>((true,
-                    $"Assegnate {assignedCount} voci a {schema.Characters.Count} personaggi."));
+                    $"Assegnazione voci completata: {assignedCount} assegnazioni, {replacedCount} riassegnazioni, {schema.Characters.Count} personaggi."));
             }
             catch (Exception ex)
             {
@@ -242,89 +184,175 @@ public sealed partial class StoriesService
             }
         }
 
-        /// <summary>
-        /// Picks the best available voice matching gender and age criteria.
-        /// Priority: same gender > closest age > highest score
-        /// </summary>
-        private static TinyGenerator.Models.TtsVoice? PickBestAvailableVoice(
-            string gender,
+        private TinyGenerator.Models.TtsVoice? SelectNarratorVoice(
+            StoryRecord story,
+            TtsCharacter narrator,
+            List<TinyGenerator.Models.TtsVoice> allVoices,
+            Dictionary<string, TinyGenerator.Models.TtsVoice> voicesById,
+            HashSet<string> usedVoiceIds)
+        {
+            if (!string.IsNullOrWhiteSpace(narrator.VoiceId) &&
+                voicesById.TryGetValue(narrator.VoiceId, out var currentNarratorVoice) &&
+                IsNarratorVoice(currentNarratorVoice) &&
+                !usedVoiceIds.Contains(currentNarratorVoice.VoiceId))
+            {
+                return currentNarratorVoice;
+            }
+
+            if (story.SerieId.HasValue)
+            {
+                try
+                {
+                    var seriesChars = _service._database.ListSeriesCharacters(story.SerieId.Value);
+                    var seriesNarrator = seriesChars.FirstOrDefault(c => IsNarratorName(c.Name));
+                    if (seriesNarrator?.VoiceId.HasValue == true)
+                    {
+                        var seriesVoice = allVoices.FirstOrDefault(v => v.Id == seriesNarrator.VoiceId.Value);
+                        if (seriesVoice != null &&
+                            IsNarratorVoice(seriesVoice) &&
+                            !usedVoiceIds.Contains(seriesVoice.VoiceId))
+                        {
+                            return seriesVoice;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Best effort.
+                }
+            }
+
+            var defaultVoiceId = _service.GetNarratorDefaultVoiceId();
+            if (!string.IsNullOrWhiteSpace(defaultVoiceId))
+            {
+                var defaultVoice = _service.FindVoiceByNameOrId(allVoices, defaultVoiceId);
+                if (defaultVoice != null &&
+                    IsNarratorVoice(defaultVoice) &&
+                    !usedVoiceIds.Contains(defaultVoice.VoiceId))
+                {
+                    return defaultVoice;
+                }
+            }
+
+            return PickBestNarratorVoice(allVoices, usedVoiceIds);
+        }
+
+        private static TinyGenerator.Models.TtsVoice? PickBestNarratorVoice(
+            List<TinyGenerator.Models.TtsVoice> allVoices,
+            HashSet<string> usedVoiceIds)
+        {
+            return allVoices
+                .Where(v =>
+                    !string.IsNullOrWhiteSpace(v.VoiceId) &&
+                    !usedVoiceIds.Contains(v.VoiceId) &&
+                    IsNarratorVoice(v))
+                .OrderByDescending(v => v.Score ?? 0)
+                .ThenByDescending(v => v.Confidence ?? 0)
+                .FirstOrDefault();
+        }
+
+        private static TinyGenerator.Models.TtsVoice? PickBestCharacterVoice(
+            string targetGender,
             string? targetAge,
             List<TinyGenerator.Models.TtsVoice> allVoices,
             HashSet<string> usedVoiceIds)
         {
-            // Filter by gender and exclude already used voices
             var candidates = allVoices
-                .Where(v => !string.IsNullOrWhiteSpace(v.VoiceId) &&
-                           !usedVoiceIds.Contains(v.VoiceId) &&
-                           string.Equals(v.Gender, gender, StringComparison.OrdinalIgnoreCase))
+                .Where(v =>
+                    !string.IsNullOrWhiteSpace(v.VoiceId) &&
+                    !usedVoiceIds.Contains(v.VoiceId) &&
+                    !IsNarratorVoice(v) &&
+                    VoiceGenderMatches(v, targetGender))
                 .ToList();
-
-            // If no candidates of same gender, try all unused voices
-            if (candidates.Count == 0)
-            {
-                candidates = allVoices
-                    .Where(v => !string.IsNullOrWhiteSpace(v.VoiceId) &&
-                               !usedVoiceIds.Contains(v.VoiceId))
-                    .ToList();
-            }
 
             if (candidates.Count == 0)
                 return null;
 
-            // Parse target age to numeric if possible
             int? targetAgeNum = ParseAgeToNumber(targetAge);
 
-            // Score each candidate
-            var scoredCandidates = candidates
+            return candidates
                 .Select(v => new
                 {
                     Voice = v,
                     Score = v.Score ?? 0,
                     AgeDiff = CalculateAgeDifference(v.Age, targetAgeNum)
                 })
-                .OrderBy(x => x.AgeDiff)        // Closest age first
-                .ThenByDescending(x => x.Score) // Then highest score
-                .ToList();
-
-            return scoredCandidates.First().Voice;
+                .OrderBy(x => x.AgeDiff)
+                .ThenByDescending(x => x.Score)
+                .Select(x => x.Voice)
+                .FirstOrDefault();
         }
 
-        /// <summary>
-        /// Parses age string to a numeric value. Handles numeric ages and descriptive ages.
-        /// </summary>
+        private static bool IsNarratorName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return false;
+
+            return name.Equals("Narratore", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("Narrator", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeGender(string? gender)
+        {
+            if (string.IsNullOrWhiteSpace(gender))
+                return string.Empty;
+
+            var g = gender.Trim().ToLowerInvariant();
+            return g switch
+            {
+                "male" or "m" or "maschio" or "uomo" => "male",
+                "female" or "f" or "femmina" or "donna" => "female",
+                "alien" or "alieno" or "extraterrestre" => "alien",
+                "robot" or "android" or "androide" => "robot",
+                "neutral" or "neutro" or "other" => "neutral",
+                _ => g
+            };
+        }
+
+        private static bool VoiceGenderMatches(TinyGenerator.Models.TtsVoice voice, string expectedGender)
+        {
+            var voiceGender = NormalizeGender(voice.Gender);
+            var target = NormalizeGender(expectedGender);
+            return !string.IsNullOrWhiteSpace(target)
+                && !string.IsNullOrWhiteSpace(voiceGender)
+                && voiceGender.Equals(target, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsNarratorVoice(TinyGenerator.Models.TtsVoice voice)
+        {
+            var archetype = (voice.Archetype ?? string.Empty).Trim();
+            return archetype.Equals("narratore", StringComparison.OrdinalIgnoreCase)
+                || archetype.Equals("narrator", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static int? ParseAgeToNumber(string? age)
         {
             if (string.IsNullOrWhiteSpace(age))
                 return null;
 
-            // Try direct numeric parse
             if (int.TryParse(age, out int numericAge))
                 return numericAge;
 
-            // Handle descriptive ages
             var ageLower = age.ToLowerInvariant();
             return ageLower switch
             {
                 "bambino" or "child" or "kid" => 8,
                 "ragazzo" or "giovane" or "young" or "teen" or "teenager" => 18,
                 "adulto" or "adult" => 35,
-                "mezza età" or "middle-aged" or "middle aged" => 50,
+                "mezza eta" or "middle-aged" or "middle aged" => 50,
                 "anziano" or "elderly" or "old" => 70,
                 _ => null
             };
         }
 
-        /// <summary>
-        /// Calculates age difference. Returns 0 if no comparison possible.
-        /// </summary>
         private static int CalculateAgeDifference(string? voiceAge, int? targetAge)
         {
             if (!targetAge.HasValue)
-                return 0; // No preference, treat as equal
+                return 0;
 
             var voiceAgeNum = ParseAgeToNumber(voiceAge);
             if (!voiceAgeNum.HasValue)
-                return 100; // Penalize voices without age info
+                return 100;
 
             return Math.Abs(voiceAgeNum.Value - targetAge.Value);
         }

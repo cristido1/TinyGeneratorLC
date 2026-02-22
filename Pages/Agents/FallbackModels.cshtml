@@ -112,6 +112,14 @@
             <label class="form-label small">Top-K</label>
             <input type="number" name="topK" class="form-control form-control-sm" step="1" min="0" placeholder="40" />
         </div>
+        <div class="col-md-2">
+            <label class="form-label small">Thinking</label>
+            <select name="thinking" class="form-select form-select-sm">
+                <option value="">null (default)</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+            </select>
+        </div>
         <div class="col-md-1 d-flex align-items-center">
             <div class="form-check mt-4">
                 <input type="checkbox" name="enabled" class="form-check-input" checked />
@@ -142,6 +150,7 @@
                 <th data-col="e2etps">E2E TPS</th>
                 <th data-col="loadratio">Load %</th>
                 <th data-col="rate">%</th>
+                <th data-col="thinking">Thinking</th>
                 <th data-col="lastuse">Last Use</th>
                 <th data-col="enabled">Enabled</th>
                 <th data-col="actions">Azioni</th>
@@ -177,6 +186,7 @@
                     <td data-col="e2etps">@((mr.AvgE2eTps > 0) ? mr.AvgE2eTps.ToString("0.00") : "-")</td>
                     <td data-col="loadratio">@((mr.LoadRatio > 0) ? (mr.LoadRatio * 100.0).ToString("0.0") + "%" : "-")</td>
                     <td data-col="rate"><span class="@textClass">@((mr.SuccessRate * 100).ToString("0.0"))%</span></td>
+                    <td data-col="thinking">@(mr.Thinking.HasValue ? (mr.Thinking.Value ? "true" : "false") : "null")</td>
                     <td data-col="lastuse">@Model.FormatLastUse(mr.LastUse)</td>
                     <td data-col="enabled">@(mr.Enabled ? "Yes" : "No")</td>
                     <td data-col="actions">
@@ -229,6 +239,14 @@
                     <div class="col-md-6">
                         <label class="form-label small">Top-K</label>
                         <input type="number" id="edit-topK" class="form-control form-control-sm" step="1" min="0" />
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label small">Thinking</label>
+                        <select id="edit-thinking" class="form-select form-select-sm">
+                            <option value="">null (default)</option>
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                        </select>
                     </div>
                     <div class="col-md-12">
                         <label class="form-label small">Instructions</label>
@@ -387,6 +405,14 @@
                 messageBox.textContent = '';
                 }
 
+                function parseNullableBool(value) {
+                    if (value === null || value === undefined) return null;
+                    var v = String(value).trim().toLowerCase();
+                    if (v === 'true' || v === '1' || v === 'yes') return true;
+                    if (v === 'false' || v === '0' || v === 'no') return false;
+                    return null;
+                }
+
                 function formatFloat(value, decimals) {
                     var num = Number(value);
                     if (!isFinite(num) || num <= 0) return '-';
@@ -429,6 +455,7 @@
                     '<td data-col="e2etps">' + escapeHtml(formatFloat(row.avgE2eTps, 2)) + '</td>' +
                     '<td data-col="loadratio">' + (Number(row.loadRatio || 0) > 0 ? escapeHtml((Number(row.loadRatio) * 100).toFixed(1) + '%') : '-') + '</td>' +
                     '<td data-col="rate"><span class="' + escapeHtml(textClass) + '">' + escapeHtml(row.successRate) + '%</span></td>' +
+                    '<td data-col="thinking">' + escapeHtml(row.thinking === null || row.thinking === undefined ? 'null' : (row.thinking ? 'true' : 'false')) + '</td>' +
                     '<td data-col="lastuse">' + escapeHtml(row.lastUse) + '</td>' +
                     '<td data-col="enabled">' + (row.enabled ? 'Yes' : 'No') + '</td>' +
                     '<td data-col="actions">' +
@@ -455,6 +482,7 @@
                         instructions: form.instructions.value || null,
                         topP: form.topP.value ? parseFloat(form.topP.value) : null,
                         topK: form.topK.value ? parseInt(form.topK.value, 10) : null,
+                        thinking: parseNullableBool(form.thinking.value),
                         enabled: !!form.enabled.checked
                     };
 
@@ -571,6 +599,7 @@
                             document.getElementById('edit-role').value = detail.roleName || '';
                             document.getElementById('edit-topP').value = (detail.topP === null || detail.topP === undefined) ? '' : String(detail.topP);
                             document.getElementById('edit-topK').value = (detail.topK === null || detail.topK === undefined) ? '' : String(detail.topK);
+                            document.getElementById('edit-thinking').value = detail.thinking === null || detail.thinking === undefined ? '' : (detail.thinking ? 'true' : 'false');
                             document.getElementById('edit-instructions').value = (detail.instructions && detail.instructions !== '-') ? detail.instructions : '';
                             document.getElementById('edit-enabled').checked = !!detail.enabled;
 
@@ -599,6 +628,7 @@
                         instructions: document.getElementById('edit-instructions').value || null,
                         topP: document.getElementById('edit-topP').value ? parseFloat(document.getElementById('edit-topP').value) : null,
                         topK: document.getElementById('edit-topK').value ? parseInt(document.getElementById('edit-topK').value, 10) : null,
+                        thinking: parseNullableBool(document.getElementById('edit-thinking').value),
                         enabled: !!document.getElementById('edit-enabled').checked
                     };
 

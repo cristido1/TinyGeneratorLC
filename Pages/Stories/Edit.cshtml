@@ -7,6 +7,14 @@
 <div class="card">
     <div class="card-body">
         <h3>Modifica storia</h3>
+        @if (TempData["ErrorMessage"] != null)
+        {
+            <div class="alert alert-danger">@TempData["ErrorMessage"]</div>
+        }
+        @if (TempData["StatusMessage"] != null)
+        {
+            <div class="alert alert-success">@TempData["StatusMessage"]</div>
+        }
         <form method="post">
             <ul class="nav nav-tabs" id="storyEditTabs" role="tablist">
                 <li class="nav-item" role="presentation">
@@ -20,6 +28,9 @@
                 </li>
                 <li class="nav-item" role="presentation">
                     <button class="nav-link" id="tagged-tab" data-bs-toggle="tab" data-bs-target="#tagged-pane" type="button" role="tab" aria-controls="tagged-pane" aria-selected="false">Story Tagged</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="personaggi-tab" data-bs-toggle="tab" data-bs-target="#personaggi-pane" type="button" role="tab" aria-controls="personaggi-pane" aria-selected="false">Personaggi</button>
                 </li>
             </ul>
 
@@ -110,6 +121,86 @@
                         <textarea class="form-control flex-grow-1 story-textarea" asp-for="StoryTaggedText"></textarea>
                     </div>
                 </div>
+                <div class="tab-pane fade" id="personaggi-pane" role="tabpanel" aria-labelledby="personaggi-tab">
+                    <div class="d-flex gap-2 mb-3">
+                        <button type="submit" asp-page-handler="ReassignVoices" class="btn btn-outline-primary">
+                            Riassegna tutte
+                        </button>
+                    </div>
+                    @if (Model.CharacterVoices == null || Model.CharacterVoices.Count == 0)
+                    {
+                        <div class="alert alert-warning mb-0">
+                            Nessun personaggio trovato nel file <code>tts_schema.json</code>.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm table-bordered align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Personaggio</th>
+                                        <th>Gender</th>
+                                        <th>Voce</th>
+                                        <th style="width:140px;">Preview</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @for (var i = 0; i < Model.CharacterVoices.Count; i++)
+                                    {
+                                        var row = Model.CharacterVoices[i];
+                                        var selectId = $"voiceSelect_{i}";
+                                        <tr>
+                                            <td>
+                                                <input type="hidden" name="PostedCharacterVoices[@i].Index" value="@row.Index" />
+                                                <input type="hidden" name="PostedCharacterVoices[@i].Name" value="@row.Name" />
+                                                <input type="hidden" name="PostedCharacterVoices[@i].Gender" value="@row.Gender" />
+                                                <input type="hidden" name="PostedCharacterVoices[@i].Voice" value="@row.Voice" />
+                                                <strong>@row.Name</strong>
+                                            </td>
+                                            <td>@(string.IsNullOrWhiteSpace(row.Gender) ? "-" : row.Gender)</td>
+                                            <td>
+                                                <select id="@selectId" name="PostedCharacterVoices[@i].VoiceId" class="form-select form-select-sm voice-select">
+                                                    <option value="">-- nessuna voce --</option>
+                                                    @foreach (var voice in Model.AvailableVoices)
+                                                    {
+                                                        var templateUrl = voice.TemplateUrl ?? string.Empty;
+                                                        var sampleUrl = voice.SampleUrl ?? string.Empty;
+                                                        var label = $"{voice.Name} ({voice.VoiceId})";
+                                                        if (!string.IsNullOrWhiteSpace(voice.Gender))
+                                                        {
+                                                            label += $" [{voice.Gender}]";
+                                                        }
+                                                        if (!string.IsNullOrWhiteSpace(voice.Age))
+                                                        {
+                                                            label += $" [eta: {voice.Age}]";
+                                                        }
+                                                        if (!string.IsNullOrWhiteSpace(voice.Archetype))
+                                                        {
+                                                            label += $" - {voice.Archetype}";
+                                                        }
+                                                        <option value="@voice.VoiceId"
+                                                                data-template-url="@templateUrl"
+                                                                data-sample-url="@sampleUrl"
+                                                                selected="@(string.Equals(row.VoiceId, voice.VoiceId, StringComparison.OrdinalIgnoreCase) ? "selected" : null)">
+                                                            @label
+                                                        </option>
+                                                    }
+                                                </select>
+                                            </td>
+                                            <td class="text-center">
+                                                <button type="button" class="btn btn-sm btn-outline-secondary play-voice-preview-btn" data-select-id="@selectId">
+                                                    Ascolta
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <audio id="voicePreviewAudio" class="w-100 d-none mt-2" controls preload="none"></audio>
+                    }
+                </div>
             </div>
             <div class="mb-3">
                 <button type="submit" class="btn btn-primary">Salva</button>
@@ -132,3 +223,66 @@
         resize: vertical;
     }
 </style>
+
+<script>
+    (function(){
+        const queryTab = '@(Model.Tab ?? string.Empty)';
+        const storageKey = 'stories-edit-active-tab';
+        const tabToActivate = queryTab || localStorage.getItem(storageKey);
+        if (tabToActivate) {
+            const targetButton = document.querySelector('#storyEditTabs button[data-bs-target="#' + tabToActivate + '-pane"]');
+            if (targetButton) {
+                const tab = bootstrap.Tab.getOrCreateInstance(targetButton);
+                tab.show();
+            }
+        }
+
+        document.querySelectorAll('#storyEditTabs button[data-bs-toggle="tab"]').forEach(btn => {
+            btn.addEventListener('shown.bs.tab', function(ev) {
+                const target = ev.target.getAttribute('data-bs-target') || '';
+                const id = target.replace('#', '').replace('-pane', '');
+                if (id) localStorage.setItem(storageKey, id);
+            });
+        });
+    })();
+</script>
+<script>
+    (function(){
+        const audio = document.getElementById('voicePreviewAudio');
+        if (!audio) return;
+
+        function getSelectedAudioUrl(selectEl) {
+            if (!selectEl) return '';
+            const opt = selectEl.options[selectEl.selectedIndex];
+            if (!opt) return '';
+            const templateUrl = opt.getAttribute('data-template-url') || '';
+            const sampleUrl = opt.getAttribute('data-sample-url') || '';
+            return templateUrl || sampleUrl;
+        }
+
+        document.addEventListener('click', async function(e){
+            const btn = e.target.closest && e.target.closest('.play-voice-preview-btn');
+            if (!btn) return;
+            const selectId = btn.getAttribute('data-select-id');
+            if (!selectId) return;
+            const selectEl = document.getElementById(selectId);
+            const url = getSelectedAudioUrl(selectEl);
+            if (!url) {
+                alert('Nessun template/sample disponibile per la voce selezionata.');
+                return;
+            }
+            try {
+                btn.disabled = true;
+                audio.classList.remove('d-none');
+                audio.pause();
+                audio.src = url;
+                audio.load();
+                await audio.play();
+            } catch (err) {
+                alert('Errore durante la riproduzione audio.');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    })();
+</script>

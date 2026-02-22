@@ -45,6 +45,9 @@ public class ModelRole
     [Column("top_k")]
     public int? TopK { get; set; }
 
+    [Column("thinking")]
+    public bool? Thinking { get; set; }
+
     [Column("created_at")]
     public string? CreatedAt { get; set; }
 

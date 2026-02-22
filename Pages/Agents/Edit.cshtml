@@ -83,6 +83,17 @@
             <small class="form-text text-muted">num_predict (nullable).</small>
         </div>
     </div>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label class="form-label">Thinking (Ollama `think`)</label>
+            <select asp-for="Agent.Thinking" class="form-select">
+                <option value="">null (non inviare parametro)</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+            </select>
+            <small class="form-text text-muted">Se null, `think` non viene inviato. Se true/false, viene inviato esplicitamente.</small>
+        </div>
+    </div>
     <div class="row mb-3" style="display: none;">
         <div class="col-md-6">
             <label class="form-label">Voice (optional)</label>
@@ -134,10 +145,16 @@
         <textarea asp-for="Agent.Prompt" class="form-control" rows="3"></textarea>
     </div>
 
-    <div class="mb-3" style="display: none;">
+    <div class="mb-3">
         <label class="form-label">JSON Response Format</label>
-        <input asp-for="Agent.JsonResponseFormat" class="form-control" placeholder="es. full_evaluation.json" />
-        <small class="form-text text-muted">Nome del file schema JSON in response_formats/ per structured output (opzionale)</small>
+        <select asp-for="Agent.JsonResponseFormat" class="form-select">
+            <option value="">-- nessuno --</option>
+            @foreach (var file in Model.ResponseFormatFiles)
+            {
+                <option value="@file" selected="@(file == Model.Agent.JsonResponseFormat ? "selected" : null)">@file</option>
+            }
+        </select>
+        <small class="form-text text-muted">Schema JSON da <code>response_formats/</code> da usare obbligatoriamente in risposta (opzionale).</small>
     </div>
     <div class="mb-3" style="display: none;">
         <label class="form-label">Execution Plan (JSON or text)</label>

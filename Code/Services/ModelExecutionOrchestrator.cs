@@ -52,6 +52,7 @@ public sealed class ModelExecutionOrchestrator
             request,
             request.InitialModelName,
             options,
+            request.Agent.Thinking,
             ct).ConfigureAwait(false);
 
         if (primary.Success && !string.IsNullOrWhiteSpace(primary.OutputText))
@@ -96,9 +97,10 @@ public sealed class ModelExecutionOrchestrator
         ModelExecutionRequest request,
         string modelName,
         ModelExecutionOptions options,
+        bool? thinkOverride,
         CancellationToken ct)
     {
-        var bridge = CreateBridge(modelName, request.Agent);
+        var bridge = CreateBridge(modelName, request.Agent, thinkOverride);
         var maxAttempts = Math.Max(1, options.MaxAttemptsPerModel);
         var retryDelayBaseSeconds = Math.Max(0, options.RetryDelayBaseSeconds);
         var workLabel = string.IsNullOrWhiteSpace(request.WorkLabel) ? request.RoleCode : request.WorkLabel!;
@@ -212,6 +214,7 @@ public sealed class ModelExecutionOrchestrator
                     request,
                     fallbackModelName,
                     options,
+                    modelRole.Thinking ?? request.Agent.Thinking,
                     ct).ConfigureAwait(false);
 
                 if (!fallbackAttempt.Success || string.IsNullOrWhiteSpace(fallbackAttempt.OutputText))
@@ -301,7 +304,7 @@ public sealed class ModelExecutionOrchestrator
         }
     }
 
-    private LangChainChatBridge CreateBridge(string modelName, Agent agent)
+    private LangChainChatBridge CreateBridge(string modelName, Agent agent, bool? thinkOverride = null)
     {
         return _kernelFactory.CreateChatBridge(
             modelName,
@@ -310,7 +313,8 @@ public sealed class ModelExecutionOrchestrator
             agent.RepeatPenalty,
             agent.TopK,
             agent.RepeatLastN,
-            agent.NumPredict);
+            agent.NumPredict,
+            thinkOverride ?? agent.Thinking);
     }
 
     private static (ModelExecutionOptions Options, string? TimeoutSource) ResolveOptions(ModelExecutionOptions? options)

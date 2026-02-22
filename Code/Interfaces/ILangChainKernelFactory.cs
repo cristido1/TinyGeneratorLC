@@ -75,6 +75,7 @@ namespace TinyGenerator.Services
             int? topK = null,
             int? repeatLastN = null,
             int? numPredict = null,
+            bool? think = null,
             bool useMaxTokens = false,
             int? numCtx = null);
     }

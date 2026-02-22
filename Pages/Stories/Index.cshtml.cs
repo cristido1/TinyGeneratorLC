@@ -813,21 +813,77 @@ namespace TinyGenerator.Pages.Stories
 
             try
             {
+                static JsonNode? GetNodeCaseInsensitive(JsonObject obj, params string[] names)
+                {
+                    foreach (var name in names)
+                    {
+                        if (obj.TryGetPropertyValue(name, out var value))
+                        {
+                            return value;
+                        }
+                    }
+
+                    foreach (var kvp in obj)
+                    {
+                        if (names.Any(n => string.Equals(kvp.Key, n, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            return kvp.Value;
+                        }
+                    }
+
+                    return null;
+                }
+
+                static string ReadString(JsonNode? node)
+                {
+                    if (node == null) return string.Empty;
+                    if (node is JsonValue)
+                    {
+                        try { return node.GetValue<string>() ?? string.Empty; } catch { }
+                    }
+                    return node.ToString();
+                }
+
+                static int? ReadIntNullable(JsonNode? node)
+                {
+                    if (node == null) return null;
+                    if (node is JsonValue)
+                    {
+                        try { return node.GetValue<int>(); } catch { }
+                        try
+                        {
+                            var asLong = node.GetValue<long>();
+                            if (asLong >= int.MinValue && asLong <= int.MaxValue) return (int)asLong;
+                        }
+                        catch { }
+                        try
+                        {
+                            var asDouble = node.GetValue<double>();
+                            if (asDouble >= int.MinValue && asDouble <= int.MaxValue) return (int)Math.Round(asDouble);
+                        }
+                        catch { }
+                    }
+
+                    return int.TryParse(node.ToString(), out var parsed) ? parsed : null;
+                }
+
                 var json = System.IO.File.ReadAllText(schemaPath);
                 var root = JsonNode.Parse(json) as JsonObject;
-                if (root == null || root["Timeline"] is not JsonArray timeline) return NotFound("Timeline mancante nello schema");
+                if (root == null) return NotFound("Schema TTS non valido");
+
+                var timelineNode = GetNodeCaseInsensitive(root, "Timeline", "timeline");
+                if (timelineNode is not JsonArray timeline) return NotFound("Timeline mancante nello schema");
 
                 var items = new List<object>();
 
                 foreach (var node in timeline.OfType<JsonObject>())
                 {
-                    if (!node.TryGetPropertyValue("FileName", out var fNode)) continue;
-                    var fileName = fNode?.GetValue<string>() ?? string.Empty;
+                    var fileName = ReadString(GetNodeCaseInsensitive(node, "FileName", "fileName"));
                     if (string.IsNullOrWhiteSpace(fileName)) continue;
 
-                    var character = node.TryGetPropertyValue("Character", out var cNode) ? cNode?.ToString() ?? "" : "";
-                    var text = node.TryGetPropertyValue("Text", out var tNode) ? tNode?.ToString() ?? "" : "";
-                    var durationMs = node.TryGetPropertyValue("DurationMs", out var dNode) ? dNode?.GetValue<int?>() : null;
+                    var character = ReadString(GetNodeCaseInsensitive(node, "Character", "character"));
+                    var text = ReadString(GetNodeCaseInsensitive(node, "Text", "text"));
+                    var durationMs = ReadIntNullable(GetNodeCaseInsensitive(node, "DurationMs", "durationMs"));
 
                     var url = Url.Page("/Stories/Index", null, new { handler = "TtsAudio", id = story.Id, file = fileName }, Request.Scheme);
                     items.Add(new
@@ -839,7 +895,7 @@ namespace TinyGenerator.Pages.Stories
                     });
                 }
 
-                return new JsonResult(new { items, gapMs = 1000 });
+                return new JsonResult(new { items, gapMs = 0 });
             }
             catch (Exception ex)
             {
@@ -1697,6 +1753,7 @@ namespace TinyGenerator.Pages.Stories
         }
     }
 }
+
 
 
 

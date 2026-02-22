@@ -13,6 +13,7 @@ namespace TinyGenerator.Pages.Agents
         public Agent Agent { get; set; } = new();
         public List<TinyGenerator.Models.TtsVoice> Voices { get; set; } = new();
         public List<TinyGenerator.Models.StepTemplate> StepTemplates { get; set; } = new();
+        public List<string> ResponseFormatFiles { get; set; } = new();
 
         public CreateModel(DatabaseService database)
         {
@@ -26,6 +27,7 @@ namespace TinyGenerator.Pages.Agents
             Agent.CreatedAt = DateTime.UtcNow.ToString("o");
             Voices = _database.ListTtsVoices();
             StepTemplates = _database.ListStepTemplates();
+            ResponseFormatFiles = LoadResponseFormatFiles();
         }
 
         public IActionResult OnPost()
@@ -36,7 +38,20 @@ namespace TinyGenerator.Pages.Agents
                 Agent.MultiStepTemplateId = null;
             }
             
+            Voices = _database.ListTtsVoices();
+            StepTemplates = _database.ListStepTemplates();
+            ResponseFormatFiles = LoadResponseFormatFiles();
             if (!ModelState.IsValid) return Page();
+
+            if (!string.IsNullOrWhiteSpace(Agent.JsonResponseFormat))
+            {
+                var selected = Agent.JsonResponseFormat.Trim();
+                if (!ResponseFormatFiles.Contains(selected, StringComparer.OrdinalIgnoreCase))
+                {
+                    ModelState.AddModelError("Agent.JsonResponseFormat", "Formato risposta JSON non valido.");
+                    return Page();
+                }
+            }
             // Validate JSON fields
             try
             {
@@ -76,7 +91,31 @@ namespace TinyGenerator.Pages.Agents
                 ModelState.AddModelError(string.Empty, ex.Message);
                 Voices = _database.ListTtsVoices();
                 StepTemplates = _database.ListStepTemplates();
+                ResponseFormatFiles = LoadResponseFormatFiles();
                 return Page();
+            }
+        }
+
+        private static List<string> LoadResponseFormatFiles()
+        {
+            try
+            {
+                var rfDir = Path.Combine(Directory.GetCurrentDirectory(), "response_formats");
+                if (!Directory.Exists(rfDir))
+                {
+                    return new List<string>();
+                }
+
+                return Directory.GetFiles(rfDir, "*.json")
+                    .Select(Path.GetFileName)
+                    .Where(f => !string.IsNullOrWhiteSpace(f))
+                    .Select(f => f!)
+                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+            catch
+            {
+                return new List<string>();
             }
         }
     }

@@ -43,6 +43,7 @@ namespace TinyGenerator.Services
         public int? RepeatLastN { get; set; }
         public int? NumPredict { get; set; }
         public int? NumCtx { get; set; }
+        public bool? Think { get; set; }
         // If null, do not send any explicit max tokens parameter to the model.
         // This avoids forcing an unsafe default such as 8000. Set when required.
         public int? MaxResponseTokens { get; set; } = null;
@@ -192,28 +193,6 @@ namespace TinyGenerator.Services
                         }
                     }
 
-                    try
-                    {
-                        if (_services != null && !string.IsNullOrWhiteSpace(agentRole))
-                        {
-                            using var scope = _services.CreateScope();
-                            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
-                            var db = scope.ServiceProvider.GetService<DatabaseService>();
-                            if (fallbackService != null && db != null)
-                            {
-                                var m = db.ListModels().FirstOrDefault(x => string.Equals(x.Name, _modelId, StringComparison.OrdinalIgnoreCase));
-                                if (m != null)
-                                {
-                                    fallbackService.RecordPrimaryModelUsage(agentRole!, Convert.ToInt32(m.Id), success: false);
-                                }
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // ignore tracking errors
-                    }
-
                     var fallbackResponse = await TryFallbackAsync(
                         agentRole!,
                         messages,
@@ -230,6 +209,8 @@ namespace TinyGenerator.Services
 
                     throw;
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception) { throw; }
 
                 // Ensure the primary model response log row is persisted before we attempt to
                 // capture its Id and before invoking response_checker (which produces its own log rows).
@@ -260,29 +241,6 @@ namespace TinyGenerator.Services
 
                 if (validation.IsValid)
                 {
-                    // Track primary model success (best-effort)
-                    try
-                    {
-                        if (_services != null && !string.IsNullOrWhiteSpace(agentRole))
-                        {
-                            using var scope = _services.CreateScope();
-                            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
-                            var db = scope.ServiceProvider.GetService<DatabaseService>();
-                            if (fallbackService != null && db != null)
-                            {
-                                var m = db.ListModels().FirstOrDefault(x => string.Equals(x.Name, _modelId, StringComparison.OrdinalIgnoreCase));
-                                if (m != null)
-                                {
-                                    fallbackService.RecordPrimaryModelUsage(agentRole!, Convert.ToInt32(m.Id), success: true);
-                                }
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // ignore tracking errors
-                    }
-
                     _logger?.Log("Info", "LangChainBridge", $"[ReqID: {requestId}] ✅ Validation OK");
                     return lastResponseJson;
                 }
@@ -293,29 +251,6 @@ namespace TinyGenerator.Services
                 {
                     _logger?.Log("Warning", "LangChainBridge", $"[ReqID: {requestId}] ⚠️ Validation failed (no retry): {lastValidationError}");
                     _logger?.Log("Warning", "LangChainBridge", $"[ReqID: {requestId}] ⚠️ Validation failed (no retry): {lastValidationError}");
-                    // Track primary model failure (best-effort)
-                    try
-                    {
-                        if (_services != null && !string.IsNullOrWhiteSpace(agentRole))
-                        {
-                            using var scope = _services.CreateScope();
-                            var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
-                            var db = scope.ServiceProvider.GetService<DatabaseService>();
-                            if (fallbackService != null && db != null)
-                            {
-                                var m = db.ListModels().FirstOrDefault(x => string.Equals(x.Name, _modelId, StringComparison.OrdinalIgnoreCase));
-                                if (m != null)
-                                {
-                                    fallbackService.RecordPrimaryModelUsage(agentRole!, Convert.ToInt32(m.Id), success: false);
-                                }
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // ignore tracking errors
-                    }
-
                     return lastResponseJson;
                 }
 
@@ -332,30 +267,6 @@ namespace TinyGenerator.Services
                     _logger?.Log("Warning", "LangChainBridge", $"[ReqID: {requestId}] ❌ Retries exhausted, requesting diagnosis...");
                     await DiagnoseFailureAsync(messages, lastValidationError, ct).ConfigureAwait(false);
                 }
-
-                // Track primary model failure (best-effort)
-                try
-                {
-                    if (_services != null && !string.IsNullOrWhiteSpace(agentRole))
-                    {
-                        using var scope = _services.CreateScope();
-                        var fallbackService = scope.ServiceProvider.GetService<ModelFallbackService>();
-                        var db = scope.ServiceProvider.GetService<DatabaseService>();
-                        if (fallbackService != null && db != null)
-                        {
-                            var m = db.ListModels().FirstOrDefault(x => string.Equals(x.Name, _modelId, StringComparison.OrdinalIgnoreCase));
-                            if (m != null)
-                            {
-                                fallbackService.RecordPrimaryModelUsage(agentRole!, Convert.ToInt32(m.Id), success: false);
-                            }
-                        }
-                    }
-                }
-                catch
-                {
-                    // ignore tracking errors
-                }
-
                 // After diagnosis, try fallback models (if enabled + role known)
                 if (options.EnableFallback && !string.IsNullOrWhiteSpace(agentRole))
                 {
@@ -1127,6 +1038,7 @@ namespace TinyGenerator.Services
                     candidateBridge.TopK = TopK;
                     candidateBridge.RepeatLastN = RepeatLastN;
                     candidateBridge.NumPredict = NumPredict;
+                    candidateBridge.Think = mr.Thinking ?? Think;
                     candidateBridge.MaxResponseTokens = MaxResponseTokens;
 
                     // Each fallback model must have the same number of attempts as the primary model.
@@ -1238,6 +1150,7 @@ namespace TinyGenerator.Services
             _beforeCallAsync = other._beforeCallAsync;
             _afterCallAsync = other._afterCallAsync;
             _logRequestsAsLlama = other._logRequestsAsLlama;
+            Think = other.Think;
         }
 
         /// <summary>
@@ -1331,6 +1244,10 @@ namespace TinyGenerator.Services
                     if (NumCtx.HasValue && NumCtx.Value > 0) options["num_ctx"] = NumCtx.Value;
 
                     requestBody["options"] = options;
+                    if (Think.HasValue)
+                    {
+                        requestBody["think"] = Think.Value;
+                    }
 
                     if (ResponseFormat != null)
                     {

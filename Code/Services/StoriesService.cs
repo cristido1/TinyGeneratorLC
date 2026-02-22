@@ -998,7 +998,8 @@ public sealed partial class StoriesService
                 int evaluationModelId,
                 string? instructionsOverride,
                 double? topPOverride,
-                int? topKOverride)
+                int? topKOverride,
+                bool? thinkOverride)
             {
                 try
                 {
@@ -1033,6 +1034,36 @@ public sealed partial class StoriesService
                         ? instructionsOverride!
                         : baseSystemMessage;
 
+                    var effectiveAgent = new Agent
+                    {
+                        Id = agent.Id,
+                        Name = agent.Name,
+                        Role = agent.Role,
+                        ModelId = evaluationModelId,
+                        ModelName = evaluationModelName,
+                        VoiceId = agent.VoiceId,
+                        Skills = agent.Skills,
+                        Config = agent.Config,
+                        JsonResponseFormat = agent.JsonResponseFormat,
+                        Prompt = agent.Prompt,
+                        Instructions = agent.Instructions,
+                        ExecutionPlan = agent.ExecutionPlan,
+                        IsActive = agent.IsActive,
+                        CreatedAt = agent.CreatedAt,
+                        UpdatedAt = agent.UpdatedAt,
+                        Notes = agent.Notes,
+                        Temperature = agent.Temperature,
+                        TopP = topPOverride ?? agent.TopP,
+                        RepeatPenalty = agent.RepeatPenalty,
+                        TopK = topKOverride ?? agent.TopK,
+                        RepeatLastN = agent.RepeatLastN,
+                        NumPredict = agent.NumPredict,
+                        Thinking = thinkOverride ?? agent.Thinking,
+                        MultiStepTemplateId = agent.MultiStepTemplateId,
+                        Priority = agent.Priority,
+                        AllowedProfiles = agent.AllowedProfiles
+                    };
+
                     // Use different prompt based on agent role
                     bool isCoherenceEvaluation = agent.Role?.Equals("coherence_evaluator", StringComparison.OrdinalIgnoreCase) ?? false;
                     var prompt = BuildStoryEvaluationPrompt(story, isCoherenceEvaluation);
@@ -1045,10 +1076,10 @@ public sealed partial class StoriesService
                     {
                         var protocolResult = await EvaluateStoryWithTextProtocolAsync(
                             story,
-                            agent,
+                            effectiveAgent,
                             systemMessage,
                             modelId: evaluationModelId,
-                            agentId: agent.Id).ConfigureAwait(false);
+                            agentId: effectiveAgent.Id).ConfigureAwait(false);
 
                         if (!protocolResult.success)
                         {
@@ -1062,24 +1093,7 @@ public sealed partial class StoriesService
                         if (!allowedPlugins.Any())
                             return (false, 0, "L'agente valutatore non ha strumenti abilitati");
 
-                        var reactAgent = new Agent
-                        {
-                            Id = agent.Id,
-                            Name = agent.Name,
-                            Role = agent.Role ?? string.Empty,
-                            ModelId = evaluationModelId,
-                            ModelName = evaluationModelName,
-                            Temperature = agent.Temperature,
-                            TopP = topPOverride ?? agent.TopP,
-                            RepeatPenalty = agent.RepeatPenalty,
-                            TopK = topKOverride ?? agent.TopK,
-                            RepeatLastN = agent.RepeatLastN,
-                            NumPredict = agent.NumPredict,
-                            Prompt = agent.Prompt,
-                            Instructions = agent.Instructions,
-                            Skills = agent.Skills,
-                            IsActive = agent.IsActive
-                        };
+                        var reactAgent = effectiveAgent;
 
                         var reactExecution = await ExecuteReActWithStandardPathAsync(
                             runId: runId,
@@ -1254,7 +1268,8 @@ public sealed partial class StoriesService
                 agent.ModelId.Value,
                 agent.Instructions,
                 agent.TopP,
-                agent.TopK);
+                agent.TopK,
+                agent.Thinking);
 
             if (primaryResult.success)
             {
@@ -1296,7 +1311,8 @@ public sealed partial class StoriesService
                         modelRole.ModelId,
                         string.IsNullOrWhiteSpace(modelRole.Instructions) ? agent.Instructions : modelRole.Instructions,
                         modelRole.TopP ?? agent.TopP,
-                        modelRole.TopK ?? agent.TopK);
+                        modelRole.TopK ?? agent.TopK,
+                        modelRole.Thinking ?? agent.Thinking);
                 },
                 validateResult: r => r.success,
                 shouldTryModelRole: modelRole =>
@@ -2571,10 +2587,10 @@ public sealed partial class StoriesService
                         }
 
                         using var modelScope = _scopeFactory.CreateScope();
-                        var modelExecution = modelScope.ServiceProvider.GetService<IAgentCallService>();
-                        if (modelExecution == null)
+                        var callCenter = modelScope.ServiceProvider.GetService<ICallCenter>();
+                        if (callCenter == null)
                         {
-                            return new CommandResult(false, "IAgentCallService non disponibile per revisione");
+                            return new CommandResult(false, "ICallCenter non disponibile per revisione");
                         }
 
                         // Use smaller chunks for the revisor to reduce repetition risk and improve responsiveness.
@@ -2638,40 +2654,35 @@ public sealed partial class StoriesService
                             catch { }
 
                             var systemPromptWithChunk = systemPrompt + $"\n\n(chunk: {i + 1}/{chunks.Count})";
-                            var result = await modelExecution.ExecuteAsync(
-                                new CommandModelExecutionService.Request
+                            var history = new ChatHistory();
+                            history.AddSystem(systemPromptWithChunk);
+                            history.AddUser(chunk.Text);
+                            var chunkThreadIdRaw = unchecked((((int)(storyId % int.MaxValue)) * 977) ^ (i + 1) ^ 0x5A17);
+                            var chunkThreadId = chunkThreadIdRaw == int.MinValue ? 1 : Math.Max(1, Math.Abs(chunkThreadIdRaw));
+                            var callResult = await callCenter.CallAgentAsync(
+                                storyId: storyId,
+                                threadId: chunkThreadId,
+                                agent: revisor,
+                                history: history,
+                                options: new CallOptions
                                 {
-                                    CommandKey = "story_revisor_chunk",
-                                    Agent = revisor,
-                                    RoleCode = string.IsNullOrWhiteSpace(revisor.Role) ? "revisor" : revisor.Role,
-                                    Prompt = chunk.Text,
-                                    SystemPrompt = systemPromptWithChunk,
-                                    MaxAttempts = 2,
-                                    RetryDelaySeconds = 1,
-                                    StepTimeoutSec = 90,
+                                    Operation = "story_revisor_chunk",
+                                    Timeout = TimeSpan.FromSeconds(90),
+                                    MaxRetries = 1,
                                     UseResponseChecker = false,
-                                    EnableFallback = true,
-                                    DiagnoseOnFinalFailure = true,
-                                    ExplainAfterAttempt = 1,
-                                    RunId = runId,
-                                    EnableDeterministicValidation = true,
-                                    DeterministicValidator = output =>
-                                    {
-                                        var text = (output ?? string.Empty).Trim();
-                                        return string.IsNullOrWhiteSpace(text)
-                                            ? new CommandModelExecutionService.DeterministicValidationResult(false, "Revisor output vuoto")
-                                            : new CommandModelExecutionService.DeterministicValidationResult(true, null);
-                                    }
+                                    AllowFallback = true,
+                                    AskFailExplanation = true,
+                                    SystemPromptOverride = systemPromptWithChunk
                                 },
-                                ctx.CancellationToken);
+                                cancellationToken: ctx.CancellationToken).ConfigureAwait(false);
 
                             var stepId = RequestIdGenerator.Generate();
-                            _logger?.LogInformation("[StepID: {StepId}][Story: {StoryId}] Revisione chunk {ChunkNum}/{Total} via standard path", stepId, storyId, i + 1, chunks.Count);
+                            _logger?.LogInformation("[StepID: {StepId}][Story: {StoryId}] Revisione chunk {ChunkNum}/{Total} via CallCenter", stepId, storyId, i + 1, chunks.Count);
 
-                            var revisedChunk = (result.Text ?? string.Empty).Trim();
-                            if (!result.Success)
+                            var revisedChunk = (callResult.ResponseText ?? string.Empty).Trim();
+                            if (!callResult.Success)
                             {
-                                _customLogger?.Append(runId, $"[story {storyId}] Revisor failed on chunk {i + 1}/{chunks.Count}: {result.Error ?? "errore sconosciuto"}", "warn");
+                                _customLogger?.Append(runId, $"[story {storyId}] Revisor failed on chunk {i + 1}/{chunks.Count}: {callResult.FailureReason ?? "errore sconosciuto"}", "warn");
                             }
 
                             if (string.IsNullOrWhiteSpace(revisedChunk))
@@ -5225,6 +5236,12 @@ public sealed partial class StoriesService
         var folderPath = context.FolderPath;
         var schemaPath = Path.Combine(folderPath, "tts_schema.json");
 
+        var ttsPrecheck = await EnsureTtsReadyBeforeGenerationAsync(story.Id, runId);
+        if (!ttsPrecheck.success)
+        {
+            return ttsPrecheck;
+        }
+
         if (!File.Exists(schemaPath))
         {
             var err = "File tts_schema.json non trovato: genera prima lo schema";
@@ -5424,6 +5441,12 @@ public sealed partial class StoriesService
         var schemaPath = Path.Combine(folderPath, "tts_schema.json");
 
         _customLogger?.Append(dispatcherRunId, $"[{story.Id}] Avvio generazione tracce audio nella cartella {folderPath}");
+
+        var ttsPrecheck = await EnsureTtsReadyBeforeGenerationAsync(story.Id, dispatcherRunId);
+        if (!ttsPrecheck.success)
+        {
+            return ttsPrecheck;
+        }
 
         if (!File.Exists(schemaPath))
         {
@@ -9095,6 +9118,77 @@ private static string? SelectMusicFileDeterministic(
 
         _logger?.LogWarning("Servizio TTS non raggiungibile: avvio tentativo di riattivazione automatica.");
         return await StartupTasks.TryRestartTtsAsync(_healthMonitor, _logger);
+    }
+
+    private async Task<(bool success, string? message)> EnsureTtsReadyBeforeGenerationAsync(long storyId, string runId)
+    {
+        async Task<bool> CheckHealthWithLogAsync(string label)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] {label}: GET /health...");
+            try
+            {
+                var ok = _healthMonitor != null
+                    ? await _healthMonitor.CheckTtsHealthAsync()
+                    : await StartupTasks.CheckTtsHealthAsync(_logger);
+                _customLogger?.Append(runId, $"[{storyId}] {label}: /health => {(ok ? "OK" : "KO")}");
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] {label}: errore su /health: {ex.Message}");
+                _logger?.LogWarning(ex, "Errore health-check TTS durante precheck per storia {StoryId}", storyId);
+                return false;
+            }
+        }
+
+        var isHealthy = await CheckHealthWithLogAsync("Precheck iniziale");
+        if (isHealthy)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] Precheck TTS OK (/health).");
+            return (true, null);
+        }
+
+        const int maxAttempts = 3;
+        const int retryDelayMs = 5000;
+
+        _customLogger?.Append(runId, $"[{storyId}] Precheck TTS fallito (/health non raggiungibile). Avvio riattivazione automatica...");
+        _logger?.LogWarning("Precheck TTS fallito per storia {StoryId}: /health non raggiungibile. Avvio fino a {MaxAttempts} tentativi di riattivazione.", storyId, maxAttempts);
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] Tentativo riattivazione TTS {attempt}/{maxAttempts}...");
+            var restarted = false;
+            try
+            {
+                restarted = await StartupTasks.TryRestartTtsAsync(_healthMonitor, _logger);
+                _customLogger?.Append(runId, $"[{storyId}] Tentativo {attempt}/{maxAttempts}: avvio server TTS => {(restarted ? "OK" : "KO")}");
+            }
+            catch (Exception ex)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] Tentativo {attempt}/{maxAttempts}: errore avvio server TTS: {ex.Message}");
+                _logger?.LogWarning(ex, "Errore avvio TTS al tentativo {Attempt}/{MaxAttempts} per storia {StoryId}", attempt, maxAttempts, storyId);
+            }
+
+            if (!restarted)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] Tentativo {attempt}/{maxAttempts}: avvio servizio non confermato, attendo comunque {retryDelayMs / 1000}s e riprovo health.");
+            }
+
+            await Task.Delay(retryDelayMs);
+
+            isHealthy = await CheckHealthWithLogAsync($"Tentativo {attempt}/{maxAttempts}");
+            if (isHealthy)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] Riattivazione TTS completata al tentativo {attempt}/{maxAttempts}.");
+                return (true, null);
+            }
+
+            _customLogger?.Append(runId, $"[{storyId}] Tentativo {attempt}/{maxAttempts}: /health ancora non raggiungibile.");
+        }
+
+        var err = $"Server TTS non raggiungibile: /health fallito dopo {maxAttempts} tentativi (attesa {retryDelayMs / 1000}s tra i tentativi).";
+        _customLogger?.Append(runId, $"[{storyId}] {err}");
+        return (false, err);
     }
 
     private string ResolveVoiceProvider(string? voiceId)

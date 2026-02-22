@@ -108,6 +108,8 @@ namespace TinyGenerator.Services.Commands
                     var chunk = preparation.Chunks[i];
                     var chunkIndex = i + 1;
                     var chunkCount = preparation.Chunks.Count;
+                    var maxDialogueLinesPerRequest = Math.Max(1, _tuning.TransformStoryRawToTagged.MaxDialogueLinesPerFormatterRequest);
+                    var chunkSlices = SplitChunkRowsByDialogueLimit(chunk.Rows, maxDialogueLinesPerRequest);
 
                     ReportProgress(
                         effectiveRunId,
@@ -115,64 +117,90 @@ namespace TinyGenerator.Services.Commands
                         chunkCount,
                         $"Formatting chunk {chunkIndex}/{chunkCount}");
 
-                    var userContent = BuildVoiceUserContent(chunk.Text, chunk.Rows, out var quoteLineIds);
-                    if (quoteLineIds.Count == 0)
+                    if (chunkSlices.Count > 1)
                     {
-                        _logger?.Append(effectiveRunId, $"[chunk {chunkIndex}/{chunkCount}] Nessun dialogo tra doppi apici: skip formatter");
-                        continue;
+                        _logger?.Append(
+                            effectiveRunId,
+                            $"[chunk {chunkIndex}/{chunkCount}] Suddiviso in {chunkSlices.Count} sotto-chunk (max {maxDialogueLinesPerRequest} righe dialogo)");
                     }
 
-                    var history = new ChatHistory();
-                    if (!string.IsNullOrWhiteSpace(systemPrompt))
+                    for (int sliceIndex = 0; sliceIndex < chunkSlices.Count; sliceIndex++)
                     {
-                        history.AddSystem(systemPrompt);
+                        var sliceRows = chunkSlices[sliceIndex];
+                        var sliceText = BuildChunkText(sliceRows);
+                        var userContent = BuildVoiceUserContent(sliceText, sliceRows, out var quoteLineIds);
+                        if (quoteLineIds.Count == 0)
+                        {
+                            _logger?.Append(
+                                effectiveRunId,
+                                $"[chunk {chunkIndex}/{chunkCount} part {sliceIndex + 1}/{chunkSlices.Count}] Nessun dialogo tra doppi apici: skip formatter");
+                            continue;
+                        }
+
+                        var history = new ChatHistory();
+                        if (!string.IsNullOrWhiteSpace(systemPrompt))
+                        {
+                            history.AddSystem(systemPrompt);
+                        }
+                        history.AddUser(userContent);
+
+                        var correctionRetries = Math.Max(0, _tuning.TransformStoryRawToTagged.FormatterV2CorrectionRetries);
+                        var maxAttempts = correctionRetries > 0
+                            ? 1 + correctionRetries
+                            : Math.Max(1, _tuning.TransformStoryRawToTagged.MaxAttemptsPerChunk);
+
+                        var callOptions = new CallOptions
+                        {
+                            Operation = CommandScopePaths.AddVoiceTagsToStory,
+                            Timeout = TimeSpan.FromSeconds(90),
+                            MaxRetries = Math.Max(0, maxAttempts - 1),
+                            UseResponseChecker = true,
+                            AllowFallback = _tuning.TransformStoryRawToTagged.EnableFallback,
+                            AskFailExplanation = _tuning.TransformStoryRawToTagged.DiagnoseOnFinalFailure,
+                            SystemPromptOverride = systemPrompt
+                        };
+                        foreach (var lineId in quoteLineIds.OrderBy(x => x))
+                        {
+                            callOptions.DeterministicChecks.Add(new CheckDialogueLineSpeakerEmotion
+                            {
+                                Options = Options.Create<object>(new Dictionary<string, object>
+                                {
+                                    ["LineId"] = lineId
+                                })
+                            });
+                        }
+
+                        var callResult = await _callCenter.CallAgentAsync(
+                            storyId: _storyId,
+                            threadId: BuildThreadId(_storyId, (chunkIndex * 1000) + sliceIndex + 1),
+                            agent: formatterAgent,
+                            history: history,
+                            options: callOptions,
+                            cancellationToken: ct).ConfigureAwait(false);
+
+                        if (!callResult.Success)
+                        {
+                            return Fail(effectiveRunId, callResult.FailureReason ?? "Formatter call failed");
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(callResult.ModelUsed))
+                        {
+                            currentModelName = callResult.ModelUsed;
+                        }
+
+                        var mappingText = (callResult.ResponseText ?? string.Empty).Trim();
+                        var normalizedMapping = NormalizeVoiceMapping(mappingText, quoteLineIds, out var errorMessage);
+                        if (!string.IsNullOrWhiteSpace(errorMessage))
+                        {
+                            return Fail(effectiveRunId, errorMessage);
+                        }
+
+                        var parsedTags = _storyTaggingPipelineService.ParseFormatterMapping(sliceRows, normalizedMapping);
+                        formatterTags.AddRange(parsedTags);
+                        _logger?.Append(
+                            effectiveRunId,
+                            $"[chunk {chunkIndex}/{chunkCount} part {sliceIndex + 1}/{chunkSlices.Count}] Validated mapping: {parsedTags.Count} lines; model={currentModelName}");
                     }
-                    history.AddUser(userContent);
-
-                    var correctionRetries = Math.Max(0, _tuning.TransformStoryRawToTagged.FormatterV2CorrectionRetries);
-                    var maxAttempts = correctionRetries > 0
-                        ? 1 + correctionRetries
-                        : Math.Max(1, _tuning.TransformStoryRawToTagged.MaxAttemptsPerChunk);
-
-                    var callOptions = new CallOptions
-                    {
-                        Operation = CommandScopePaths.AddVoiceTagsToStory,
-                        Timeout = TimeSpan.FromSeconds(90),
-                        MaxRetries = Math.Max(0, maxAttempts - 1),
-                        UseResponseChecker = true,
-                        AllowFallback = _tuning.TransformStoryRawToTagged.EnableFallback,
-                        AskFailExplanation = _tuning.TransformStoryRawToTagged.DiagnoseOnFinalFailure,
-                        SystemPromptOverride = systemPrompt
-                    };
-
-                    var callResult = await _callCenter.CallAgentAsync(
-                        storyId: _storyId,
-                        threadId: BuildThreadId(_storyId, chunkIndex),
-                        agent: formatterAgent,
-                        history: history,
-                        options: callOptions,
-                        cancellationToken: ct).ConfigureAwait(false);
-
-                    if (!callResult.Success)
-                    {
-                        return Fail(effectiveRunId, callResult.FailureReason ?? "Formatter call failed");
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(callResult.ModelUsed))
-                    {
-                        currentModelName = callResult.ModelUsed;
-                    }
-
-                    var mappingText = (callResult.ResponseText ?? string.Empty).Trim();
-                    var normalizedMapping = NormalizeVoiceMapping(mappingText, quoteLineIds, out var errorMessage);
-                    if (!string.IsNullOrWhiteSpace(errorMessage))
-                    {
-                        return Fail(effectiveRunId, errorMessage);
-                    }
-
-                    var parsedTags = _storyTaggingPipelineService.ParseFormatterMapping(chunk.Rows, normalizedMapping);
-                    formatterTags.AddRange(parsedTags);
-                    _logger?.Append(effectiveRunId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: {parsedTags.Count} lines; model={currentModelName}");
                 }
 
                 if (!_storyTaggingPipelineService.SaveFormatterTaggingResult(
@@ -251,6 +279,57 @@ namespace TinyGenerator.Services.Commands
                    + "TESTO COMPLETO (righe numerate):\n" + chunkText;
         }
 
+        private static string BuildChunkText(IReadOnlyList<StoryTaggingService.StoryRow> rows)
+        {
+            if (rows == null || rows.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return string.Join(
+                "\n",
+                rows.Select(r => $"{r.LineId:000} {r.Text}".TrimEnd()));
+        }
+
+        private static List<List<StoryTaggingService.StoryRow>> SplitChunkRowsByDialogueLimit(
+            IReadOnlyList<StoryTaggingService.StoryRow> rows,
+            int maxDialogueLinesPerSlice)
+        {
+            var result = new List<List<StoryTaggingService.StoryRow>>();
+            if (rows == null || rows.Count == 0)
+            {
+                return result;
+            }
+
+            var limit = Math.Max(1, maxDialogueLinesPerSlice);
+            var current = new List<StoryTaggingService.StoryRow>();
+            var currentDialogueCount = 0;
+
+            foreach (var row in rows)
+            {
+                var isDialogue = StartsWithOpeningQuote(row.Text);
+                if (isDialogue && currentDialogueCount >= limit && current.Count > 0)
+                {
+                    result.Add(current);
+                    current = new List<StoryTaggingService.StoryRow>();
+                    currentDialogueCount = 0;
+                }
+
+                current.Add(row);
+                if (isDialogue)
+                {
+                    currentDialogueCount++;
+                }
+            }
+
+            if (current.Count > 0)
+            {
+                result.Add(current);
+            }
+
+            return result;
+        }
+
         private static string NormalizeVoiceMapping(string mappingText, HashSet<int> quoteLineIds, out string? error)
         {
             error = null;
@@ -316,7 +395,7 @@ namespace TinyGenerator.Services.Commands
             if (string.IsNullOrWhiteSpace(text)) return false;
             var trimmed = text.TrimStart();
             if (trimmed.Length == 0) return false;
-            return trimmed[0] == '"' || trimmed[0] == '“' || trimmed[0] == '«';
+            return trimmed[0] == '"' || trimmed[0] == '\u201C' || trimmed[0] == '\u00AB';
         }
 
         private static string? BuildSystemPrompt(Agent agent)
@@ -427,4 +506,3 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
-

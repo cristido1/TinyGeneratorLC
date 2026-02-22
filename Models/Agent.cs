@@ -78,6 +78,9 @@ namespace TinyGenerator.Models
 
         [Column("num_predict")]
         public int? NumPredict { get; set; } // Max tokens to predict (model-specific)
+
+        [Column("thinking")]
+        public bool? Thinking { get; set; } // Null = non inviare parametro think; true/false = invia think esplicito
         
         // Multi-step template association
         [Column("multi_step_template_id")]

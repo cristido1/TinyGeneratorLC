@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 
@@ -35,12 +37,37 @@ public sealed class TextValidationService
         "cuore", "respiro", "tremare", "paura", "ansia", "tensione", "silenzio",
         "sentiva", "pensava", "ricordava", "guardava", "fissava"
     };
-
     private static readonly string[] ActionVerbs =
     {
         "entra", "esce", "corre", "prende", "lascia", "rompe", "cade", "apre",
-        "chiude", "urla", "spinge", "colpisce", "trascina", "afferra"
+        "chiude", "urla", "spinge", "colpisce", "trascina", "afferra",
+        "avvicina", "avvicinava", "muove", "volta", "spegne", "accende", "alza",
+        "tira", "scatta", "scivola", "sposta", "spostò", "protende", "getta",
+        "lancia", "inclina", "attraversa", "ringhia", "emette", "riversa",
+        "lampeggia", "brilla", "trema", "brucia", "risuona", "fissa", "mostra",
+        "attiva", "disattiva",
+        "avanza", "arretra", "assale", "attacca", "aziona", "blocca", "bracca",
+        "carica", "catapulta", "cattura", "cede", "crolla", "decolla", "devia",
+        "distrugge", "divora", "esplode", "evade", "falcia", "ferisce", "fende",
+        "forza", "frena", "frantuma", "fruga", "fugge", "gira", "graffia",
+        "impatta", "implode", "insegue", "irrompe", "lacera", "libera", "manovra",
+        "massacra", "mena", "mira", "molla", "monta", "morde", "naviga",
+        "neutralizza", "oscilla", "penetra", "perfora", "picchia", "piomba", "plana",
+        "precipita", "preme", "punta", "reagisce", "recupera", "respinge", "retrocede",
+        "rovescia", "rovina", "ruggisce", "salta", "sbanda", "sbatte", "sbuca",
+        "scaglia", "scappa", "scardina", "scarta", "scavalca", "scende", "scontra",
+        "scopre", "scoppia", "scuote", "sferra", "sfila", "sfonda", "sfugge",
+        "sgancia", "slitta", "smonta", "smorza", "sorpassa", "sorregge", "spara",
+        "spezza", "spalanca", "sprofonda", "stabilizza", "stacca", "sterza",
+        "stordisce", "strappa", "stringe", "svanisce", "taglia", "tampona",
+        "travolge", "trafigge", "urta", "vola"
     };
+
+    private static readonly HashSet<string> ActionVerbKeys = ActionVerbs
+        .Select(NormalizeActionVerbKey)
+        .Where(v => !string.IsNullOrWhiteSpace(v))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
 
     public TextValidationService(IOptionsMonitor<StateDrivenStoryGenerationOptions> options)
     {
@@ -171,7 +198,21 @@ public sealed class TextValidationService
 
     private static bool HasAnyActionVerb(string text)
     {
-        return ActionVerbs.Any(verb => ContainsWord(text, verb));
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        foreach (Match token in Regex.Matches(text.ToLowerInvariant(), @"\p{L}+"))
+        {
+            var key = NormalizeActionVerbKey(token.Value);
+            if (!string.IsNullOrWhiteSpace(key) && ActionVerbKeys.Contains(key))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool HasSimilarSentenceRepetition(List<string> sentences, double threshold, int limit)
@@ -347,9 +388,106 @@ public sealed class TextValidationService
 
     private static bool HasActionVerb(string sentence)
     {
-        return ActionVerbs.Any(verb => ContainsWord(sentence, verb));
+        return HasAnyActionVerb(sentence);
     }
 
+    private static string NormalizeActionVerbKey(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var token = RemoveDiacritics(value.ToLowerInvariant().Trim());
+        token = Regex.Replace(token, @"[^a-z]", string.Empty);
+        if (token.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        token = StripEncliticPronouns(token);
+        token = StemItalianVerbToken(token);
+        return token;
+    }
+
+    private static string StripEncliticPronouns(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token) || token.Length < 5)
+        {
+            return token;
+        }
+
+        string[] suffixes =
+        {
+            "gliele", "glieli", "gliela", "glielo", "gliene",
+            "mene", "tene", "sene", "cene", "vene",
+            "meli", "teli", "seli", "celi", "veli",
+            "mela", "tela", "sela", "cela", "vela",
+            "gli", "glie", "melo", "telo", "selo", "celo", "velo",
+            "mi", "ti", "si", "ci", "vi", "lo", "la", "li", "le", "ne"
+        };
+
+        foreach (var suffix in suffixes)
+        {
+            if (token.Length > suffix.Length + 2 && token.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                return token[..^suffix.Length];
+            }
+        }
+
+        return token;
+    }
+
+    private static string StemItalianVerbToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token) || token.Length < 4)
+        {
+            return token;
+        }
+
+        string[] endings =
+        {
+            "erebbero", "irebbero", "assero", "essero", "issero",
+            "arono", "erono", "irono", "avano", "evano", "ivano",
+            "ando", "endo", "ammo", "emmo", "immo",
+            "asti", "esti", "isti", "asse", "esse", "isse",
+            "ato", "uto", "ito", "ata", "uta", "ita", "ati", "uti", "iti", "ate", "ute", "ite",
+            "are", "ere", "ire", "ava", "eva", "iva", "ano", "ono",
+            "era", "ira", "ara",
+            "ai", "ei", "ii", "o", "a", "e", "i"
+        };
+
+        foreach (var ending in endings)
+        {
+            if (token.Length > ending.Length + 2 && token.EndsWith(ending, StringComparison.Ordinal))
+            {
+                return token[..^ending.Length];
+            }
+        }
+
+        return token;
+    }
+
+    private static string RemoveDiacritics(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Normalize(NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder(normalized.Length);
+        foreach (var ch in normalized)
+        {
+            var category = CharUnicodeInfo.GetUnicodeCategory(ch);
+            if (category != UnicodeCategory.NonSpacingMark)
+            {
+                sb.Append(ch);
+            }
+        }
+
+        return sb.ToString().Normalize(NormalizationForm.FormC);
+    }
     private static bool ContainsWord(string text, string word)
     {
         return Regex.IsMatch(text ?? string.Empty, $@"\b{Regex.Escape(word)}\b", RegexOptions.IgnoreCase);

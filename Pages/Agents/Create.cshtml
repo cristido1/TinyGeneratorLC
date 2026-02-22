@@ -84,6 +84,17 @@
         <label class="form-label">Config (JSON)</label>
         <textarea asp-for="Agent.Config" class="form-control" rows="4"></textarea>
     </div>
+    <div class="mb-3">
+        <label class="form-label">JSON Response Format</label>
+        <select asp-for="Agent.JsonResponseFormat" class="form-select">
+            <option value="">-- nessuno --</option>
+            @foreach (var file in Model.ResponseFormatFiles)
+            {
+                <option value="@file" selected="@(file == Model.Agent.JsonResponseFormat ? "selected" : null)">@file</option>
+            }
+        </select>
+        <small class="form-text text-muted">Schema JSON da <code>response_formats/</code> da usare obbligatoriamente in risposta (opzionale).</small>
+    </div>
     <div class="mb-3 form-check">
         <input asp-for="Agent.IsActive" class="form-check-input" />
         <label class="form-check-label">Active</label>

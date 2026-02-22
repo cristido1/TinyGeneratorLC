@@ -250,6 +250,7 @@ namespace TinyGenerator
                 var baseDir = AppContext.BaseDirectory;
                 var scriptCandidates = new[]
                 {
+                    @"C:\Users\User\Documents\ai\localTTS\launch_tts.bat",
                     Path.Combine(cwd, "start_tts.ps1"),
                     Path.Combine(baseDir, "start_tts.ps1"),
                     Path.Combine(cwd, "start_localtts.ps1"),
@@ -271,8 +272,8 @@ namespace TinyGenerator
                         Arguments = string.Equals(ext, ".ps1", StringComparison.OrdinalIgnoreCase)
                             ? $"-ExecutionPolicy Bypass -File \"{starterScript}\""
                             : $"/c \"{starterScript}\"",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
+                        RedirectStandardOutput = false,
+                        RedirectStandardError = false,
                         UseShellExecute = false,
                         CreateNoWindow = true,
                         WorkingDirectory = Path.GetDirectoryName(starterScript)
@@ -281,18 +282,14 @@ namespace TinyGenerator
                     var p = Process.Start(psi);
                     if (p != null)
                     {
-                        await p.WaitForExitAsync(cancellationToken);
-                        var stdout = await p.StandardOutput.ReadToEndAsync();
-                        var stderr = await p.StandardError.ReadToEndAsync();
-                        if (!string.IsNullOrWhiteSpace(stdout))
-                            logger?.LogInformation("[Startup] TTS starter stdout: {out}", stdout);
-                        if (!string.IsNullOrWhiteSpace(stderr))
-                            logger?.LogWarning("[Startup] TTS starter stderr: {err}", stderr);
+                        logger?.LogInformation("[Startup] TTS starter launched (non-blocking), PID={pid}", p.Id);
 
                         if (await WaitUntilHealthyAsync(30))
                         {
                             return true;
                         }
+
+                        logger?.LogWarning("[Startup] TTS starter launched but /health is still not ready after 30s");
                     }
                 }
 

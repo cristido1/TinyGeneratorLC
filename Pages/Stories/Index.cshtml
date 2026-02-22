@@ -364,7 +364,12 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" />
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="/js/shared/list-ui.js"></script>
+    <script src="/js/stories/tts.js"></script>
     <script>
+        if (window.StoriesApp && typeof window.StoriesApp.initTts === 'function') {
+            window.StoriesApp.initTts();
+        }
+
         const evaluatorAgents = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
             Model.Evaluators.Select(ev => new
             {

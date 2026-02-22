@@ -374,6 +374,7 @@ internal sealed class FakeKernelFactory : ILangChainKernelFactory
         int? topK = null,
         int? repeatLastN = null,
         int? numPredict = null,
+        bool? think = null,
         bool useMaxTokens = false,
         int? numCtx = null)
     {
@@ -387,6 +388,7 @@ internal sealed class FakeKernelFactory : ILangChainKernelFactory
             logger: null,
             forceOllama: true,
             services: null);
+        bridge.Think = think;
         bridge.NumCtx = numCtx;
         return bridge;
     }

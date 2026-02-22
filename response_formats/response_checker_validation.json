@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "is_valid": {
+      "type": "boolean"
+    },
+    "needs_retry": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "violated_rules": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    }
+  },
+  "required": [
+    "is_valid",
+    "needs_retry",
+    "reason",
+    "violated_rules"
+  ],
+  "additionalProperties": false
+}

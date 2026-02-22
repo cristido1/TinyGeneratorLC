@@ -1,13 +1,25 @@
 (function(window){
     function initTts() {
         let gapTimer = null;
+        function reportTtsError(message, error) {
+            const details = error && error.message ? ` (${error.message})` : '';
+            console.error('[TTS Playlist] ' + message, error || '');
+            alert(message + details);
+        }
         document.addEventListener('click', function(e){
             const btn = e.target && e.target.closest ? e.target.closest('.tts-playlist-btn') : null;
             if (btn) {
                 e.preventDefault();
                 const storyId = btn.dataset.storyId;
                 fetch(window.location.pathname + '?handler=TtsPlaylist&id=' + storyId)
-                    .then(r => r.json())
+                    .then(async r => {
+                        if (!r.ok) {
+                            let body = '';
+                            try { body = (await r.text() || '').trim(); } catch (_) { }
+                            throw new Error(body ? ('HTTP ' + r.status + ' - ' + body) : ('HTTP ' + r.status));
+                        }
+                        return r.json();
+                    })
                     .then(async data => {
                         if (!data?.items?.length) { alert('Nessuna traccia TTS'); return; }
 
@@ -18,27 +30,24 @@
 
                         // Playlist items: url, character, text, durationMs (optional)
                         const items = data.items;
-                        const gapMs = Number(data?.gapMs ?? 1000) > 0 ? Number(data.gapMs) : 1000;
+                        const parsedGap = Number(data?.gapMs);
+                        const gapMs = Number.isFinite(parsedGap) && parsedGap >= 0 ? parsedGap : 0;
 
                         // Build cumulative durations (in seconds). If durationMs missing, try to load metadata.
                         let totalSeconds = 0;
                         const durations = [];
                         for (let i = 0; i < items.length; i++) {
                             const it = items[i];
+                            if (!it?.url) {
+                                throw new Error('URL audio mancante alla traccia #' + (i + 1));
+                            }
                             if (it.durationMs != null) {
                                 const s = Math.max(0, it.durationMs / 1000.0);
                                 durations.push(s);
                                 totalSeconds += s;
                             } else {
-                                // load metadata to get duration (may be async)
-                                try {
-                                    const metaDur = await probeDuration(items[i].url);
-                                    durations.push(metaDur);
-                                    totalSeconds += metaDur;
-                                } catch (ex) {
-                                    // fallback small duration (unknown)
-                                    durations.push(0);
-                                }
+                                // Avoid blocking playback start; unknown duration is allowed.
+                                durations.push(0);
                             }
                         }
 
@@ -84,14 +93,23 @@
                             audio.src = items[idx].url;
                             // Wait metadata to set currentTime
                             audio.pause();
-                            audio.removeAttribute('preload');
-                            audio.addEventListener('loadedmetadata', function onMeta(){
+                            audio.preload = 'auto';
+                            audio.load();
+                            audio.addEventListener('loadedmetadata', async function onMeta(){
                                 audio.removeEventListener('loadedmetadata', onMeta);
                                 if (segmentOffset && audio.duration && segmentOffset < audio.duration - 0.05) {
                                     audio.currentTime = segmentOffset;
                                 }
-                                audio.play().catch(()=>{});
+                                try {
+                                    await audio.play();
+                                } catch (playError) {
+                                    reportTtsError('Riproduzione TTS bloccata o non disponibile', playError);
+                                }
                             });
+                            audio.addEventListener('error', function onErr(){
+                                audio.removeEventListener('error', onErr);
+                                reportTtsError('Errore caricamento audio TTS');
+                            }, { once: true });
                         }
 
                         // On ended -> advance to next segment
@@ -150,19 +168,8 @@
                             if (h>0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
                             return `${m}:${String(sec).padStart(2,'0')}`;
                         }
-
-                        function probeDuration(url){
-                            return new Promise((resolve, reject)=>{
-                                const a = document.createElement('audio');
-                                a.preload = 'metadata';
-                                a.src = url;
-                                a.addEventListener('loadedmetadata', function(){
-                                    resolve(a.duration || 0);
-                                });
-                                a.addEventListener('error', function(){ reject(new Error('metadata error')); });
-                            });
-                        }
-                    });
+                    })
+                    .catch(err => reportTtsError('Errore avvio playlist TTS', err));
             }
         });
     }
@@ -170,3 +177,4 @@
     window.StoriesApp = window.StoriesApp || {};
     window.StoriesApp.initTts = initTts;
 })(window);
+

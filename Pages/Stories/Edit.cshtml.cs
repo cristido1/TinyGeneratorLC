@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using TinyGenerator.Services;
 using TinyGenerator.Models;
 
@@ -18,6 +21,9 @@ namespace TinyGenerator.Pages.Stories
 
         [BindProperty(SupportsGet = true)]
         public long Id { get; set; }
+
+        [BindProperty(SupportsGet = true)]
+        public string? Tab { get; set; }
 
         [BindProperty]
         public string Prompt { get; set; } = string.Empty;
@@ -58,6 +64,11 @@ namespace TinyGenerator.Pages.Stories
     public string? Title { get; set; }
 
     public string FormatterAgentName { get; set; } = string.Empty;
+    public List<CharacterVoiceEntry> CharacterVoices { get; set; } = new();
+    public List<VoiceOption> AvailableVoices { get; set; } = new();
+
+        [BindProperty]
+        public List<CharacterVoiceEntry> PostedCharacterVoices { get; set; } = new();
 
         public IActionResult OnGet(long id)
         {
@@ -79,6 +90,7 @@ namespace TinyGenerator.Pages.Stories
             LoadAgents();
             LoadModels();
             LoadSeries();
+            LoadVoicesAndCharactersFromSchema(s);
             FormatterAgentName = ResolveFormatterAgentName(s.FormatterModelId);
             return Page();
         }
@@ -115,7 +127,31 @@ namespace TinyGenerator.Pages.Stories
                 SerieEpisode = null;
             }
             _database.UpdateStorySeriesInfo(Id, SerieId, SerieEpisode, allowSeriesUpdate: true);
+            SavePostedVoicesToSchema(story, PostedCharacterVoices);
             return RedirectToPage("/Stories/Details", new { id = Id });
+        }
+
+        public async Task<IActionResult> OnPostReassignVoicesAsync()
+        {
+            if (Id <= 0) return BadRequest();
+            var story = _stories.GetStoryById(Id);
+            if (story == null) return NotFound();
+
+            var (ok, msg) = await _stories.AssignVoicesAsync(Id);
+            if (!ok)
+            {
+                TempData["ErrorMessage"] = string.IsNullOrWhiteSpace(msg)
+                    ? "Riassegnazione voci fallita."
+                    : msg;
+            }
+            else
+            {
+                TempData["StatusMessage"] = string.IsNullOrWhiteSpace(msg)
+                    ? "Voci riassegnate."
+                    : msg;
+            }
+
+            return RedirectToPage(new { id = Id, tab = "personaggi" });
         }
 
         private void LoadStatuses()
@@ -186,6 +222,204 @@ namespace TinyGenerator.Pages.Stories
             {
                 return string.Empty;
             }
+        }
+
+        private void LoadVoicesAndCharactersFromSchema(StoryRecord story)
+        {
+            try
+            {
+                var voices = _database.ListTtsVoices(onlyEnabled: true);
+                AvailableVoices = voices
+                    .Where(v => !string.IsNullOrWhiteSpace(v.VoiceId))
+                    .OrderBy(v => v.Name)
+                    .Select(v => new VoiceOption
+                    {
+                        VoiceId = v.VoiceId,
+                        Name = string.IsNullOrWhiteSpace(v.Name) ? v.VoiceId : v.Name,
+                        Gender = v.Gender ?? string.Empty,
+                        Age = v.Age ?? string.Empty,
+                        Archetype = v.Archetype ?? string.Empty,
+                        TemplateUrl = BuildTemplateUrl(v.TemplateWav),
+                        SampleUrl = "/TtsVoices?handler=Sample&voiceId=" + Uri.EscapeDataString(v.VoiceId)
+                    })
+                    .ToList();
+            }
+            catch
+            {
+                AvailableVoices = new List<VoiceOption>();
+            }
+
+            CharacterVoices = ReadCharacterVoicesFromSchema(story);
+        }
+
+        private List<CharacterVoiceEntry> ReadCharacterVoicesFromSchema(StoryRecord story)
+        {
+            var result = new List<CharacterVoiceEntry>();
+            var schemaPath = GetSchemaPath(story);
+            if (string.IsNullOrWhiteSpace(schemaPath) || !System.IO.File.Exists(schemaPath))
+                return result;
+
+            try
+            {
+                var root = JsonNode.Parse(System.IO.File.ReadAllText(schemaPath)) as JsonObject;
+                if (root == null) return result;
+
+                var charsNode = GetNodeCaseInsensitive(root, "characters", "Characters");
+                if (charsNode is not JsonArray charsArray) return result;
+
+                for (int i = 0; i < charsArray.Count; i++)
+                {
+                    if (charsArray[i] is not JsonObject ch) continue;
+                    result.Add(new CharacterVoiceEntry
+                    {
+                        Index = i,
+                        Name = ReadStringCaseInsensitive(ch, "name", "Name") ?? string.Empty,
+                        Gender = ReadStringCaseInsensitive(ch, "gender", "Gender") ?? string.Empty,
+                        VoiceId = ReadStringCaseInsensitive(ch, "voiceId", "VoiceId") ?? string.Empty,
+                        Voice = ReadStringCaseInsensitive(ch, "voice", "Voice") ?? string.Empty
+                    });
+                }
+            }
+            catch
+            {
+                // best effort
+            }
+
+            return result;
+        }
+
+        private void SavePostedVoicesToSchema(StoryRecord story, List<CharacterVoiceEntry>? postedRows)
+        {
+            if (postedRows == null || postedRows.Count == 0) return;
+
+            var schemaPath = GetSchemaPath(story);
+            if (string.IsNullOrWhiteSpace(schemaPath) || !System.IO.File.Exists(schemaPath))
+                return;
+
+            try
+            {
+                var root = JsonNode.Parse(System.IO.File.ReadAllText(schemaPath)) as JsonObject;
+                if (root == null) return;
+
+                var charsNode = GetNodeCaseInsensitive(root, "characters", "Characters");
+                if (charsNode is not JsonArray charsArray) return;
+
+                var voiceNameById = _database.ListTtsVoices(onlyEnabled: false)
+                    .Where(v => !string.IsNullOrWhiteSpace(v.VoiceId))
+                    .GroupBy(v => v.VoiceId, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        g => g.Key,
+                        g =>
+                        {
+                            var first = g.First();
+                            return string.IsNullOrWhiteSpace(first.Name) ? first.VoiceId : first.Name;
+                        },
+                        StringComparer.OrdinalIgnoreCase);
+
+                foreach (var row in postedRows)
+                {
+                    if (row.Index < 0 || row.Index >= charsArray.Count) continue;
+                    if (charsArray[row.Index] is not JsonObject ch) continue;
+
+                    var newVoiceId = (row.VoiceId ?? string.Empty).Trim();
+                    var newVoiceName = string.Empty;
+                    if (!string.IsNullOrWhiteSpace(newVoiceId) &&
+                        voiceNameById.TryGetValue(newVoiceId, out var resolvedName))
+                    {
+                        newVoiceName = resolvedName ?? string.Empty;
+                    }
+
+                    SetStringCaseInsensitive(ch, newVoiceId, "voiceId", "VoiceId", "voice_id");
+                    SetStringCaseInsensitive(ch, newVoiceName, "voice", "Voice");
+                }
+
+                var options = new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                };
+                System.IO.File.WriteAllText(schemaPath, root.ToJsonString(options));
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+
+        private static JsonNode? GetNodeCaseInsensitive(JsonObject obj, params string[] names)
+        {
+            foreach (var n in names)
+            {
+                if (obj.TryGetPropertyValue(n, out var node))
+                    return node;
+            }
+
+            foreach (var kvp in obj)
+            {
+                if (names.Any(n => string.Equals(n, kvp.Key, StringComparison.OrdinalIgnoreCase)))
+                    return kvp.Value;
+            }
+
+            return null;
+        }
+
+        private static string? ReadStringCaseInsensitive(JsonObject obj, params string[] names)
+        {
+            var node = GetNodeCaseInsensitive(obj, names);
+            if (node == null) return null;
+            if (node is JsonValue)
+            {
+                try { return node.GetValue<string>(); } catch { }
+            }
+            return node.ToString();
+        }
+
+        private static void SetStringCaseInsensitive(JsonObject obj, string value, params string[] preferredNames)
+        {
+            foreach (var key in obj.Select(k => k.Key).ToList())
+            {
+                if (preferredNames.Any(n => string.Equals(n, key, StringComparison.OrdinalIgnoreCase)))
+                {
+                    obj[key] = value;
+                    return;
+                }
+            }
+
+            var targetName = preferredNames.FirstOrDefault() ?? "value";
+            obj[targetName] = value;
+        }
+
+        private static string? BuildTemplateUrl(string? templateWav)
+        {
+            if (string.IsNullOrWhiteSpace(templateWav)) return null;
+            return "/data_voices_samples/" + Uri.EscapeDataString(templateWav.Trim());
+        }
+
+        private static string? GetSchemaPath(StoryRecord story)
+        {
+            if (story == null || string.IsNullOrWhiteSpace(story.Folder))
+                return null;
+            return Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder, "tts_schema.json");
+        }
+
+        public sealed class CharacterVoiceEntry
+        {
+            public int Index { get; set; }
+            public string Name { get; set; } = string.Empty;
+            public string Gender { get; set; } = string.Empty;
+            public string VoiceId { get; set; } = string.Empty;
+            public string Voice { get; set; } = string.Empty;
+        }
+
+        public sealed class VoiceOption
+        {
+            public string VoiceId { get; set; } = string.Empty;
+            public string Name { get; set; } = string.Empty;
+            public string Gender { get; set; } = string.Empty;
+            public string Age { get; set; } = string.Empty;
+            public string Archetype { get; set; } = string.Empty;
+            public string? TemplateUrl { get; set; }
+            public string SampleUrl { get; set; } = string.Empty;
         }
     }
 }

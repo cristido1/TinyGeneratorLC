@@ -265,6 +265,7 @@ namespace TinyGenerator.Services
             int? topK = null,
             int? repeatLastN = null,
             int? numPredict = null,
+            bool? think = null,
             bool useMaxTokens = false,
             int? numCtx = null)
         {
@@ -362,6 +363,7 @@ namespace TinyGenerator.Services
                 if (topK.HasValue) bridge.TopK = topK.Value;
                 if (repeatLastN.HasValue) bridge.RepeatLastN = repeatLastN.Value;
                 if (numPredict.HasValue) bridge.NumPredict = numPredict.Value;
+                bridge.Think = think;
                 if (numCtx.HasValue && numCtx.Value > 0)
                 {
                     bridge.NumCtx = numCtx.Value;

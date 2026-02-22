@@ -227,7 +227,6 @@ public sealed class GenerateNextChunkCommand : ICommand
         history.AddUser(prompt);
 
         string lastError = "Writer returned empty output";
-        string lastOutput = string.Empty;
         string modelUsed = ResolveModelName(writerAgent) ?? string.Empty;
         var hadDeterministicFailure = false;
 
@@ -252,7 +251,18 @@ public sealed class GenerateNextChunkCommand : ICommand
                     ["ErrorMessage"] = $"Risposta vuota ({agentIdentity})"
                 })
             });
-
+            options.DeterministicChecks.Add(new CheckTextValidation
+            {
+                Options = Options.Create<object>(new Dictionary<string, object>
+                {
+                    ["TextValidationService"] = _textValidationService,
+                    ["StoryHistory"] = storyHistory,
+                    ["AgentIdentity"] = agentIdentity,
+                    ["RunId"] = runId,
+                    ["Phase"] = phase,
+                    ["Logger"] = _logger as object ?? new object()
+                })
+            });
             var callResult = await callCenter.CallAgentAsync(
                 storyId: _storyId,
                 threadId: BuildThreadId(_storyId, attempt),
@@ -278,51 +288,6 @@ public sealed class GenerateNextChunkCommand : ICommand
             }
 
             var cleaned = callResult.ResponseText.Trim();
-            lastOutput = cleaned;
-
-            var checks = new List<IDeterministicCheck>
-            {
-                new CheckTextValidation
-                {
-                    Options = Options.Create<object>(new Dictionary<string, object>
-                    {
-                        ["TextValidationService"] = _textValidationService,
-                        ["StoryHistory"] = storyHistory,
-                        ["AgentIdentity"] = agentIdentity,
-                        ["RunId"] = runId,
-                        ["Phase"] = phase,
-                        ["Logger"] = _logger as object ?? new object()
-                    })
-                }
-            };
-
-            if (_options.RequireCliffhanger)
-            {
-                checks.Add(new CheckCliffhangerEnding
-                {
-                    Options = Options.Create<object>(new Dictionary<string, object>
-                    {
-                        ["AgentIdentity"] = agentIdentity
-                    })
-                });
-            }
-
-            var deterministic = CheckRunner.Execute(cleaned, checks.ToArray());
-            if (!deterministic.IsValid)
-            {
-                hadDeterministicFailure = true;
-                lastError = deterministic.Reason ?? "Check deterministico fallito";
-                _logger?.Append(runId, $"[{roleCode}] Tentativo {attempt}/{maxAttempts} fallito (deterministico): {lastError}", "warning");
-                _logger?.MarkLatestModelResponseResult("FAILED", lastError);
-
-                if (attempt < maxAttempts)
-                {
-                    history.AddAssistant(cleaned);
-                    history.AddUser(BuildRetryConversationPrompt(lastError));
-                }
-
-                continue;
-            }
 
             return new CommandModelExecutionService.Result
             {
@@ -335,11 +300,19 @@ public sealed class GenerateNextChunkCommand : ICommand
             };
         }
 
+        if (!string.IsNullOrWhiteSpace(lastError) &&
+            (lastError.Contains("GENERIC_ERROR:", StringComparison.OrdinalIgnoreCase) ||
+             lastError.Contains("deterministic", StringComparison.OrdinalIgnoreCase) ||
+             lastError.Contains("deterministico", StringComparison.OrdinalIgnoreCase)))
+        {
+            hadDeterministicFailure = true;
+        }
+
         return new CommandModelExecutionService.Result
         {
             Success = false,
             Error = lastError,
-            Text = lastOutput,
+            Text = string.Empty,
             ModelName = modelUsed,
             UsedFallback = !string.Equals(modelUsed, ResolveModelName(writerAgent), StringComparison.OrdinalIgnoreCase),
             DeterministicFailure = hadDeterministicFailure,

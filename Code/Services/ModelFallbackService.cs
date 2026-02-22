@@ -56,13 +56,16 @@ public class ModelFallbackService
             query = query.Where(mr => mr.ModelId != excludeModelId.Value);
         }
 
-        // Order by success rate (descending), then by use_count (descending) for stability
+        // Priority:
+        // 1) models never tried for this role (use_count == 0)
+        // 2) then best historical performers
         var fallbacks = query.ToList()
-            .OrderByDescending(mr => mr.SuccessRate)
+            .OrderByDescending(mr => mr.UseCount == 0)
+            .ThenByDescending(mr => mr.SuccessRate)
             .ThenByDescending(mr => mr.UseCount)
             .ToList();
 
-        _logger?.Log("Info", "ModelFallback", $"Found {fallbacks.Count} fallback models for role '{roleCode}' (excluding model {excludeModelId})");
+        _logger?.Log("Info", "ModelFallback", $"Found {fallbacks.Count} fallback models for role '{roleCode}' (excluding model {excludeModelId}, neverTriedFirst=true)");
         return fallbacks;
     }
 

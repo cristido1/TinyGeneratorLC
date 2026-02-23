@@ -581,8 +581,8 @@ public sealed class CinoOptimizeStoryCommand : ICommand
         {
             return rootCallCenter;
         }
-
-        return new CallCenter(_modelExecution, _database, _logger);
+        
+        return null;
     }
 
     private void ReportCinoProgress(

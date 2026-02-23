@@ -64,22 +64,13 @@ namespace TinyGenerator.Services.Commands
                     ct.ThrowIfCancellationRequested();
                     try
                     {
-                        IAgentCallService? modelExecution = null;
-                        if (_scopeFactory != null)
-                        {
-                            using var modelScope = _scopeFactory.CreateScope();
-                            modelExecution = modelScope.ServiceProvider.GetService<IAgentCallService>();
-                        }
-                        modelExecution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
-
                         var runId = Guid.NewGuid().ToString();
                         var cmd = new SummarizeStoryCommand(
                             story.Id,
                             _database,
                             _kernelFactory,
                             _logger,
-                            scopeFactory: _scopeFactory,
-                            modelExecution: modelExecution);
+                            scopeFactory: _scopeFactory);
 
                         var summarizeCommand = new DelegateCommand(
                             "SummarizeStory",

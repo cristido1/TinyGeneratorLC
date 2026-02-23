@@ -52,8 +52,9 @@ public sealed class GenerateRandomSeriesPromptCommand : ICommand
             database,
             style,
             logger,
-            callCenter: modelExecution == null ? null : new CallCenter(modelExecution, database, logger))
+            callCenter: ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter)
     {
+        _ = modelExecution;
     }
 
     public async Task<CommandResult> ExecuteAsync(string? runId = null, CancellationToken ct = default)

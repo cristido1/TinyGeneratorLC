@@ -1,0 +1,33 @@
+name: CallCenter Boundary Guardrail
+
+on:
+  push:
+    paths:
+      - "Code/Commands/**"
+      - "Code/Services/**"
+      - "scripts/check_callcenter_boundary.ps1"
+      - "scripts/check_command_deterministic_boundary.ps1"
+      - ".github/workflows/callcenter-boundary.yml"
+  pull_request:
+    paths:
+      - "Code/Commands/**"
+      - "Code/Services/**"
+      - "scripts/check_callcenter_boundary.ps1"
+      - "scripts/check_command_deterministic_boundary.ps1"
+      - ".github/workflows/callcenter-boundary.yml"
+  workflow_dispatch:
+
+jobs:
+  check-callcenter-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run CallCenter boundary check
+        shell: pwsh
+        run: ./scripts/check_callcenter_boundary.ps1
+
+      - name: Run command deterministic boundary check
+        shell: pwsh
+        run: ./scripts/check_command_deterministic_boundary.ps1

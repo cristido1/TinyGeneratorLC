@@ -1017,30 +1017,9 @@ internal static class StateDrivenPipelineHelpers
         {
             using var scope = scopeFactory.CreateScope();
             callCenter = scope.ServiceProvider.GetService<ICallCenter>();
-            if (callCenter == null)
-            {
-                var scopedAgentCall = scope.ServiceProvider.GetService<IAgentCallService>();
-                if (scopedAgentCall != null)
-                {
-                    var scopedDb = scope.ServiceProvider.GetService<DatabaseService>();
-                    if (scopedDb != null)
-                    {
-                        callCenter = new CallCenter(scopedAgentCall, scopedDb);
-                    }
-                }
-            }
         }
 
         callCenter ??= ServiceLocator.Services?.GetService<ICallCenter>();
-        if (callCenter == null)
-        {
-            var rootAgentCall = ServiceLocator.Services?.GetService<IAgentCallService>();
-            var rootDb = ServiceLocator.Services?.GetService<DatabaseService>();
-            if (rootAgentCall != null && rootDb != null)
-            {
-                callCenter = new CallCenter(rootAgentCall, rootDb);
-            }
-        }
 
         if (callCenter == null)
         {

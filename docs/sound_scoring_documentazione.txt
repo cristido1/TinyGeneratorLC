@@ -1,0 +1,83 @@
+SOUND SCORING SYSTEM - DOCUMENTAZIONE
+
+================================================== CAMPI DA AGGIUNGERE
+ALLA TABELLA sound_library
+==================================================
+
+score_loudness score_dynamic score_clipping score_noise score_duration
+score_format score_consistency score_tag_match score_human score_final
+score_last_calc score_version
+
+================================================== DESCRIZIONE DEI
+SINGOLI SCORE ==================================================
+
+1)  score_loudness Valuta il volume medio (RMS o LUFS). Valore ideale:
+    vicino al target configurato (es. -20 dB). Punteggio alto se vicino
+    al target.
+
+2)  score_dynamic Calcola la differenza tra peak e RMS. Evita suoni
+    troppo compressi o troppo piatti.
+
+3)  score_clipping Conta quanti sample sono a 0 dBFS. Se supera la
+    soglia, penalizza il punteggio.
+
+4)  score_noise Stima il rumore di fondo nelle pause. Suoni più puliti
+    hanno punteggio più alto.
+
+5)  score_duration Verifica che la durata sia coerente con il tipo di
+    suono. Esempi:
+
+-   gunshot: 0.2–3s
+-   footsteps: 0.1–1.5s
+-   ambient: >5s
+
+6)  score_format Valuta la qualità del file:
+
+-   48kHz = bonus
+-   24bit = bonus
+-   formato WAV = bonus
+
+7)  score_consistency Analizza la stabilità dello spettro audio.
+    Penalizza artefatti strani o instabilità.
+
+8)  score_tag_match Valuta la coerenza tra tag, descrizione e categoria
+    del suono.
+
+9)  score_human Valutazione manuale dell’utente. Range consigliato:
+    0–100.
+
+================================================== CALCOLO DELLO SCORE
+FINALE ==================================================
+
+score_final = somma pesata dei singoli score:
+
+score_final = score_loudness * peso_loudness + score_dynamic *
+peso_dynamic + score_clipping * peso_clipping + score_noise *
+peso_noise + score_duration * peso_duration + score_format *
+peso_format + score_consistency* peso_consistency + score_tag_match *
+peso_tag_match + score_human * peso_human
+
+I pesi sono configurati negli AppSettings.
+
+================================================== PROCESSO DI CALCOLO
+==================================================
+
+Per ogni suono: 1. Leggi il file audio 2. Calcola tutte le metriche 3.
+Salva i singoli score 4. Calcola score_final 5. Aggiorna score_last_calc
+e score_version
+
+================================================== UTILIZZO IN SELEZIONE
+==================================================
+
+I suoni vengono selezionati con ordinamento:
+
+ORDER BY score_final DESC, score_human DESC, times_used ASC, last_used
+ASC
+
+================================================== NOTE FINALI
+==================================================
+
+-   Tutti gli score sono deterministici
+-   Lo score umano ha peso maggiore
+-   Il sistema migliora nel tempo
+-   Nessuna tabella aggiuntiva necessaria

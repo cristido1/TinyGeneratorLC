@@ -258,6 +258,8 @@ builder.Services.Configure<SeriesGenerationOptions>(options =>
 });
 // Audio generation options (autolaunch followups)
 builder.Services.Configure<AudioGenerationOptions>(builder.Configuration.GetSection("AudioGeneration"));
+builder.Services.Configure<SoundScoringOptions>(builder.Configuration.GetSection("SoundScoring"));
+builder.Services.AddSingleton<SoundScoringService>();
 // Automatic operations (auto enqueue when system idle)
 builder.Services.Configure<AutomaticOperationsOptions>(builder.Configuration.GetSection("AutomaticOperations"));
 builder.Services.Configure<StoryTaggingPipelineOptions>(builder.Configuration.GetSection("StoryTaggingPipeline"));

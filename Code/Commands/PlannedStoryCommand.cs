@@ -34,7 +34,6 @@ namespace TinyGenerator.Services.Commands
         private readonly ICommandEnqueuer _dispatcher;
         private readonly ICustomLogger _logger;
         private readonly IServiceScopeFactory? _scopeFactory;
-        private readonly IAgentCallService? _modelExecution;
         private readonly ICallCenter? _callCenter;
 
         public PlannedStoryCommand(
@@ -68,7 +67,7 @@ namespace TinyGenerator.Services.Commands
             _dispatcher = dispatcher;
             _logger = logger;
             _scopeFactory = scopeFactory;
-            _modelExecution = modelExecution;
+            _ = modelExecution;
             _callCenter = callCenter;
             _tuning = tuning ?? new CommandTuningOptions();
         }
@@ -609,26 +608,23 @@ REGOLE FONDAMENTALI:
                 return _callCenter;
             }
 
+            if (_scopeFactory != null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var scopedCallCenter = scope.ServiceProvider.GetService<ICallCenter>();
+                if (scopedCallCenter != null)
+                {
+                    return scopedCallCenter;
+                }
+            }
+
             var rootCallCenter = ServiceLocator.Services?.GetService<ICallCenter>();
             if (rootCallCenter != null)
             {
                 return rootCallCenter;
             }
 
-            var execution = _modelExecution;
-            if (execution == null && _scopeFactory != null)
-            {
-                using var scope = _scopeFactory.CreateScope();
-                execution = scope.ServiceProvider.GetService<IAgentCallService>();
-            }
-
-            execution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
-            if (execution == null)
-            {
-                return null;
-            }
-
-            return new CallCenter(execution, _database, _logger);
+            return null;
         }
 
         private void EnqueueTransformCommand(long storyId)

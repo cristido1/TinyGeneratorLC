@@ -306,23 +306,25 @@ namespace TinyGenerator.Pages.Stories
 
         public IActionResult OnPostCloneFromRevised(long id)
         {
-            var runId = QueueStoryCommand(
-                id,
-                "clone_revised_story",
-                ctx =>
+            try
+            {
+                var result = _stories.TryCloneStoryFromRevised(id);
+                if (!result.Success || !result.NewStoryId.HasValue || result.NewStoryId.Value <= 0)
                 {
-                    var result = _stories.TryCloneStoryFromRevised(id);
-                    return Task.FromResult(new CommandResult(result.Success, result.Message));
-                },
-                "Clonazione da revisione accodata.",
-                threadScopeOverride: $"story/clone_revised/{id}",
-                metadata: new Dictionary<string, string>
-                {
-                    ["operation"] = "clone_revised_story",
-                    ["storyId"] = id.ToString()
-                });
+                    TempData["ErrorMessage"] = string.IsNullOrWhiteSpace(result.Message)
+                        ? "Clonazione da revisione fallita."
+                        : result.Message;
+                    return RedirectToPage();
+                }
 
-            TempData["StatusMessage"] = $"Clonazione accodata (run {runId}).";
+                TempData["StatusMessage"] =
+                    $"{result.Message} Revisione della nuova storia accodata automaticamente.";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore durante clonazione da revisione: " + ex.Message;
+            }
+
             return RedirectToPage();
         }
 

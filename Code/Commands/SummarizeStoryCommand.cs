@@ -20,7 +20,6 @@ namespace TinyGenerator.Services.Commands
         private readonly ICustomLogger _logger;
         private readonly IAgentResolutionService _agentResolutionService;
         private readonly IServiceScopeFactory? _scopeFactory;
-        private readonly IAgentCallService? _modelExecution;
         private readonly ICallCenter? _callCenter;
 
         public string? LastError { get; private set; }
@@ -41,7 +40,7 @@ namespace TinyGenerator.Services.Commands
             _logger = logger;
             _agentResolutionService = agentResolutionService ?? new AgentResolutionService(database);
             _scopeFactory = scopeFactory;
-            _modelExecution = modelExecution;
+            _ = modelExecution;
             _callCenter = callCenter;
         }
 
@@ -177,26 +176,23 @@ namespace TinyGenerator.Services.Commands
                 return _callCenter;
             }
 
+            if (_scopeFactory != null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var fromScope = scope.ServiceProvider.GetService<ICallCenter>();
+                if (fromScope != null)
+                {
+                    return fromScope;
+                }
+            }
+
             var fromRoot = ServiceLocator.Services?.GetService<ICallCenter>();
             if (fromRoot != null)
             {
                 return fromRoot;
             }
-
-            var execution = _modelExecution;
-            if (execution == null && _scopeFactory != null)
-            {
-                using var scope = _scopeFactory.CreateScope();
-                execution = scope.ServiceProvider.GetService<IAgentCallService>();
-            }
-
-            execution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
-            if (execution == null)
-            {
-                return null;
-            }
-
-            return new CallCenter(execution, _database, _logger);
+            
+            return null;
         }
 
         private bool Fail(string? runId, string message)

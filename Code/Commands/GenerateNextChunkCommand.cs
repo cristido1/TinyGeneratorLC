@@ -28,7 +28,6 @@ public sealed class GenerateNextChunkCommand : ICommand
     private readonly ICustomLogger? _logger;
     private readonly TextValidationService _textValidationService;
     private readonly ICallCenter? _callCenter;
-    private readonly IAgentCallService? _modelExecution;
     private readonly GenerateChunkOptions _options;
     private readonly IServiceScopeFactory? _scopeFactory;
 
@@ -54,7 +53,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         _tuning = tuning ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory;
         _callCenter = callCenter;
-        _modelExecution = modelExecution;
+        _ = modelExecution;
         _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
     }
 
@@ -706,26 +705,23 @@ public sealed class GenerateNextChunkCommand : ICommand
             return _callCenter;
         }
 
+        if (_scopeFactory != null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var scopedCallCenter = scope.ServiceProvider.GetService<ICallCenter>();
+            if (scopedCallCenter != null)
+            {
+                return scopedCallCenter;
+            }
+        }
+
         var rootCallCenter = ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter;
         if (rootCallCenter != null)
         {
             return rootCallCenter;
         }
-
-        var execution = _modelExecution;
-        if (execution == null && _scopeFactory != null)
-        {
-            using var scope = _scopeFactory.CreateScope();
-            execution = scope.ServiceProvider.GetService<IAgentCallService>();
-        }
-
-        execution ??= ServiceLocator.Services?.GetService(typeof(IAgentCallService)) as IAgentCallService;
-        if (execution == null)
-        {
-            return null;
-        }
-
-        return new CallCenter(execution, _database, _logger);
+        
+        return null;
     }
 
     private string? ResolveModelName(Agent agent)

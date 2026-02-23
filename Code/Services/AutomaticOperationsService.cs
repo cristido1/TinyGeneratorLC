@@ -136,6 +136,10 @@ namespace TinyGenerator.Services
                     else
                     {
                         var reason = string.IsNullOrWhiteSpace(enqueueResult.Reason) ? "enqueue=false" : enqueueResult.Reason;
+                        if (IsBenignAlreadyQueuedReason(reason))
+                        {
+                            continue;
+                        }
                         ReportAutoAttempt(
                             chosen.Name,
                             success: false,
@@ -462,15 +466,31 @@ namespace TinyGenerator.Services
             try
             {
                 return _dispatcher.GetActiveCommands().Any(s =>
-                    string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase) ||
-                    (s.Metadata != null &&
-                     s.Metadata.TryGetValue("operation", out var op) &&
-                     string.Equals(op, operationName, StringComparison.OrdinalIgnoreCase)));
+                    (
+                        (string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)) &&
+                        string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase)
+                    ) ||
+                    (
+                        (string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)) &&
+                        s.Metadata != null &&
+                        s.Metadata.TryGetValue("operation", out var op) &&
+                        string.Equals(op, operationName, StringComparison.OrdinalIgnoreCase)
+                    ));
             }
             catch
             {
                 return false;
             }
+        }
+
+        private static bool IsBenignAlreadyQueuedReason(string? reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason)) return false;
+            var text = reason.Trim();
+            return text.Contains("in coda", StringComparison.OrdinalIgnoreCase)
+                   || text.Contains("already queued", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool HasAnyActiveCommands()
@@ -863,3 +883,5 @@ namespace TinyGenerator.Services
         }
     }
 }
+
+

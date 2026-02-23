@@ -182,25 +182,22 @@ public sealed class GenerateNewSerieCommand : ICommand
             return _callCenter;
         }
 
+        if (_scopeFactory != null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var fromScope = scope.ServiceProvider.GetService<ICallCenter>();
+            if (fromScope != null)
+            {
+                return fromScope;
+            }
+        }
+
         var fromRoot = ServiceLocator.Services?.GetService<ICallCenter>();
         if (fromRoot != null)
         {
             return fromRoot;
         }
 
-        IAgentCallService? execution = null;
-        if (_scopeFactory != null)
-        {
-            using var scope = _scopeFactory.CreateScope();
-            execution = scope.ServiceProvider.GetService<IAgentCallService>();
-        }
-
-        execution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
-        if (execution == null)
-        {
-            return null;
-        }
-
-        return new CallCenter(execution, _database, _logger);
+        return null;
     }
 }

@@ -101,6 +101,14 @@ namespace TinyGenerator.Services.Commands
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
 
                 var formatterTags = new List<StoryTaggingService.StoryTagEntry>();
+                var maxDialogueLinesPerRequestGlobal = Math.Max(1, _tuning.TransformStoryRawToTagged.MaxDialogueLinesPerFormatterRequest);
+                var totalFormatterSlices = 0;
+                foreach (var c in preparation.Chunks)
+                {
+                    totalFormatterSlices += Math.Max(1, SplitChunkRowsByDialogueLimit(c.Rows, maxDialogueLinesPerRequestGlobal).Count);
+                }
+                totalFormatterSlices = Math.Max(1, totalFormatterSlices);
+                var processedFormatterSlices = 0;
 
                 for (int i = 0; i < preparation.Chunks.Count; i++)
                 {
@@ -108,14 +116,8 @@ namespace TinyGenerator.Services.Commands
                     var chunk = preparation.Chunks[i];
                     var chunkIndex = i + 1;
                     var chunkCount = preparation.Chunks.Count;
-                    var maxDialogueLinesPerRequest = Math.Max(1, _tuning.TransformStoryRawToTagged.MaxDialogueLinesPerFormatterRequest);
+                    var maxDialogueLinesPerRequest = maxDialogueLinesPerRequestGlobal;
                     var chunkSlices = SplitChunkRowsByDialogueLimit(chunk.Rows, maxDialogueLinesPerRequest);
-
-                    ReportProgress(
-                        effectiveRunId,
-                        chunkIndex,
-                        chunkCount,
-                        $"Formatting chunk {chunkIndex}/{chunkCount}");
 
                     if (chunkSlices.Count > 1)
                     {
@@ -126,6 +128,16 @@ namespace TinyGenerator.Services.Commands
 
                     for (int sliceIndex = 0; sliceIndex < chunkSlices.Count; sliceIndex++)
                     {
+                        processedFormatterSlices++;
+                        var progressDescription = chunkSlices.Count > 1
+                            ? $"Formatter chunk {chunkIndex}/{chunkCount} part {sliceIndex + 1}/{chunkSlices.Count}"
+                            : $"Formatter chunk {chunkIndex}/{chunkCount}";
+                        ReportProgress(
+                            effectiveRunId,
+                            processedFormatterSlices,
+                            totalFormatterSlices,
+                            progressDescription);
+
                         var sliceRows = chunkSlices[sliceIndex];
                         var sliceText = BuildChunkText(sliceRows);
                         var userContent = BuildVoiceUserContent(sliceText, sliceRows, out var quoteLineIds);
@@ -475,26 +487,23 @@ namespace TinyGenerator.Services.Commands
 
         private static ICallCenter ResolveOrCreateCallCenter(DatabaseService database, StoriesService? storiesService, ICustomLogger? logger)
         {
+            if (storiesService?.ScopeFactory != null)
+            {
+                using var scope = storiesService.ScopeFactory.CreateScope();
+                var scopedCallCenter = scope.ServiceProvider.GetService<ICallCenter>();
+                if (scopedCallCenter != null)
+                {
+                    return scopedCallCenter;
+                }
+            }
+
             var rootCallCenter = ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter;
             if (rootCallCenter != null)
             {
                 return rootCallCenter;
             }
-
-            IAgentCallService? agentCallService = null;
-            if (storiesService?.ScopeFactory != null)
-            {
-                using var scope = storiesService.ScopeFactory.CreateScope();
-                agentCallService = scope.ServiceProvider.GetService<IAgentCallService>();
-            }
-
-            agentCallService ??= ServiceLocator.Services?.GetService(typeof(IAgentCallService)) as IAgentCallService;
-            if (agentCallService == null)
-            {
-                throw new InvalidOperationException("ICallCenter/IAgentCallService non disponibile per AddVoiceTagsToStoryCommand.");
-            }
-
-            return new CallCenter(agentCallService, database, logger);
+            
+            throw new InvalidOperationException("ICallCenter non disponibile per AddVoiceTagsToStoryCommand.");
         }
 
         private static int BuildThreadId(long storyId, int chunkIndex)

@@ -5249,6 +5249,315 @@ WHERE agent_id IS NOT NULL
         }
     }
 
+    // Sounds library CRUD (Dapper, no EF migration required)
+    public List<Sound> ListSounds(string? search = null, string? type = null)
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        var sql = @"
+SELECT
+    id           AS Id,
+    type         AS Type,
+    library      AS Library,
+    filepath     AS FilePath,
+    filename     AS FileName,
+    description  AS Description,
+    tags         AS Tags,
+    embedding    AS Embedding,
+    duration_seconds AS DurationSeconds,
+    COALESCE(usage_count, 0) AS UsageCount,
+    usage_last   AS UsageLast,
+    score_loudness AS ScoreLoudness,
+    score_dynamic AS ScoreDynamic,
+    score_clipping AS ScoreClipping,
+    score_noise AS ScoreNoise,
+    score_duration AS ScoreDuration,
+    score_format AS ScoreFormat,
+    score_consistency AS ScoreConsistency,
+    score_tag_match AS ScoreTagMatch,
+    score_human AS ScoreHuman,
+    score_final AS ScoreFinal,
+    score_last_calc AS ScoreLastCalc,
+    score_version AS ScoreVersion
+FROM sounds
+WHERE (@search IS NULL OR @search = '' OR
+       lower(coalesce(filename,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(description,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(tags,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(library,'')) LIKE '%' || lower(@search) || '%')
+  AND (@type IS NULL OR @type = '' OR lower(type) = lower(@type))
+ORDER BY
+    COALESCE(score_final, -1) DESC,
+    COALESCE(score_human, -1) DESC,
+    COALESCE(usage_count, 0) ASC,
+    CASE WHEN usage_last IS NULL OR usage_last = '' THEN 0 ELSE 1 END ASC,
+    usage_last ASC,
+    CASE lower(type) WHEN 'amb' THEN 1 WHEN 'music' THEN 2 ELSE 3 END,
+    coalesce(library,''),
+    coalesce(filename,'');";
+
+        return conn.Query<Sound>(sql, new { search, type }).ToList();
+    }
+
+    public Sound? GetSoundById(int id)
+    {
+        if (id <= 0) return null;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+SELECT
+    id           AS Id,
+    type         AS Type,
+    library      AS Library,
+    filepath     AS FilePath,
+    filename     AS FileName,
+    description  AS Description,
+    tags         AS Tags,
+    embedding    AS Embedding,
+    duration_seconds AS DurationSeconds,
+    COALESCE(usage_count, 0) AS UsageCount,
+    usage_last   AS UsageLast,
+    score_loudness AS ScoreLoudness,
+    score_dynamic AS ScoreDynamic,
+    score_clipping AS ScoreClipping,
+    score_noise AS ScoreNoise,
+    score_duration AS ScoreDuration,
+    score_format AS ScoreFormat,
+    score_consistency AS ScoreConsistency,
+    score_tag_match AS ScoreTagMatch,
+    score_human AS ScoreHuman,
+    score_final AS ScoreFinal,
+    score_last_calc AS ScoreLastCalc,
+    score_version AS ScoreVersion
+FROM sounds
+WHERE id = @id
+LIMIT 1;";
+
+        return conn.QueryFirstOrDefault<Sound>(sql, new { id });
+    }
+
+    public int InsertSound(Sound sound)
+    {
+        if (sound == null) throw new ArgumentNullException(nameof(sound));
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+INSERT INTO sounds(
+    type, library, filepath, filename, description, tags, embedding, duration_seconds, usage_count, usage_last,
+    score_loudness, score_dynamic, score_clipping, score_noise, score_duration,
+    score_format, score_consistency, score_tag_match, score_human, score_final, score_last_calc, score_version)
+VALUES (
+    @Type, @Library, @FilePath, @FileName, @Description, @Tags, @Embedding, @DurationSeconds, @UsageCount, @UsageLast,
+    @ScoreLoudness, @ScoreDynamic, @ScoreClipping, @ScoreNoise, @ScoreDuration,
+    @ScoreFormat, @ScoreConsistency, @ScoreTagMatch, @ScoreHuman, @ScoreFinal, @ScoreLastCalc, @ScoreVersion);
+SELECT last_insert_rowid();";
+
+        var normalized = NormalizeSoundForPersistence(sound);
+        return conn.ExecuteScalar<int>(sql, normalized);
+    }
+
+    public void UpdateSound(Sound sound)
+    {
+        if (sound == null) throw new ArgumentNullException(nameof(sound));
+        if (sound.Id <= 0) throw new ArgumentException("Invalid sound id", nameof(sound));
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+UPDATE sounds
+SET
+    type = @Type,
+    library = @Library,
+    filepath = @FilePath,
+    filename = @FileName,
+    description = @Description,
+    tags = @Tags,
+    embedding = @Embedding,
+    score_human = @ScoreHuman
+WHERE id = @Id;";
+
+        var normalized = NormalizeSoundForPersistence(sound);
+        conn.Execute(sql, normalized);
+    }
+
+    public void DeleteSoundById(int id)
+    {
+        if (id <= 0) return;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        conn.Execute("DELETE FROM sounds WHERE id = @id", new { id });
+    }
+
+    public void MarkSoundUsed(int id)
+    {
+        if (id <= 0) return;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        conn.Execute(@"
+UPDATE sounds
+SET
+    usage_count = COALESCE(usage_count, 0) + 1,
+    usage_last = @ts
+WHERE id = @id;", new
+        {
+            id,
+            ts = DateTime.UtcNow.ToString("o")
+        });
+    }
+
+    public List<Sound> ListSoundsForScoring(bool onlyMissingFinal = false, int? limit = null)
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        var sql = @"
+SELECT
+    id AS Id, type AS Type, library AS Library, filepath AS FilePath, filename AS FileName,
+    description AS Description, tags AS Tags, embedding AS Embedding, duration_seconds AS DurationSeconds,
+    COALESCE(usage_count,0) AS UsageCount, usage_last AS UsageLast,
+    score_loudness AS ScoreLoudness, score_dynamic AS ScoreDynamic, score_clipping AS ScoreClipping,
+    score_noise AS ScoreNoise, score_duration AS ScoreDuration, score_format AS ScoreFormat,
+    score_consistency AS ScoreConsistency, score_tag_match AS ScoreTagMatch, score_human AS ScoreHuman,
+    score_final AS ScoreFinal, score_last_calc AS ScoreLastCalc, score_version AS ScoreVersion
+FROM sounds
+WHERE (@onlyMissing = 0 OR score_final IS NULL)
+ORDER BY id";
+
+        if (limit.HasValue && limit.Value > 0)
+        {
+            sql += " LIMIT @limit";
+        }
+
+        return conn.Query<Sound>(sql, new { onlyMissing = onlyMissingFinal ? 1 : 0, limit }).ToList();
+    }
+
+    public void UpdateSoundScores(
+        int id,
+        double? scoreLoudness,
+        double? scoreDynamic,
+        double? scoreClipping,
+        double? scoreNoise,
+        double? scoreDuration,
+        double? scoreFormat,
+        double? scoreConsistency,
+        double? scoreTagMatch,
+        double? scoreFinal,
+        string? scoreLastCalc,
+        string? scoreVersion)
+    {
+        if (id <= 0) return;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        conn.Execute(@"
+UPDATE sounds SET
+    score_loudness = @scoreLoudness,
+    score_dynamic = @scoreDynamic,
+    score_clipping = @scoreClipping,
+    score_noise = @scoreNoise,
+    score_duration = @scoreDuration,
+    score_format = @scoreFormat,
+    score_consistency = @scoreConsistency,
+    score_tag_match = @scoreTagMatch,
+    score_final = @scoreFinal,
+    score_last_calc = @scoreLastCalc,
+    score_version = @scoreVersion
+WHERE id = @id;", new
+        {
+            id,
+            scoreLoudness,
+            scoreDynamic,
+            scoreClipping,
+            scoreNoise,
+            scoreDuration,
+            scoreFormat,
+            scoreConsistency,
+            scoreTagMatch,
+            scoreFinal,
+            scoreLastCalc,
+            scoreVersion
+        });
+    }
+
+    public List<Sound> ListSoundsMissingDuration(int? limit = null)
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        var sql = @"
+SELECT
+    id AS Id, type AS Type, library AS Library, filepath AS FilePath, filename AS FileName,
+    description AS Description, tags AS Tags, embedding AS Embedding, duration_seconds AS DurationSeconds,
+    COALESCE(usage_count,0) AS UsageCount, usage_last AS UsageLast,
+    score_loudness AS ScoreLoudness, score_dynamic AS ScoreDynamic, score_clipping AS ScoreClipping,
+    score_noise AS ScoreNoise, score_duration AS ScoreDuration, score_format AS ScoreFormat,
+    score_consistency AS ScoreConsistency, score_tag_match AS ScoreTagMatch, score_human AS ScoreHuman,
+    score_final AS ScoreFinal, score_last_calc AS ScoreLastCalc, score_version AS ScoreVersion
+FROM sounds
+WHERE duration_seconds IS NULL OR duration_seconds <= 0
+ORDER BY id";
+
+        if (limit.HasValue && limit.Value > 0)
+        {
+            sql += " LIMIT @limit";
+        }
+
+        return conn.Query<Sound>(sql, new { limit }).ToList();
+    }
+
+    public void UpdateSoundDurationSeconds(int id, double? durationSeconds)
+    {
+        if (id <= 0) return;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        conn.Execute(@"
+UPDATE sounds
+SET duration_seconds = @durationSeconds
+WHERE id = @id;", new
+        {
+            id,
+            durationSeconds
+        });
+    }
+
+    private static Sound NormalizeSoundForPersistence(Sound sound)
+    {
+        var normalizedType = (sound.Type ?? string.Empty).Trim().ToLowerInvariant();
+        if (normalizedType is not ("fx" or "music" or "amb"))
+        {
+            normalizedType = "fx";
+        }
+
+        return new Sound
+        {
+            Id = sound.Id,
+            Type = normalizedType,
+            Library = string.IsNullOrWhiteSpace(sound.Library) ? null : sound.Library.Trim(),
+            FilePath = (sound.FilePath ?? string.Empty).Trim(),
+            FileName = (sound.FileName ?? string.Empty).Trim(),
+            Description = string.IsNullOrWhiteSpace(sound.Description) ? null : sound.Description.Trim(),
+            Tags = string.IsNullOrWhiteSpace(sound.Tags) ? null : sound.Tags.Trim(),
+            Embedding = string.IsNullOrWhiteSpace(sound.Embedding) ? null : sound.Embedding.Trim(),
+            DurationSeconds = sound.DurationSeconds.HasValue ? Math.Round(Math.Max(0d, sound.DurationSeconds.Value), 3) : null,
+            UsageCount = Math.Max(0, sound.UsageCount),
+            UsageLast = string.IsNullOrWhiteSpace(sound.UsageLast) ? null : sound.UsageLast.Trim(),
+            ScoreLoudness = sound.ScoreLoudness,
+            ScoreDynamic = sound.ScoreDynamic,
+            ScoreClipping = sound.ScoreClipping,
+            ScoreNoise = sound.ScoreNoise,
+            ScoreDuration = sound.ScoreDuration,
+            ScoreFormat = sound.ScoreFormat,
+            ScoreConsistency = sound.ScoreConsistency,
+            ScoreTagMatch = sound.ScoreTagMatch,
+            ScoreHuman = sound.ScoreHuman.HasValue ? Math.Clamp(sound.ScoreHuman.Value, 0d, 100d) : null,
+            ScoreFinal = sound.ScoreFinal,
+            ScoreLastCalc = string.IsNullOrWhiteSpace(sound.ScoreLastCalc) ? null : sound.ScoreLastCalc.Trim(),
+            ScoreVersion = string.IsNullOrWhiteSpace(sound.ScoreVersion) ? null : sound.ScoreVersion.Trim()
+        };
+    }
+
     // TTS voices: list and upsert
     public List<TinyGenerator.Models.TtsVoice> ListTtsVoices(bool onlyEnabled = false)
     {

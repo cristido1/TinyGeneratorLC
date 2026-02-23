@@ -1,0 +1,243 @@
+@page
+@model TinyGenerator.Pages.Sounds.IndexModel
+@{
+    ViewData["Title"] = "Sounds";
+    ViewData["PageDescription"] = "Libreria suoni WAV (fx/music/amb)";
+
+    string ScoreCss(double? value)
+    {
+        if (!value.HasValue) return "score-empty";
+        if (value.Value < 50) return "score-low";
+        if (value.Value < 75) return "score-mid";
+        return "score-high";
+    }
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
+    <style>
+        .btn-group-vertical > .btn, .btn-group > .btn { flex: none; }
+        .sound-player { width: 220px; max-width: 100%; }
+        .sound-path { max-width: 460px; word-break: break-all; }
+        .score-pill {
+            display: inline-block;
+            min-width: 58px;
+            text-align: center;
+            padding: 0.15rem 0.4rem;
+            border-radius: 999px;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        .score-low { background: #f8d7da; color: #842029; }
+        .score-mid { background: #fff3cd; color: #664d03; }
+        .score-high { background: #d1e7dd; color: #0f5132; }
+        .score-empty { color: #6c757d; }
+    </style>
+}
+
+<div class="container-fluid py-3">
+    @if (TempData["Success"] is string ok && !string.IsNullOrWhiteSpace(ok))
+    {
+        <div class="alert alert-success py-2">@ok</div>
+    }
+    @if (TempData["Error"] is string err && !string.IsNullOrWhiteSpace(err))
+    {
+        <div class="alert alert-danger py-2">@err</div>
+    }
+
+    <div class="d-flex gap-2 mb-2">
+        <form method="post" asp-page-handler="RecalculateScores" class="d-inline">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-sm btn-outline-primary">Ricalcola score (tutti)</button>
+        </form>
+        <form id="enqueueMissingScoresForm" method="post" asp-page-handler="EnqueueRecalculateMissingScores" class="d-inline">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Accoda score mancanti</button>
+        </form>
+        <form id="enqueueMissingDurationsForm" method="post" asp-page-handler="EnqueueBackfillMissingDurations" class="d-inline">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Calcola durate mancanti</button>
+        </form>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <table id="soundsTable" class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th data-col="actions">Azioni</th>
+                        <th data-col="listen">Ascolta</th>
+                        <th data-col="id">Id</th>
+                        <th data-col="type">Type</th>
+                        <th data-col="library">Library</th>
+                        <th data-col="filename">Filename</th>
+                        <th data-col="description">Description</th>
+                        <th data-col="tags">Tags</th>
+                        <th data-col="usageCount">Usage Count</th>
+                        <th data-col="usageLast">Usage Last</th>
+                        <th data-col="durationSeconds">Durata (s)</th>
+                        <th data-col="scoreFinal">Score Final</th>
+                        <th data-col="scoreHuman">Score Human</th>
+                        <th data-col="scoreLoudness">Score Loudness</th>
+                        <th data-col="scoreDynamic">Score Dynamic</th>
+                        <th data-col="scoreClipping">Score Clipping</th>
+                        <th data-col="scoreNoise">Score Noise</th>
+                        <th data-col="scoreDuration">Score Duration</th>
+                        <th data-col="scoreFormat">Score Format</th>
+                        <th data-col="scoreConsistency">Score Consistency</th>
+                        <th data-col="scoreTagMatch">Score Tag Match</th>
+                        <th data-col="scoreLastCalc">Score Last Calc</th>
+                        <th data-col="scoreVersion">Score Version</th>
+                        <th data-col="filepath">FilePath</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in Model.Items)
+                    {
+                        <tr>
+                            <td data-col="actions">
+                                <div class="d-flex gap-1">
+                                    <form method="post" asp-page-handler="EnqueueRecalculateRowScore" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="id" value="@s.Id" />
+                                        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Accoda ricalcolo score">Score</button>
+                                    </form>
+                                    <a class="btn btn-sm btn-outline-secondary" href="/Sounds/Edit?id=@s.Id">Edit</a>
+                                    <form method="post" asp-page-handler="Delete" class="d-inline" onsubmit="return confirm('Eliminare questo suono?');">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="id" value="@s.Id" />
+                                        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                    </form>
+                                </div>
+                            </td>
+                            <td data-col="listen">
+                                <audio class="sound-player" controls preload="none" src="?handler=Audio&id=@s.Id"></audio>
+                            </td>
+                            <td data-col="id">@s.Id</td>
+                            <td data-col="type">
+                                <span class="badge @(s.Type == "amb" ? "bg-success" : s.Type == "music" ? "bg-primary" : "bg-secondary")">@s.Type</span>
+                            </td>
+                            <td data-col="library">@s.Library</td>
+                            <td data-col="filename">@s.FileName</td>
+                            <td data-col="description">@s.Description</td>
+                            <td data-col="tags">@s.Tags</td>
+                            <td data-col="usageCount">@s.UsageCount</td>
+                            <td data-col="usageLast">@s.UsageLast</td>
+                            <td data-col="durationSeconds">@s.DurationSeconds?.ToString("0.###")</td>
+                            <td data-col="scoreFinal"><span class="score-pill @ScoreCss(s.ScoreFinal)">@s.ScoreFinal?.ToString("0.##")</span></td>
+                            <td data-col="scoreHuman"><span class="score-pill @ScoreCss(s.ScoreHuman)">@s.ScoreHuman?.ToString("0.##")</span></td>
+                            <td data-col="scoreLoudness"><span class="score-pill @ScoreCss(s.ScoreLoudness)">@s.ScoreLoudness?.ToString("0.##")</span></td>
+                            <td data-col="scoreDynamic"><span class="score-pill @ScoreCss(s.ScoreDynamic)">@s.ScoreDynamic?.ToString("0.##")</span></td>
+                            <td data-col="scoreClipping"><span class="score-pill @ScoreCss(s.ScoreClipping)">@s.ScoreClipping?.ToString("0.##")</span></td>
+                            <td data-col="scoreNoise"><span class="score-pill @ScoreCss(s.ScoreNoise)">@s.ScoreNoise?.ToString("0.##")</span></td>
+                            <td data-col="scoreDuration"><span class="score-pill @ScoreCss(s.ScoreDuration)">@s.ScoreDuration?.ToString("0.##")</span></td>
+                            <td data-col="scoreFormat"><span class="score-pill @ScoreCss(s.ScoreFormat)">@s.ScoreFormat?.ToString("0.##")</span></td>
+                            <td data-col="scoreConsistency"><span class="score-pill @ScoreCss(s.ScoreConsistency)">@s.ScoreConsistency?.ToString("0.##")</span></td>
+                            <td data-col="scoreTagMatch"><span class="score-pill @ScoreCss(s.ScoreTagMatch)">@s.ScoreTagMatch?.ToString("0.##")</span></td>
+                            <td data-col="scoreLastCalc">@s.ScoreLastCalc</td>
+                            <td data-col="scoreVersion">@s.ScoreVersion</td>
+                            <td data-col="filepath" class="sound-path">@s.FilePath</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+(function initSoundsTable() {
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initSoundsTable, 50);
+        return;
+    }
+
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var idx = 0;
+    function loadScript(url, callback) {
+        var s = document.createElement('script');
+        s.src = url;
+        s.onload = callback;
+        s.onerror = callback;
+        document.head.appendChild(s);
+    }
+    function next() {
+        if (idx < scripts.length) {
+            loadScript(scripts[idx++], next);
+            return;
+        }
+        initializeDataTable();
+    }
+    next();
+
+    function initializeDataTable() {
+        jQuery(function($) {
+            if (typeof $.fn.DataTable === 'undefined') return;
+
+            $('#soundsTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                stateDuration: 0, // localStorage persistente sul dispositivo (standard DataTables)
+                pageLength: 25,
+                lengthMenu: [[10,25,50,100],[10,25,50,100]],
+                order: [[11, 'desc']],
+                columnDefs: [
+                    { orderable: false, targets: [0, 1] }
+                ],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo',
+                        className: 'btn btn-sm btn-light border text-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() { window.location.href = '/Sounds/Create'; }
+                    },
+                    {
+                        text: '<i class="bi bi-stopwatch me-1"></i>Durate mancanti',
+                        className: 'btn btn-sm btn-light border text-warning',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            var form = document.getElementById('enqueueMissingDurationsForm');
+                            if (form) form.submit();
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-calculator me-1"></i>Score mancanti',
+                        className: 'btn btn-sm btn-light border text-success',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            var form = document.getElementById('enqueueMissingScoresForm');
+                            if (form) form.submit();
+                        }
+                    },
+                    {
+                        extend: 'colvis',
+                        text: '<i class="bi bi-layout-three-columns me-1"></i>Colonne',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' }
+                    },
+                    {
+                        text: '<i class="bi bi-arrow-clockwise me-1"></i>Refresh',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() { location.reload(); }
+                    }
+                ]
+            });
+        });
+    }
+})();
+</script>

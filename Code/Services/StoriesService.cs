@@ -444,22 +444,105 @@ public sealed partial class StoriesService
         var baseTitle = string.IsNullOrWhiteSpace(story.Title) ? $"Story {story.Id}" : story.Title;
         var cloneTitle = $"{baseTitle} (versione migliorata)";
 
-        var newStoryId = InsertSingleStory(
+        // Use the DB insert directly so we can finish clone initialization (summary/evaluations copy)
+        // before enqueueing the automatic revision command for the new story.
+        var evaluatedStatusId = ResolveStatusId("evaluated");
+
+        var newStoryId = _database.InsertSingleStory(
             story.Prompt ?? string.Empty,
             revised,
             story.ModelId,
             story.AgentId,
-            score: 0.0,
-            eval: null,
-            approved: 0,
-            statusId: null,
+            score: story.Score,
+            eval: story.Eval,
+            approved: story.Approved ? 1 : 0,
+            statusId: evaluatedStatusId,
             memoryKey: null,
             title: cloneTitle,
-            storyId: null,
             serieId: story.SerieId,
-            serieEpisode: story.SerieEpisode);
+            serieEpisode: story.SerieEpisode,
+            parentStoryId: story.Id);
 
-        return (true, newStoryId, $"Nuova storia {newStoryId} creata dalla revisione.");
+        if (!evaluatedStatusId.HasValue)
+        {
+            EnsureStoryStatusInserted(newStoryId);
+        }
+        CopyStorySummaryToClone(story, newStoryId);
+        CopyStoryEvaluationsToClone(evaluations, newStoryId);
+
+        if (evaluatedStatusId.HasValue)
+        {
+            try
+            {
+                _database.UpdateStoryById(newStoryId, statusId: evaluatedStatusId.Value, updateStatus: true);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Impossibile impostare lo stato evaluated sul clone {NewStoryId}", newStoryId);
+            }
+        }
+
+        var reviseRunId = EnqueueReviseStoryCommand(newStoryId, trigger: "clone_from_revised", priority: 2, force: true);
+        var message = string.IsNullOrWhiteSpace(reviseRunId)
+            ? $"Nuova storia {newStoryId} creata dalla revisione (enqueue revisione non riuscito)."
+            : $"Nuova storia {newStoryId} creata dalla revisione. Revisione accodata: {reviseRunId}.";
+        return (true, newStoryId, message);
+    }
+
+    private void CopyStorySummaryToClone(StoryRecord sourceStory, long newStoryId)
+    {
+        if (newStoryId <= 0) return;
+        if (sourceStory == null) return;
+        if (string.IsNullOrWhiteSpace(sourceStory.Summary)) return;
+        try
+        {
+            _database.UpdateStorySummary(newStoryId, sourceStory.Summary);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Impossibile copiare il summary da story {SourceStoryId} a story {NewStoryId}", sourceStory.Id, newStoryId);
+        }
+    }
+
+    private void CopyStoryEvaluationsToClone(IEnumerable<StoryEvaluation>? sourceEvaluations, long newStoryId)
+    {
+        if (newStoryId <= 0 || sourceEvaluations == null) return;
+
+        foreach (var evaluation in sourceEvaluations)
+        {
+            if (evaluation == null) continue;
+            if (evaluation.Id <= 0) continue; // Skip synthetic entries (e.g. global coherence).
+
+            try
+            {
+                int? modelId = null;
+                if (evaluation.ModelId.HasValue &&
+                    evaluation.ModelId.Value > 0 &&
+                    evaluation.ModelId.Value <= int.MaxValue)
+                {
+                    modelId = (int)evaluation.ModelId.Value;
+                }
+
+                _database.AddStoryEvaluation(
+                    newStoryId,
+                    evaluation.NarrativeCoherenceScore,
+                    evaluation.NarrativeCoherenceDefects ?? string.Empty,
+                    evaluation.OriginalityScore,
+                    evaluation.OriginalityDefects ?? string.Empty,
+                    evaluation.EmotionalImpactScore,
+                    evaluation.EmotionalImpactDefects ?? string.Empty,
+                    evaluation.ActionScore,
+                    evaluation.ActionDefects ?? string.Empty,
+                    evaluation.TotalScore,
+                    evaluation.RawJson ?? string.Empty,
+                    modelId: modelId,
+                    agentId: evaluation.AgentId);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Impossibile copiare la valutazione {EvaluationId} su story {NewStoryId}", evaluation.Id, newStoryId);
+            }
+        }
     }
 
     public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false, bool allowCreatorMetadataUpdate = false)
@@ -1195,22 +1278,13 @@ public sealed partial class StoriesService
 
                                 if (summarizerAgent != null)
                                 {
-                                    IAgentCallService? summarizeModelExecution = null;
-                                    if (_scopeFactory != null)
-                                    {
-                                        using var summarizeScope = _scopeFactory.CreateScope();
-                                        summarizeModelExecution = summarizeScope.ServiceProvider.GetService<IAgentCallService>();
-                                    }
-                                    summarizeModelExecution ??= ServiceLocator.Services?.GetService<IAgentCallService>();
-
                                     var summarizeRunId = Guid.NewGuid().ToString();
                                     var cmd = new Commands.SummarizeStoryCommand(
                                         storyId,
                                         _database,
                                         _kernelFactory!,
                                         _customLogger!,
-                                        scopeFactory: _scopeFactory,
-                                        modelExecution: summarizeModelExecution);
+                                        scopeFactory: _scopeFactory);
 
                                     _commandDispatcher.Enqueue(
                                         "SummarizeStory",
@@ -1358,8 +1432,9 @@ public sealed partial class StoriesService
 
         if (_scopeFactory == null) return (false, 0, "IServiceScopeFactory non disponibile");
         using var scope = _scopeFactory.CreateScope();
-        var modelExecution = scope.ServiceProvider.GetService<IAgentCallService>();
-        if (modelExecution == null) return (false, 0, "IAgentCallService non disponibile");
+        var callCenter = scope.ServiceProvider.GetService<ICallCenter>()
+            ?? ServiceLocator.Services?.GetService<ICallCenter>();
+        if (callCenter == null) return (false, 0, "ICallCenter non disponibile");
 
         var messages = new List<ConversationMessage>
         {
@@ -1385,30 +1460,25 @@ public sealed partial class StoriesService
             var stepId = RequestIdGenerator.Generate();
             _logger?.LogInformation("[StepID: {StepId}][Story: {StoryId}] Valutazione tentativo {Attempt}/{Max}", stepId, story.Id, attempt, maxAttemptsFinalEvaluation);
 
-            var promptForAttempt = string.Join(
-                "\n\n",
-                messages
-                    .Where(m => !string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase))
-                    .Select(m => $"[{m.Role}] {m.Content}"));
-
-            var evalResult = await modelExecution.ExecuteAsync(
-                new CommandModelExecutionService.Request
+            var history = new ChatHistory(messages);
+            var threadId = unchecked((((int)(story.Id % int.MaxValue)) * 541) ^ attempt);
+            var evalResult = await callCenter.CallAgentAsync(
+                storyId: story.Id,
+                threadId: threadId,
+                agent: evaluatorAgent,
+                history: history,
+                options: new CallOptions
                 {
-                    CommandKey = "story_evaluation",
-                    Agent = evaluatorAgent,
-                    RoleCode = string.IsNullOrWhiteSpace(evaluatorAgent.Role) ? "story_evaluator" : evaluatorAgent.Role,
-                    Prompt = promptForAttempt,
-                    SystemPrompt = systemMessage,
-                    MaxAttempts = 1,
-                    RetryDelaySeconds = 0,
-                    StepTimeoutSec = 120,
+                    Operation = "story_evaluation",
+                    Timeout = TimeSpan.FromSeconds(120),
+                    MaxRetries = 0,
                     UseResponseChecker = false,
-                    EnableFallback = true,
-                    DiagnoseOnFinalFailure = true,
-                    ExplainAfterAttempt = 1
+                    AllowFallback = true,
+                    AskFailExplanation = true,
+                    SystemPromptOverride = systemMessage
                 }).ConfigureAwait(false);
 
-            evalText = NormalizeEvaluatorOutput((evalResult.Text ?? string.Empty));
+            evalText = NormalizeEvaluatorOutput((evalResult.ResponseText ?? string.Empty));
             messages.Add(new ConversationMessage { Role = "assistant", Content = evalText });
                 if (TryParseEvaluationText(evalText, out parsed, out parseError))
                 {
@@ -2527,14 +2597,24 @@ public sealed partial class StoriesService
 
                         var allowNext = true;
 
-                        var revisor = _database.ListAgents()
+                        var revisionAgent = _database.ListAgents()
                             .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
-                                        a.Role.Equals("revisor", StringComparison.OrdinalIgnoreCase))
+                                        (
+                                            a.Role.Equals("story_editor", StringComparison.OrdinalIgnoreCase) ||
+                                            a.Role.Equals("revisor", StringComparison.OrdinalIgnoreCase)
+                                        ))
+                            .OrderByDescending(a => a.Role != null && a.Role.Equals("story_editor", StringComparison.OrdinalIgnoreCase))
+                            .ThenBy(a => a.Id)
+                            .FirstOrDefault();
+
+                        var criticExtractor = _database.ListAgents()
+                            .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
+                                        a.Role.Equals("critic_extractor", StringComparison.OrdinalIgnoreCase))
                             .OrderBy(a => a.Id)
                             .FirstOrDefault();
 
                         // If no revisor available, fall back to raw -> revised so the pipeline can continue.
-                        if (revisor == null)
+                        if (revisionAgent == null)
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
@@ -2544,7 +2624,7 @@ public sealed partial class StoriesService
                                 : "No revisor configured: copied raw to story_revised.");
                         }
 
-                        if (!revisor.ModelId.HasValue)
+                        if (!revisionAgent.ModelId.HasValue)
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
                             allowNext = ApplyStatusTransitionWithCleanup(story, "revised", runId);
@@ -2554,7 +2634,7 @@ public sealed partial class StoriesService
                                 : "Revisor has no model: copied raw to story_revised.");
                         }
 
-                        var modelInfo = _database.GetModelInfoById(revisor.ModelId.Value);
+                        var modelInfo = _database.GetModelInfoById(revisionAgent.ModelId.Value);
                         if (string.IsNullOrWhiteSpace(modelInfo?.Name))
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
@@ -2570,7 +2650,7 @@ public sealed partial class StoriesService
                             return new CommandResult(false, "Kernel factory non disponibile");
                         }
 
-                        var systemPrompt = (revisor.Prompt ?? string.Empty).Trim();
+                        var systemPrompt = (revisionAgent.Prompt ?? string.Empty).Trim();
                         if (string.IsNullOrWhiteSpace(systemPrompt))
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
@@ -2591,6 +2671,71 @@ public sealed partial class StoriesService
                         if (callCenter == null)
                         {
                             return new CommandResult(false, "ICallCenter non disponibile per revisione");
+                        }
+
+                        string? extractedCriticIssues = null;
+                        var evaluationsForCritic = (_database.GetStoryEvaluations(storyId) ?? new List<StoryEvaluation>())
+                            .Where(e => e != null && e.Id > 0)
+                            .OrderBy(e => e.Id)
+                            .ToList();
+
+                        if (criticExtractor != null && criticExtractor.ModelId.HasValue && evaluationsForCritic.Count > 0)
+                        {
+                            var criticPrompt = (criticExtractor.Prompt ?? string.Empty).Trim();
+                            if (!string.IsNullOrWhiteSpace(criticPrompt))
+                            {
+                                try
+                                {
+                                    var criticHistory = new ChatHistory();
+                                    criticHistory.AddSystem(criticPrompt);
+                                    criticHistory.AddUser(BuildCriticExtractorInput(raw, evaluationsForCritic));
+
+                                    var criticThreadIdRaw = unchecked((((int)(storyId % int.MaxValue)) * 131) ^ 0x43E1);
+                                    var criticThreadId = criticThreadIdRaw == int.MinValue ? 1 : Math.Max(1, Math.Abs(criticThreadIdRaw));
+                                    var criticResult = await callCenter.CallAgentAsync(
+                                        storyId: storyId,
+                                        threadId: criticThreadId,
+                                        agent: criticExtractor,
+                                        history: criticHistory,
+                                        options: new CallOptions
+                                        {
+                                            Operation = "story_critic_extractor",
+                                            Timeout = TimeSpan.FromSeconds(90),
+                                            MaxRetries = 1,
+                                            UseResponseChecker = false,
+                                            AllowFallback = true,
+                                            AskFailExplanation = true,
+                                            SystemPromptOverride = criticPrompt,
+                                            DeterministicChecks =
+                                            {
+                                                new CheckEmpty
+                                                {
+                                                    Options = Options.Create<object>(new Dictionary<string, object>
+                                                    {
+                                                        ["ErrorMessage"] = "critic_extractor: lista criticita vuota"
+                                                    })
+                                                }
+                                            }
+                                        },
+                                        cancellationToken: ctx.CancellationToken).ConfigureAwait(false);
+
+                                    if (criticResult.Success && !string.IsNullOrWhiteSpace(criticResult.ResponseText))
+                                    {
+                                        extractedCriticIssues = criticResult.ResponseText.Trim();
+                                        _customLogger?.Append(runId, $"[story {storyId}] Critic extractor completed.");
+                                    }
+                                    else
+                                    {
+                                        _customLogger?.Append(runId,
+                                            $"[story {storyId}] Critic extractor failed or empty: {criticResult.FailureReason ?? "errore sconosciuto"}",
+                                            "warn");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger?.LogWarning(ex, "Critic extractor failed for story {StoryId}", storyId);
+                                }
+                            }
                         }
 
                         // Use smaller chunks for the revisor to reduce repetition risk and improve responsiveness.
@@ -2653,26 +2798,43 @@ public sealed partial class StoriesService
                             }
                             catch { }
 
+                            var isStoryEditor = !string.IsNullOrWhiteSpace(revisionAgent.Role) &&
+                                revisionAgent.Role.Equals("story_editor", StringComparison.OrdinalIgnoreCase);
                             var systemPromptWithChunk = systemPrompt + $"\n\n(chunk: {i + 1}/{chunks.Count})";
                             var history = new ChatHistory();
                             history.AddSystem(systemPromptWithChunk);
-                            history.AddUser(chunk.Text);
+                            history.AddUser(BuildRevisionChunkUserInput(
+                                chunk.Text,
+                                chunkIndex: i + 1,
+                                chunkCount: chunks.Count,
+                                criticIssues: extractedCriticIssues,
+                                includeCriticSection: isStoryEditor));
                             var chunkThreadIdRaw = unchecked((((int)(storyId % int.MaxValue)) * 977) ^ (i + 1) ^ 0x5A17);
                             var chunkThreadId = chunkThreadIdRaw == int.MinValue ? 1 : Math.Max(1, Math.Abs(chunkThreadIdRaw));
                             var callResult = await callCenter.CallAgentAsync(
                                 storyId: storyId,
                                 threadId: chunkThreadId,
-                                agent: revisor,
+                                agent: revisionAgent,
                                 history: history,
                                 options: new CallOptions
                                 {
-                                    Operation = "story_revisor_chunk",
+                                    Operation = isStoryEditor ? "story_editor_chunk" : "story_revisor_chunk",
                                     Timeout = TimeSpan.FromSeconds(90),
                                     MaxRetries = 1,
                                     UseResponseChecker = false,
                                     AllowFallback = true,
                                     AskFailExplanation = true,
-                                    SystemPromptOverride = systemPromptWithChunk
+                                    SystemPromptOverride = systemPromptWithChunk,
+                                    DeterministicChecks =
+                                    {
+                                        new CheckEmpty
+                                        {
+                                            Options = Options.Create<object>(new Dictionary<string, object>
+                                            {
+                                                ["ErrorMessage"] = "editor_chunk: risposta vuota"
+                                            })
+                                        }
+                                    }
                                 },
                                 cancellationToken: ctx.CancellationToken).ConfigureAwait(false);
 
@@ -2682,7 +2844,7 @@ public sealed partial class StoriesService
                             var revisedChunk = (callResult.ResponseText ?? string.Empty).Trim();
                             if (!callResult.Success)
                             {
-                                _customLogger?.Append(runId, $"[story {storyId}] Revisor failed on chunk {i + 1}/{chunks.Count}: {callResult.FailureReason ?? "errore sconosciuto"}", "warn");
+                                _customLogger?.Append(runId, $"[story {storyId}] Revision agent failed on chunk {i + 1}/{chunks.Count}: {callResult.FailureReason ?? "errore sconosciuto"}", "warn");
                             }
 
                             if (string.IsNullOrWhiteSpace(revisedChunk))
@@ -2918,6 +3080,68 @@ public sealed partial class StoriesService
     }
 
     private sealed record RevisionChunk(int Start, string Text, string TrailingSeparator);
+
+    private static string BuildCriticExtractorInput(string storyText, IReadOnlyList<StoryEvaluation> evaluations)
+    {
+        var sb = new StringBuilder(Math.Max(1024, storyText?.Length ?? 0));
+        sb.AppendLine("STORIA ORIGINALE (riferimento):");
+        sb.AppendLine(storyText ?? string.Empty);
+        sb.AppendLine();
+        sb.AppendLine("REPORT VALUTATORI COMPLETI:");
+        sb.AppendLine();
+
+        for (var i = 0; i < evaluations.Count; i++)
+        {
+            var e = evaluations[i];
+            sb.AppendLine($"VALUTATORE #{i + 1}");
+            if (!string.IsNullOrWhiteSpace(e.AgentName))
+            {
+                sb.AppendLine($"Agent: {e.AgentName}");
+            }
+            sb.AppendLine($"TotalScore: {e.TotalScore:F2}");
+            sb.AppendLine($"NarrativeCoherenceScore: {e.NarrativeCoherenceScore}");
+            if (!string.IsNullOrWhiteSpace(e.NarrativeCoherenceDefects))
+                sb.AppendLine($"NarrativeCoherenceDefects: {e.NarrativeCoherenceDefects}");
+            sb.AppendLine($"OriginalityScore: {e.OriginalityScore}");
+            if (!string.IsNullOrWhiteSpace(e.OriginalityDefects))
+                sb.AppendLine($"OriginalityDefects: {e.OriginalityDefects}");
+            sb.AppendLine($"EmotionalImpactScore: {e.EmotionalImpactScore}");
+            if (!string.IsNullOrWhiteSpace(e.EmotionalImpactDefects))
+                sb.AppendLine($"EmotionalImpactDefects: {e.EmotionalImpactDefects}");
+            sb.AppendLine($"ActionScore: {e.ActionScore}");
+            if (!string.IsNullOrWhiteSpace(e.ActionDefects))
+                sb.AppendLine($"ActionDefects: {e.ActionDefects}");
+            if (!string.IsNullOrWhiteSpace(e.RawJson))
+            {
+                sb.AppendLine("RawJson:");
+                sb.AppendLine(e.RawJson);
+            }
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("Output richiesto:");
+        sb.AppendLine("- Elenco puntato di criticita' concrete da correggere.");
+        sb.AppendLine("- Nessun riassunto della storia.");
+        sb.AppendLine("- Nessun complimento o giudizio generico.");
+        return sb.ToString();
+    }
+
+    private static string BuildRevisionChunkUserInput(string chunkText, int chunkIndex, int chunkCount, string? criticIssues, bool includeCriticSection)
+    {
+        var sb = new StringBuilder(chunkText?.Length ?? 256);
+        if (includeCriticSection && !string.IsNullOrWhiteSpace(criticIssues))
+        {
+            sb.AppendLine("CRITICITA' DA CORREGGERE (generate da critic_extractor):");
+            sb.AppendLine(criticIssues.Trim());
+            sb.AppendLine();
+        }
+
+        sb.AppendLine($"TESTO DA REVISIONARE (chunk {chunkIndex}/{chunkCount}):");
+        sb.AppendLine(chunkText ?? string.Empty);
+        sb.AppendLine();
+        sb.AppendLine("Restituisci solo il testo revisionato del chunk, senza spiegazioni.");
+        return sb.ToString();
+    }
 
     private static List<RevisionChunk> SplitIntoRevisionChunks(string text, int approxChunkChars)
     {
@@ -3285,8 +3509,9 @@ public sealed partial class StoriesService
         if (_scopeFactory != null)
         {
             using var scope = _scopeFactory.CreateScope();
-            var execution = scope.ServiceProvider.GetService<IAgentCallService>();
-            if (execution != null)
+            var callCenter = scope.ServiceProvider.GetService<ICallCenter>()
+                ?? ServiceLocator.Services?.GetService<ICallCenter>();
+            if (callCenter != null)
             {
                 usedStandardPath = true;
                 var syntheticAgent = new Agent
@@ -3303,32 +3528,34 @@ public sealed partial class StoriesService
                     IsActive = true
                 };
 
-                var modelResult = await execution.ExecuteAsync(
-                    new CommandModelExecutionService.Request
+                var history = new ChatHistory(messages);
+                var callResult = await callCenter.CallAgentAsync(
+                    storyId: 0,
+                    threadId: unchecked((modelName ?? string.Empty).GetHashCode(StringComparison.Ordinal) ^ 0x4C51),
+                    agent: syntheticAgent,
+                    history: history,
+                    options: new CallOptions
                     {
-                        CommandKey = "extract_characters",
-                        Agent = syntheticAgent,
-                        RoleCode = "character_extractor",
-                        Prompt = messages.Last().Content ?? string.Empty,
-                        SystemPrompt = systemPrompt,
-                        MaxAttempts = 2,
-                        RetryDelaySeconds = 1,
-                        StepTimeoutSec = 90,
+                        Operation = "extract_characters",
+                        Timeout = TimeSpan.FromSeconds(90),
+                        MaxRetries = 1,
                         UseResponseChecker = false,
-                        EnableFallback = false,
-                        DiagnoseOnFinalFailure = true,
-                        ExplainAfterAttempt = 1,
-                        EnableDeterministicValidation = true,
-                        DeterministicValidator = output =>
+                        AllowFallback = false,
+                        AskFailExplanation = true,
+                        SystemPromptOverride = systemPrompt,
+                        DeterministicChecks =
                         {
-                            var jsonCandidate = ExtractJsonArray(output);
-                            return string.IsNullOrWhiteSpace(jsonCandidate)
-                                ? new CommandModelExecutionService.DeterministicValidationResult(false, "JSON personaggi non trovato")
-                                : new CommandModelExecutionService.DeterministicValidationResult(true, null);
+                            new CheckExtractableJsonArray
+                            {
+                                Options = Options.Create<object>(new Dictionary<string, object>
+                                {
+                                    ["ErrorMessage"] = "JSON personaggi non trovato"
+                                })
+                            }
                         }
-                    });
+                    }).ConfigureAwait(false);
 
-                responseText = modelResult.Text ?? string.Empty;
+                responseText = callResult.ResponseText ?? string.Empty;
             }
             else
             {
@@ -3342,8 +3569,8 @@ public sealed partial class StoriesService
 
         if (!usedStandardPath)
         {
-            _customLogger?.MarkLatestModelResponseResult("FAILED", "IAgentCallService non disponibile per estrazione personaggi");
-            return (false, new List<StoryCharacter>(), "IAgentCallService non disponibile per estrazione personaggi");
+            _customLogger?.MarkLatestModelResponseResult("FAILED", "ICallCenter non disponibile per estrazione personaggi");
+            return (false, new List<StoryCharacter>(), "ICallCenter non disponibile per estrazione personaggi");
         }
 
         var json = ExtractJsonArray(responseText);
@@ -3363,6 +3590,24 @@ public sealed partial class StoriesService
         EnsureNarratorCharacter(characters);
         _customLogger?.MarkLatestModelResponseResult("SUCCESS", null);
         return (true, characters, null);
+    }
+
+    private sealed class CheckExtractableJsonArray : CheckBase
+    {
+        public override string Rule => "Output deve contenere un array JSON estraibile.";
+        public override string GenericErrorDescription => "JSON personaggi non trovato";
+
+        public override IDeterministicResult Execute(string textToCheck)
+        {
+            var started = DateTime.UtcNow;
+            var json = ExtractJsonArray(textToCheck);
+            return new DeterministicResult
+            {
+                Successed = !string.IsNullOrWhiteSpace(json),
+                Message = string.IsNullOrWhiteSpace(json) ? "JSON personaggi non trovato" : "ok",
+                CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds)
+            };
+        }
     }
 
     private static string? ExtractJsonArray(string? text)

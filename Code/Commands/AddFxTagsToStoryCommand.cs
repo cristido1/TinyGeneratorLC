@@ -230,26 +230,23 @@ namespace TinyGenerator.Services.Commands
 
         private static ICallCenter ResolveOrCreateCallCenter(DatabaseService database, StoriesService? storiesService, ICustomLogger? logger)
         {
+            if (storiesService?.ScopeFactory != null)
+            {
+                using var scope = storiesService.ScopeFactory.CreateScope();
+                var scopedCallCenter = scope.ServiceProvider.GetService<ICallCenter>();
+                if (scopedCallCenter != null)
+                {
+                    return scopedCallCenter;
+                }
+            }
+
             var rootCallCenter = ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter;
             if (rootCallCenter != null)
             {
                 return rootCallCenter;
             }
-
-            IAgentCallService? agentCallService = null;
-            if (storiesService?.ScopeFactory != null)
-            {
-                using var scope = storiesService.ScopeFactory.CreateScope();
-                agentCallService = scope.ServiceProvider.GetService<IAgentCallService>();
-            }
-
-            agentCallService ??= ServiceLocator.Services?.GetService(typeof(IAgentCallService)) as IAgentCallService;
-            if (agentCallService == null)
-            {
-                throw new InvalidOperationException("ICallCenter/IAgentCallService non disponibile per AddFxTagsToStoryCommand.");
-            }
-
-            return new CallCenter(agentCallService, database, logger);
+            
+            throw new InvalidOperationException("ICallCenter non disponibile per AddFxTagsToStoryCommand.");
         }
 
         private static int BuildThreadId(long storyId, int chunkIndex)

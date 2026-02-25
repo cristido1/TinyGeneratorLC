@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
 using TinyGenerator.Hubs;
 using TinyGenerator.Models;
 
@@ -13,15 +14,18 @@ public sealed class CallCenter : ICallCenter
     private readonly DatabaseService _database;
     private readonly IHubContext<StoryLiveHub>? _hubContext;
     private readonly ICustomLogger? _logger;
+    private readonly IOptionsMonitor<ResponseValidationOptions>? _responseValidationOptions;
 
     public CallCenter(
         IAgentCallService agentCallService,
         DatabaseService database,
+        IOptionsMonitor<ResponseValidationOptions>? responseValidationOptions,
         IHubContext<StoryLiveHub>? hubContext = null,
         ICustomLogger? logger = null)
     {
         _agentCallService = agentCallService;
         _database = database;
+        _responseValidationOptions = responseValidationOptions;
         _hubContext = hubContext;
         _logger = logger;
     }
@@ -33,6 +37,7 @@ public sealed class CallCenter : ICallCenter
         : this(
             agentCallService,
             database,
+            ServiceLocator.Services?.GetService<IOptionsMonitor<ResponseValidationOptions>>(),
             ServiceLocator.Services?.GetService<IHubContext<StoryLiveHub>>(),
             logger)
     {
@@ -236,7 +241,7 @@ public sealed class CallCenter : ICallCenter
             MaxAttempts = 1,
             StepTimeoutSec = timeoutSec,
             UseResponseChecker = options.UseResponseChecker,
-            EnableFallback = false,
+            EnableFallback = options.AllowFallback && IsModelFallbackEnabledByConfig(),
             DiagnoseOnFinalFailure = false,
             ExplainAfterAttempt = 0,
             RunId = $"callcenter_{Guid.NewGuid():N}",
@@ -287,6 +292,18 @@ public sealed class CallCenter : ICallCenter
         var exec = await _agentCallService.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
 
         return exec;
+    }
+
+    private bool IsModelFallbackEnabledByConfig()
+    {
+        try
+        {
+            return _responseValidationOptions?.CurrentValue?.EnableFallback ?? true;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private static CommandModelExecutionService.DeterministicValidationResult ExecuteDeterministicChecks(
@@ -576,7 +593,7 @@ public sealed class CallCenter : ICallCenter
         {
             var count = Math.Max(0, err.ErrorCount);
             var emphasis = count > 0 ? new string('!', count / 5) : string.Empty;
-            sb.AppendLine($"- {err.ErrorText} (l'hai commesso {count} volte{emphasis})");
+            sb.AppendLine($"- {err.ErrorText}");
         }
 
         return sb.ToString().TrimEnd();

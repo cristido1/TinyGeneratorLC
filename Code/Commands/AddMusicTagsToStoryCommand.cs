@@ -94,6 +94,13 @@ namespace TinyGenerator.Services.Commands
                 _storyTaggingPipelineService.PersistInitialRows(preparation);
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
+                ReportProgress(
+                    effectiveRunId,
+                    0,
+                    Math.Max(1, preparation.Chunks.Count),
+                    preparation.Chunks.Count > 0
+                        ? $"Music tags: preparazione completata, chunk 0/{preparation.Chunks.Count} (0%)"
+                        : "Music tags: nessun chunk da processare");
 
                 var musicTags = new List<StoryTaggingService.StoryTagEntry>();
 
@@ -103,12 +110,13 @@ namespace TinyGenerator.Services.Commands
                     var chunk = preparation.Chunks[i];
                     var chunkIndex = i + 1;
                     var chunkCount = preparation.Chunks.Count;
+                    var percent = chunkCount <= 0 ? 0 : (int)Math.Round(((chunkIndex - 1) * 100.0) / chunkCount);
 
                     ReportProgress(
                         effectiveRunId,
-                        chunkIndex,
+                        Math.Max(0, chunkIndex - 1),
                         chunkCount,
-                        $"Adding music tags chunk {chunkIndex}/{chunkCount}");
+                        $"Music tags chunk {chunkIndex}/{chunkCount} ({percent}%) - richiesta agente");
 
                     var history = new ChatHistory();
                     if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -161,6 +169,12 @@ namespace TinyGenerator.Services.Commands
 
                     _logger?.Append(effectiveRunId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalMusic={parsed.Count}; model={currentModelName}");
                     musicTags.AddRange(parsed);
+                    var percentDone = chunkCount <= 0 ? 100 : (int)Math.Round((chunkIndex * 100.0) / chunkCount);
+                    ReportProgress(
+                        effectiveRunId,
+                        chunkIndex,
+                        chunkCount,
+                        $"Music tags chunk {chunkIndex}/{chunkCount} completato ({percentDone}%)");
                 }
 
                 if (!_storyTaggingPipelineService.SaveTaggingResult(preparation, musicTags, StoryTaggingService.TagTypeMusic, out var saveError))
@@ -177,6 +191,11 @@ namespace TinyGenerator.Services.Commands
                     _tuning.MusicExpert.AutolaunchNextCommand);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
+                ReportProgress(
+                    effectiveRunId,
+                    Math.Max(1, preparation.Chunks.Count),
+                    Math.Max(1, preparation.Chunks.Count),
+                    "Music tags completati (100%)");
                 return new CommandResult(
                     true,
                     enqueued

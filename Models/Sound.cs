@@ -22,11 +22,14 @@ public sealed class Sound
     public string FileName { get; set; } = string.Empty;
 
     public string? Description { get; set; }
+    public string? License { get; set; }
 
     public string? Tags { get; set; }
 
     public string? Embedding { get; set; }
+    public string? InsertDate { get; set; }
     public double? DurationSeconds { get; set; }
+    public bool Enabled { get; set; } = true;
 
     public int UsageCount { get; set; }
 

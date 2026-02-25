@@ -105,24 +105,6 @@ public sealed partial class StoriesService
                 var json = JsonSerializer.Serialize(schema, jsonOptions);
                 _service.SaveSanitizedTtsSchemaJson(schemaPath, json);
 
-                // New requirement: resolve MUSIC blocks to actual file names immediately during schema generation.
-                // This picks files from series_folder/{series.folder}/music or data/music_stories and writes music_file/musicFile.
-                try
-                {
-                    var existingJson = await File.ReadAllTextAsync(schemaPath, context.CancellationToken);
-                    var rootNode = JsonNode.Parse(existingJson) as JsonObject;
-                    if (rootNode != null)
-                    {
-                        _service.AssignMusicFilesFromLibrary(rootNode, story, folderPath);
-                        SanitizeTtsSchemaTextFields(rootNode);
-                        await File.WriteAllTextAsync(schemaPath, rootNode.ToJsonString(SchemaJsonOptions), context.CancellationToken);
-                    }
-                }
-                catch (Exception exMusic)
-                {
-                    _service._logger?.LogWarning(exMusic, "Unable to assign music files during tts_schema generation for story {Id}", story.Id);
-                }
-
                 try { _service._database.UpdateStoryGeneratedTtsJson(story.Id, true); } catch { }
 
                 var normResults = new List<(string Name, bool Success, string? Message)>();
@@ -145,6 +127,25 @@ public sealed partial class StoriesService
                     var messageText = result.Message ?? (result.Success ? "ok" : "fallito");
                     summaryBuilder.AppendLine($"{result.Name}: {messageText}");
                 }
+
+                // Dopo i comandi che riscrivono tts_schema.json (typed), risolviamo i riferimenti audio di libreria
+                // direttamente nello schema, così i campi *_source_path / *_sound_id non vengono persi.
+                try
+                {
+                    var assignRunId = _service.CurrentDispatcherRunId ?? $"generate_tts_schema_{story.Id}";
+                    await _service.AssignCatalogLibraryReferencesInTtsSchemaAsync(
+                        schemaPath,
+                        story,
+                        folderPath,
+                        assignRunId,
+                        context.CancellationToken);
+                }
+                catch (Exception exAssign)
+                {
+                    _service._logger?.LogWarning(exAssign, "Unable to assign catalog library references during tts_schema generation for story {Id}", story.Id);
+                    summaryBuilder.AppendLine($"AssignCatalogLibraryRefs: warning {exAssign.Message}");
+                }
+
                 var summaryMessage = summaryBuilder.ToString().Trim();
 
                 var allowNext = _service.TryChangeStatus(story.Id, "generate_tts_schema", null);

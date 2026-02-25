@@ -24,6 +24,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          which rg
+          rg --version
+
+      - name: Verify ripgrep in PowerShell
+        shell: pwsh
+        run: |
+          Get-Command rg | Format-List *
+          rg --version
+
       - name: Run CallCenter boundary check
         shell: pwsh
         run: ./scripts/check_callcenter_boundary.ps1

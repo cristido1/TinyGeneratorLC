@@ -126,6 +126,19 @@ public sealed partial class StoriesService
                         selected = PickBestCharacterVoice(targetGender, storyChar?.Age, allVoices, usedVoiceIds);
                     }
 
+                    // Fallback per gender "unknown"/non disponibile: non bloccare il prepare_tts_schema
+                    // se esiste almeno una voce personaggio utilizzabile.
+                    if (selected == null && IsUnknownOrUnspecifiedGender(targetGender))
+                    {
+                        selected = PickBestCharacterVoiceAnyGender(storyChar?.Age, allVoices, usedVoiceIds);
+                        if (selected != null)
+                        {
+                            var selectedGender = NormalizeGender(selected.Gender);
+                            if (!string.IsNullOrWhiteSpace(selectedGender))
+                                targetGender = selectedGender;
+                        }
+                    }
+
                     if (selected == null)
                     {
                         errors.Add($"{character.Name}: nessuna voce disponibile (gender richiesto: {targetGender}).");
@@ -283,6 +296,36 @@ public sealed partial class StoriesService
                 .FirstOrDefault();
         }
 
+        private static TinyGenerator.Models.TtsVoice? PickBestCharacterVoiceAnyGender(
+            string? targetAge,
+            List<TinyGenerator.Models.TtsVoice> allVoices,
+            HashSet<string> usedVoiceIds)
+        {
+            var candidates = allVoices
+                .Where(v =>
+                    !string.IsNullOrWhiteSpace(v.VoiceId) &&
+                    !usedVoiceIds.Contains(v.VoiceId) &&
+                    !IsNarratorVoice(v))
+                .ToList();
+
+            if (candidates.Count == 0)
+                return null;
+
+            int? targetAgeNum = ParseAgeToNumber(targetAge);
+
+            return candidates
+                .Select(v => new
+                {
+                    Voice = v,
+                    Score = v.Score ?? 0,
+                    AgeDiff = CalculateAgeDifference(v.Age, targetAgeNum)
+                })
+                .OrderBy(x => x.AgeDiff)
+                .ThenByDescending(x => x.Score)
+                .Select(x => x.Voice)
+                .FirstOrDefault();
+        }
+
         private static bool IsNarratorName(string? name)
         {
             if (string.IsNullOrWhiteSpace(name))
@@ -307,6 +350,14 @@ public sealed partial class StoriesService
                 "neutral" or "neutro" or "other" => "neutral",
                 _ => g
             };
+        }
+
+        private static bool IsUnknownOrUnspecifiedGender(string? gender)
+        {
+            var normalized = NormalizeGender(gender);
+            return string.IsNullOrWhiteSpace(normalized)
+                || normalized.Equals("unknown", StringComparison.OrdinalIgnoreCase)
+                || normalized.Equals("neutral", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool VoiceGenderMatches(TinyGenerator.Models.TtsVoice voice, string expectedGender)

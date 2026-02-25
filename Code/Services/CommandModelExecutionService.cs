@@ -1503,7 +1503,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         {
             var count = Math.Max(0, err.ErrorCount);
             var emphasis = count > 0 ? new string('!', count / 5) : string.Empty;
-            sb.AppendLine($"- {err.ErrorText} (l'hai commesso {count} volte{emphasis})");
+            sb.AppendLine($"- {err.ErrorText}");
         }
 
         return sb.ToString().TrimEnd();

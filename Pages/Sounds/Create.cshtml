@@ -32,7 +32,11 @@
 
                     <div class="col-12">
                         <label asp-for="Sound.FilePath" class="form-label"></label>
-                        <input asp-for="Sound.FilePath" class="form-control" />
+                        <div class="input-group">
+                            <input asp-for="Sound.FilePath" class="form-control" id="soundFilePathInput" />
+                            <button type="button" class="btn btn-outline-secondary" id="browseSoundFilesBtn">Sfoglia libreria</button>
+                        </div>
+                        <div class="form-text">Ammessi `.wav` e `.mp3` dentro `sounds_library`.</div>
                     </div>
 
                     <div class="col-md-6">
@@ -60,10 +64,83 @@
                     <a class="btn btn-outline-secondary" href="/Sounds/Index">Annulla</a>
                 </div>
             </form>
+
+            <div class="card mt-3 d-none" id="soundFileBrowserCard">
+                <div class="card-body">
+                    <div class="d-flex gap-2 mb-2">
+                        <input type="text" class="form-control" id="soundFileBrowserQuery" placeholder="Cerca file..." />
+                        <button type="button" class="btn btn-outline-secondary" id="soundFileBrowserRefresh">Aggiorna</button>
+                        <button type="button" class="btn btn-outline-secondary" id="soundFileBrowserClose">Chiudi</button>
+                    </div>
+                    <div class="small text-muted mb-2" id="soundFileBrowserStatus"></div>
+                    <select class="form-select" id="soundFileBrowserList" size="12"></select>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+    <script>
+        (function initSoundFileBrowser() {
+            var browseBtn = document.getElementById('browseSoundFilesBtn');
+            var card = document.getElementById('soundFileBrowserCard');
+            var queryInput = document.getElementById('soundFileBrowserQuery');
+            var refreshBtn = document.getElementById('soundFileBrowserRefresh');
+            var closeBtn = document.getElementById('soundFileBrowserClose');
+            var list = document.getElementById('soundFileBrowserList');
+            var status = document.getElementById('soundFileBrowserStatus');
+            var filePathInput = document.getElementById('soundFilePathInput');
+            var fileNameInput = document.getElementById('Sound_FileName');
+            if (!browseBtn || !card || !list || !status || !filePathInput || !fileNameInput) return;
+
+            var lastItems = [];
+
+            async function loadFiles() {
+                status.textContent = 'Caricamento...';
+                list.innerHTML = '';
+                var q = queryInput && queryInput.value ? encodeURIComponent(queryInput.value) : '';
+                try {
+                    var resp = await fetch('?handler=BrowseFiles' + (q ? '&q=' + q : ''), { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    var data = await resp.json();
+                    if (!Array.isArray(data)) throw new Error(data && data.error ? data.error : 'Risposta non valida');
+                    lastItems = data;
+                    data.forEach(function (item, idx) {
+                        var opt = document.createElement('option');
+                        opt.value = String(idx);
+                        opt.textContent = item.relativePath || item.fileName || item.fullPath;
+                        list.appendChild(opt);
+                    });
+                    status.textContent = 'File trovati: ' + data.length;
+                } catch (err) {
+                    status.textContent = 'Errore caricamento file: ' + (err && err.message ? err.message : err);
+                }
+            }
+
+            function applySelected() {
+                var idx = parseInt(list.value, 10);
+                if (isNaN(idx) || !lastItems[idx]) return;
+                var item = lastItems[idx];
+                filePathInput.value = item.fullPath || '';
+                fileNameInput.value = item.fileName || '';
+            }
+
+            browseBtn.addEventListener('click', function () {
+                card.classList.remove('d-none');
+                loadFiles();
+            });
+            refreshBtn && refreshBtn.addEventListener('click', loadFiles);
+            closeBtn && closeBtn.addEventListener('click', function () { card.classList.add('d-none'); });
+            queryInput && queryInput.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loadFiles();
+                }
+            });
+            list.addEventListener('dblclick', applySelected);
+            list.addEventListener('change', applySelected);
+        })();
+    </script>
 }

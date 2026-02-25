@@ -90,6 +90,8 @@ namespace TinyGenerator.Services.Commands
                 _storyTaggingPipelineService.PersistInitialRows(preparation);
 
                 telemetry.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
+                var totalChunks = Math.Max(1, preparation.Chunks.Count);
+                telemetry.ReportProgress(0, totalChunks, $"Ambient tags: preparazione completata, chunk 0/{totalChunks} (0%)");
 
                 var ambientTags = new List<StoryTaggingService.StoryTagEntry>();
                 var currentModelName = resolvedAgent.ModelName;
@@ -101,7 +103,11 @@ namespace TinyGenerator.Services.Commands
                     var chunk = preparation.Chunks[i];
                     var chunkIndex = i + 1;
                     var chunkCount = preparation.Chunks.Count;
-                    telemetry.ReportProgress(chunkIndex, chunkCount, $"Adding ambient tags chunk {chunkIndex}/{chunkCount}");
+                    var percentBefore = chunkCount <= 0 ? 0 : (int)Math.Round(((chunkIndex - 1) * 100.0) / chunkCount);
+                    telemetry.ReportProgress(
+                        Math.Max(0, chunkIndex - 1),
+                        Math.Max(1, chunkCount),
+                        $"Ambient tags chunk {chunkIndex}/{chunkCount} ({percentBefore}%) - richiesta agente");
 
                     var history = new ChatHistory();
                     if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -155,6 +161,11 @@ namespace TinyGenerator.Services.Commands
                         $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalAmbient={parsed.Count}; model={currentModelName}");
 
                     ambientTags.AddRange(parsed);
+                    var percentDone = chunkCount <= 0 ? 100 : (int)Math.Round((chunkIndex * 100.0) / chunkCount);
+                    telemetry.ReportProgress(
+                        chunkIndex,
+                        Math.Max(1, chunkCount),
+                        $"Ambient tags chunk {chunkIndex}/{chunkCount} completato ({percentDone}%)");
                 }
 
                 if (!_storyTaggingPipelineService.SaveAmbientTaggingResult(preparation, ambientTags, out var saveError))
@@ -170,6 +181,7 @@ namespace TinyGenerator.Services.Commands
                     _storyId,
                     _tuning.AmbientExpert.AutolaunchNextCommand);
 
+                telemetry.ReportProgress(totalChunks, totalChunks, "Ambient tags completati (100%)");
                 telemetry.MarkCompleted(effectiveRunId, "ok");
                 return new CommandResult(true, enqueued
                     ? "Ambient tags added (next status enqueued)"

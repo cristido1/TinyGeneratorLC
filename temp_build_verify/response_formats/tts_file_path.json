@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "description": "Il percorso completo o il nome del file JSON generato contenente la dialogue track per il TTS"
+    }
+  },
+  "required": ["file_path"],
+  "additionalProperties": false
+}

@@ -176,6 +176,32 @@ namespace TinyGenerator.Services
                 }
             }
 
+            // Fallback for story status commands that often don't pass explicit agent metadata.
+            if (database != null && (string.IsNullOrWhiteSpace(agentName) || string.IsNullOrWhiteSpace(modelName)))
+            {
+                var inferredRole = ResolveAgentRoleFromOperation(op);
+                if (!string.IsNullOrWhiteSpace(inferredRole))
+                {
+                    var inferredAgent = database.ListAgents()
+                        .FirstOrDefault(a => a.IsActive && string.Equals(a.Role, inferredRole, StringComparison.OrdinalIgnoreCase));
+                    if (inferredAgent != null)
+                    {
+                        if (string.IsNullOrWhiteSpace(agentName))
+                        {
+                            agentName = inferredAgent.Name;
+                        }
+                        if (string.IsNullOrWhiteSpace(agentRole))
+                        {
+                            agentRole = inferredAgent.Role;
+                        }
+                        if (string.IsNullOrWhiteSpace(modelName) && inferredAgent.ModelId.HasValue && inferredAgent.ModelId.Value > 0)
+                        {
+                            modelName = database.GetModelInfoById(inferredAgent.ModelId.Value)?.Name;
+                        }
+                    }
+                }
+            }
+
             if (database != null && string.IsNullOrWhiteSpace(modelName))
             {
                 var modelId = TryGetMetadataInt(metadata, "modelId", "ModelId");
@@ -233,6 +259,24 @@ namespace TinyGenerator.Services
             _ = BroadcastCommandsAsync();
 
             return new CommandHandle(id, op, workItem.Completion.Task);
+        }
+
+        private static string? ResolveAgentRoleFromOperation(string? operationName)
+        {
+            var op = (operationName ?? string.Empty).Trim().ToLowerInvariant();
+            return op switch
+            {
+                "add_voice_tags_to_story" => "formatter",
+                "add_ambient_tags_to_story" => "ambient_expert",
+                "add_fx_tags_to_story" => "fx_expert",
+                "add_music_tags_to_story" => "music_expert",
+                "always_on_story_summaries" => "summarizer",
+                "canon_extractor" => "canon_extractor",
+                "continuity_validator" => "continuity_validator",
+                "state_delta_builder" => "state_delta_builder",
+                "recap_builder" => "recap_builder",
+                _ => null
+            };
         }
 
         private async Task<CommandResult> ExecuteCommandLifecycleAsync(ICommand command, CommandContext context)
@@ -700,6 +744,25 @@ Completed:
 
             _ = BroadcastCommandsAsync();
             return true;
+        }
+
+        public int ClearCompletedCommands()
+        {
+            var removed = 0;
+            foreach (var runId in _completed.Keys)
+            {
+                if (_completed.TryRemove(runId, out _))
+                {
+                    removed++;
+                }
+            }
+
+            if (removed > 0)
+            {
+                _ = BroadcastCommandsAsync();
+            }
+
+            return removed;
         }
 
         private Task BroadcastCommandsAsync()

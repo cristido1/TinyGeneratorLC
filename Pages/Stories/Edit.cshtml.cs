@@ -331,6 +331,7 @@ namespace TinyGenerator.Pages.Stories
 
                     SetStringCaseInsensitive(ch, newVoiceId, "voiceId", "VoiceId", "voice_id");
                     SetStringCaseInsensitive(ch, newVoiceName, "voice", "Voice");
+                    SetStringCaseInsensitive(ch, (row.Gender ?? string.Empty).Trim(), "gender", "Gender");
                 }
 
                 var options = new JsonSerializerOptions

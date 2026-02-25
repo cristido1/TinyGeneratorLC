@@ -168,18 +168,19 @@ public sealed class CanonExtractorCommand : ICommand
     private static string BuildCanonExtractorPrompt(string storyText)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("ESTRAI EVENTI CANONICI (TAG tra parentesi quadre, NO JSON).");
+        sb.AppendLine("ESTRAI EVENTI CANONICI IN JSON.");
         sb.AppendLine();
         sb.AppendLine("Vincoli:");
         sb.AppendLine("- Ordina gli eventi in sequenza temporale.");
-        sb.AppendLine("- Ogni evento include: ORDER, TITLE, SUMMARY, CHARACTERS (lista), LOCATION, OUTCOME.");
-        sb.AppendLine("- Output SOLO TAG, niente testo extra.");
+        sb.AppendLine("- Restituisci SOLO un array JSON valido, senza markdown, senza testo extra.");
+        sb.AppendLine("- Ogni elemento include obbligatoriamente: order, title, summary, characters (array), location, outcome.");
+        sb.AppendLine("- 'order' deve essere intero progressivo (1,2,3...).");
+        sb.AppendLine("- 'characters' deve essere sempre un array JSON (anche vuoto).");
         sb.AppendLine();
         sb.AppendLine("Formato richiesto:");
-        sb.AppendLine("[CANON_EVENTS]");
-        sb.AppendLine("[EVENT][ORDER]1[/ORDER][TITLE]...[/TITLE][SUMMARY]...[/SUMMARY][CHARACTERS]A;B[/CHARACTERS][LOCATION]...[/LOCATION][OUTCOME]...[/OUTCOME][/EVENT]");
-        sb.AppendLine("... (piu' EVENT) ...");
-        sb.AppendLine("[/CANON_EVENTS]");
+        sb.AppendLine("[");
+        sb.AppendLine("  {\"order\":1,\"title\":\"...\",\"summary\":\"...\",\"characters\":[\"A\",\"B\"],\"location\":\"...\",\"outcome\":\"...\"}");
+        sb.AppendLine("]");
         sb.AppendLine();
         sb.AppendLine("EPISODIO:");
         sb.AppendLine(storyText);
@@ -338,10 +339,14 @@ public sealed class StateDeltaBuilderCommand : ICommand
         sb.AppendLine("Vincoli:");
         sb.AppendLine("- Restituisci SOLO TAG (nessun JSON).");
         sb.AppendLine("- Scrivi WORLD_STATE come testo compatto ma completo (coerente con input).");
+        sb.AppendLine("- Devi restituire SEMPRE tutti e tre i tag: WORLD_STATE, OPEN_THREADS, LAST_MAJOR_EVENT.");
+        sb.AppendLine("- LAST_MAJOR_EVENT e' OBBLIGATORIO e non puo' mancare.");
+        sb.AppendLine("- OPEN_THREADS deve essere presente anche se vuoto.");
+        sb.AppendLine("- Nessun testo extra prima o dopo i tag.");
         sb.AppendLine();
         sb.AppendLine("Formato richiesto:");
         sb.AppendLine("[WORLD_STATE]...[/WORLD_STATE]");
-        sb.AppendLine("[OPEN_THREADS]... (uno per riga) ...[/OPEN_THREADS]");
+        sb.AppendLine("[OPEN_THREADS]... (uno per riga, oppure vuoto) ...[/OPEN_THREADS]");
         sb.AppendLine("[LAST_MAJOR_EVENT]...[/LAST_MAJOR_EVENT]");
         sb.AppendLine();
         sb.AppendLine("STATE_SUMMARY_COMPACT:");
@@ -503,10 +508,15 @@ public sealed class ContinuityValidatorCommand : ICommand
     private static string BuildContinuityPrompt(string stateSummaryCompact, string canonEventsJson, string deltaJson)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("VERIFICA COERENZA NARRATIVA (TAG tra parentesi quadre, NO JSON).");
+        sb.AppendLine("VERIFICA COERENZA NARRATIVA.");
         sb.AppendLine();
-        sb.AppendLine("Output SOLO TAG:");
-        sb.AppendLine("[ISSUES][ISSUE][SEVERITY]low|medium|high[/SEVERITY][DESCRIPTION]...[/DESCRIPTION][/ISSUE]...[/ISSUES]");
+        sb.AppendLine("Restituisci esclusivamente nel formato JSON richiesto dalla request.");
+        sb.AppendLine("Nessun testo extra, nessun markdown, nessuna domanda all'utente.");
+        sb.AppendLine("Se non rilevi problemi, restituisci comunque un JSON valido con issues vuoto.");
+        sb.AppendLine("Se rilevi problemi, descrivili in modo sintetico e concreto.");
+        sb.AppendLine("Severita' ammessa: low, medium, high.");
+        sb.AppendLine("Esempio valido:");
+        sb.AppendLine("{\"issues\":[{\"severity\":\"medium\",\"description\":\"...\"}]}");
         sb.AppendLine();
         sb.AppendLine("STATE_SUMMARY_COMPACT:");
         sb.AppendLine(stateSummaryCompact);
@@ -881,7 +891,7 @@ public sealed class RecapBuilderCommand : ICommand
         }
 
         var prompt = BuildRecapPrompt(episode.CanonEvents ?? "[]");
-        var response = await CallAgentAsync(agent, prompt, roleOverride: CommandRoleCodes.RecapBuilder, ct: ct);
+        var response = await CallAgentAsync(agent, prompt, roleOverride: CommandRoleCodes.RecapBuilder, ct: ct, skipResponseChecker: true);
         if (!response.Success)
         {
             return new CommandResult(false, response.Error ?? "RecapBuilder failed");
@@ -903,7 +913,7 @@ public sealed class RecapBuilderCommand : ICommand
         return StateDrivenPipelineHelpers.ResolveActiveAgent(_database, role);
     }
 
-    private async Task<AgentResponse> CallAgentAsync(Agent agent, string prompt, string roleOverride, CancellationToken ct)
+    private async Task<AgentResponse> CallAgentAsync(Agent agent, string prompt, string roleOverride, CancellationToken ct, bool skipResponseChecker = false)
     {
         var modelName = StateDrivenPipelineHelpers.ResolveModelName(_database, agent);
         if (string.IsNullOrWhiteSpace(modelName))
@@ -920,7 +930,8 @@ public sealed class RecapBuilderCommand : ICommand
             roleOverride,
             systemPrompt,
             prompt,
-            ct);
+            ct,
+            skipResponseChecker: skipResponseChecker);
 
         if (!response.Success)
         {
@@ -937,6 +948,7 @@ public sealed class RecapBuilderCommand : ICommand
         sb.AppendLine("Vincoli:");
         sb.AppendLine("- Usa SOLO gli eventi canonici.");
         sb.AppendLine("- Output solo testo recap, senza titoli o markup.");
+        sb.AppendLine("- Non chiudere con cliffhanger; finale informativo e neutro.");
         sb.AppendLine();
         sb.AppendLine("CANON_EVENTS:");
         sb.AppendLine(canonEventsJson);

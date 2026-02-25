@@ -23,8 +23,12 @@ public sealed class SoundScoringService
 
     public sealed record BatchResult(int Processed, int Updated, int Failed, List<string> Errors);
     public sealed record DurationBatchResult(int Processed, int Updated, int Failed, List<string> Errors);
+    private static readonly HashSet<string> SupportedAudioExtensions = new(StringComparer.OrdinalIgnoreCase) { ".wav", ".mp3" };
 
     public double GetWavDurationSeconds(string filePath)
+        => GetAudioDurationSeconds(filePath);
+
+    public double GetAudioDurationSeconds(string filePath)
     {
         if (string.IsNullOrWhiteSpace(filePath))
         {
@@ -33,26 +37,38 @@ public sealed class SoundScoringService
 
         if (!File.Exists(filePath))
         {
-            throw new FileNotFoundException("File WAV non trovato", filePath);
+            throw new FileNotFoundException("File audio non trovato", filePath);
         }
 
-        var wav = ReadWav(filePath);
+        var wav = ReadAudioForScoring(filePath);
         return Math.Round(Math.Max(0d, wav.DurationSeconds), 3);
     }
 
-    public DurationBatchResult BackfillMissingDurations(int? limit = null)
+    public DurationBatchResult BackfillMissingDurations(
+        int? limit = null,
+        Action<int, int, string>? progress = null)
     {
         var sounds = _database.ListSoundsMissingDuration(limit);
         var errors = new List<string>();
         var updated = 0;
         var failed = 0;
-
-        foreach (var sound in sounds)
+        var total = sounds.Count;
+        if (total == 0)
         {
+            progress?.Invoke(1, 1, "Nessun suono con durata mancante.");
+        }
+        else
+        {
+            progress?.Invoke(0, total, $"Avvio backfill durate suoni ({total} elementi)");
+        }
+
+        for (var i = 0; i < total; i++)
+        {
+            var sound = sounds[i];
             var sw = Stopwatch.StartNew();
             try
             {
-                var durationSec = GetWavDurationSeconds(sound.FilePath);
+                var durationSec = GetAudioDurationSeconds(sound.FilePath);
                 _database.UpdateSoundDurationSeconds(sound.Id, durationSec);
                 sw.Stop();
                 _logger?.LogInformation(
@@ -62,6 +78,7 @@ public sealed class SoundScoringService
                     durationSec,
                     sw.ElapsedMilliseconds);
                 updated++;
+                progress?.Invoke(i + 1, total, $"Durata OK sound #{sound.Id} ({i + 1}/{total}) • aggiornati={updated} errori={failed}");
             }
             catch (Exception ex)
             {
@@ -70,21 +87,36 @@ public sealed class SoundScoringService
                 var msg = $"sound {sound.Id} ({sound.FileName}): {ex.Message}";
                 errors.Add(msg);
                 _logger?.LogWarning(ex, "Sound duration backfill failed for sound {SoundId}", sound.Id);
+                progress?.Invoke(i + 1, total, $"Durata FAIL sound #{sound.Id} ({i + 1}/{total}) • aggiornati={updated} errori={failed}");
             }
         }
 
-        return new DurationBatchResult(sounds.Count, updated, failed, errors);
+        return new DurationBatchResult(total, updated, failed, errors);
     }
 
-    public BatchResult RecalculateScores(bool onlyMissingFinal = false, int? limit = null)
+    public BatchResult RecalculateScores(
+        bool onlyMissingFinal = false,
+        int? limit = null,
+        Action<int, int, string>? progress = null)
     {
         var sounds = _database.ListSoundsForScoring(onlyMissingFinal, limit);
         var errors = new List<string>();
         var updated = 0;
         var failed = 0;
-
-        foreach (var sound in sounds)
+        var scopeText = onlyMissingFinal ? "mancanti" : "tutti";
+        var total = sounds.Count;
+        if (total == 0)
         {
+            progress?.Invoke(1, 1, $"Nessun score {scopeText} da ricalcolare.");
+        }
+        else
+        {
+            progress?.Invoke(0, total, $"Avvio ricalcolo score {scopeText} ({total} suoni)");
+        }
+
+        for (var i = 0; i < total; i++)
+        {
+            var sound = sounds[i];
             var sw = Stopwatch.StartNew();
             try
             {
@@ -105,6 +137,7 @@ public sealed class SoundScoringService
                 sw.Stop();
                 LogPerSoundScore(sound, score, sw.ElapsedMilliseconds);
                 updated++;
+                progress?.Invoke(i + 1, total, $"Score OK sound #{sound.Id} ({i + 1}/{total}) • aggiornati={updated} errori={failed}");
             }
             catch (Exception ex)
             {
@@ -113,10 +146,11 @@ public sealed class SoundScoringService
                 var msg = $"sound {sound.Id} ({sound.FileName}): {ex.Message}";
                 errors.Add(msg);
                 _logger?.LogWarning(ex, "Sound scoring failed for sound {SoundId}", sound.Id);
+                progress?.Invoke(i + 1, total, $"Score FAIL sound #{sound.Id} ({i + 1}/{total}) • aggiornati={updated} errori={failed}");
             }
         }
 
-        return new BatchResult(sounds.Count, updated, failed, errors);
+        return new BatchResult(total, updated, failed, errors);
     }
 
     public void RecalculateScoreForSound(int soundId)
@@ -145,17 +179,18 @@ public sealed class SoundScoringService
     {
         if (sound == null) throw new ArgumentNullException(nameof(sound));
         if (string.IsNullOrWhiteSpace(sound.FilePath)) throw new InvalidOperationException("FilePath vuoto");
-        if (!File.Exists(sound.FilePath)) throw new FileNotFoundException("File WAV non trovato", sound.FilePath);
+        if (!File.Exists(sound.FilePath)) throw new FileNotFoundException("File audio non trovato", sound.FilePath);
 
-        var wav = ReadWav(sound.FilePath);
+        var wav = ReadAudioForScoring(sound.FilePath);
         if (wav.Samples.Length == 0) throw new InvalidOperationException("Nessun sample audio letto");
+        var sourceExt = Path.GetExtension(sound.FilePath);
 
         var scoreLoudness = ScoreLoudness(wav);
         var scoreDynamic = ScoreDynamic(wav);
         var scoreClipping = ScoreClipping(wav);
         var scoreNoise = ScoreNoise(wav);
         var scoreDuration = ScoreDuration(sound, wav.DurationSeconds);
-        var scoreFormat = ScoreFormat(wav);
+        var scoreFormat = ScoreFormat(wav, sourceExt);
         var scoreConsistency = ScoreConsistency(wav);
         var scoreTagMatch = ScoreTagMatch(sound);
 
@@ -265,11 +300,15 @@ public sealed class SoundScoringService
         return (1.0 - Clamp01(over / tol)) * 100.0;
     }
 
-    private static double? ScoreFormat(WavData wav)
+    private static double? ScoreFormat(WavData wav, string? sourceExtension)
     {
-        var score = 0.0;
-        // WAV already guaranteed by source table usage, but keep score component explicit.
-        score += 40;
+        var ext = (sourceExtension ?? string.Empty).Trim().ToLowerInvariant();
+        var score = ext switch
+        {
+            ".wav" => 40.0,
+            ".mp3" => 22.0, // supportato ma con penalita' rispetto a WAV lossless
+            _ => 10.0
+        };
         score += wav.SampleRate >= 48000 ? 35 : wav.SampleRate >= 44100 ? 25 : 10;
         score += wav.BitsPerSample >= 24 ? 25 : wav.BitsPerSample >= 16 ? 18 : 8;
         return Math.Min(100.0, score);
@@ -378,6 +417,131 @@ public sealed class SoundScoringService
         double DurationSeconds,
         IReadOnlyList<double> WindowRms,
         float[] Samples);
+
+    private WavData ReadAudioForScoring(string path)
+    {
+        var ext = Path.GetExtension(path);
+        if (string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                return ReadWav(path);
+            }
+            catch (InvalidOperationException ex) when (
+                ex.Message.Contains("Formato WAV non supportato", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("WAV incompleto", StringComparison.OrdinalIgnoreCase))
+            {
+                // Some datasets (e.g. UrbanSound8K) contain compressed WAV variants (ADPCM, etc.).
+                // Fallback to ffmpeg decode -> PCM WAV, then reuse the same scorer.
+                var fallbackTempWav = DecodeAudioToTemporaryWav(path);
+                try
+                {
+                    return ReadWav(fallbackTempWav);
+                }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(fallbackTempWav))
+                        {
+                            File.Delete(fallbackTempWav);
+                        }
+                    }
+                    catch
+                    {
+                        // best-effort
+                    }
+                }
+            }
+        }
+
+        if (!string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Formato audio non supportato per scoring: {ext}");
+        }
+
+        var tempWav = DecodeAudioToTemporaryWav(path);
+        try
+        {
+            return ReadWav(tempWav);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempWav))
+                {
+                    File.Delete(tempWav);
+                }
+            }
+            catch
+            {
+                // best-effort
+            }
+        }
+    }
+
+    private string DecodeAudioToTemporaryWav(string sourcePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            throw new InvalidOperationException("Percorso sorgente audio vuoto");
+        }
+
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException("File audio non trovato", sourcePath);
+        }
+
+        var ext = Path.GetExtension(sourcePath);
+        if (!SupportedAudioExtensions.Contains(ext))
+        {
+            throw new InvalidOperationException($"Estensione non supportata: {ext}");
+        }
+
+        var tempWav = Path.Combine(Path.GetTempPath(), $"sound_score_{Guid.NewGuid():N}.wav");
+        var psi = new ProcessStartInfo
+        {
+            FileName = "ffmpeg",
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("-y");
+        psi.ArgumentList.Add("-i");
+        psi.ArgumentList.Add(sourcePath);
+        psi.ArgumentList.Add("-vn");
+        psi.ArgumentList.Add("-ac");
+        psi.ArgumentList.Add("1");
+        psi.ArgumentList.Add("-ar");
+        psi.ArgumentList.Add("48000");
+        psi.ArgumentList.Add("-f");
+        psi.ArgumentList.Add("wav");
+        psi.ArgumentList.Add(tempWav);
+
+        using var process = new Process { StartInfo = psi };
+        try
+        {
+            process.Start();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Impossibile avviare ffmpeg per decodifica audio: {ex.Message}", ex);
+        }
+
+        var stdErr = process.StandardError.ReadToEnd();
+        var stdOut = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0 || !File.Exists(tempWav))
+        {
+            var details = string.IsNullOrWhiteSpace(stdErr) ? stdOut : stdErr;
+            throw new InvalidOperationException($"ffmpeg decode failed (exit {process.ExitCode}): {details.Trim()}");
+        }
+
+        return tempWav;
+    }
 
     private WavData ReadWav(string path)
     {

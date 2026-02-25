@@ -101,6 +101,32 @@ public sealed class DatabaseService
     // connection is required.
     private IDbConnection CreateDapperConnection() => new SqliteConnection(_connectionString);
 
+    private static bool IsSqliteMissingColumnOrTable(Exception ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        return message.Contains("no such column", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("no such table", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ExecuteWriteChecked(
+        IDbConnection conn,
+        string sql,
+        object? param = null,
+        IDbTransaction? tx = null,
+        string? operation = null,
+        int? minAffectedRows = null)
+    {
+        var affected = conn.Execute(sql, param, tx);
+        if (minAffectedRows.HasValue && affected < minAffectedRows.Value)
+        {
+            var op = string.IsNullOrWhiteSpace(operation) ? "Dapper write" : operation;
+            throw new InvalidOperationException(
+                $"{op}: righe aggiornate/eliminate = {affected}, attese >= {minAffectedRows.Value}.");
+        }
+
+        return affected;
+    }
+
     // ============================================================
     // State-driven narrative generation (Narrative Engine runtime)
     // ============================================================
@@ -5153,10 +5179,19 @@ WHERE agent_id IS NOT NULL
             conn.Open();
             // SQLite uses integer 0/1 for booleans
             var sql = "UPDATE stories SET generated_tts = @g WHERE id = @id";
-            conn.Execute(sql, new { g = generatedTts ? 1 : 0, id = storyId });
+            var affected = ExecuteWriteChecked(
+                conn,
+                sql,
+                new { g = generatedTts ? 1 : 0, id = storyId },
+                operation: $"UpdateStoryGeneratedTts(storyId={storyId})");
+            if (affected == 0)
+            {
+                Console.WriteLine($"[DB][WARN] UpdateStoryGeneratedTts: nessuna riga aggiornata per storyId={storyId}");
+                return false;
+            }
             return true;
         }
-        catch
+        catch (Exception ex) when (IsSqliteMissingColumnOrTable(ex))
         {
             // Best-effort: if the column doesn't exist or DB schema isn't updated yet,
             // swallow the error and return false so callers can continue.
@@ -5176,10 +5211,19 @@ WHERE agent_id IS NOT NULL
             using var conn = CreateDapperConnection();
             conn.Open();
             var sql = "UPDATE stories SET generated_tts_json = @g WHERE id = @id";
-            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            var affected = ExecuteWriteChecked(
+                conn,
+                sql,
+                new { g = generated ? 1 : 0, id = storyId },
+                operation: $"UpdateStoryGeneratedTtsJson(storyId={storyId})");
+            if (affected == 0)
+            {
+                Console.WriteLine($"[DB][WARN] UpdateStoryGeneratedTtsJson: nessuna riga aggiornata per storyId={storyId}");
+                return false;
+            }
             return true;
         }
-        catch
+        catch (Exception ex) when (IsSqliteMissingColumnOrTable(ex))
         {
             return false;
         }
@@ -5192,10 +5236,19 @@ WHERE agent_id IS NOT NULL
             using var conn = CreateDapperConnection();
             conn.Open();
             var sql = "UPDATE stories SET generated_music = @g WHERE id = @id";
-            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            var affected = ExecuteWriteChecked(
+                conn,
+                sql,
+                new { g = generated ? 1 : 0, id = storyId },
+                operation: $"UpdateStoryGeneratedMusic(storyId={storyId})");
+            if (affected == 0)
+            {
+                Console.WriteLine($"[DB][WARN] UpdateStoryGeneratedMusic: nessuna riga aggiornata per storyId={storyId}");
+                return false;
+            }
             return true;
         }
-        catch
+        catch (Exception ex) when (IsSqliteMissingColumnOrTable(ex))
         {
             return false;
         }
@@ -5208,10 +5261,19 @@ WHERE agent_id IS NOT NULL
             using var conn = CreateDapperConnection();
             conn.Open();
             var sql = "UPDATE stories SET generated_effects = @g WHERE id = @id";
-            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            var affected = ExecuteWriteChecked(
+                conn,
+                sql,
+                new { g = generated ? 1 : 0, id = storyId },
+                operation: $"UpdateStoryGeneratedEffects(storyId={storyId})");
+            if (affected == 0)
+            {
+                Console.WriteLine($"[DB][WARN] UpdateStoryGeneratedEffects: nessuna riga aggiornata per storyId={storyId}");
+                return false;
+            }
             return true;
         }
-        catch
+        catch (Exception ex) when (IsSqliteMissingColumnOrTable(ex))
         {
             return false;
         }
@@ -5224,10 +5286,19 @@ WHERE agent_id IS NOT NULL
             using var conn = CreateDapperConnection();
             conn.Open();
             var sql = "UPDATE stories SET generated_ambient = @g WHERE id = @id";
-            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            var affected = ExecuteWriteChecked(
+                conn,
+                sql,
+                new { g = generated ? 1 : 0, id = storyId },
+                operation: $"UpdateStoryGeneratedAmbient(storyId={storyId})");
+            if (affected == 0)
+            {
+                Console.WriteLine($"[DB][WARN] UpdateStoryGeneratedAmbient: nessuna riga aggiornata per storyId={storyId}");
+                return false;
+            }
             return true;
         }
-        catch
+        catch (Exception ex) when (IsSqliteMissingColumnOrTable(ex))
         {
             return false;
         }
@@ -5240,10 +5311,19 @@ WHERE agent_id IS NOT NULL
             using var conn = CreateDapperConnection();
             conn.Open();
             var sql = "UPDATE stories SET generated_mixed_audio = @g WHERE id = @id";
-            conn.Execute(sql, new { g = generated ? 1 : 0, id = storyId });
+            var affected = ExecuteWriteChecked(
+                conn,
+                sql,
+                new { g = generated ? 1 : 0, id = storyId },
+                operation: $"UpdateStoryGeneratedMixedAudio(storyId={storyId})");
+            if (affected == 0)
+            {
+                Console.WriteLine($"[DB][WARN] UpdateStoryGeneratedMixedAudio: nessuna riga aggiornata per storyId={storyId}");
+                return false;
+            }
             return true;
         }
-        catch
+        catch (Exception ex) when (IsSqliteMissingColumnOrTable(ex))
         {
             return false;
         }
@@ -5263,9 +5343,12 @@ SELECT
     filepath     AS FilePath,
     filename     AS FileName,
     description  AS Description,
+    license      AS License,
     tags         AS Tags,
     embedding    AS Embedding,
+    insert_date  AS InsertDate,
     duration_seconds AS DurationSeconds,
+    COALESCE(enabled, 1) AS Enabled,
     COALESCE(usage_count, 0) AS UsageCount,
     usage_last   AS UsageLast,
     score_loudness AS ScoreLoudness,
@@ -5300,6 +5383,123 @@ ORDER BY
         return conn.Query<Sound>(sql, new { search, type }).ToList();
     }
 
+    public (int Total, int Filtered, List<Sound> Items) ListSoundsPaged(
+        int start,
+        int length,
+        string? search = null,
+        string? type = null,
+        string? sortColumn = null,
+        bool sortDesc = false)
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        if (start < 0) start = 0;
+        if (length <= 0) length = 25;
+        if (length > 500) length = 500;
+
+        var orderExpr = ResolveSoundSortExpression(sortColumn);
+        var orderDir = sortDesc ? "DESC" : "ASC";
+        var hasSearch = !string.IsNullOrWhiteSpace(search);
+
+        const string selectSql = @"
+SELECT
+    id           AS Id,
+    type         AS Type,
+    library      AS Library,
+    filepath     AS FilePath,
+    filename     AS FileName,
+    description  AS Description,
+    license      AS License,
+    tags         AS Tags,
+    embedding    AS Embedding,
+    insert_date  AS InsertDate,
+    duration_seconds AS DurationSeconds,
+    COALESCE(enabled, 1) AS Enabled,
+    COALESCE(usage_count, 0) AS UsageCount,
+    usage_last   AS UsageLast,
+    score_loudness AS ScoreLoudness,
+    score_dynamic AS ScoreDynamic,
+    score_clipping AS ScoreClipping,
+    score_noise AS ScoreNoise,
+    score_duration AS ScoreDuration,
+    score_format AS ScoreFormat,
+    score_consistency AS ScoreConsistency,
+    score_tag_match AS ScoreTagMatch,
+    score_human AS ScoreHuman,
+    score_final AS ScoreFinal,
+    score_last_calc AS ScoreLastCalc,
+    score_version AS ScoreVersion
+FROM sounds
+WHERE (@type IS NULL OR @type = '' OR lower(type) = lower(@type))
+  AND (@search IS NULL OR @search = '' OR
+       lower(coalesce(filename,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(description,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(tags,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(library,'')) LIKE '%' || lower(@search) || '%')";
+
+        const string countTotalSql = @"
+SELECT COUNT(*)
+FROM sounds
+WHERE (@type IS NULL OR @type = '' OR lower(type) = lower(@type));";
+
+        const string countFilteredSql = @"
+SELECT COUNT(*)
+FROM sounds
+WHERE (@type IS NULL OR @type = '' OR lower(type) = lower(@type))
+  AND (@search IS NULL OR @search = '' OR
+       lower(coalesce(filename,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(description,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(tags,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(library,'')) LIKE '%' || lower(@search) || '%');";
+
+        var pageSql = $@"
+{selectSql}
+ORDER BY {orderExpr} {orderDir},
+         id ASC
+LIMIT @length OFFSET @start;";
+
+        var total = conn.ExecuteScalar<int>(countTotalSql, new { type });
+        var filtered = hasSearch
+            ? conn.ExecuteScalar<int>(countFilteredSql, new { type, search })
+            : total;
+        var items = conn.Query<Sound>(pageSql, new { type, search, start, length }).ToList();
+
+        return (total, filtered, items);
+    }
+
+    private static string ResolveSoundSortExpression(string? sortColumn)
+    {
+        return (sortColumn ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "id" => "id",
+            "type" => "lower(coalesce(type,''))",
+            "library" => "lower(coalesce(library,''))",
+            "filename" => "lower(coalesce(filename,''))",
+            "description" => "lower(coalesce(description,''))",
+            "tags" => "lower(coalesce(tags,''))",
+            "usagecount" => "COALESCE(usage_count, 0)",
+            "usagelast" => "coalesce(usage_last,'')",
+            "insertdate" => "coalesce(insert_date,'')",
+            "durationseconds" => "COALESCE(duration_seconds, -1)",
+            "scorefinal" => "COALESCE(score_final, -1)",
+            "scorehuman" => "COALESCE(score_human, -1)",
+            "scoreloudness" => "COALESCE(score_loudness, -1)",
+            "scoredynamic" => "COALESCE(score_dynamic, -1)",
+            "scoreclipping" => "COALESCE(score_clipping, -1)",
+            "scorenoise" => "COALESCE(score_noise, -1)",
+            "scoreduration" => "COALESCE(score_duration, -1)",
+            "scoreformat" => "COALESCE(score_format, -1)",
+            "scoreconsistency" => "COALESCE(score_consistency, -1)",
+            "scoretagmatch" => "COALESCE(score_tag_match, -1)",
+            "scorelastcalc" => "coalesce(score_last_calc,'')",
+            "scoreversion" => "coalesce(score_version,'')",
+            "filepath" => "lower(coalesce(filepath,''))",
+            "enabled" => "COALESCE(enabled, 1)",
+            _ => "COALESCE(score_final, -1)"
+        };
+    }
+
     public Sound? GetSoundById(int id)
     {
         if (id <= 0) return null;
@@ -5314,9 +5514,12 @@ SELECT
     filepath     AS FilePath,
     filename     AS FileName,
     description  AS Description,
+    license      AS License,
     tags         AS Tags,
     embedding    AS Embedding,
+    insert_date  AS InsertDate,
     duration_seconds AS DurationSeconds,
+    COALESCE(enabled, 1) AS Enabled,
     COALESCE(usage_count, 0) AS UsageCount,
     usage_last   AS UsageLast,
     score_loudness AS ScoreLoudness,
@@ -5346,11 +5549,11 @@ LIMIT 1;";
 
         const string sql = @"
 INSERT INTO sounds(
-    type, library, filepath, filename, description, tags, embedding, duration_seconds, usage_count, usage_last,
+    type, library, filepath, filename, description, license, tags, embedding, duration_seconds, enabled, usage_count, usage_last,
     score_loudness, score_dynamic, score_clipping, score_noise, score_duration,
     score_format, score_consistency, score_tag_match, score_human, score_final, score_last_calc, score_version)
 VALUES (
-    @Type, @Library, @FilePath, @FileName, @Description, @Tags, @Embedding, @DurationSeconds, @UsageCount, @UsageLast,
+    @Type, @Library, @FilePath, @FileName, @Description, @License, @Tags, @Embedding, @DurationSeconds, @Enabled, @UsageCount, @UsageLast,
     @ScoreLoudness, @ScoreDynamic, @ScoreClipping, @ScoreNoise, @ScoreDuration,
     @ScoreFormat, @ScoreConsistency, @ScoreTagMatch, @ScoreHuman, @ScoreFinal, @ScoreLastCalc, @ScoreVersion);
 SELECT last_insert_rowid();";
@@ -5374,8 +5577,10 @@ SET
     filepath = @FilePath,
     filename = @FileName,
     description = @Description,
+    license = @License,
     tags = @Tags,
     embedding = @Embedding,
+    enabled = @Enabled,
     score_human = @ScoreHuman
 WHERE id = @Id;";
 
@@ -5408,6 +5613,391 @@ WHERE id = @id;", new
         });
     }
 
+    public List<SoundMissing> ListMissingSounds(string? status = null, string? type = null)
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+SELECT
+    id            AS Id,
+    type          AS Type,
+    prompt        AS Prompt,
+    tags          AS Tags,
+    story_id      AS StoryId,
+    story_title   AS StoryTitle,
+    source        AS Source,
+    COALESCE(occurrences, 0) AS Occurrences,
+    status        AS Status,
+    first_seen_at AS FirstSeenAt,
+    last_seen_at  AS LastSeenAt,
+    notes         AS Notes
+FROM sounds_missing
+WHERE (@status IS NULL OR @status = '' OR lower(status) = lower(@status))
+  AND (@type IS NULL OR @type = '' OR lower(type) = lower(@type))
+ORDER BY
+    CASE lower(coalesce(status, 'open'))
+        WHEN 'open' THEN 0
+        WHEN 'resolved' THEN 1
+        WHEN 'ignored' THEN 2
+        ELSE 9
+    END,
+    COALESCE(occurrences, 0) DESC,
+    COALESCE(last_seen_at, first_seen_at, '') DESC,
+    id DESC;";
+
+        return conn.Query<SoundMissing>(sql, new { status, type }).ToList();
+    }
+
+    public SoundMissing? GetMissingSoundById(long id)
+    {
+        if (id <= 0) return null;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+SELECT
+    id            AS Id,
+    type          AS Type,
+    prompt        AS Prompt,
+    tags          AS Tags,
+    story_id      AS StoryId,
+    story_title   AS StoryTitle,
+    source        AS Source,
+    COALESCE(occurrences, 0) AS Occurrences,
+    status        AS Status,
+    first_seen_at AS FirstSeenAt,
+    last_seen_at  AS LastSeenAt,
+    notes         AS Notes
+FROM sounds_missing
+WHERE id = @id
+LIMIT 1;";
+
+        return conn.QueryFirstOrDefault<SoundMissing>(sql, new { id });
+    }
+
+    public int UpdateMissingSoundStatus(
+        long id,
+        string status,
+        string? notes = null,
+        string? source = null)
+    {
+        if (id <= 0) return 0;
+        var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "open" : status.Trim().ToLowerInvariant();
+        if (normalizedStatus is not ("open" or "resolved" or "ignored"))
+        {
+            normalizedStatus = "open";
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        return ExecuteWriteChecked(conn, @"
+UPDATE sounds_missing
+SET
+    status = @status,
+    notes = CASE
+        WHEN @notes IS NULL OR @notes = '' THEN notes
+        ELSE @notes
+    END,
+    source = CASE
+        WHEN @source IS NULL OR @source = '' THEN source
+        ELSE @source
+    END,
+    last_seen_at = @now
+WHERE id = @id;",
+            new
+            {
+                id,
+                status = normalizedStatus,
+                notes,
+                source,
+                now = DateTime.UtcNow.ToString("o")
+            },
+            operation: $"UpdateMissingSoundStatus(id={id}, status={normalizedStatus})",
+            minAffectedRows: 1);
+    }
+
+    public int DeleteMissingSoundsByIds(IEnumerable<long> ids)
+    {
+        var idList = ids?
+            .Where(i => i > 0)
+            .Distinct()
+            .ToList() ?? new List<long>();
+
+        if (idList.Count == 0) return 0;
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        return conn.Execute("DELETE FROM sounds_missing WHERE id IN @ids", new { ids = idList });
+    }
+
+    public long UpsertMissingSound(
+        string type,
+        string prompt,
+        string? tags = null,
+        long? storyId = null,
+        string? storyTitle = null,
+        string? source = null)
+    {
+        if (string.IsNullOrWhiteSpace(type)) throw new ArgumentException("Missing type", nameof(type));
+        if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("Missing prompt", nameof(prompt));
+
+        var normalizedType = type.Trim().ToLowerInvariant();
+        if (normalizedType is not ("fx" or "amb" or "music"))
+        {
+            normalizedType = "fx";
+        }
+
+        var normalizedPrompt = prompt.Trim();
+        var normalizedTags = string.IsNullOrWhiteSpace(tags) ? null : tags.Trim();
+        var normalizedStoryTitle = string.IsNullOrWhiteSpace(storyTitle) ? null : storyTitle.Trim();
+        var normalizedSource = string.IsNullOrWhiteSpace(source) ? null : source.Trim();
+        var now = DateTime.UtcNow.ToString("o");
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        // Deduplica su (type + prompt + tags) tra record ancora aperti.
+        var existingId = conn.ExecuteScalar<long?>(@"
+SELECT id
+FROM sounds_missing
+WHERE lower(type) = lower(@type)
+  AND prompt = @prompt
+  AND coalesce(tags, '') = coalesce(@tags, '')
+  AND lower(coalesce(status, 'open')) = 'open'
+ORDER BY id DESC
+LIMIT 1;",
+            new { type = normalizedType, prompt = normalizedPrompt, tags = normalizedTags }, tx);
+
+        if (existingId.HasValue && existingId.Value > 0)
+        {
+            conn.Execute(@"
+UPDATE sounds_missing
+SET
+    occurrences = COALESCE(occurrences, 0) + 1,
+    last_seen_at = @now,
+    story_id = COALESCE(@storyId, story_id),
+    story_title = COALESCE(NULLIF(@storyTitle, ''), story_title),
+    source = COALESCE(NULLIF(@source, ''), source)
+WHERE id = @id;",
+                new
+                {
+                    id = existingId.Value,
+                    now,
+                    storyId,
+                    storyTitle = normalizedStoryTitle,
+                    source = normalizedSource
+                }, tx);
+            tx.Commit();
+            return existingId.Value;
+        }
+
+        var newId = conn.ExecuteScalar<long>(@"
+INSERT INTO sounds_missing(
+    type, prompt, tags, story_id, story_title, source,
+    occurrences, status, first_seen_at, last_seen_at, notes)
+VALUES (
+    @type, @prompt, @tags, @storyId, @storyTitle, @source,
+    1, 'open', @now, @now, NULL);
+SELECT last_insert_rowid();",
+            new
+            {
+                type = normalizedType,
+                prompt = normalizedPrompt,
+                tags = normalizedTags,
+                storyId,
+                storyTitle = normalizedStoryTitle,
+                source = normalizedSource,
+                now
+            }, tx);
+
+        tx.Commit();
+        return newId;
+    }
+
+    // Name/Gender lookup cache for character gender normalization
+    public List<NameGenderEntry> ListNameGenderEntries(string? search = null)
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+SELECT
+    id          AS Id,
+    name        AS Name,
+    gender      AS Gender,
+    insert_date AS InsertDate,
+    COALESCE(verified, 0) AS Verified
+FROM name_gender
+WHERE (@search IS NULL OR @search = '' OR lower(name) LIKE '%' || lower(@search) || '%')
+ORDER BY
+    COALESCE(verified, 0) DESC,
+    lower(name) ASC,
+    id ASC;";
+
+        return conn.Query<NameGenderEntry>(sql, new { search }).ToList();
+    }
+
+    public NameGenderEntry? GetNameGenderByName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+SELECT
+    id          AS Id,
+    name        AS Name,
+    gender      AS Gender,
+    insert_date AS InsertDate,
+    COALESCE(verified, 0) AS Verified
+FROM name_gender
+WHERE lower(trim(name)) = lower(trim(@name))
+LIMIT 1;";
+
+        return conn.QueryFirstOrDefault<NameGenderEntry>(sql, new { name = name.Trim() });
+    }
+
+    public long UpsertNameGender(string name, string? gender, bool? verified = null)
+    {
+        var normalizedName = NormalizeNameGenderLookupName(name);
+        if (string.IsNullOrWhiteSpace(normalizedName))
+            throw new ArgumentException("Nome non valido", nameof(name));
+
+        var normalizedGender = NormalizeCharacterGender(gender);
+        var now = DateTime.UtcNow.ToString("o");
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        var existing = conn.QueryFirstOrDefault<NameGenderEntry>(@"
+SELECT
+    id          AS Id,
+    name        AS Name,
+    gender      AS Gender,
+    insert_date AS InsertDate,
+    COALESCE(verified, 0) AS Verified
+FROM name_gender
+WHERE lower(trim(name)) = lower(trim(@name))
+LIMIT 1;",
+            new { name = normalizedName }, tx);
+
+        if (existing != null)
+        {
+            conn.Execute(@"
+UPDATE name_gender
+SET
+    gender = @gender,
+    verified = COALESCE(@verified, verified)
+WHERE id = @id;",
+                new
+                {
+                    id = existing.Id,
+                    gender = normalizedGender,
+                    verified = verified.HasValue ? (verified.Value ? 1 : 0) : (int?)null
+                }, tx);
+
+            tx.Commit();
+            return existing.Id;
+        }
+
+        var id = conn.ExecuteScalar<long>(@"
+INSERT INTO name_gender (name, gender, insert_date, verified)
+VALUES (@name, @gender, @insertDate, @verified);
+SELECT last_insert_rowid();",
+            new
+            {
+                name = normalizedName,
+                gender = normalizedGender,
+                insertDate = now,
+                verified = verified.GetValueOrDefault(false) ? 1 : 0
+            }, tx);
+
+        tx.Commit();
+        return id;
+    }
+
+    public bool UpdateNameGenderVerified(long id, bool verified)
+    {
+        if (id <= 0) return false;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        var affected = ExecuteWriteChecked(
+            conn,
+            "UPDATE name_gender SET verified = @verified WHERE id = @id;",
+            new { id, verified = verified ? 1 : 0 },
+            operation: $"UpdateNameGenderVerified(id={id})",
+            minAffectedRows: 1);
+        return affected > 0;
+    }
+
+    public string? CycleNameGender(long id)
+    {
+        if (id <= 0) return null;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        var current = conn.ExecuteScalar<string?>("SELECT gender FROM name_gender WHERE id = @id LIMIT 1;", new { id }, tx);
+        if (current == null)
+        {
+            tx.Rollback();
+            return null;
+        }
+
+        var normalized = NormalizeCharacterGender(current);
+        var next = normalized switch
+        {
+            "male" => "female",
+            "female" => "robot",
+            "robot" => "alien",
+            "alien" => "unknown",
+            _ => "male"
+        };
+
+        ExecuteWriteChecked(
+            conn,
+            "UPDATE name_gender SET gender = @gender WHERE id = @id;",
+            new { id, gender = next },
+            tx,
+            operation: $"CycleNameGender(id={id})",
+            minAffectedRows: 1);
+        tx.Commit();
+        return next;
+    }
+
+    public bool DeleteNameGenderById(long id)
+    {
+        if (id <= 0) return false;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        return conn.Execute("DELETE FROM name_gender WHERE id = @id;", new { id }) > 0;
+    }
+
+    private static string NormalizeNameGenderLookupName(string? name)
+    {
+        return string.IsNullOrWhiteSpace(name)
+            ? string.Empty
+            : name.Trim();
+    }
+
+    public static string NormalizeCharacterGender(string? gender)
+    {
+        var g = (gender ?? string.Empty).Trim().ToLowerInvariant();
+        return g switch
+        {
+            "male" => "male",
+            "female" => "female",
+            "robot" => "robot",
+            "alien" => "alien",
+            "unknown" => "unknown",
+            _ => "unknown"
+        };
+    }
+
     public List<Sound> ListSoundsForScoring(bool onlyMissingFinal = false, int? limit = null)
     {
         using var conn = CreateDapperConnection();
@@ -5417,6 +6007,7 @@ WHERE id = @id;", new
 SELECT
     id AS Id, type AS Type, library AS Library, filepath AS FilePath, filename AS FileName,
     description AS Description, tags AS Tags, embedding AS Embedding, duration_seconds AS DurationSeconds,
+    COALESCE(enabled,1) AS Enabled,
     COALESCE(usage_count,0) AS UsageCount, usage_last AS UsageLast,
     score_loudness AS ScoreLoudness, score_dynamic AS ScoreDynamic, score_clipping AS ScoreClipping,
     score_noise AS ScoreNoise, score_duration AS ScoreDuration, score_format AS ScoreFormat,
@@ -5490,6 +6081,7 @@ WHERE id = @id;", new
 SELECT
     id AS Id, type AS Type, library AS Library, filepath AS FilePath, filename AS FileName,
     description AS Description, tags AS Tags, embedding AS Embedding, duration_seconds AS DurationSeconds,
+    COALESCE(enabled,1) AS Enabled,
     COALESCE(usage_count,0) AS UsageCount, usage_last AS UsageLast,
     score_loudness AS ScoreLoudness, score_dynamic AS ScoreDynamic, score_clipping AS ScoreClipping,
     score_noise AS ScoreNoise, score_duration AS ScoreDuration, score_format AS ScoreFormat,
@@ -5538,9 +6130,11 @@ WHERE id = @id;", new
             FilePath = (sound.FilePath ?? string.Empty).Trim(),
             FileName = (sound.FileName ?? string.Empty).Trim(),
             Description = string.IsNullOrWhiteSpace(sound.Description) ? null : sound.Description.Trim(),
+            License = string.IsNullOrWhiteSpace(sound.License) ? null : sound.License.Trim(),
             Tags = string.IsNullOrWhiteSpace(sound.Tags) ? null : sound.Tags.Trim(),
             Embedding = string.IsNullOrWhiteSpace(sound.Embedding) ? null : sound.Embedding.Trim(),
             DurationSeconds = sound.DurationSeconds.HasValue ? Math.Round(Math.Max(0d, sound.DurationSeconds.Value), 3) : null,
+            Enabled = sound.Enabled,
             UsageCount = Math.Max(0, sound.UsageCount),
             UsageLast = string.IsNullOrWhiteSpace(sound.UsageLast) ? null : sound.UsageLast.Trim(),
             ScoreLoudness = sound.ScoreLoudness,

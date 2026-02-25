@@ -63,6 +63,17 @@ namespace TinyGenerator.Controllers
         }
 
         /// <summary>
+        /// POST /api/commands/clear-completed
+        /// Rimuove dal popup i comandi terminati (completed/failed/cancelled).
+        /// </summary>
+        [HttpPost("clear-completed")]
+        public IActionResult ClearCompletedCommands()
+        {
+            var removed = _dispatcher.ClearCompletedCommands();
+            return Ok(new { removed, message = "Completed commands cleared" });
+        }
+
+        /// <summary>
         /// POST /api/commands/summarize?storyId=123
         /// Genera il riassunto di una storia usando l'agente Story Summarizer.
         /// </summary>

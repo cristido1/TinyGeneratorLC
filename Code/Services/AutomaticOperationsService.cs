@@ -3,20 +3,29 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using TinyGenerator.Models;
+using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Services
 {
     public sealed class AutomaticOperationsService : BackgroundService
     {
+        private const int MaxAutoEpisodeNumber = 6;
         private static readonly HashSet<string> IgnoredOperations = new(StringComparer.OrdinalIgnoreCase)
         {
             "memory_embedding_worker",
             "BatchSummarizeStories",
             "SummarizeStory",
-            "auto_idle_attempt"
+            "auto_idle_attempt",
+            "update_model_stats_from_logs",
+            "update_model_stats",
+            "always_on_story_summaries",
+            "analyze_pending_log_errors",
+            "log_analyzer"
         };
 
         private readonly ICommandDispatcher _dispatcher;
@@ -24,11 +33,19 @@ namespace TinyGenerator.Services
         private readonly DatabaseService _database;
         private readonly IOptionsMonitor<AutomaticOperationsOptions> _optionsMonitor;
         private readonly ILogger<AutomaticOperationsService> _logger;
+        private readonly ILangChainKernelFactory _kernelFactory;
+        private readonly ICustomLogger _customLogger;
+        private readonly CommandTuningOptions _tuning;
+        private readonly IServiceScopeFactory _scopeFactory;
+        private readonly TextValidationService _textValidationService;
         private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(10);
         private DateTime _lastActivityUtc;
         private DateTime _lastAttemptUtc;
+        private DateTime _lastAutoSeriesEpisodeAttemptUtc;
+        private int _lastAutoSeriesId;
         private int _lastTaskIndex = -1;
         private bool _idleAttempted;
+        private readonly HashSet<long> _autoCompleteDeferredStoryIds = new();
         private volatile bool _enabled;
         private readonly IDisposable? _optionsSubscription;
 
@@ -37,12 +54,22 @@ namespace TinyGenerator.Services
             StoriesService stories,
             DatabaseService database,
             IOptionsMonitor<AutomaticOperationsOptions> optionsMonitor,
+            ILangChainKernelFactory kernelFactory,
+            ICustomLogger customLogger,
+            IOptions<CommandTuningOptions> tuningOptions,
+            IServiceScopeFactory scopeFactory,
+            TextValidationService textValidationService,
             ILogger<AutomaticOperationsService> logger)
         {
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
             _stories = stories ?? throw new ArgumentNullException(nameof(stories));
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
+            _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
+            _customLogger = customLogger ?? throw new ArgumentNullException(nameof(customLogger));
+            _tuning = tuningOptions?.Value ?? new CommandTuningOptions();
+            _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+            _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _enabled = _optionsMonitor.CurrentValue?.Enabled ?? false;
             _optionsSubscription = _optionsMonitor.OnChange(OnOptionsChanged);
@@ -52,6 +79,7 @@ namespace TinyGenerator.Services
         {
             _lastActivityUtc = DateTime.UtcNow;
             _lastAttemptUtc = DateTime.UtcNow;
+            _lastAutoSeriesEpisodeAttemptUtc = DateTime.MinValue;
             _idleAttempted = false;
 
             while (!stoppingToken.IsCancellationRequested)
@@ -63,6 +91,16 @@ namespace TinyGenerator.Services
                     var opts = _optionsMonitor.CurrentValue ?? new AutomaticOperationsOptions();
                     if (!_enabled)
                     {
+                        continue;
+                    }
+
+                    DrainAutoCompleteDeferredFailures();
+                    TryRunAutoStateDrivenSeriesEpisode(opts);
+
+                    if (TryRunAutoCompleteBacklogImmediate(opts))
+                    {
+                        _lastActivityUtc = DateTime.UtcNow;
+                        _idleAttempted = false;
                         continue;
                     }
 
@@ -79,7 +117,6 @@ namespace TinyGenerator.Services
                         _idleAttempted = false;
                         continue;
                     }
-
                     var idleThreshold = TimeSpan.FromSeconds(Math.Max(5, opts.IdleSeconds));
                     var nowUtc = DateTime.UtcNow;
 
@@ -98,20 +135,14 @@ namespace TinyGenerator.Services
                     var available = probes.Where(p => p.Probe.Ok).Select(p => p.Task).ToList();
                     if (available.Count == 0)
                     {
-                        var reasons = probes
-                            .Select(p => $"{p.Task.Name}: {(string.IsNullOrWhiteSpace(p.Probe.Reason) ? "nessun candidato" : p.Probe.Reason)}")
-                            .ToList();
-                        var message = reasons.Count == 0
-                            ? "Nessun candidato disponibile."
-                            : $"Nessun candidato disponibile. Verificati: {string.Join(" | ", reasons)}";
-                        ReportAutoAttempt("auto_idle_no_candidates", success: false, message: message, failureKind: "no_candidates");
+                        _logger.LogDebug("Idle auto-op: nessun candidato disponibile.");
                         continue;
                     }
 
                     var chosen = PickNextTask(available);
                     if (chosen == null)
                     {
-                        ReportAutoAttempt("auto_idle_no_task", success: false, message: "Nessun task automatico selezionato.");
+                        _logger.LogDebug("Idle auto-op: nessun task selezionato.");
                         continue;
                     }
 
@@ -180,8 +211,164 @@ namespace TinyGenerator.Services
             _enabled = options?.Enabled ?? false;
             _lastActivityUtc = DateTime.UtcNow;
             _lastAttemptUtc = DateTime.UtcNow;
+            _lastAutoSeriesEpisodeAttemptUtc = DateTime.MinValue;
             _idleAttempted = false;
+            _autoCompleteDeferredStoryIds.Clear();
             _logger.LogInformation("AutomaticOperationsService {State} via config reload", _enabled ? "enabled" : "disabled");
+        }
+
+        private void TryRunAutoStateDrivenSeriesEpisode(AutomaticOperationsOptions opts)
+        {
+            try
+            {
+                var auto = opts.AutoStateDrivenSeriesEpisode;
+                if (auto == null || !auto.Enabled)
+                {
+                    return;
+                }
+
+                var interval = TimeSpan.FromMinutes(Math.Max(1, auto.IntervalMinutes));
+                var nowUtc = DateTime.UtcNow;
+                if (nowUtc - _lastAutoSeriesEpisodeAttemptUtc < interval)
+                {
+                    return;
+                }
+
+                if (HasPendingStoryAutomationBacklog(opts))
+                {
+                    return;
+                }
+
+                if (IsOperationQueued("StateDrivenEpisodeAuto"))
+                {
+                    _lastAutoSeriesEpisodeAttemptUtc = nowUtc;
+                    return;
+                }
+
+                TryEnqueueAutoStateDrivenSeriesEpisode(auto);
+                _lastAutoSeriesEpisodeAttemptUtc = nowUtc;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Auto state-driven episode check failed inside AutomaticOperationsService");
+            }
+        }
+
+        private bool HasPendingStoryAutomationBacklog(AutomaticOperationsOptions opts)
+        {
+            try
+            {
+                if (HasActiveNonIgnoredCommands())
+                {
+                    return true;
+                }
+
+                if (opts.ReviseAndEvaluate?.Enabled == true &&
+                    CountStoriesByStatus(new[] { "inserted", "inserito" }) > 0)
+                {
+                    return true;
+                }
+
+                if (opts.EvaluateRevised?.Enabled == true &&
+                    CountRevisedStoriesNeedingEvaluations(2) > 0)
+                {
+                    return true;
+                }
+
+                if (opts.AutoDeleteLowRated?.Enabled == true)
+                {
+                    var minEvals = Math.Max(1, opts.AutoDeleteLowRated.MinEvaluations);
+                    var minAvg = opts.AutoDeleteLowRated.MinAverageScore;
+                    if (CountLowRatedStories(minAvg, minEvals) > 0)
+                    {
+                        return true;
+                    }
+                }
+
+                if (opts.AutoCompleteAudioPipeline?.Enabled == true)
+                {
+                    var minAvg = opts.AutoCompleteAudioPipeline.MinAverageScore;
+                    if (CountAutoCompleteCandidates(minAvg) > 0)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Backlog check for auto state-driven episode failed");
+                return true; // fail-safe: avoid creating new episodes if unsure
+            }
+        }
+
+        private void DrainAutoCompleteDeferredFailures()
+        {
+            try
+            {
+                var failed = _stories.DrainAutoCompleteDeferredFailures();
+                if (failed == null || failed.Count == 0)
+                {
+                    return;
+                }
+
+                foreach (var storyId in failed)
+                {
+                    if (storyId > 0)
+                    {
+                        _autoCompleteDeferredStoryIds.Add(storyId);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Unable to drain auto-complete deferred failures");
+            }
+        }
+
+        private bool TryRunAutoCompleteBacklogImmediate(AutomaticOperationsOptions opts)
+        {
+            try
+            {
+                var auto = opts.AutoCompleteAudioPipeline;
+                if (auto == null || !auto.Enabled)
+                {
+                    return false;
+                }
+
+                if (HasActiveNonIgnoredCommands())
+                {
+                    return false;
+                }
+
+                var minAvg = auto.MinAverageScore;
+                if (!TryGetTopStoryForAutoComplete(minAvg, out var storyId, out _, _autoCompleteDeferredStoryIds))
+                {
+                    if (_autoCompleteDeferredStoryIds.Count > 0)
+                    {
+                        _autoCompleteDeferredStoryIds.Clear();
+                        return TryRunAutoCompleteBacklogImmediate(opts);
+                    }
+
+                    return false;
+                }
+
+                var runId = _stories.EnqueueAllNextStatusEnqueuer(
+                    storyId,
+                    trigger: "auto_complete_audio_pipeline",
+                    priority: Math.Max(1, auto.Priority),
+                    ignoreActiveChain: true,
+                    resetToStatusCodeOnFailure: "evaluated",
+                    deferAutoCompleteOnFailure: true);
+
+                return !string.IsNullOrWhiteSpace(runId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Immediate auto-complete audio pipeline attempt failed");
+                return false;
+            }
         }
 
         private void ReportAutoAttempt(
@@ -231,8 +418,7 @@ namespace TinyGenerator.Services
             var commands = _dispatcher.GetActiveCommands();
             foreach (var cmd in commands)
             {
-                if (!string.Equals(cmd.Status, "queued", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(cmd.Status, "running", StringComparison.OrdinalIgnoreCase))
+                if (!IsQueuedOrRunningStatus(cmd.Status))
                 {
                     continue;
                 }
@@ -363,49 +549,6 @@ namespace TinyGenerator.Services
                     }));
             }
 
-            if (opts.UpdateModelStats.Enabled)
-            {
-                list.Add(new IdleTask(
-                    name: "update_model_stats",
-                    priority: Math.Max(1, opts.UpdateModelStats.Priority),
-                    hasCandidate: () =>
-                    {
-                        const string filter = "model logs examined=false AND category in (ModelResponse, ModelCompletion)";
-                        var count = _database.GetPendingModelResponseLogsCount();
-                        return count > 0
-                            ? new IdleTaskResult(true, null, null, filter, count)
-                            : new IdleTaskResult(false, null, "nessun log modello da analizzare", filter, count);
-                    },
-                    tryEnqueue: () =>
-                    {
-                        const string filter = "model logs examined=false AND category in (ModelResponse, ModelCompletion)";
-                        var count = _database.GetPendingModelResponseLogsCount();
-                        if (IsOperationQueued("update_model_stats"))
-                        {
-                            return new IdleTaskResult(false, null, "update_model_stats già in coda", filter, count);
-                        }
-                        var runId = $"update_model_stats_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-                        _dispatcher.Enqueue(
-                            "update_model_stats",
-                            ctx =>
-                            {
-                                _database.RefreshModelStatsFromAllLogs();
-                                var msg = "Model stats refreshed from all logs";
-                                return Task.FromResult(new CommandResult(true, msg));
-                            },
-                            runId: runId,
-                            threadScope: "system/model_stats",
-                            metadata: new Dictionary<string, string>
-                            {
-                                ["operation"] = "update_model_stats",
-                                ["trigger"] = "idle_auto"
-                            },
-                            priority: Math.Max(1, opts.UpdateModelStats.Priority),
-                            batch: true);
-                        return new IdleTaskResult(true, null, null, filter, count);
-                    }));
-            }
-
             if (opts.AutoCompleteAudioPipeline.Enabled)
             {
                 list.Add(new IdleTask(
@@ -436,7 +579,9 @@ namespace TinyGenerator.Services
                             storyId,
                             trigger: "auto_complete_audio_pipeline",
                             priority: Math.Max(1, opts.AutoCompleteAudioPipeline.Priority),
-                            ignoreActiveChain: true);
+                            ignoreActiveChain: true,
+                            resetToStatusCodeOnFailure: "evaluated",
+                            deferAutoCompleteOnFailure: true);
                         return !string.IsNullOrWhiteSpace(runId)
                             ? new IdleTaskResult(true, storyId, null, filter, count, title)
                             : new IdleTaskResult(false, storyId, "enqueue catena stati fallito", filter, count, title);
@@ -467,13 +612,11 @@ namespace TinyGenerator.Services
             {
                 return _dispatcher.GetActiveCommands().Any(s =>
                     (
-                        (string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)) &&
+                        IsQueuedOrRunningStatus(s.Status) &&
                         string.Equals(s.OperationName, operationName, StringComparison.OrdinalIgnoreCase)
                     ) ||
                     (
-                        (string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)) &&
+                        IsQueuedOrRunningStatus(s.Status) &&
                         s.Metadata != null &&
                         s.Metadata.TryGetValue("operation", out var op) &&
                         string.Equals(op, operationName, StringComparison.OrdinalIgnoreCase)
@@ -497,14 +640,21 @@ namespace TinyGenerator.Services
         {
             try
             {
-                return _dispatcher.GetActiveCommands().Any(s =>
-                    string.Equals(s.Status, "queued", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase));
+                return _dispatcher.GetActiveCommands().Any(s => IsQueuedOrRunningStatus(s.Status));
             }
             catch
             {
                 return false;
             }
+        }
+
+        private static bool IsQueuedOrRunningStatus(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status)) return false;
+            return status.Equals("queued", StringComparison.OrdinalIgnoreCase)
+                   || status.Equals("running", StringComparison.OrdinalIgnoreCase)
+                   || status.Equals("batch_queued", StringComparison.OrdinalIgnoreCase)
+                   || status.Equals("batch_running", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryGetBestStoryByStatus(IEnumerable<string> statusCodes, out long storyId, out string? reason)
@@ -672,7 +822,7 @@ namespace TinyGenerator.Services
             return true;
         }
 
-        private bool TryGetTopStoryForAutoComplete(double minAverageScore, out long storyId, out string? reason)
+        private bool TryGetTopStoryForAutoComplete(double minAverageScore, out long storyId, out string? reason, ISet<long>? excludedStoryIds = null)
         {
             storyId = 0;
             reason = null;
@@ -697,6 +847,11 @@ namespace TinyGenerator.Services
                     if (story == null || story.Deleted)
                     {
                         lastReason = "storia non trovata o eliminata";
+                        continue;
+                    }
+                    if (excludedStoryIds != null && excludedStoryIds.Contains(story.Id))
+                    {
+                        lastReason = "storia rinviata a giro successivo dopo errore";
                         continue;
                     }
                     if (story.AutoTtsFailed)
@@ -836,6 +991,7 @@ namespace TinyGenerator.Services
                 {
                     var story = _database.GetStoryById(candidate.Id);
                     if (story == null || story.Deleted) continue;
+                    if (_autoCompleteDeferredStoryIds.Contains(story.Id)) continue;
                     if (story.AutoTtsFailed) continue;
                     if (evaluatedStep >= 0)
                     {
@@ -856,6 +1012,256 @@ namespace TinyGenerator.Services
             {
                 return 0;
             }
+        }
+
+        private bool TryEnqueueAutoStateDrivenSeriesEpisode(AutoStateDrivenSeriesEpisodeOptions auto)
+        {
+            var serie = PickNextSeriesForAutoEpisode();
+            if (serie == null) return false;
+
+            var writer = ResolveAutoEpisodeWriterAgent(auto.WriterAgentId);
+            if (writer == null) return false;
+
+            var nextEpisodeNumber = GetNextAutoSeriesEpisodeNumber(serie.Id);
+            if (nextEpisodeNumber > MaxAutoEpisodeNumber)
+            {
+                _logger.LogInformation(
+                    "Auto episode generation stopped: next episode {EpisodeNumber} exceeds max {MaxEpisode}.",
+                    nextEpisodeNumber,
+                    MaxAutoEpisodeNumber);
+                return false;
+            }
+
+            var episode = _database.EnsureSeriesEpisode(serie.Id, nextEpisodeNumber);
+            if (episode == null) return false;
+
+            var narrativeProfileId = serie.DefaultNarrativeProfileId.GetValueOrDefault(1);
+            if (narrativeProfileId <= 0) narrativeProfileId = 1;
+
+            var plannerMode = string.IsNullOrWhiteSpace(serie.DefaultPlannerMode) ? null : serie.DefaultPlannerMode!.Trim();
+            var theme = SeriesEpisodePromptBuilder.BuildStateDrivenEpisodeTheme(serie, episode);
+            var title = SeriesEpisodePromptBuilder.BuildStateDrivenEpisodeTitle(serie, episode);
+
+            var genId = Guid.NewGuid();
+            _customLogger.Start(genId.ToString());
+            _customLogger.Append(genId.ToString(), $"Avvio episodio automatico: serie={serie.Id}, ep={episode.Number}");
+
+            var startCmd = new StartStateDrivenStoryCommand(_database);
+            var start = startCmd.ExecuteAsync(
+                theme: theme,
+                title: title,
+                narrativeProfileId: narrativeProfileId,
+                serieId: serie.Id,
+                serieEpisode: episode.Number,
+                plannerMode: plannerMode,
+                ct: CancellationToken.None).GetAwaiter().GetResult();
+
+            if (!start.success || start.storyId <= 0)
+            {
+                _customLogger.Append(genId.ToString(), $"Errore avvio storia: {start.error}", "error");
+                _customLogger.MarkCompleted(genId.ToString(), "failed");
+                return false;
+            }
+
+            var minutes = auto.TargetMinutes <= 0 ? 30 : auto.TargetMinutes;
+            var wpm = auto.WordsPerMinute <= 0 ? 150 : auto.WordsPerMinute;
+            var priority = Math.Max(1, auto.Priority);
+
+            _dispatcher.Enqueue(
+                "StateDrivenEpisodeAuto",
+                async ctx =>
+                {
+                    try
+                    {
+                        var cmd = new GenerateStateDrivenEpisodeToDurationCommand(
+                            storyId: start.storyId,
+                            writerAgentId: writer.Id,
+                            targetMinutes: minutes,
+                            wordsPerMinute: wpm,
+                            database: _database,
+                            kernelFactory: _kernelFactory,
+                            storiesService: _stories,
+                            logger: _customLogger,
+                            textValidationService: _textValidationService,
+                            tuning: _tuning,
+                            scopeFactory: _scopeFactory);
+
+                        return await cmd.ExecuteAsync(runIdForProgress: genId.ToString(), ct: ctx.CancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _customLogger.Append(genId.ToString(), "Operazione annullata.", "warning");
+                        await _customLogger.MarkCompletedAsync(genId.ToString(), "cancelled");
+                        _ = _customLogger.BroadcastTaskComplete(genId, "cancelled");
+                        return new CommandResult(false, "cancelled");
+                    }
+                    catch (Exception ex)
+                    {
+                        _customLogger.Append(genId.ToString(), "Errore: " + ex.Message, "error");
+                        await _customLogger.MarkCompletedAsync(genId.ToString(), ex.Message);
+                        _ = _customLogger.BroadcastTaskComplete(genId, "failed");
+                        return new CommandResult(false, ex.Message);
+                    }
+                },
+                runId: genId.ToString(),
+                metadata: new Dictionary<string, string>
+                {
+                    ["operation"] = "state_driven_series_episode_auto",
+                    ["storyId"] = start.storyId.ToString(),
+                    ["serieId"] = serie.Id.ToString(),
+                    ["episodeId"] = episode.Id.ToString(),
+                    ["episodeNumber"] = episode.Number.ToString(),
+                    ["writerAgentId"] = writer.Id.ToString(),
+                    ["writerName"] = writer.Name,
+                    ["targetMinutes"] = minutes.ToString(),
+                    ["wordsPerMinute"] = wpm.ToString()
+                },
+                priority: priority);
+
+            return true;
+        }
+
+        private Series? PickNextSeriesForAutoEpisode()
+        {
+            try
+            {
+                var all = _database.ListAllSeries()
+                    .Where(s => s != null && s.Id > 0)
+                    .OrderBy(s => s.Id)
+                    .ToList();
+                if (all.Count == 0) return null;
+
+                var eligible = new List<Series>();
+                foreach (var serie in all)
+                {
+                    var nextEpisodeNumber = GetNextAutoSeriesEpisodeNumber(serie.Id);
+                    if (nextEpisodeNumber <= MaxAutoEpisodeNumber)
+                    {
+                        eligible.Add(serie);
+                    }
+                }
+
+                if (eligible.Count == 0)
+                {
+                    return null;
+                }
+
+                Series? selected = null;
+                if (_lastAutoSeriesId > 0)
+                {
+                    selected = eligible.FirstOrDefault(s => s.Id > _lastAutoSeriesId);
+                }
+
+                selected ??= eligible[0];
+                _lastAutoSeriesId = selected.Id;
+                return selected;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed selecting series for auto state-driven episode");
+                return null;
+            }
+        }
+
+        private int GetNextAutoSeriesEpisodeNumber(int serieId)
+        {
+            if (serieId <= 0) return 1;
+            try
+            {
+                var maxStoryEpisode = _database.GetAllStories()
+                    .Where(s => s.SerieId == serieId && !s.Deleted && s.SerieEpisode.HasValue && s.SerieEpisode.Value > 0)
+                    .Select(s => s.SerieEpisode!.Value)
+                    .DefaultIfEmpty(0)
+                    .Max();
+
+                var next = maxStoryEpisode + 1;
+                return next <= 0 ? 1 : next;
+            }
+            catch
+            {
+                return _database.GetNextSeriesEpisodeNumber(serieId);
+            }
+        }
+
+        private Agent? ResolveAutoEpisodeWriterAgent(int writerAgentId)
+        {
+            if (writerAgentId > 0)
+            {
+                var agent = _database.GetAgentById(writerAgentId);
+                if (agent != null && agent.IsActive) return agent;
+            }
+
+            // Preferred default for auto state-driven episodes: Qwen3 30b writer
+            var preferred = _database.ListAgents()
+                .FirstOrDefault(a =>
+                    a.IsActive &&
+                    !string.IsNullOrWhiteSpace(a.Name) &&
+                    a.Name.Contains("State-Driven Writer", StringComparison.OrdinalIgnoreCase) &&
+                    a.Name.Contains("Qwen3 30b", StringComparison.OrdinalIgnoreCase));
+            if (preferred != null)
+            {
+                return preferred;
+            }
+
+            preferred = _database.ListAgents()
+                .FirstOrDefault(a =>
+                    a.IsActive &&
+                    a.ModelId.HasValue &&
+                    string.Equals(a.Role, "writer", StringComparison.OrdinalIgnoreCase) &&
+                    (_database.GetModelInfoById(a.ModelId.Value)?.Name ?? string.Empty)
+                        .Contains("qwen3:30b", StringComparison.OrdinalIgnoreCase));
+            if (preferred != null)
+            {
+                return preferred;
+            }
+
+            var writers = _database.ListAgents()
+                .Where(a => a.IsActive && a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (writers.Count == 0) return null;
+            if (writers.Count == 1) return writers[0];
+
+            var weighted = new List<(Agent Agent, double Weight)>();
+            double totalWeight = 0;
+            foreach (var writer in writers)
+            {
+                var score = GetAutoEpisodeWriterScore(writer);
+                var weight = Math.Max(1.0, score);
+                weighted.Add((writer, weight));
+                totalWeight += weight;
+            }
+
+            if (totalWeight <= 0)
+            {
+                return writers[Random.Shared.Next(writers.Count)];
+            }
+
+            var roll = Random.Shared.NextDouble() * totalWeight;
+            foreach (var entry in weighted)
+            {
+                roll -= entry.Weight;
+                if (roll <= 0)
+                {
+                    return entry.Agent;
+                }
+            }
+
+            return weighted[weighted.Count - 1].Agent;
+        }
+
+        private double GetAutoEpisodeWriterScore(Agent writer)
+        {
+            if (writer.ModelId.HasValue)
+            {
+                var model = _database.GetModelInfoById(writer.ModelId.Value);
+                if (model != null)
+                {
+                    if (model.WriterScore > 0) return model.WriterScore;
+                    if (model.TotalScore > 0) return model.TotalScore;
+                }
+            }
+
+            return 1.0;
         }
 
         private sealed record IdleTaskResult(
@@ -883,5 +1289,6 @@ namespace TinyGenerator.Services
         }
     }
 }
+
 
 

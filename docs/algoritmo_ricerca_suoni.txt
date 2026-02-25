@@ -1,0 +1,261 @@
+ALGORITMO: SOUND SEARCH ENGINE (FX + AMBIENT + MUSIC) — VERSIONE COMPLETA
+
+OBIETTIVO
+Dato un set di tag provenienti dagli agenti (FX, Ambient, Music), costruire query ottimizzate e cercare file audio sulle seguenti fonti:
+
+1) Freesound (API)
+2) Pixabay (API)
+3) Mixkit (scraping)
+4) OrangeFreeSounds (scraping)
+5) OpenGameArt (scraping + filtro licenze)
+
+Il sistema deve cercare UN suono alla volta e salvarlo nella tabella sounds.
+
+------------------------------------------------------------
+APPSETTINGS
+
+"SoundSearch": {
+  "FreesoundApiKey": "",
+  "PixabayApiKey": "",
+  "DownloadFolder": "C:\\Sounds\\Library",
+  "MaxResultsPerQuery": 10,
+  "MinDuration": 1,
+  "MaxDuration": 120
+}
+
+------------------------------------------------------------
+FORMATO TAG IN INPUT
+
+FX:
+ID tag1, tag2, tag3, tag4, tag5 [durata]
+
+AMBIENT:
+ID cat, cat_syn, s1, s1_syn, s2, s2_syn, s3, s3_syn
+
+MUSIC:
+ID type, type_syn, mood, mood_syn, energy, energy_syn, context, context_syn [durata]
+
+------------------------------------------------------------
+STEP 1 — PARSING
+
+Per ogni riga:
+- leggere ID
+- estrarre lista tag
+- estrarre durata (se presente)
+
+------------------------------------------------------------
+STEP 2 — QUERY BUILDER
+
+Costruire query di massimo 2–3 parole.
+
+------------------------------------------------------------
+2A — FX QUERY
+
+INPUT:
+[s1, s2, object, context, material]
+
+QUERY:
+
+Q1 = s1 + " " + object
+Q2 = s2 + " " + object
+Q3 = s1 + " " + material + " " + object
+Q4 = object + " " + s1
+Q5 = object + " " + context
+
+------------------------------------------------------------
+2B — AMBIENT QUERY
+
+INPUT:
+[categoria, categoria_syn, s1, s1_syn, s2, s2_syn, s3, s3_syn]
+
+QUERY:
+
+Q1 = categoria + " ambience"
+Q2 = categoria_syn + " ambience"
+Q3 = s1 + " ambience"
+Q4 = s1 + " " + categoria
+Q5 = s2 + " " + categoria
+
+------------------------------------------------------------
+2C — MUSIC QUERY
+
+INPUT:
+[type, type_syn, mood, mood_syn, energy, energy_syn, context, context_syn]
+
+QUERY:
+
+Q1 = type + " music"
+Q2 = type_syn + " music"
+Q3 = mood + " " + type
+Q4 = energy + " " + type
+Q5 = context + " " + type
+
+------------------------------------------------------------
+STEP 3 — ESECUZIONE RICERCA MULTI-FONTE
+
+Per ogni query eseguire ricerca nell’ordine:
+
+1) Freesound API
+2) Pixabay API
+3) Mixkit scraping
+4) OrangeFreeSounds scraping
+5) OpenGameArt scraping
+
+Fermarsi appena si trovano risultati validi.
+
+------------------------------------------------------------
+STEP 4 — IMPLEMENTAZIONE FONTI
+
+----------------------------------------
+FREESOUND API
+----------------------------------------
+Endpoint:
+https://freesound.org/apiv2/search/text/?query={query}
+
+Headers:
+Authorization: Token {ApiKey}
+
+----------------------------------------
+PIXABAY API
+----------------------------------------
+Endpoint:
+https://pixabay.com/api/sounds/?key={key}&q={query}
+
+----------------------------------------
+MIXKIT (SCRAPING)
+----------------------------------------
+URL:
+https://mixkit.co/free-sound-effects/{query}/
+
+Parsare HTML e trovare link download.
+
+----------------------------------------
+ORANGEFREESOUNDS (SCRAPING)
+----------------------------------------
+URL:
+https://orangefreesounds.com/?s={query}
+
+Step:
+- GET HTML
+- estrarre articoli
+- aprire pagina dettaglio
+- trovare link mp3 download
+
+----------------------------------------
+OPENGAMEART (SCRAPING)
+----------------------------------------
+URL:
+https://opengameart.org/art-search-advanced?keys={query}&field_art_type_tid=12
+
+Step:
+- GET HTML
+- aprire pagina risultato
+- trovare sezione DOWNLOAD
+
+FILTRARE SOLO licenze:
+- CC0
+- CC-BY
+- CC-BY-SA
+
+------------------------------------------------------------
+STEP 5 — NORMALIZZAZIONE RISULTATI
+
+Convertire tutti i risultati in struttura unica:
+
+SoundResult:
+- Title
+- Url
+- DirectDownloadUrl
+- Duration
+- Source
+
+------------------------------------------------------------
+STEP 6 — FILTRI
+
+Scartare risultati se:
+
+- durata < MinDuration
+- durata > MaxDuration
+- file non audio
+
+------------------------------------------------------------
+STEP 7 — SCORING
+
+Calcolare punteggio:
+
++2 match suono principale (o tipo o categoria)
++1 match oggetto/mood
++1 match context
++1 match materiale/energia
++1 durata compatibile
++1 formato wav/flac
++1 se source = freesound
++1 se source = pixabay
++1 se source = mixkit
++1 se source = orangefreesounds
++1 se source = opengameart
+
+Selezionare il risultato con score maggiore.
+
+------------------------------------------------------------
+STEP 8 — DOWNLOAD
+
+Scaricare file in:
+
+{DownloadFolder}\{category}\{filename}
+
+Esempio:
+C:\Sounds\Library\fx\slam_door_01.wav
+
+------------------------------------------------------------
+STEP 9 — DATABASE
+
+Inserire record in tabella sounds:
+
+- Category (fx / ambience / music)
+- TagsOriginal
+- QueryUsed
+- Source
+- Url
+- LocalPath
+- Duration
+- Score
+- CreatedAt
+
+------------------------------------------------------------
+STEP 10 — LOG
+
+Loggare:
+
+- query tentate
+- numero risultati per fonte
+- risultato scelto
+- score
+- eventuali errori parsing
+
+------------------------------------------------------------
+STEP 11 — FALLBACK
+
+Se nessun risultato:
+
+FX:
+object + sound1
+
+Ambient:
+categoria + ambience
+
+Music:
+type + music
+
+------------------------------------------------------------
+STEP 12 — ESECUZIONE
+
+Processare:
+
+- una riga alla volta
+- cercare
+- salvare
+- passare alla successiva
+
+------------------------------------------------------------
+FINE

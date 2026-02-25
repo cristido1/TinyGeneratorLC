@@ -1,6 +1,7 @@
 // Sidebar toggle functionality
 (function() {
     const STORAGE_KEY = 'sidebar-collapsed';
+    const SECTION_STORAGE_KEY = 'sidebar-open-section';
     
     function init() {
         const sidebar = document.querySelector('.app-sidebar');
@@ -44,18 +45,8 @@
         
         // Highlight active nav item based on current path
         highlightActiveNav();
-        
-        // Debug: check if Models link works
-        const modelsLink = document.querySelector('.sidebar-link-models');
-        if (modelsLink) {
-            modelsLink.addEventListener('click', function(e) {
-                console.log('Models link clicked!');
-                console.log('Default prevented?', e.defaultPrevented);
-                console.log('Target:', e.target);
-                console.log('Current target:', e.currentTarget);
-                console.log('href:', this.getAttribute('href'));
-            });
-        }
+
+        initSectionAccordion(sidebar);
     }
     
     function highlightActiveNav() {
@@ -69,6 +60,44 @@
                 (href !== '/' && path.startsWith(href));
             link.classList.toggle('active', isActive);
         });
+    }
+
+    function initSectionAccordion(sidebar) {
+        const sections = Array.from(sidebar.querySelectorAll('.sidebar-section'));
+        if (!sections.length) return;
+
+        const setOpenSection = (targetSection) => {
+            sections.forEach(section => {
+                const isOpen = section === targetSection;
+                section.classList.toggle('is-open', isOpen);
+                const toggle = section.querySelector('.sidebar-section-toggle');
+                if (toggle) {
+                    toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+                }
+            });
+
+            const key = targetSection?.dataset.sectionKey;
+            if (key) {
+                localStorage.setItem(SECTION_STORAGE_KEY, key);
+            }
+        };
+
+        sections.forEach(section => {
+            const toggle = section.querySelector('.sidebar-section-toggle');
+            if (!toggle) return;
+
+            toggle.addEventListener('click', () => {
+                if (section.classList.contains('is-open')) {
+                    return;
+                }
+                setOpenSection(section);
+            });
+        });
+
+        const activeSection = sections.find(section => section.querySelector('a.active'));
+        const savedKey = localStorage.getItem(SECTION_STORAGE_KEY);
+        const savedSection = savedKey ? sections.find(s => s.dataset.sectionKey === savedKey) : null;
+        setOpenSection(activeSection || savedSection || sections[0]);
     }
     
     if (document.readyState === 'loading') {

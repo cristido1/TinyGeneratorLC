@@ -7,7 +7,9 @@
       "Bash(dotnet ef database update:*)",
       "Bash(sqlite3:*)",
       "Bash(dotnet ef migrations:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(cmd /c \"taskkill /PID 14480 /F\")",
+      "Bash(dotnet run:*)"
     ]
   }
 }

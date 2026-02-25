@@ -55,6 +55,13 @@ namespace TinyGenerator.Services
                     _rerunRequested = true;
                     return;
                 }
+
+                if (IsEmbeddingWorkerAlreadyQueuedOrRunning())
+                {
+                    _rerunRequested = true;
+                    return;
+                }
+
                 _commandRunning = true;
             }
 
@@ -73,6 +80,42 @@ namespace TinyGenerator.Services
                 batch: true);
 
             _ = handle.CompletionTask.ContinueWith(t => OnCommandCompleted(t), TaskScheduler.Default);
+        }
+
+        private bool IsEmbeddingWorkerAlreadyQueuedOrRunning()
+        {
+            try
+            {
+                return _dispatcher.GetActiveCommands().Any(cmd =>
+                {
+                    if (!IsQueuedOrRunningStatus(cmd.Status))
+                    {
+                        return false;
+                    }
+
+                    if (string.Equals(cmd.OperationName, "memory_embedding_worker", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+
+                    return cmd.Metadata != null
+                           && cmd.Metadata.TryGetValue("operation", out var op)
+                           && string.Equals(op, "memory_embedding_worker", StringComparison.OrdinalIgnoreCase);
+                });
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsQueuedOrRunningStatus(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status)) return false;
+            return status.Equals("queued", StringComparison.OrdinalIgnoreCase)
+                   || status.Equals("running", StringComparison.OrdinalIgnoreCase)
+                   || status.Equals("batch_queued", StringComparison.OrdinalIgnoreCase)
+                   || status.Equals("batch_running", StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task<CommandResult> RunWorkerAsync(CancellationToken cancellationToken)

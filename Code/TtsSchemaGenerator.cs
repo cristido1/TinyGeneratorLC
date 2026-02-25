@@ -84,14 +84,17 @@ namespace TinyGenerator.Services
             
             // Track pending ambient sounds (from [RUMORI: ...] tag) - applied only to the next phrase.
             string? pendingAmbientSounds = null;
+            string? pendingAmbientSoundTags = null;
             
             // Track pending FX for the next phrase
             string? pendingFxDescription = null;
             int? pendingFxDuration = null;
+            string? pendingFxTags = null;
             
             // Track pending music for the next phrase
             string? pendingMusicDescription = null;
             int? pendingMusicDuration = null;
+            string? pendingMusicTags = null;
 
             // Track pending emotion from [EMOZIONE: xxx] tag - applies to the next character
             string? pendingEmotion = null;
@@ -181,18 +184,24 @@ namespace TinyGenerator.Services
                             Emotion = pendingEmotionValue,
                             Ambience = pendingAmbience,
                             AmbientSounds = pendingAmbientSounds,
+                            AmbientSoundTags = pendingAmbientSoundTags,
                             FxDescription = pendingFxDescription,
+                            FxTags = pendingFxTags,
                             FxDuration = pendingFxDuration,
                             MusicDescription = pendingMusicDescription,
+                            MusicTags = pendingMusicTags,
                             MusicDuration = pendingMusicDuration ?? (pendingMusicDescription != null ? 10 : null)
                         };
 
                         pendingAmbience = null;
                         // Apply ambient sounds only to the phrase immediately following the tag.
                         pendingAmbientSounds = null;
+                        pendingAmbientSoundTags = null;
                         pendingFxDescription = null;
+                        pendingFxTags = null;
                         pendingFxDuration = null;
                         pendingMusicDescription = null;
+                        pendingMusicTags = null;
 
                         timeline.Add(pendingPhrase);
                     }
@@ -206,6 +215,8 @@ namespace TinyGenerator.Services
                     // Extract ambience description from tag content (after colon) or from the following text
                     var colonIndex = tagContent.IndexOf(':');
                     var desc = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
+                    var tagsCsv = (string?)null;
+                    (desc, tagsCsv) = SplitTextAndOptionalTagsClause(desc);
                     if (string.IsNullOrWhiteSpace(desc))
                     {
                         desc = text ?? string.Empty;
@@ -225,6 +236,8 @@ namespace TinyGenerator.Services
                     // Extract ambient sounds description from tag content (after colon) or from the following text
                     var colonIndex = tagContent.IndexOf(':');
                     var desc = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
+                    string? tagsCsv;
+                    (desc, tagsCsv) = SplitTextAndOptionalTagsClause(desc);
                     if (string.IsNullOrWhiteSpace(desc))
                     {
                         desc = text ?? string.Empty;
@@ -237,14 +250,16 @@ namespace TinyGenerator.Services
                          desc.Equals("silenzio", StringComparison.OrdinalIgnoreCase)))
                     {
                         pendingAmbientSounds = null;
+                        pendingAmbientSoundTags = null;
                         _logger?.Log("Debug", "TtsSchemaGenerator", "Cleared ambient sounds (OFF/NONE)");
                         continue;
                     }
                     if (!string.IsNullOrWhiteSpace(desc))
                     {
                         pendingAmbientSounds = FilterTextField(desc);
+                        pendingAmbientSoundTags = tagsCsv;
                         _logger?.Log("Debug", "TtsSchemaGenerator",
-                            $"Parsed ambient sounds (for AudioCraft): '{pendingAmbientSounds}'");
+                            $"Parsed ambient sounds (for AudioCraft): '{pendingAmbientSounds}' | tags='{pendingAmbientSoundTags ?? string.Empty}'");
                     }
                     // If the tag has trailing narration text without a character tag, treat it as Narratore.
                     if (!string.IsNullOrWhiteSpace(text))
@@ -265,10 +280,12 @@ namespace TinyGenerator.Services
                             Character = narratorKey,
                             Text = CleanText(text),
                             Emotion = "neutral",
-                            AmbientSounds = pendingAmbientSounds
+                            AmbientSounds = pendingAmbientSounds,
+                            AmbientSoundTags = pendingAmbientSoundTags
                         };
                         timeline.Add(narratorPhrase);
                         pendingAmbientSounds = null;
+                        pendingAmbientSoundTags = null;
                     }
                     continue;
                 }
@@ -279,28 +296,34 @@ namespace TinyGenerator.Services
                 {
                     var colonIndex = tagContent.IndexOf(':');
                     var afterColon = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
+                    var musicTagsCsv = (string?)null;
+                    (afterColon, musicTagsCsv) = SplitTextAndOptionalTagsClause(afterColon);
 
-                    // Expected: "20 | suspense" (duration | type)
+                    // Accept:
+                    // - "20 | suspense"
+                    // - "suspense"
                     var parts = afterColon.Split('|', 2, StringSplitOptions.TrimEntries);
-                    if (parts.Length == 2)
+                    if (parts.Length >= 1)
                     {
-                        var durationStr = parts[0].Trim().Replace(',', '.');
-                        var type = parts[1].Trim();
-
-                        if (double.TryParse(durationStr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var durSeconds) &&
+                        string type;
+                        pendingMusicDuration = null;
+                        if (parts.Length == 2 &&
+                            double.TryParse(parts[0].Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var durSeconds) &&
                             durSeconds > 0)
                         {
                             pendingMusicDuration = (int)Math.Ceiling(durSeconds);
+                            type = parts[1].Trim();
                         }
                         else
                         {
-                            pendingMusicDuration = null;
+                            type = afterColon.Trim();
                         }
 
                         // We store the type in music_description so downstream can resolve it to a file.
                         pendingMusicDescription = !string.IsNullOrWhiteSpace(type)
                             ? FilterTextField(type)
                             : null;
+                        pendingMusicTags = musicTagsCsv;
 
                         // opening/ending are always applied in the final mix, not inside tts_schema.json timeline.
                         if (string.Equals(pendingMusicDescription, "opening", StringComparison.OrdinalIgnoreCase) ||
@@ -308,15 +331,19 @@ namespace TinyGenerator.Services
                         {
                             pendingMusicDuration = null;
                             pendingMusicDescription = null;
+                            pendingMusicTags = null;
                         }
 
                         _logger?.Log("Debug", "TtsSchemaGenerator",
-                            $"Parsed MUSIC: duration={pendingMusicDuration?.ToString() ?? "(null)"}s, type='{pendingMusicDescription}'");
+                            $"Parsed MUSIC: duration={pendingMusicDuration?.ToString() ?? "(null)"}s, type='{pendingMusicDescription}', tags='{pendingMusicTags ?? string.Empty}'");
                     }
                     else
                     {
+                        pendingMusicDuration = null;
+                        pendingMusicDescription = null;
+                        pendingMusicTags = null;
                         _logger?.Log("Warning", "TtsSchemaGenerator",
-                            $"Invalid MUSIC tag format (expected '[MUSIC: <seconds> | <type>]'): '{tagContent}'");
+                            $"Invalid MUSIC tag format: '{tagContent}'");
                     }
 
                     continue;
@@ -327,6 +354,7 @@ namespace TinyGenerator.Services
                     // Expected format: [MUSICA: <duration_seconds>] descriptive prompt text
                     var colonIndex = tagContent.IndexOf(':');
                     var desc = colonIndex >= 0 ? tagContent.Substring(colonIndex + 1).Trim() : string.Empty;
+                    (desc, pendingMusicTags) = SplitTextAndOptionalTagsClause(desc);
 
                     if (colonIndex >= 0 && !string.IsNullOrWhiteSpace(desc))
                     {
@@ -386,8 +414,15 @@ namespace TinyGenerator.Services
                 // [FX: <secondi> : <descrizione>]
                 if (tagContent.StartsWith("FX", StringComparison.OrdinalIgnoreCase))
                 {
+                    var fxPayload = tagContent;
+                    if (fxPayload.Length >= 2)
+                    {
+                        fxPayload = fxPayload.Trim();
+                    }
+                    (fxPayload, pendingFxTags) = SplitTextAndOptionalTagsClause(fxPayload);
+
                     var m = Regex.Match(
-                        tagContent,
+                        fxPayload,
                         @"^FX\s*:\s*(\d+(?:[.,]\d+)?)(?:\s*(?:s|sec|secondi))?\s*:\s*(.+)$",
                         RegexOptions.IgnoreCase);
                     if (m.Success)
@@ -402,11 +437,17 @@ namespace TinyGenerator.Services
                         }
                         else
                         {
+                            pendingFxDescription = null;
+                            pendingFxDuration = null;
+                            pendingFxTags = null;
                             _logger?.Log("Warning", "TtsSchemaGenerator", $"Invalid FX tag format: [{tagContent}]");
                         }
                     }
                     else
                     {
+                        pendingFxDescription = null;
+                        pendingFxDuration = null;
+                        pendingFxTags = null;
                         _logger?.Log("Warning", "TtsSchemaGenerator", $"Invalid FX tag format: [{tagContent}]");
                     }
                     continue;
@@ -522,19 +563,25 @@ namespace TinyGenerator.Services
 
                     // Ambient sounds (audio): keep both camelCase and snake_case for compatibility.
                     ["ambientSounds"] = pendingAmbientSounds,
+                    ["ambientSoundTags"] = pendingAmbientSoundTags,
                     ["ambientSoundsDuration"] = null,
                     ["ambientSoundsFile"] = null,
                     ["ambient_sound_description"] = pendingAmbientSounds,
+                    ["ambient_sound_tags"] = pendingAmbientSoundTags,
                     ["ambient_sound_file"] = null,
 
                     ["fxDescription"] = pendingFxDescription,
+                    ["fxTags"] = pendingFxTags,
                     ["fxDuration"] = pendingFxDuration,
                     ["fxFile"] = null,
                     ["fx_description"] = pendingFxDescription,
+                    ["fx_tags"] = pendingFxTags,
                     ["fx_duration"] = pendingFxDuration,
                     ["fx_file"] = null,
 
                     ["music_description"] = pendingMusicDescription,
+                    ["music_tags"] = pendingMusicTags,
+                    ["musicTags"] = pendingMusicTags,
                     ["music_duration"] = pendingMusicDuration ?? (pendingMusicDescription != null ? 10 : null),
                     ["music_file"] = null
                 };
@@ -542,9 +589,12 @@ namespace TinyGenerator.Services
                 // Reset pending ambience, FX, music, and ambient sounds after applying (single use).
                 pendingAmbience = null;
                 pendingAmbientSounds = null;
+                pendingAmbientSoundTags = null;
                 pendingFxDescription = null;
+                pendingFxTags = null;
                 pendingFxDuration = null;
                 pendingMusicDescription = null;
+                pendingMusicTags = null;
 
                 timeline.Add(phraseNode);
             }
@@ -570,6 +620,42 @@ namespace TinyGenerator.Services
                 @"(?<!^)(?<!\r)(?<!\n)(\[(?:NARRATORE|PERSONAGGIO:|EMOZIONE:|RUMORI|RUMORE|AMBIENTE|FX|MUSIC)\b)",
                 "\n$1",
                 RegexOptions.IgnoreCase);
+        }
+
+        private static (string body, string? tagsCsv) SplitTextAndOptionalTagsClause(string? input)
+        {
+            var text = (input ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return (string.Empty, null);
+            }
+
+            var match = Regex.Match(text, @"^(.*?)(?:\|\s*TAGS\s*:\s*(.+))$", RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                return (text, null);
+            }
+
+            var body = match.Groups[1].Value.Trim().Trim('|').Trim();
+            var tags = NormalizeCsvTags(match.Groups[2].Value);
+            return (body, tags);
+        }
+
+        private static string? NormalizeCsvTags(string? csv)
+        {
+            if (string.IsNullOrWhiteSpace(csv)) return null;
+
+            var tokens = csv.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => t.Trim())
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Select(t => Regex.Replace(t.ToLowerInvariant(), @"\s+", "_"))
+                .Select(t => Regex.Replace(t, @"[^a-z0-9_]+", string.Empty))
+                .Select(t => Regex.Replace(t, @"_+", "_").Trim('_'))
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return tokens.Count == 0 ? null : string.Join(", ", tokens);
         }
 
         /// <summary>

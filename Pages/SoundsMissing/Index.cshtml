@@ -1,0 +1,219 @@
+@page
+@model TinyGenerator.Pages.SoundsMissing.IndexModel
+@{
+    ViewData["Title"] = "Sounds Missing";
+    ViewData["PageDescription"] = "Richieste audio non trovate nella libreria sounds";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
+    <style>
+        .btn-group-vertical > .btn, .btn-group > .btn { flex: none; }
+        .cell-wrap { max-width: 420px; white-space: normal; word-break: break-word; }
+        .cell-small { white-space: nowrap; }
+        .prompt-cell { min-width: 260px; }
+    </style>
+}
+
+<div class="container-fluid py-3">
+    @if (!string.IsNullOrWhiteSpace(Model.ActionMessage))
+    {
+        <div class="alert alert-@(string.IsNullOrWhiteSpace(Model.ActionMessageType) ? "info" : Model.ActionMessageType)">
+            @Model.ActionMessage
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Model.LoadError))
+    {
+        <div class="alert alert-warning">
+            Errore caricando <code>sounds_missing</code>: @Model.LoadError
+        </div>
+    }
+
+    <form id="recheckMissingForm" method="post" asp-page-handler="RecheckAgainstSounds" class="d-none">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+        <input type="hidden" name="statusFilter" value="@Model.StatusFilter" />
+    </form>
+    <form id="enqueueSearchAllForm" method="post" asp-page-handler="EnqueueSearchAll" class="d-none">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+        <input type="hidden" name="statusFilter" value="@Model.StatusFilter" />
+    </form>
+    <form id="enqueueResetResolvedStoriesForm" method="post" asp-page-handler="EnqueueResetResolvedStories" class="d-none">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+        <input type="hidden" name="statusFilter" value="@Model.StatusFilter" />
+    </form>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <table id="soundsMissingTable" class="table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th data-col="id">Id</th>
+                        <th data-col="status">Status</th>
+                        <th data-col="type">Type</th>
+                        <th data-col="occurrences">Occorrenze</th>
+                        <th data-col="lastSeenAt">Last Seen</th>
+                        <th data-col="firstSeenAt">First Seen</th>
+                        <th data-col="prompt">Prompt</th>
+                        <th data-col="tags">Tags</th>
+                        <th data-col="storyId">Story Id</th>
+                        <th data-col="storyTitle">Story Title</th>
+                        <th data-col="source">Source</th>
+                        <th data-col="notes">Notes</th>
+                        <th data-col="actions">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in Model.Items)
+                    {
+                        <tr>
+                            <td data-col="id" class="cell-small">@item.Id</td>
+                            <td data-col="status">
+                                <span class="badge @(item.Status == "resolved" ? "bg-success" : "bg-warning text-dark")">
+                                    @item.Status
+                                </span>
+                            </td>
+                            <td data-col="type">
+                                <span class="badge @(item.Type == "amb" ? "bg-success" : item.Type == "music" ? "bg-primary" : "bg-secondary")">@item.Type</span>
+                            </td>
+                            <td data-col="occurrences" class="cell-small">@item.Occurrences</td>
+                            <td data-col="lastSeenAt" class="cell-small">@item.LastSeenAt</td>
+                            <td data-col="firstSeenAt" class="cell-small">@item.FirstSeenAt</td>
+                            <td data-col="prompt" class="cell-wrap prompt-cell">@item.Prompt</td>
+                            <td data-col="tags" class="cell-wrap">@item.Tags</td>
+                            <td data-col="storyId" class="cell-small">@item.StoryId</td>
+                            <td data-col="storyTitle" class="cell-wrap">@item.StoryTitle</td>
+                            <td data-col="source" class="cell-wrap">@item.Source</td>
+                            <td data-col="notes" class="cell-wrap">@item.Notes</td>
+                            <td data-col="actions" class="cell-small">
+                                <div class="dropdown">
+                                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                                    <ul class="dropdown-menu dropdown-menu-end">
+                                        @if (item.Status == "open" && (item.Type == "fx" || item.Type == "amb"))
+                                        {
+                                            <li>
+                                                <form method="post" asp-page-handler="EnqueueSearchOne" class="m-0">
+                                                    @Html.AntiForgeryToken()
+                                                    <input type="hidden" name="id" value="@item.Id" />
+                                                    <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+                                                    <input type="hidden" name="statusFilter" value="@Model.StatusFilter" />
+                                                    <button type="submit" class="dropdown-item">Cerca Online</button>
+                                                </form>
+                                            </li>
+                                        }
+                                        else
+                                        {
+                                            <li><span class="dropdown-item-text text-muted">Nessuna azione</span></li>
+                                        }
+                                    </ul>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+(function initSoundsMissingTable() {
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initSoundsMissingTable, 50);
+        return;
+    }
+
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var idx = 0;
+    function loadScript(url, callback) {
+        var s = document.createElement('script');
+        s.src = url;
+        s.onload = callback;
+        s.onerror = callback;
+        document.head.appendChild(s);
+    }
+    function next() {
+        if (idx < scripts.length) {
+            loadScript(scripts[idx++], next);
+            return;
+        }
+        initializeDataTable();
+    }
+    next();
+
+    function initializeDataTable() {
+        jQuery(function($) {
+            if (typeof $.fn.DataTable === 'undefined') return;
+
+            $('#soundsMissingTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                stateDuration: 0,
+                pageLength: 25,
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                order: [[4, 'desc'], [0, 'desc']],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-cloud-download me-1"></i>Cerca Tutti (Open)',
+                        className: 'btn btn-sm btn-light border text-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            if (confirm('Accodare la ricerca online per tutti i sounds_missing aperti di tipo fx/amb?')) {
+                                var form = document.getElementById('enqueueSearchAllForm');
+                                if (form) form.submit();
+                            }
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-arrow-repeat me-1"></i>Reset Storie (resolved)',
+                        className: 'btn btn-sm btn-light border text-warning',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            if (confirm('Resettare a tts_generated le storie che hanno sounds_missing solo resolved (nessun open) e cancellare i resolved?')) {
+                                var form = document.getElementById('enqueueResetResolvedStoriesForm');
+                                if (form) form.submit();
+                            }
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-search me-1"></i>Verifica Mancanti',
+                        className: 'btn btn-sm btn-light border text-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            if (confirm('Verificare i tag mancanti contro la libreria sounds e rimuovere i record risolti?')) {
+                                var form = document.getElementById('recheckMissingForm');
+                                if (form) form.submit();
+                            }
+                        }
+                    },
+                    {
+                        extend: 'colvis',
+                        text: '<i class="bi bi-layout-three-columns me-1"></i>Colonne',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' }
+                    },
+                    {
+                        text: '<i class="bi bi-arrow-clockwise me-1"></i>Refresh',
+                        className: 'btn btn-sm btn-light border',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() { location.reload(); }
+                    }
+                ]
+            });
+        });
+    }
+})();
+</script>

@@ -1,0 +1,39 @@
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "order": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "title": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "characters": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "location": {
+        "type": "string"
+      },
+      "outcome": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "order",
+      "title",
+      "summary",
+      "characters",
+      "location",
+      "outcome"
+    ],
+    "additionalProperties": false
+  }
+}

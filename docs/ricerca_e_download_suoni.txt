@@ -1,0 +1,388 @@
+DOCUMENTAZIONE IMPLEMENTAZIONE: Ricerca + Download suoni (FX / AMB) da Freesound API, Pixabay, Mixkit
+Target: agente “SoundSearch” server-side (C#) che prende 1 record “mancante” alla volta, cerca online, scarica 1 suono, lo inserisce in tabella `sounds` con tag e metadati.
+Vincoli:
+- Processare 1 record alla volta (single item).
+- Tipi ammessi: FX, AMB (ambience). Saltare MUSIC.
+- NO function calling / tools: usare solo HTTP + parsing JSON/HTML e la response JSON interna del tuo servizio.
+- I test di qualità audio li farà Cristiano manualmente (quindi niente analisi audio obbligatoria, solo metadati).
+- Fonti: Freesound (API ufficiale), Pixabay (endpoint HTML/JSON non ufficiale -> scraping leggero), Mixkit (scraping HTML).
+- Scaricare 1 solo file (best candidate) e inserirlo in `sounds`.
+
+====================================================================
+1) CONFIGURAZIONE (appsettings)
+====================================================================
+
+Aggiungere sezione:
+"SoundSearch": {
+  "Enabled": true,
+  "DownloadFolder": "D:\\AudioLibrary\\",                 // base path dove salvare i file scaricati
+  "TempFolder": "D:\\AudioLibrary\\_tmp\\",               // opzionale
+  "UserAgent": "CrisSoundSearchBot/1.0",
+  "TimeoutSeconds": 30,
+  "MaxCandidatesPerSource": 10,                           // quanti risultati valutare per fonte
+  "MinDurationSeconds": 0.2,                              // durata minima ammessa
+  "MaxDurationSecondsFx": 12,                             // FX one-shot
+  "MaxDurationSecondsAmb": 300,                           // ambience
+  "PreferredSampleFormats": [ "wav", "flac", "mp3" ],
+  "AllowedLicenses": [ "cc0", "cc-by", "pixabay", "mixkit" ],
+  "SkipIfAlreadyInSounds": true,                          // se URL già presente in DB
+  "LanguageHint": "it-IT",
+  "Query": {
+    "MaxQueryTerms": 8,
+    "AddEnglishSynonyms": true
+  },
+
+  "Freesound": {
+    "Enabled": true,
+    "ApiKey": "<INSERT>",
+    "BaseUrl": "https://freesound.org/apiv2",
+    "RequireCommercialOk": true,                          // se vuoi filtrare licenze compatibili
+    "PageSize": 15
+  },
+
+  "Pixabay": {
+    "Enabled": true,
+    "ApiKey": "<INSERT_IF_AVAILABLE>",                    // se usi API ufficiale (consigliato)
+    "BaseUrl": "https://pixabay.com",
+    "UseOfficialApiIfPossible": true,
+    "OfficialApiUrl": "https://pixabay.com/api/",
+    "OfficialApiType": "audio"                            // se supportato; in alternativa scraping
+  },
+
+  "Mixkit": {
+    "Enabled": true,
+    "BaseUrl": "https://mixkit.co",
+    "CategoryPath": "/free-sound-effects/",
+    "RespectRobots": true                                 // se vuoi, in scraping leggero
+  }
+}
+
+NOTE:
+- Freesound richiede API Key.
+- Pixabay: preferire API ufficiale se supporta audio e se hai key. In alternativa scraping dal sito.
+- Mixkit: scraping HTML (non ha API pubblica ufficiale per bulk).
+
+====================================================================
+2) DATI IN INGRESSO / TABELLE COINVOLTE
+====================================================================
+
+2.1 Record sorgente (FX mancanti / AMB mancanti)
+Assumo che tu abbia una tabella/viste tipo “sounds_missing” con campi:
+- Id (int)
+- Type (string)  // "fx" oppure "amb" oppure "music"
+- Prompt (string)
+- Tags (string)  // csv: "porta, schianta, ..."
+- Occorrenze (int)
+- Status (string) // "open" / "found" / "failed" ecc.
+
+L’agent deve ricevere 1 record alla volta, ad es. per Id.
+
+2.2 Tabella target: `sounds`
+Richiesto: inserire 1 riga per suono trovato.
+Campi minimi consigliati (adatta ai tuoi reali):
+- SoundId (PK)
+- Type (fx/amb)               // NO music
+- Title                        // titolo o descrizione breve
+- Source                       // freesound|pixabay|mixkit
+- SourceUrl                    // pagina del suono
+- DownloadUrl                  // url effettivo scaricato (se disponibile)
+- LocalPath                    // path locale file salvato
+- License                      // stringa licenza
+- Author                       // autore/creator se disponibile
+- Tags                         // csv o json
+- DurationSeconds              // se disponibile
+- SampleRate                   // se disponibile
+- Channels                     // se disponibile
+- CreatedUtc
+- Notes                        // opzionale: prompt originale, id sorgente, ecc.
+- ExternalId                   // id su piattaforma (freesound id etc.)
+- HashSha256                   // opzionale (per dedup)
+
+Inoltre salvare:
+- MissingSourceId (FK o riferimento) (consigliato): id del record mancante da cui deriva
+- SearchQueryUsed (string) (consigliato)
+
+====================================================================
+3) FLUSSO PRINCIPALE (1 record alla volta)
+====================================================================
+
+Metodo entry-point suggerito:
+SoundSearchService.ProcessOneMissingSound(int missingId) -> SoundSearchResult
+
+Pseudoflow:
+
+1) Carica record mancante (missing) da DB
+2) Se missing.Type == "music" -> return Skipped
+3) Normalizza input:
+   - prompt = missing.Prompt
+   - tags = parse CSV missing.Tags
+4) Costruisci “SearchPlan”:
+   - Determina se FX o AMB
+   - Calcola range durata:
+       FX: duration <= MaxDurationSecondsFx
+       AMB: duration <= MaxDurationSecondsAmb
+   - Genera query in inglese + fallback in italiano:
+       q1 = Translate/Map IT->EN (semplice dizionario)
+       q2 = keywords dai tag (EN)
+       q3 = prompt keywords puliti
+   - MaxQueryTerms: troncare
+5) Per ogni fonte abilitata (ordine consigliato):
+   A) Freesound
+   B) Mixkit
+   C) Pixabay
+   (ordine motivazione: Freesound ha tag/metadati migliori; Mixkit qualità buona; Pixabay più generico)
+6) Per ogni fonte:
+   - esegui ricerca (max N candidati)
+   - valuta e ordina candidati (scoring semplice)
+   - seleziona best candidate
+   - se best candidate valido:
+       - scarica file
+       - salva su disco (cartella per tipo + slug)
+       - inserisci in tabella sounds
+       - aggiorna record mancante (Status="found")
+       - return Found
+7) Se nessuna fonte trova -> aggiorna record mancante (Status="failed" + motivo) e return NotFound
+
+====================================================================
+4) GENERAZIONE QUERY (IT->EN semplice, no AI)
+====================================================================
+
+Niente LLM: usare mapper deterministico + tokenizzazione.
+Implementare:
+- Tokenize: lowercase, rimuovi punteggiatura, stopwords IT base (es: "che", "si", "un", "una", "dal", "della", "sul", "sopra", "loro", ecc.)
+- Stemming leggero opzionale (non indispensabile)
+- Dizionario sinonimi IT->EN per parole frequenti nel tuo dominio:
+  porta->door, schianta->slam, urto->impact, colpo->hit, esplosione->explosion, vibrazione->vibration, motore->engine, ponte->bridge/deck, nave->ship, tunnel->tunnel, grido->scream/shout, tonfo->thud, boato->boom, metallo->metal, pavimento->floor, frena->brake, pneumatici->tires, stridio->screech, banco->bench, scaffale->shelf, crolla->collapse, legno->wood, ecc.
+- Per FX preferire termini “one-shot”: hit, slam, thud, impact, crash, boom, rumble.
+- Per AMB preferire termini “ambience”: ambience, room tone, background, interior, exterior, engine hum, ventilation, crowd, wind.
+
+Generare fino a 3 query:
+- QueryPrimary: da tag tradotti + 1-2 termini dal prompt
+- QuerySecondary: da prompt tradotto (top terms)
+- QueryItalianFallback: prompt originale pulito
+
+====================================================================
+5) SCORING CANDIDATI (semplice)
+====================================================================
+
+Score = TagMatch + PromptMatch + DurationFit + FormatPreference + SourceBias
+
+- TagMatch: conteggio match keyword (0..10)
+- PromptMatch: 0..5
+- DurationFit:
+   - FX: preferisci 0.3..5 sec (bonus), penalizza > MaxDurationSecondsFx
+   - AMB: preferisci 20..180 sec (bonus), penalizza < MinDurationSeconds
+- FormatPreference: +1 se wav/flac, +0.5 se mp3
+- SourceBias: Freesound +1, Mixkit +0.5, Pixabay +0 (configurabile)
+
+Se candidate non ha licenza consentita -> scarta.
+Se URL già presente in DB (SkipIfAlreadyInSounds) -> scarta.
+
+====================================================================
+6) IMPLEMENTAZIONE FREESOUND (API)
+====================================================================
+
+6.1 Search
+Endpoint:
+GET {BaseUrl}/search/text/
+Params:
+- query = <query>
+- fields = id,name,previews,duration,tags,license,username,download,images,url
+- filter = duration:[0 TO X] (X dipende da FX/AMB)
+- page_size = PageSize
+Headers:
+- Authorization: Token <ApiKey>
+
+Note:
+- Freesound per download spesso richiede endpoint download dedicato e token.
+- Usare “previews” se il download diretto è limitato (previews sono mp3/ogg).
+- Se vuoi WAV, serve download ufficiale e permessi; altrimenti usare preview mp3 (accettabile per “prima bozza”).
+
+6.2 Candidate mapping
+Estrarre:
+- ExternalId = id
+- Title = name
+- SourceUrl = url
+- DownloadUrl = download (se presente) altrimenti previews.preview-hq-mp3 o simile
+- Tags = tags (array)
+- DurationSeconds = duration
+- License = license
+- Author = username
+
+6.3 Download
+- Se usi previews: GET preview url -> salva file .mp3
+- Se usi download: chiamare URL download con header Authorization.
+
+====================================================================
+7) IMPLEMENTAZIONE PIXABAY
+====================================================================
+
+7.1 Preferire API ufficiale (se supporta audio)
+- Se l’API ufficiale per audio non è disponibile nel tuo piano/endpoint:
+  fallback a scraping HTML.
+
+7.2 Scraping leggero (fallback)
+- Costruisci URL ricerca:
+  https://pixabay.com/sound-effects/search/<urlencoded-query>/
+- Scarica HTML
+- Parse:
+  - link alla pagina del suono
+  - titolo
+  - eventuali keyword
+  - link download (se presente nella pagina dettaglio)
+- Poi:
+  - apri la pagina dettaglio
+  - estrai URL del file (tipicamente mp3)
+  - estrai licenza “Pixabay License”
+  - scarica
+
+NOTE: lo scraping può rompersi se cambiano HTML. Gestire con try/catch e log “PixabayParseFailed”.
+
+====================================================================
+8) IMPLEMENTAZIONE MIXKIT (scraping HTML)
+====================================================================
+
+8.1 Ricerca
+Mixkit non ha ricerca API stabile; puoi:
+- usare la pagina categorie e filtrare per keyword nel titolo/descrizione
+- oppure usare la search interna se presente.
+
+Approccio pratico:
+- GET https://mixkit.co/free-sound-effects/
+- (opzionale) se esiste query param di ricerca, usarlo; altrimenti:
+  - scarica listing paginato
+  - match su keyword nel titolo
+  - raccogli candidate links
+
+8.2 Dettaglio + download
+- Apri pagina dettaglio suono
+- trova link download (mp3/wav se disponibile)
+- estrai titolo e categoria
+- licenza Mixkit (salva stringa “Mixkit License”)
+
+NOTE: come Pixabay, scraping fragile. Loggare fallimenti.
+
+====================================================================
+9) DOWNLOAD + SALVATAGGIO FILE
+====================================================================
+
+9.1 Naming e cartelle
+BaseFolder = SoundSearch.DownloadFolder
+
+Path:
+- FX:  <Base>\fx\<slug_prompt_or_tags>\<source>_<externalId>.<ext>
+- AMB: <Base>\amb\<slug_prompt_or_tags>\<source>_<externalId>.<ext>
+
+Slug:
+- da prompt/tags, max 40 char, solo [a-z0-9-_]
+
+9.2 Dedup
+- Se possibile calcolare SHA256 del contenuto e salvare in sounds.HashSha256
+- Se hash già esiste -> non inserire doppio; aggiornare missing come “found_duplicate” e puntare al suono esistente.
+
+9.3 Validazioni minime
+- file size > 5KB
+- estensione valida
+- durata se disponibile (se non disponibile, non bloccare)
+
+====================================================================
+10) INSERIMENTO IN DB (tabella sounds)
+====================================================================
+
+Inserire 1 record con:
+- Type: missing.Type (fx/amb)
+- Title: candidate.Title
+- Source: "freesound"|"pixabay"|"mixkit"
+- SourceUrl: candidate.SourceUrl
+- DownloadUrl: candidate.DownloadUrl
+- LocalPath: path salvato
+- License: candidate.License
+- Author: candidate.Author
+- Tags: merge di:
+    - missing.Tags (csv)
+    - candidate.Tags (se presenti)
+  Normalizzare e deduplicare
+- DurationSeconds: candidate.DurationSeconds (se presente)
+- ExternalId: candidate.ExternalId
+- Notes: "from missingId=<id>; query=<queryUsed>"
+- CreatedUtc: now
+
+Aggiornare record mancante:
+- Status = "found"
+- (opzionale) FoundSoundId = nuovo SoundId
+- (opzionale) FoundSource = source
+- (opzionale) FoundUrl = candidate.SourceUrl
+- (opzionale) Message = "OK"
+
+Se non trovato:
+- Status = "failed"
+- Message = "No candidates from sources: freesound,pixabay,mixkit"
+
+Se skipped:
+- Status = "skipped"
+- Message = "type=music"
+
+====================================================================
+11) OUTPUT JSON DEL SERVIZIO (no function call)
+====================================================================
+
+ProcessOneMissingSound deve restituire JSON (string o DTO) con:
+{
+  "missingId": 123,
+  "status": "found|failed|skipped",
+  "sourceTried": ["freesound","mixkit","pixabay"],
+  "selected": {
+    "source": "freesound",
+    "externalId": "12345",
+    "title": "...",
+    "sourceUrl": "...",
+    "downloadUrl": "...",
+    "localPath": "...",
+    "license": "...",
+    "tags": ["..."],
+    "durationSeconds": 2.3,
+    "score": 7.5
+  },
+  "errors": [
+    { "source": "pixabay", "error": "PixabayParseFailed", "detail": "..." }
+  ]
+}
+
+====================================================================
+12) LOGGING / TELEMETRIA
+====================================================================
+
+Log per missingId:
+- query generate
+- risultati per fonte (count + top score)
+- download ok/fail
+- inserimento DB ok/fail
+
+Non bloccare l’intero processo se una fonte fallisce: passare alla successiva.
+
+====================================================================
+13) NOTE IMPORTANTI / RISCHI
+====================================================================
+
+- Scraping Pixabay/Mixkit è fragile: prevedere fallback e logging.
+- Freesound: licenze diverse; salva sempre licenza e autore.
+- Non scaricare multipli: 1 solo suono per missingId.
+- Non fare music: filtrare a monte.
+
+====================================================================
+14) CHECKLIST IMPLEMENTAZIONE
+====================================================================
+
+- [ ] AppSettings SoundSearch + binding a options class
+- [ ] DTO: MissingSound, SoundCandidate, SoundSearchResult
+- [ ] Service: SoundSearchService.ProcessOneMissingSound(missingId)
+- [ ] FreesoundClient (HTTP JSON)
+- [ ] PixabayClient (API o scraping)
+- [ ] MixkitClient (scraping)
+- [ ] CandidateScorer
+- [ ] Downloader + file store
+- [ ] SoundsRepository (insert sound)
+- [ ] MissingRepository (update status)
+- [ ] JSON output finale
+
+FINE DOCUMENTAZIONE

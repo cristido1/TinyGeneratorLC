@@ -5,76 +5,261 @@
     ViewData["PageDescription"] = "Gestione ruoli agenti";
 }
 
+@section Styles {
 <style>
-    .btn-group-vertical>.btn, .btn-group>.btn {
-        flex: none;
-    }
+/* ── Tokens ──────────────────────────────────────────── */
+:root {
+    --ra: #4361ee;          /* accent */
+    --ra-pale: #eef0fd;     /* accent tint */
+    --ra-dim:  #c5cefc;     /* accent border */
+    --ra-row:  #f0f2f5;     /* row separator */
+    --ra-head: #f7f8ff;     /* header / footer bg */
+}
 
-    #rolesTable {
-        font-size: 0.9rem;
-    }
+/* ── Card wrapper ────────────────────────────────────── */
+#roles-card {
+    border: 1px solid #e4e8f0;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,.05);
+    background: #fff;
+}
 
-    #rolesTable thead th {
-        font-weight: 600;
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        padding: 0.75rem;
-        border-bottom: 2px solid #dee2e6;
-    }
+/* ── Toolbar (top row) ───────────────────────────────── */
+#roles-card .dataTables_wrapper > .row:first-child {
+    padding: .7rem 1rem;
+    border-bottom: 1px solid var(--ra-row);
+    background: var(--ra-head);
+    margin: 0;
+    align-items: center;
+}
 
-    #rolesTable tbody td {
-        padding: 0.75rem;
-        vertical-align: middle;
-    }
+/* ── Search ──────────────────────────────────────────── */
+.dataTables_filter { display: flex; align-items: center; justify-content: flex-end; }
+.dataTables_filter label {
+    display: flex; align-items: center; gap: .35rem;
+    font-size: .82rem; color: #64748b; font-weight: 500;
+    white-space: nowrap;
+}
+.dataTables_filter input {
+    font-size: .82rem !important;
+    border: 1px solid #dde1e7 !important;
+    border-radius: 20px !important;
+    padding: .28rem .85rem !important;
+    width: 190px;
+    transition: border-color .15s, box-shadow .15s;
+    outline: none;
+}
+.dataTables_filter input:focus {
+    border-color: var(--ra) !important;
+    box-shadow: 0 0 0 3px rgba(67,97,238,.1) !important;
+}
 
-    #rolesTable tbody tr:hover {
-        background-color: #f8f9fa;
-    }
+/* ── Buttons ─────────────────────────────────────────── */
+.dt-buttons { display: flex; gap: .35rem; flex-wrap: wrap; }
+.dt-buttons .btn {
+    border-radius: 7px !important;
+    font-size: .82rem !important;
+    font-weight: 500 !important;
+    padding: .3rem .8rem !important;
+    letter-spacing: .1px;
+}
 
-    #rolesTable tbody tr.odd,
-    #rolesTable tbody tr.even {
-        background-color: transparent;
-    }
+/* ── Table head ──────────────────────────────────────── */
+#rolesTable thead th {
+    background: var(--ra-head);
+    color: var(--ra);
+    font-size: .71rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .65px;
+    border-bottom: 2px solid var(--ra-dim) !important;
+    padding: .55rem .75rem;
+    white-space: nowrap;
+}
 
-    .dt-buttons .btn {
-        font-size: 0.875rem;
-        padding: 0.375rem 0.75rem;
-    }
+/* ── Table body ──────────────────────────────────────── */
+#rolesTable.dataTable tbody td {
+    border-bottom: 1px solid var(--ra-row);
+    padding: .52rem .75rem;
+    vertical-align: middle;
+}
+#rolesTable.dataTable tbody tr:last-child td { border-bottom: none; }
+#rolesTable.dataTable tbody tr:hover td     { background: var(--ra-pale); }
+#rolesTable.dataTable tbody tr.shown td     { background: var(--ra-pale); }
 
-    .dataTables_filter input {
-        margin-left: 0.5rem;
-        border-radius: 0.25rem;
-    }
+/* ── Expand control ──────────────────────────────────── */
+.dt-control {
+    cursor: pointer;
+    width: 26px;
+    text-align: center;
+    color: #b0b8d0;
+}
+.dt-control::before {
+    content: "\F285";
+    font-family: "bootstrap-icons";
+    font-size: .78rem;
+    display: inline-block;
+    transition: transform .18s ease, color .18s ease;
+}
+tr.shown .dt-control::before { transform: rotate(90deg); color: var(--ra); }
 
-    .dataTables_paginate .pagination {
-        margin-bottom: 0;
-    }
+/* ── Role name ───────────────────────────────────────── */
+.role-name {
+    font-weight: 600;
+    font-size: .87rem;
+    color: #0f172a;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+}
+.role-icon {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    background: var(--ra-pale);
+    color: var(--ra);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: .7rem;
+    flex-shrink: 0;
+}
 
-    .dataTables_info {
-        font-size: 0.875rem;
-        color: #6c757d;
-    }
+/* ── Command chip ────────────────────────────────────── */
+.cmd-chip {
+    display: inline-block;
+    background: var(--ra-pale);
+    color: var(--ra);
+    border: 1px solid var(--ra-dim);
+    border-radius: 5px;
+    padding: 1px 8px;
+    font-size: .75rem;
+    font-family: "SFMono-Regular", Consolas, monospace;
+}
 
-    .table-container {
-        border: 1px solid #dee2e6;
-        border-radius: 0.375rem;
-        padding: 1rem;
-        background: white;
-    }
+/* ── Actions button ──────────────────────────────────── */
+.btn-dot {
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    padding: .2rem .45rem;
+    border-radius: 5px;
+    line-height: 1;
+    transition: background .12s, color .12s;
+    font-size: 1rem;
+}
+.btn-dot:hover,
+.btn-dot:focus { background: var(--ra-pale); color: var(--ra); }
+.dropdown-item.text-danger:hover { background: #fff5f5; }
+
+/* ── Footer row ──────────────────────────────────────── */
+#roles-card .dataTables_wrapper > .row:last-child {
+    padding: .5rem 1rem;
+    border-top: 1px solid var(--ra-row);
+    background: var(--ra-head);
+    margin: 0;
+    align-items: center;
+}
+.dataTables_info { font-size: .76rem; color: #94a3b8; }
+
+/* ── Pagination ──────────────────────────────────────── */
+.dataTables_paginate .pagination { margin: 0; gap: .1rem; }
+.dataTables_paginate .page-link {
+    font-size: .76rem;
+    border-radius: 6px !important;
+    border: 1px solid transparent;
+    color: #475569;
+    padding: .22rem .5rem;
+    line-height: 1.5;
+    transition: background .12s, color .12s;
+}
+.dataTables_paginate .page-item.active .page-link {
+    background: var(--ra); border-color: var(--ra); color: #fff;
+}
+.dataTables_paginate .page-item.disabled .page-link { color: #cbd5e1; }
+.dataTables_paginate .page-link:hover:not([class*="active"]) {
+    background: var(--ra-pale); color: var(--ra); border-color: var(--ra-dim);
+}
+
+/* ── Child detail ────────────────────────────────────── */
+.child-detail {
+    padding: .9rem 1.1rem .9rem 1.3rem;
+    background: #fafbff;
+    border-left: 3px solid var(--ra);
+}
+.child-detail .section-title {
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--ra);
+    margin-bottom: .45rem;
+}
+.child-detail .info-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: .9rem;
+    row-gap: .18rem;
+    font-size: .82rem;
+}
+.child-detail .info-label { font-weight: 600; color: #64748b; white-space: nowrap; }
+.child-detail .info-value { color: #1e293b; }
+
+.inner-tbl {
+    font-size: .79rem;
+    border: 1px solid #e4e8f5;
+    border-radius: 7px;
+    overflow: hidden;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+.inner-tbl thead th {
+    background: #f1f3fc;
+    color: var(--ra);
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    font-weight: 700;
+    padding: .35rem .6rem;
+    border-bottom: 1px solid #dde3f8;
+}
+.inner-tbl tbody td {
+    padding: .38rem .6rem;
+    border-bottom: 1px solid #f2f3fa;
+    vertical-align: middle;
+}
+.inner-tbl tbody tr:last-child td { border-bottom: none; }
+
+/* Rate bars */
+.rate-bar { height: 5px; border-radius: 3px; background: #e9ecef; overflow: hidden; min-width: 48px; }
+.rate-bar-fill { height: 100%; border-radius: 3px; }
+.rate-bar-fill.high { background: #10b981; }
+.rate-bar-fill.mid  { background: #f59e0b; }
+.rate-bar-fill.low  { background: #ef4444; }
+.rate-text.high { color: #10b981; font-weight: 600; }
+.rate-text.mid  { color: #d97706; font-weight: 600; }
+.rate-text.low  { color: #ef4444; font-weight: 600; }
 </style>
+}
 
 @if (TempData["Message"] != null)
 {
-    <div class="alert alert-success">@TempData["Message"]</div>
+    <div class="alert alert-success alert-dismissible fade show d-flex align-items-center gap-2 mb-3" role="alert">
+        <i class="bi bi-check-circle-fill"></i>
+        <span>@TempData["Message"]</span>
+        <button type="button" class="btn-close ms-auto" data-bs-dismiss="alert"></button>
+    </div>
 }
 @if (TempData["ErrorMessage"] != null)
 {
-    <div class="alert alert-danger">@TempData["ErrorMessage"]</div>
+    <div class="alert alert-danger alert-dismissible fade show d-flex align-items-center gap-2 mb-3" role="alert">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        <span>@TempData["ErrorMessage"]</span>
+        <button type="button" class="btn-close ms-auto" data-bs-dismiss="alert"></button>
+    </div>
 }
 
-<div class="table-container">
-    <table class="table table-sm table-hover mb-0" id="rolesTable">
+<div id="roles-card">
+    <table class="table table-sm mb-0" id="rolesTable">
         <thead>
             <tr>
                 <th></th>
@@ -83,7 +268,7 @@
                 <th data-col="command">Comando Collegato</th>
                 <th data-col="created">Creato</th>
                 <th data-col="updated">Aggiornato</th>
-                <th data-col="actions">Azioni</th>
+                <th data-col="actions" style="width:50px"></th>
             </tr>
         </thead>
         <tbody>
@@ -91,29 +276,50 @@
             {
                 <tr data-id="@role.Id" data-name="@role.Ruolo">
                     <td class="dt-control"></td>
-                    <td data-col="id">@role.Id</td>
-                    <td data-col="role"><strong>@role.Ruolo</strong></td>
-                    <td data-col="command"><code class="small">@(role.ComandoCollegato ?? "-")</code></td>
-                    <td data-col="created">@TinyGenerator.Pages.Roles.IndexModel.FormatTimestamp(role.CreatedAt)</td>
-                    <td data-col="updated">@TinyGenerator.Pages.Roles.IndexModel.FormatTimestamp(role.UpdatedAt)</td>
+                    <td data-col="id" class="text-muted" style="font-size:.78rem">@role.Id</td>
+                    <td data-col="role">
+                        <span class="role-name">
+                            <span class="role-icon"><i class="bi bi-person-gear"></i></span>
+                            @role.Ruolo
+                        </span>
+                    </td>
+                    <td data-col="command">
+                        @if (!string.IsNullOrWhiteSpace(role.ComandoCollegato))
+                        {
+                            <span class="cmd-chip">@role.ComandoCollegato</span>
+                        }
+                        else
+                        {
+                            <span class="text-muted" style="font-size:.82rem">—</span>
+                        }
+                    </td>
+                    <td data-col="created" class="text-muted" style="font-size:.79rem">@TinyGenerator.Pages.Roles.IndexModel.FormatTimestamp(role.CreatedAt)</td>
+                    <td data-col="updated" class="text-muted" style="font-size:.79rem">@TinyGenerator.Pages.Roles.IndexModel.FormatTimestamp(role.UpdatedAt)</td>
                     <td data-col="actions">
                         <div class="dropdown">
-                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
-                            <ul class="dropdown-menu dropdown-menu-end">
+                            <button class="btn-dot dropdown-toggle dropdown-toggle-split" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="bi bi-three-dots-vertical"></i>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end shadow-sm" style="font-size:.83rem; min-width:140px">
                                 @foreach (var action in Model.GetActionsForRole(role))
                                 {
                                     if (action.Method == "GET")
                                     {
                                         <li>
-                                            <a class="dropdown-item js-nav" href="@action.Url" data-url="@action.Url">@action.Title</a>
+                                            <a class="dropdown-item js-nav" href="@action.Url" data-url="@action.Url">
+                                                <i class="bi bi-pencil me-2 opacity-50"></i>@action.Title
+                                            </a>
                                         </li>
                                     }
                                     else if (action.Method == "POST")
                                     {
+                                        <li><hr class="dropdown-divider my-1" /></li>
                                         <li>
                                             <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Confermi eliminazione del ruolo?')" : "true")">
                                                 @Html.AntiForgeryToken()
-                                                <button type="submit" class="dropdown-item">@action.Title</button>
+                                                <button type="submit" class="dropdown-item text-danger">
+                                                    <i class="bi bi-trash me-2 opacity-50"></i>@action.Title
+                                                </button>
                                             </form>
                                         </li>
                                     }
@@ -129,10 +335,7 @@
 
 <script>
 (function initDataTable() {
-    if (typeof jQuery === 'undefined') {
-        setTimeout(initDataTable, 50);
-        return;
-    }
+    if (typeof jQuery === 'undefined') { setTimeout(initDataTable, 50); return; }
 
     var scripts = [
         '/lib/datatables/js/jquery.dataTables.min.js',
@@ -141,49 +344,52 @@
         '/lib/datatables/js/buttons.bootstrap5.min.js',
         '/lib/datatables/js/buttons.colVis.min.js'
     ];
+    var i = 0;
+    function loadNext() {
+        if (i >= scripts.length) { init(); return; }
+        var s = document.createElement('script');
+        s.src = scripts[i++];
+        s.onload = s.onerror = loadNext;
+        document.head.appendChild(s);
+    }
+    loadNext();
 
-    var currentScriptIndex = 0;
+    function rateClass(r) { r = parseFloat(r); return r >= 80 ? 'high' : r >= 50 ? 'mid' : 'low'; }
 
-    function loadScript(url, callback) {
-        var script = document.createElement('script');
-        script.src = url;
-        script.onload = callback;
-        script.onerror = function() {
-            console.error('Failed to load script:', url);
-            callback();
-        };
-        document.head.appendChild(script);
+    function buildFallbackRows(rows) {
+        if (!rows || !rows.length)
+            return '<tr><td colspan="5" class="text-muted text-center py-2" style="font-size:.79rem"><i class="bi bi-info-circle me-1"></i>Nessun fallback configurato</td></tr>';
+        return rows.map(function(it) {
+            var cls = rateClass(it.rate);
+            var pct = Math.min(100, Math.max(0, parseFloat(it.rate)));
+            var badge = it.enabled
+                ? '<span class="badge rounded-pill" style="background:#ecfdf5;color:#059669;border:1px solid #a7f3d0;font-weight:600">Attivo</span>'
+                : '<span class="badge rounded-pill" style="background:#f8fafc;color:#94a3b8;border:1px solid #e2e8f0;font-weight:600">Off</span>';
+            return '<tr>' +
+                '<td><i class="bi bi-cpu me-1 text-muted opacity-50"></i>' + (it.modelName || '') + '</td>' +
+                '<td class="text-end"><span style="color:#10b981;font-weight:600">' + it.success + '</span><span class="text-muted"> / ' + it.useCount + '</span></td>' +
+                '<td class="text-end"><span style="color:#ef4444">' + it.failed + '</span></td>' +
+                '<td><div class="d-flex align-items-center gap-2">' +
+                    '<div class="rate-bar"><div class="rate-bar-fill ' + cls + '" style="width:' + pct + '%"></div></div>' +
+                    '<span class="rate-text ' + cls + '" style="font-size:.76rem">' + it.rate + '%</span>' +
+                '</div></td>' +
+                '<td class="text-center">' + badge + '</td>' +
+            '</tr>';
+        }).join('');
     }
 
-    function loadNextScript() {
-        if (currentScriptIndex < scripts.length) {
-            loadScript(scripts[currentScriptIndex], function() {
-                currentScriptIndex++;
-                loadNextScript();
-            });
-        } else {
-            initializeDataTable();
-        }
-    }
-
-    loadNextScript();
-
-    function initializeDataTable() {
+    function init() {
         jQuery(document).ready(function($) {
-            if (typeof $.fn.DataTable === 'undefined') {
-                console.error('DataTables non caricato');
-                return;
-            }
+            if (typeof $.fn.DataTable === 'undefined') return;
 
             var table = $('#rolesTable').DataTable({
-                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                dom: "<'row mb-0'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
                      "rt" +
-                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+                     "<'row mt-0'<'col-sm-6'i><'col-sm-6 text-end'p>>",
                 stateSave: true,
                 paging: true,
                 pageLength: 25,
-                lengthChange: true,
-                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                lengthChange: false,
                 order: [[2, 'asc']],
                 ordering: true,
                 searching: true,
@@ -193,46 +399,31 @@
                 ],
                 buttons: [
                     {
-                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Ruolo',
+                        text: '<i class="bi bi-plus me-1"></i>Nuovo Ruolo',
                         className: 'btn btn-sm btn-primary',
-                        attr: {
-                            style: 'width: auto; flex: 0 0 auto;'
-                        },
-                        action: function() {
-                            window.location.href = '/Roles/Edit';
-                        }
+                        action: function() { window.location.href = '/Roles/Edit'; }
                     },
                     {
                         extend: 'colvis',
-                        text: 'Colonne',
-                        className: 'btn btn-sm btn-secondary'
+                        text: '<i class="bi bi-layout-three-columns me-1"></i>Colonne',
+                        className: 'btn btn-sm btn-outline-dark'
                     }
                 ],
                 language: {
-                    search: "Cerca:",
-                    lengthMenu: "Mostra _MENU_ record",
-                    info: "Showing _START_ to _END_ of _TOTAL_ entries",
-                    infoEmpty: "Nessun record disponibile",
-                    infoFiltered: "(filtrati da _MAX_ record totali)",
-                    zeroRecords: "Nessun record trovato",
-                    paginate: {
-                        first: "Prima",
-                        last: "Ultima",
-                        next: "Succ",
-                        previous: "Prec"
-                    }
+                    search: "Cerca",
+                    info: "_START_–_END_ di _TOTAL_",
+                    infoEmpty: "Nessun ruolo",
+                    infoFiltered: "(su _MAX_)",
+                    zeroRecords: "Nessun ruolo trovato",
+                    paginate: { first: "«", last: "»", next: "›", previous: "‹" }
                 }
             });
 
-            table.on('click', 'td.dt-control', function () {
+            // Expand / collapse child row
+            table.on('click', 'td.dt-control', function() {
                 var $tr = $(this).closest('tr');
                 var row = table.row($tr);
-
-                if (row.child.isShown()) {
-                    row.child.hide();
-                    $tr.removeClass('shown');
-                    return;
-                }
+                if (row.child.isShown()) { row.child.hide(); $tr.removeClass('shown'); return; }
 
                 var id = $tr.data('id');
                 if (!id) return;
@@ -240,42 +431,34 @@
                 fetch('?handler=Detail&id=' + encodeURIComponent(id))
                     .then(function(r) { return r.json(); })
                     .then(function(data) {
-                        var fallbackRows = '';
-                        if (data.fallbackModels && data.fallbackModels.length) {
-                            fallbackRows = data.fallbackModels.map(function(item) {
-                                return '<tr>' +
-                                    '<td>' + (item.modelName || '') + '</td>' +
-                                    '<td class="text-end">' + item.success + '/' + item.useCount + '</td>' +
-                                    '<td class="text-end text-danger">' + item.failed + '</td>' +
-                                    '<td class="text-end">' + item.rate + '%</td>' +
-                                    '<td class="text-center">' + (item.enabled ? 'Yes' : 'No') + '</td>' +
-                                '</tr>';
-                            }).join('');
-                        } else {
-                            fallbackRows = '<tr><td colspan="5" class="text-muted text-center">Nessun fallback configurato</td></tr>';
-                        }
+                        var infoRows = (data.description || '').split('\n').map(function(line) {
+                            var p = line.split(': '), lbl = p.shift(), val = p.join(': ') || '—';
+                            return '<dt class="info-label">' + lbl + '</dt><dd class="info-value mb-0">' + val + '</dd>';
+                        }).join('');
 
-                        var fallbackTable = '<div class="table-responsive mt-2">' +
-                            '<table class="table table-sm table-bordered mb-0">' +
-                                '<thead>' +
-                                    '<tr>' +
-                                        '<th>Modello</th>' +
-                                        '<th class="text-end">Successi</th>' +
-                                        '<th class="text-end">Falliti</th>' +
-                                        '<th class="text-end">%</th>' +
-                                        '<th class="text-center">Enabled</th>' +
-                                    '</tr>' +
-                                '</thead>' +
-                                '<tbody>' + fallbackRows + '</tbody>' +
-                            '</table>' +
-                        '</div>';
+                        var html =
+                            '<div class="child-detail">' +
+                                '<div class="row g-4">' +
+                                    '<div class="col-auto">' +
+                                        '<div class="section-title"><i class="bi bi-person-gear me-1"></i>' + (data.title || '') + '</div>' +
+                                        '<dl class="info-grid mb-0">' + infoRows + '</dl>' +
+                                    '</div>' +
+                                    '<div class="col">' +
+                                        '<div class="section-title"><i class="bi bi-diagram-3 me-1"></i>Fallback Models</div>' +
+                                        '<table class="inner-tbl">' +
+                                            '<thead><tr>' +
+                                                '<th>Modello</th>' +
+                                                '<th class="text-end">Successi</th>' +
+                                                '<th class="text-end">Falliti</th>' +
+                                                '<th>Tasso</th>' +
+                                                '<th class="text-center">Stato</th>' +
+                                            '</tr></thead>' +
+                                            '<tbody>' + buildFallbackRows(data.fallbackModels) + '</tbody>' +
+                                        '</table>' +
+                                    '</div>' +
+                                '</div>' +
+                            '</div>';
 
-                        var html = '<div class="card"><div class="card-body">' +
-                            '<h5 class="card-title">' + (data.title || '') + '</h5>' +
-                            '<p class="card-text" style="white-space: pre-wrap;">' + (data.description || '') + '</p>' +
-                            '<h6 class="mt-3 mb-2">Fallback models</h6>' +
-                            fallbackTable +
-                            '</div></div>';
                         row.child(html).show();
                         $tr.addClass('shown');
                     });
@@ -284,8 +467,7 @@
             $(document).on('click', 'a.dropdown-item.js-nav', function(e) {
                 var url = $(this).data('url') || $(this).attr('href');
                 if (!url) return;
-                e.preventDefault();
-                e.stopPropagation();
+                e.preventDefault(); e.stopPropagation();
                 window.location.assign(url);
             });
         });

@@ -154,11 +154,18 @@
                                             <td>
                                                 <input type="hidden" name="PostedCharacterVoices[@i].Index" value="@row.Index" />
                                                 <input type="hidden" name="PostedCharacterVoices[@i].Name" value="@row.Name" />
-                                                <input type="hidden" name="PostedCharacterVoices[@i].Gender" value="@row.Gender" />
                                                 <input type="hidden" name="PostedCharacterVoices[@i].Voice" value="@row.Voice" />
                                                 <strong>@row.Name</strong>
                                             </td>
-                                            <td>@(string.IsNullOrWhiteSpace(row.Gender) ? "-" : row.Gender)</td>
+                                            <td>
+                                                <select name="PostedCharacterVoices[@i].Gender" class="form-select form-select-sm">
+                                                    <option value="" selected="@(string.IsNullOrWhiteSpace(row.Gender) ? "selected" : null)">--</option>
+                                                    <option value="male" selected="@(string.Equals(row.Gender, "male", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">male</option>
+                                                    <option value="female" selected="@(string.Equals(row.Gender, "female", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">female</option>
+                                                    <option value="robot" selected="@(string.Equals(row.Gender, "robot", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">robot</option>
+                                                    <option value="alien" selected="@(string.Equals(row.Gender, "alien", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">alien</option>
+                                                </select>
+                                            </td>
                                             <td>
                                                 <select id="@selectId" name="PostedCharacterVoices[@i].VoiceId" class="form-select form-select-sm voice-select">
                                                     <option value="">-- nessuna voce --</option>

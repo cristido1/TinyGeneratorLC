@@ -1,0 +1,183 @@
+DOCUMENTO: GESTIONE TAG E PRIORITÀ FONTI AUDIO
+
+OBIETTIVO
+Standardizzare i tag dei suoni provenienti dai vari provider e dare priorità alle fonti che restituiscono tag strutturati. Le fonti senza tag devono essere usate solo come fallback finale.
+
+------------------------------------------------------------
+CLASSIFICAZIONE FONTI PER QUALITÀ TAG
+
+PRIORITÀ 1 (tag strutturati affidabili)
+- Freesound
+- OpenGameArt
+
+PRIORITÀ 2 (tag parziali)
+- Pixabay
+
+PRIORITÀ 3 (nessun tag affidabile)
+- Mixkit
+- OrangeFreeSounds
+
+------------------------------------------------------------
+ORDINE DI RICERCA AGGIORNATO
+
+Per ogni query, cercare in questo ordine:
+
+1) Freesound
+2) OpenGameArt
+3) Pixabay
+4) Mixkit
+5) OrangeFreeSounds
+
+------------------------------------------------------------
+STEP 1 — RACCOLTA METADATI
+
+Per ogni risultato recuperare:
+
+- Title
+- Description (se disponibile)
+- Tags (se disponibili)
+- Category (se disponibile)
+- Duration
+- Source
+
+------------------------------------------------------------
+STEP 2 — NORMALIZZAZIONE TAG PROVIDER
+
+INPUT:
+- provider_tags (array o stringa)
+- title
+- description
+
+OUTPUT:
+lista di tag candidati puliti
+
+PROCESSO:
+
+1) Se provider_tags esistono:
+   - splittare su virgola
+   - lowercase
+   - rimuovere duplicati
+   - rimuovere stopwords (sound, effect, audio, free, download, etc.)
+
+2) Se provider_tags non esistono:
+   - estrarre parole chiave da title
+   - estrarre parole chiave da description (prime 20 parole)
+
+3) unire tutto in una lista unica
+
+------------------------------------------------------------
+STEP 3 — MAPPATURA SU SCHEMA INTERNO
+
+Convertire i tag candidati nelle categorie standard:
+
+FX:
+- suono
+- oggetto
+- contesto
+- materiale
+
+AMBIENT:
+- categoria
+- luogo
+- suono_base
+- suono_secondario
+
+MUSIC:
+- tipo
+- mood
+- energia
+- contesto
+
+Per ogni categoria:
+- trovare la parola migliore
+- assegnare sinonimo dalla tabella sinonimi interna
+
+------------------------------------------------------------
+STEP 4 — GENERAZIONE TAG FINALI
+
+Creare sempre struttura a coppie:
+
+FX:
+[sound, sound_syn, object, object_syn, context, context_syn, material, material_syn]
+
+AMBIENT:
+[categoria, cat_syn, luogo, luogo_syn, suono1, suono1_syn, suono2, suono2_syn]
+
+MUSIC:
+[type, type_syn, mood, mood_syn, energy, energy_syn, context, context_syn]
+
+------------------------------------------------------------
+STEP 5 — SCORING TAG QUALITY
+
+Calcolare punteggio qualità tag:
+
++3 se provider = Freesound
++3 se provider = OpenGameArt
++2 se provider = Pixabay
++0 se provider = Mixkit
++0 se provider = OrangeFreeSounds
+
++1 per ogni categoria popolata correttamente
++1 se sinonimi validi
+
+Salvare questo score come TagQualityScore
+
+------------------------------------------------------------
+STEP 6 — FILTRO RISULTATI PER QUALITÀ TAG
+
+Quando esistono più risultati validi:
+
+- preferire quelli con TagQualityScore più alto
+- usare Mixkit e OrangeFreeSounds solo se nessun risultato valido dalle fonti superiori
+
+------------------------------------------------------------
+STEP 7 — FALLBACK SENZA TAG
+
+Se la fonte NON restituisce tag (Mixkit / OrangeFreeSounds):
+
+1) usare solo:
+   - query originale
+   - titolo
+   - categoria pagina
+
+2) generare tag con regole deterministiche + keyword matching
+
+3) se non si riesce a costruire almeno 3 categorie → scartare risultato
+
+------------------------------------------------------------
+STEP 8 — SALVATAGGIO DATABASE
+
+Salvare in tabella sounds:
+
+- Category (fx / ambience / music)
+- TagsOriginalProvider
+- TagsNormalized (coppie sinonimi)
+- TagQualityScore
+- Source
+- Url
+- LocalPath
+- Duration
+- CreatedAt
+
+------------------------------------------------------------
+STEP 9 — LOGGING
+
+Loggare sempre:
+
+- fonte
+- query usata
+- numero tag trovati
+- qualità tag
+- eventuali fallback attivati
+
+------------------------------------------------------------
+STEP 10 — REGOLE FINALI
+
+REGOLA 1: usare sempre prima fonti con tag strutturati
+REGOLA 2: usare fonti senza tag solo come ultima scelta
+REGOLA 3: normalizzare sempre i tag prima di salvare
+REGOLA 4: non salvare suoni con tag incompleti
+REGOLA 5: mantenere struttura a coppie di sinonimi
+
+------------------------------------------------------------
+FINE DOCUMENTO

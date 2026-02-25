@@ -2,7 +2,8 @@
 @model TinyGenerator.Pages.Sounds.IndexModel
 @{
     ViewData["Title"] = "Sounds";
-    ViewData["PageDescription"] = "Libreria suoni WAV (fx/music/amb)";
+    ViewData["PageDescription"] = "Libreria suoni WAV/MP3 (fx/music/amb)";
+    var jsTypeFilter = Model.TypeFilter ?? string.Empty;
 
     string ScoreCss(double? value)
     {
@@ -10,6 +11,14 @@
         if (value.Value < 50) return "score-low";
         if (value.Value < 75) return "score-mid";
         return "score-high";
+    }
+
+    string FormatInsertDate(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        return DateTime.TryParse(value, out var dt)
+            ? dt.ToString("yyyy/MM/dd HH:mm")
+            : value;
     }
 }
 
@@ -33,6 +42,10 @@
         .score-mid { background: #fff3cd; color: #664d03; }
         .score-high { background: #d1e7dd; color: #0f5132; }
         .score-empty { color: #6c757d; }
+        .sound-disabled-row { opacity: 0.55; color: #6c757d; }
+        .sound-disabled-row a,
+        .sound-disabled-row .badge,
+        .sound-disabled-row .btn { opacity: 0.9; }
     </style>
 }
 
@@ -46,9 +59,28 @@
         <div class="alert alert-danger py-2">@err</div>
     }
 
+    <form method="get" class="row g-2 align-items-end mb-3">
+        <div class="col-sm-4 col-md-3 col-lg-2">
+            <label for="typeFilterTop" class="form-label mb-1">Tipo</label>
+            <select id="typeFilterTop" name="typeFilter" class="form-select form-select-sm">
+                <option value="" selected="@(string.IsNullOrWhiteSpace(Model.TypeFilter))">Tutti</option>
+                <option value="fx" selected="@(string.Equals(Model.TypeFilter, "fx", StringComparison.OrdinalIgnoreCase))">fx</option>
+                <option value="music" selected="@(string.Equals(Model.TypeFilter, "music", StringComparison.OrdinalIgnoreCase))">music</option>
+                <option value="amb" selected="@(string.Equals(Model.TypeFilter, "amb", StringComparison.OrdinalIgnoreCase))">amb</option>
+            </select>
+        </div>
+        <div class="col-sm-auto">
+            <button type="submit" class="btn btn-sm btn-primary">Filtra</button>
+        </div>
+        <div class="col-sm-auto">
+            <a href="/Sounds/Index?typeFilter=" class="btn btn-sm btn-outline-secondary">Reset</a>
+        </div>
+    </form>
+
     <div class="d-flex gap-2 mb-2">
-        <form method="post" asp-page-handler="RecalculateScores" class="d-inline">
+        <form method="post" asp-page-handler="EnqueueRecalculateScores" class="d-inline">
             @Html.AntiForgeryToken()
+            <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
             <button type="submit" class="btn btn-sm btn-outline-primary">Ricalcola score (tutti)</button>
         </form>
         <form id="enqueueMissingScoresForm" method="post" asp-page-handler="EnqueueRecalculateMissingScores" class="d-inline">
@@ -78,6 +110,7 @@
                         <th data-col="tags">Tags</th>
                         <th data-col="usageCount">Usage Count</th>
                         <th data-col="usageLast">Usage Last</th>
+                        <th data-col="insertDate">Inserito il</th>
                         <th data-col="durationSeconds">Durata (s)</th>
                         <th data-col="scoreFinal">Score Final</th>
                         <th data-col="scoreHuman">Score Human</th>
@@ -94,57 +127,7 @@
                         <th data-col="filepath">FilePath</th>
                     </tr>
                 </thead>
-                <tbody>
-                    @foreach (var s in Model.Items)
-                    {
-                        <tr>
-                            <td data-col="actions">
-                                <div class="d-flex gap-1">
-                                    <form method="post" asp-page-handler="EnqueueRecalculateRowScore" class="d-inline">
-                                        @Html.AntiForgeryToken()
-                                        <input type="hidden" name="id" value="@s.Id" />
-                                        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
-                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Accoda ricalcolo score">Score</button>
-                                    </form>
-                                    <a class="btn btn-sm btn-outline-secondary" href="/Sounds/Edit?id=@s.Id">Edit</a>
-                                    <form method="post" asp-page-handler="Delete" class="d-inline" onsubmit="return confirm('Eliminare questo suono?');">
-                                        @Html.AntiForgeryToken()
-                                        <input type="hidden" name="id" value="@s.Id" />
-                                        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
-                                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                                    </form>
-                                </div>
-                            </td>
-                            <td data-col="listen">
-                                <audio class="sound-player" controls preload="none" src="?handler=Audio&id=@s.Id"></audio>
-                            </td>
-                            <td data-col="id">@s.Id</td>
-                            <td data-col="type">
-                                <span class="badge @(s.Type == "amb" ? "bg-success" : s.Type == "music" ? "bg-primary" : "bg-secondary")">@s.Type</span>
-                            </td>
-                            <td data-col="library">@s.Library</td>
-                            <td data-col="filename">@s.FileName</td>
-                            <td data-col="description">@s.Description</td>
-                            <td data-col="tags">@s.Tags</td>
-                            <td data-col="usageCount">@s.UsageCount</td>
-                            <td data-col="usageLast">@s.UsageLast</td>
-                            <td data-col="durationSeconds">@s.DurationSeconds?.ToString("0.###")</td>
-                            <td data-col="scoreFinal"><span class="score-pill @ScoreCss(s.ScoreFinal)">@s.ScoreFinal?.ToString("0.##")</span></td>
-                            <td data-col="scoreHuman"><span class="score-pill @ScoreCss(s.ScoreHuman)">@s.ScoreHuman?.ToString("0.##")</span></td>
-                            <td data-col="scoreLoudness"><span class="score-pill @ScoreCss(s.ScoreLoudness)">@s.ScoreLoudness?.ToString("0.##")</span></td>
-                            <td data-col="scoreDynamic"><span class="score-pill @ScoreCss(s.ScoreDynamic)">@s.ScoreDynamic?.ToString("0.##")</span></td>
-                            <td data-col="scoreClipping"><span class="score-pill @ScoreCss(s.ScoreClipping)">@s.ScoreClipping?.ToString("0.##")</span></td>
-                            <td data-col="scoreNoise"><span class="score-pill @ScoreCss(s.ScoreNoise)">@s.ScoreNoise?.ToString("0.##")</span></td>
-                            <td data-col="scoreDuration"><span class="score-pill @ScoreCss(s.ScoreDuration)">@s.ScoreDuration?.ToString("0.##")</span></td>
-                            <td data-col="scoreFormat"><span class="score-pill @ScoreCss(s.ScoreFormat)">@s.ScoreFormat?.ToString("0.##")</span></td>
-                            <td data-col="scoreConsistency"><span class="score-pill @ScoreCss(s.ScoreConsistency)">@s.ScoreConsistency?.ToString("0.##")</span></td>
-                            <td data-col="scoreTagMatch"><span class="score-pill @ScoreCss(s.ScoreTagMatch)">@s.ScoreTagMatch?.ToString("0.##")</span></td>
-                            <td data-col="scoreLastCalc">@s.ScoreLastCalc</td>
-                            <td data-col="scoreVersion">@s.ScoreVersion</td>
-                            <td data-col="filepath" class="sound-path">@s.FilePath</td>
-                        </tr>
-                    }
-                </tbody>
+                <tbody></tbody>
             </table>
         </div>
     </div>
@@ -185,6 +168,85 @@
     function initializeDataTable() {
         jQuery(function($) {
             if (typeof $.fn.DataTable === 'undefined') return;
+            const currentTypeFilter = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(jsTypeFilter));
+            const antiForgeryToken = document.querySelector('input[name="__RequestVerificationToken"]')?.value || '';
+
+            function esc(v) {
+                if (v === null || v === undefined) return '';
+                return String(v)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function fmtNum(v, digits) {
+                if (v === null || v === undefined || v === '') return '';
+                const n = Number(v);
+                return Number.isFinite(n) ? n.toFixed(digits).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') : esc(v);
+            }
+
+            function scoreCss(v) {
+                if (v === null || v === undefined || v === '') return 'score-empty';
+                const n = Number(v);
+                if (!Number.isFinite(n)) return 'score-empty';
+                if (n < 50) return 'score-low';
+                if (n < 75) return 'score-mid';
+                return 'score-high';
+            }
+
+            function fmtInsertDate(v) {
+                if (!v) return '';
+                const d = new Date(v);
+                if (Number.isNaN(d.getTime())) return esc(v);
+                const yyyy = d.getFullYear();
+                const MM = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                const HH = String(d.getHours()).padStart(2, '0');
+                const mm = String(d.getMinutes()).padStart(2, '0');
+                return `${yyyy}/${MM}/${dd} ${HH}:${mm}`;
+            }
+
+            function typeBadge(type, enabled) {
+                const t = (type || '').toLowerCase();
+                const cls = t === 'amb' ? 'bg-success' : (t === 'music' ? 'bg-primary' : 'bg-secondary');
+                let html = `<span class="badge ${cls}">${esc(type || '')}</span>`;
+                if (!enabled) {
+                    html += ' <span class="badge bg-light text-muted border ms-1">disabled</span>';
+                }
+                return html;
+            }
+
+            function rowActions(row) {
+                const id = Number(row.id ?? row.Id);
+                const typeFilterHidden = `<input type="hidden" name="typeFilter" value="${esc(currentTypeFilter)}" />`;
+                const tokenInput = antiForgeryToken ? `<input type="hidden" name="__RequestVerificationToken" value="${esc(antiForgeryToken)}" />` : '';
+                return `
+<div class="dropdown">
+  <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Azioni</button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li>
+      <form method="post" action="/Sounds/Index?handler=EnqueueRecalculateRowScore" class="m-0">
+        ${tokenInput}
+        <input type="hidden" name="id" value="${id}" />
+        ${typeFilterHidden}
+        <button type="submit" class="dropdown-item">Accoda ricalcolo score</button>
+      </form>
+    </li>
+    <li><a class="dropdown-item" href="/Sounds/Edit?id=${id}">Edit</a></li>
+    <li><hr class="dropdown-divider" /></li>
+    <li>
+      <form method="post" action="/Sounds/Index?handler=Delete" class="m-0" onsubmit="return confirm('Eliminare questo suono?');">
+        ${tokenInput}
+        <input type="hidden" name="id" value="${id}" />
+        ${typeFilterHidden}
+        <button type="submit" class="dropdown-item text-danger">Delete</button>
+      </form>
+    </li>
+  </ul>
+</div>`;
+            }
 
             $('#soundsTable').DataTable({
                 dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
@@ -192,12 +254,54 @@
                      "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
                 stateSave: true,
                 stateDuration: 0, // localStorage persistente sul dispositivo (standard DataTables)
+                processing: true,
+                serverSide: true,
                 pageLength: 25,
                 lengthMenu: [[10,25,50,100],[10,25,50,100]],
-                order: [[11, 'desc']],
+                ajax: {
+                    url: '/api/sounds/datatable',
+                    type: 'POST',
+                    data: function(d) {
+                        d.typeFilter = currentTypeFilter || '';
+                    }
+                },
+                order: [[12, 'desc']],
+                columns: [
+                    { data: 'id', name: 'actions', render: function(_, __, row){ return rowActions(row); }, orderable: false },
+                    { data: 'id', name: 'listen', render: function(v){ return `<audio class="sound-player" controls preload="none" src="/Sounds/Index?handler=Audio&id=${Number(v)}"></audio>`; }, orderable: false },
+                    { data: 'id', name: 'id' },
+                    { data: 'type', name: 'type', render: function(v, __, row){ return typeBadge(v, !!(row.enabled ?? row.Enabled)); } },
+                    { data: 'library', name: 'library', defaultContent: '' },
+                    { data: 'fileName', name: 'filename', defaultContent: '' },
+                    { data: 'description', name: 'description', defaultContent: '' },
+                    { data: 'tags', name: 'tags', defaultContent: '' },
+                    { data: 'usageCount', name: 'usageCount', defaultContent: 0 },
+                    { data: 'usageLast', name: 'usageLast', defaultContent: '' },
+                    { data: 'insertDate', name: 'insertDate', render: function(v){ return fmtInsertDate(v); } },
+                    { data: 'durationSeconds', name: 'durationSeconds', render: function(v){ return fmtNum(v, 3); } },
+                    { data: 'scoreFinal', name: 'scoreFinal', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreHuman', name: 'scoreHuman', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreLoudness', name: 'scoreLoudness', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreDynamic', name: 'scoreDynamic', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreClipping', name: 'scoreClipping', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreNoise', name: 'scoreNoise', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreDuration', name: 'scoreDuration', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreFormat', name: 'scoreFormat', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreConsistency', name: 'scoreConsistency', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreTagMatch', name: 'scoreTagMatch', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
+                    { data: 'scoreLastCalc', name: 'scoreLastCalc', defaultContent: '' },
+                    { data: 'scoreVersion', name: 'scoreVersion', defaultContent: '' },
+                    { data: 'filePath', name: 'filepath', defaultContent: '', className: 'sound-path' }
+                ],
                 columnDefs: [
                     { orderable: false, targets: [0, 1] }
                 ],
+                createdRow: function(row, data) {
+                    const enabled = data.enabled ?? data.Enabled;
+                    if (enabled === false || enabled === 0) {
+                        row.classList.add('sound-disabled-row');
+                    }
+                },
                 buttons: [
                     {
                         text: '<i class="bi bi-plus-circle me-1"></i>Nuovo',

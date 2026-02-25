@@ -9,6 +9,7 @@ namespace TinyGenerator.Pages.Sounds;
 
 public class IndexModel : PageModel
 {
+    private const string TypeFilterCookieName = "sounds_type_filter";
     private readonly DatabaseService _database;
     private readonly SoundScoringService _soundScoring;
     private readonly ICommandDispatcher? _dispatcher;
@@ -35,9 +36,35 @@ public class IndexModel : PageModel
 
     public void OnGet()
     {
-        var type = NormalizeTypeOrNull(TypeFilter);
-        Items = _database.ListSounds(type: type);
+        var hasTypeFilterQuery = Request.Query.ContainsKey("typeFilter");
+        var requestedType = hasTypeFilterQuery
+            ? TypeFilter
+            : Request.Cookies[TypeFilterCookieName];
+
+        var type = NormalizeTypeOrNull(requestedType);
+        // Server-side DataTables paging via API: do not preload the whole sounds table.
+        Items = Array.Empty<Sound>();
         TypeFilter = type;
+
+        if (hasTypeFilterQuery)
+        {
+            if (string.IsNullOrWhiteSpace(type))
+            {
+                Response.Cookies.Delete(TypeFilterCookieName);
+            }
+            else
+            {
+                Response.Cookies.Append(
+                    TypeFilterCookieName,
+                    type,
+                    new CookieOptions
+                    {
+                        HttpOnly = false,
+                        IsEssential = true,
+                        Expires = DateTimeOffset.UtcNow.AddDays(90)
+                    });
+            }
+        }
     }
 
     public IActionResult OnPostDelete(int id)
@@ -55,26 +82,7 @@ public class IndexModel : PageModel
         return RedirectToPage(new { typeFilter = TypeFilter });
     }
 
-    public IActionResult OnPostRecalculateScores(bool onlyMissing = false)
-    {
-        try
-        {
-            var result = _soundScoring.RecalculateScores(onlyMissingFinal: onlyMissing);
-            TempData["Success"] = $"Score suoni ricalcolati. Processati={result.Processed}, aggiornati={result.Updated}, errori={result.Failed}.";
-            if (result.Errors.Count > 0)
-            {
-                TempData["Error"] = string.Join(" | ", result.Errors.Take(3)) + (result.Errors.Count > 3 ? $" (+{result.Errors.Count - 3} altri)" : string.Empty);
-            }
-        }
-        catch (Exception ex)
-        {
-            TempData["Error"] = ex.Message;
-        }
-
-        return RedirectToPage(new { typeFilter = TypeFilter });
-    }
-
-    public IActionResult OnPostEnqueueRecalculateMissingScores()
+    public IActionResult OnPostEnqueueRecalculateScores(bool onlyMissing = false)
     {
         if (_dispatcher == null)
         {
@@ -84,28 +92,37 @@ public class IndexModel : PageModel
 
         try
         {
-            var runId = $"sound_scores_missing_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-            var cmd = new RecalculateSoundScoresCommand(_soundScoring, onlyMissingFinal: true);
+            var runId = onlyMissing
+                ? $"sound_scores_missing_{DateTime.UtcNow:yyyyMMddHHmmssfff}"
+                : $"sound_scores_all_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            var cmd = new RecalculateSoundScoresCommand(_soundScoring, onlyMissingFinal: onlyMissing);
             var handle = _dispatcher.Enqueue(
                 cmd,
                 runId: runId,
                 threadScope: "sounds/scoring",
                 metadata: new Dictionary<string, string>
                 {
-                    ["scope"] = "missing",
+                    ["scope"] = onlyMissing ? "missing" : "all",
                     ["entity"] = "sounds"
                 },
                 priority: 3);
 
-            TempData["Success"] = $"Ricalcolo score mancanti accodato (runId={handle.RunId}).";
+            TempData["Success"] = onlyMissing
+                ? $"Ricalcolo score mancanti accodato (runId={handle.RunId})."
+                : $"Ricalcolo score (tutti) accodato (runId={handle.RunId}).";
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Errore accodando ricalcolo score mancanti suoni");
+            _logger?.LogError(ex, "Errore accodando ricalcolo score suoni (onlyMissing={OnlyMissing})", onlyMissing);
             TempData["Error"] = ex.Message;
         }
 
         return RedirectToPage(new { typeFilter = TypeFilter });
+    }
+
+    public IActionResult OnPostEnqueueRecalculateMissingScores()
+    {
+        return OnPostEnqueueRecalculateScores(onlyMissing: true);
     }
 
     public IActionResult OnPostEnqueueRecalculateRowScore(int id)
@@ -204,12 +221,20 @@ public class IndexModel : PageModel
                 return NotFound();
             }
 
-            if (!string.Equals(Path.GetExtension(full), ".wav", StringComparison.OrdinalIgnoreCase))
+            var ext = Path.GetExtension(full);
+            var contentType = ext.ToLowerInvariant() switch
             {
-                return BadRequest("Solo file .wav supportati.");
+                ".wav" => "audio/wav",
+                ".mp3" => "audio/mpeg",
+                _ => string.Empty
+            };
+
+            if (string.IsNullOrWhiteSpace(contentType))
+            {
+                return BadRequest("Solo file .wav e .mp3 supportati.");
             }
 
-            return PhysicalFile(full, "audio/wav");
+            return PhysicalFile(full, contentType);
         }
         catch (Exception ex)
         {

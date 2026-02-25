@@ -7,6 +7,7 @@ using TinyGenerator.Hubs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Http.Features;
 using TinyGenerator.Services.Commands;
 
 // Attempt to restart local Ollama with higher priority before app startup (best-effort).
@@ -16,6 +17,10 @@ using TinyGenerator.Services.Commands;
 
 Console.WriteLine($"[Startup] Creating WebApplication builder at {DateTime.UtcNow:o}");
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.ValueCountLimit = 5000;
+});
 // Enable provider validation in development to catch DI issues during Build
 if (builder.Environment.IsDevelopment())
 {
@@ -260,8 +265,17 @@ builder.Services.Configure<SeriesGenerationOptions>(options =>
 builder.Services.Configure<AudioGenerationOptions>(builder.Configuration.GetSection("AudioGeneration"));
 builder.Services.Configure<SoundScoringOptions>(builder.Configuration.GetSection("SoundScoring"));
 builder.Services.AddSingleton<SoundScoringService>();
+builder.Services.Configure<SoundSearchOptions>(builder.Configuration.GetSection("SoundSearch"));
+builder.Services.AddSingleton<SoundSearchService>(sp => new SoundSearchService(
+    sp.GetRequiredService<DatabaseService>(),
+    sp.GetRequiredService<IHttpClientFactory>(),
+    sp.GetRequiredService<IOptionsMonitor<SoundSearchOptions>>(),
+    sp.GetService<ICallCenter>(),
+    sp.GetService<ICustomLogger>(),
+    sp.GetService<ILogger<SoundSearchService>>()));
 // Automatic operations (auto enqueue when system idle)
 builder.Services.Configure<AutomaticOperationsOptions>(builder.Configuration.GetSection("AutomaticOperations"));
+builder.Services.Configure<AlwaysOnAutomaticCommandsOptions>(builder.Configuration.GetSection("AlwaysOnAutomaticCommands"));
 builder.Services.Configure<StoryTaggingPipelineOptions>(builder.Configuration.GetSection("StoryTaggingPipeline"));
 // Narrator voice options (default voice id)
 builder.Services.Configure<NarratorVoiceOptions>(builder.Configuration.GetSection("NarratorVoice"));
@@ -282,10 +296,9 @@ builder.Services.AddSingleton<CommandDispatcher>(sp =>
 builder.Services.AddSingleton<ICommandDispatcher>(sp => sp.GetRequiredService<CommandDispatcher>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CommandDispatcher>());
 
-// Auto-summarize service (batch summarization at startup and every hour)
-builder.Services.AddHostedService<AutoSummarizeService>();
+// Always-on automatic commands (embeddings/stats/summaries/log analysis)
+builder.Services.AddHostedService<AlwaysOnAutomaticCommandsService>();
 builder.Services.AddHostedService<AutomaticOperationsService>();
-builder.Services.AddHostedService<AutoStateDrivenSeriesEpisodeService>();
 
 // Sentiment mapping service (embedding-based + agent fallback)
 builder.Services.AddSingleton<SentimentMappingService>(sp => new SentimentMappingService(
@@ -312,7 +325,8 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     idleAutoOptions: sp.GetService<IOptionsMonitor<AutomaticOperationsOptions>>(),
     scopeFactory: sp.GetService<IServiceScopeFactory>(),
     storyTaggingOptions: sp.GetService<IOptionsMonitor<StoryTaggingPipelineOptions>>(),
-    healthMonitor: sp.GetService<IServiceHealthMonitor>()));
+    healthMonitor: sp.GetService<IServiceHealthMonitor>(),
+    soundSearchService: sp.GetService<SoundSearchService>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 builder.Services.AddSingleton<SystemReportService>();
 builder.Services.AddSingleton<CommandModelExecutionService>();

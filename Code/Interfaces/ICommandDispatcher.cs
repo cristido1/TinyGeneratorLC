@@ -43,6 +43,7 @@ namespace TinyGenerator.Services
         void UpdateRetry(string runId, int retryCount);
         void UpdateOperationName(string runId, string newOperationName);
         bool CancelCommand(string runId);
+        int ClearCompletedCommands();
 
         /// <summary>
         /// Attende il completamento di un comando identificato dal runId e restituisce il relativo CommandResult.

@@ -82,6 +82,24 @@
         }
     };
 
+    window.clearCompletedCommandsPanel = async function(event) {
+        if (event) {
+            event.stopPropagation();
+            event.preventDefault();
+        }
+
+        try {
+            const resp = await fetch('/api/commands/clear-completed', { method: 'POST' });
+            if (!resp.ok) {
+                console.error('[CommandPanel] Clear completed failed:', await resp.text());
+                return;
+            }
+            pollCommands();
+        } catch (err) {
+            console.error('[CommandPanel] Clear completed error:', err);
+        }
+    };
+
     waitForSignalR(initCommandPanel);
 
     function initCommandPanel() {
@@ -120,6 +138,17 @@
                     cursor: move;
                 ">
                     <span style="flex:1;"><i class="bi bi-gear-fill me-1"></i>Comandi in esecuzione / coda</span>
+                    <button id="cmd-clear-completed-btn" onclick="clearCompletedCommandsPanel(event)" onmousedown="event.stopPropagation()" ontouchstart="event.stopPropagation()" style="
+                        background: rgba(255,255,255,0.2);
+                        color: #fff;
+                        border: 1px solid rgba(255,255,255,0.35);
+                        padding: 2px 8px;
+                        border-radius: 10px;
+                        font-size: 11px;
+                        cursor: pointer;
+                        margin-right: 8px;
+                        line-height: 1.2;
+                    " title="Rimuovi dal popup i comandi terminati">Pulisci</button>
                     <span class="badge" id="cmd-count" style="
                         background: rgba(255,255,255,0.25);
                         padding: 3px 8px;
@@ -350,6 +379,9 @@
                 const isCinoCommand = opLower.includes('cino_optimize_story');
                 const isStateDrivenCommand = opLower.includes('state_driven');
                 const hasStep = currentStep !== undefined && currentStep !== null && maxStep !== undefined && maxStep !== null;
+                const genericProgressPercent = (hasStep && Number(maxStep) > 0)
+                    ? Math.max(0, Math.min(100, Math.round((Number(currentStep) / Number(maxStep)) * 100)))
+                    : null;
                 const scoreMatch = /(?:score\s*parziale|parziale)\s+(\d+\/10)/i.exec(stepDesc);
                 const runningScore = scoreMatch ? scoreMatch[1] : '';
                 const normalizedStepDesc = stepDesc ? stepDesc.replace(/\|/g, ', ') : '';
@@ -509,6 +541,14 @@
                         <div style="font-size:10px; color:#444; margin-top:2px;">Completamento: ${stateProgressPercent}%</div>
                     </div>`
                     : '';
+                const genericStepProgressBar = (genericProgressPercent !== null && !isCinoCommand && !isStateDrivenCommand)
+                    ? `<div style="margin-top:4px;">
+                        <div style="height:6px; background:#e2e8f0; border-radius:999px; overflow:hidden;">
+                            <div style="height:100%; width:${genericProgressPercent}%; background:#0d6efd;"></div>
+                        </div>
+                        <div style="font-size:10px; color:#444; margin-top:2px;">Avanzamento: ${genericProgressPercent}% (${currentStep}/${maxStep})</div>
+                    </div>`
+                    : '';
                 const cinoInfo = isCinoCommand ? `
                     <div style="font-size:11px; color:#111; margin-top:4px; user-select:text;">
                         Writer: ${escapeHtml(cinoWriter)}${cinoModel ? ` • Model: ${escapeHtml(cinoModel)}` : ''}
@@ -544,7 +584,7 @@
                 ` : '';
                 const compactStatus = (isCinoCommand && status === 'running')
                     ? 'running CINO'
-                    : `${statusDisplay}${stepInfo}${retryInfo}`;
+                    : `${statusDisplay}`;
 
                 return `
                     <div style="
@@ -558,7 +598,7 @@
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <strong>${statusIcon} ${op}${storyIdBadge}</strong>
                             <div style="display:flex; align-items:center; gap:6px;">
-                                <span style="font-size:11px; opacity:0.8;">${compactStatus}</span>
+                                <span style="font-size:11px; opacity:0.8; white-space:nowrap;">${compactStatus}</span>
                                 ${cancelButton}
                             </div>
                         </div>
@@ -571,6 +611,7 @@
                         ${cinoInfo}
                         ${stateInfo}
                         ${stateProgressBar}
+                        ${genericStepProgressBar}
                         ${progressInfo}
                         ${autoInfo}
                         ${errorMsg}

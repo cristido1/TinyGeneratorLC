@@ -9,6 +9,7 @@ public class EditModel : PageModel
 {
     private readonly DatabaseService _database;
     private static readonly string SoundsRoot = Path.GetFullPath(@"C:\Users\User\Documents\ai\sounds_library");
+    private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase) { ".wav", ".mp3" };
 
     public EditModel(DatabaseService database)
     {
@@ -31,6 +32,39 @@ public class EditModel : PageModel
 
         Sound = item;
         return Page();
+    }
+
+    public IActionResult OnGetBrowseFiles(string? q = null)
+    {
+        try
+        {
+            if (!Directory.Exists(SoundsRoot))
+            {
+                return new JsonResult(Array.Empty<object>());
+            }
+
+            var query = (q ?? string.Empty).Trim();
+            var files = Directory.EnumerateFiles(SoundsRoot, "*.*", SearchOption.AllDirectories)
+                .Where(f => AllowedExtensions.Contains(Path.GetExtension(f)))
+                .Select(full => new
+                {
+                    fullPath = Path.GetFullPath(full),
+                    fileName = Path.GetFileName(full),
+                    relativePath = Path.GetRelativePath(SoundsRoot, full).Replace('\\', '/')
+                })
+                .Where(x => string.IsNullOrWhiteSpace(query) ||
+                            x.fileName.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                            x.relativePath.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(x => x.relativePath, StringComparer.OrdinalIgnoreCase)
+                .Take(1000)
+                .ToList();
+
+            return new JsonResult(files);
+        }
+        catch (Exception ex)
+        {
+            return new JsonResult(new { error = ex.Message }) { StatusCode = 500 };
+        }
     }
 
     public IActionResult OnPost()
@@ -77,9 +111,9 @@ public class EditModel : PageModel
             {
                 ModelState.AddModelError("Sound.FilePath", "Il file deve stare dentro sounds_library.");
             }
-            else if (!string.Equals(Path.GetExtension(full), ".wav", StringComparison.OrdinalIgnoreCase))
+            else if (!AllowedExtensions.Contains(Path.GetExtension(full)))
             {
-                ModelState.AddModelError("Sound.FilePath", "Sono ammessi solo file .wav.");
+                ModelState.AddModelError("Sound.FilePath", "Sono ammessi file .wav e .mp3.");
             }
             else
             {

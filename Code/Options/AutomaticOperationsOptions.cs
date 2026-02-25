@@ -25,12 +25,6 @@ namespace TinyGenerator.Services
             MinEvaluations = 2
         };
 
-        public AutomaticOperationOptions UpdateModelStats { get; set; } = new()
-        {
-            Enabled = true,
-            Priority = 5
-        };
-
         public AutoCompleteAudioPipelineOptions AutoCompleteAudioPipeline { get; set; } = new()
         {
             Enabled = true,
@@ -43,7 +37,7 @@ namespace TinyGenerator.Services
             Enabled = true,
             Priority = 7,
             IntervalMinutes = 20,
-            TargetMinutes = 20,
+            TargetMinutes = 30,
             WordsPerMinute = 150,
             WriterAgentId = 0
         };
@@ -68,7 +62,7 @@ namespace TinyGenerator.Services
     public sealed class AutoStateDrivenSeriesEpisodeOptions : AutomaticOperationOptions
     {
         public int IntervalMinutes { get; set; } = 20;
-        public int TargetMinutes { get; set; } = 20;
+        public int TargetMinutes { get; set; } = 30;
         public int WordsPerMinute { get; set; } = 150;
         public int WriterAgentId { get; set; } = 0;
     }

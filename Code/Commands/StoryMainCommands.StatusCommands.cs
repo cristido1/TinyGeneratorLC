@@ -440,7 +440,7 @@ public sealed partial class StoryMainCommands
                 var (success, message) = await _service.GenerateMusicInternalAsync(context, runId);
                 if (success)
                 {
-                    _service.TryChangeStatus(context.Story.Id, "generate_music", runId);
+                    _service.TryChangeStatus(context.Story.Id, "generate_music_audio", runId);
                 }
                 return (success, message);
             }
@@ -452,6 +452,7 @@ public sealed partial class StoryMainCommands
     private sealed class MixFinalAudioCommand : StoriesService.IStoryCommand
     {
         private readonly StoriesService _service;
+        public event EventHandler<CommandProgressEventArgs>? Progress;
 
         public MixFinalAudioCommand(StoriesService service) => _service = service;
 
@@ -462,14 +463,25 @@ public sealed partial class StoryMainCommands
         public async Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
+            ReportProgress(0, 3, "Mix finale: preparazione (0%)");
             var deleteCmd = new StoriesService.DeleteFinalMixCommand(_service);
+            ReportProgress(1, 3, "Mix finale: cleanup output precedenti (33%)");
             var (cleanupOk, cleanupMessage) = await deleteCmd.ExecuteAsync(context);
             if (!cleanupOk)
             {
                 return (false, cleanupMessage ?? "Impossibile cancellare il mix finale esistente");
             }
 
-            return await _service.StartMixFinalAudioAsync(context);
+            ReportProgress(2, 3, "Mix finale: rendering e mixaggio in corso (66%)");
+            var result = await _service.StartMixFinalAudioAsync(context);
+            if (result.success)
+            {
+                ReportProgress(3, 3, "Mix finale completato (100%)");
+            }
+            return result;
         }
+
+        private void ReportProgress(int current, int max, string description)
+            => Progress?.Invoke(this, new CommandProgressEventArgs(current, max, description));
     }
 }

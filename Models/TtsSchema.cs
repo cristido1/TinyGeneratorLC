@@ -30,11 +30,13 @@ public class TtsPhrase
     /// This is the prompt sent to AudioCraft to generate background ambient sounds.
     /// </summary>
     public string? AmbientSounds { get; set; }
+    public string? AmbientSoundTags { get; set; }
     
     /// <summary>
     /// Sound effect description to generate (from [FX, duration, description] tag).
     /// </summary>
     public string? FxDescription { get; set; }
+    public string? FxTags { get; set; }
     
     /// <summary>
     /// Duration in seconds for the sound effect.
@@ -50,6 +52,7 @@ public class TtsPhrase
     /// Music description to generate (from [MUSICA: description] tag).
     /// </summary>
     public string? MusicDescription { get; set; }
+    public string? MusicTags { get; set; }
     
     /// <summary>
     /// Duration in seconds for the music (default 10 seconds).

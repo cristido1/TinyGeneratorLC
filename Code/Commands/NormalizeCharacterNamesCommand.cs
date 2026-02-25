@@ -1,9 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
@@ -84,7 +85,7 @@ public sealed partial class StoriesService
                     if (chars.Count == 0)
                     {
                         return (false,
-                            $"La lista personaggi della storia è vuota o non valida. JSON attuale: {story.Characters.Substring(0, Math.Min(200, story.Characters.Length))}...");
+                            $"La lista personaggi della storia Ã¨ vuota o non valida. JSON attuale: {story.Characters.Substring(0, Math.Min(200, story.Characters.Length))}...");
                     }
                     storyCharacters = chars;
                 }
@@ -114,7 +115,9 @@ public sealed partial class StoriesService
                 }
 
                 var normalizedCount = 0;
+                var genderUpdatedCount = 0;
                 var characterMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var resolvedGenderByLookupName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
                 // Build mapping from old names to canonical names
                 foreach (var ttsChar in schema.Characters)
@@ -127,11 +130,6 @@ public sealed partial class StoriesService
                         _service._customLogger?.Log("Information", "NormalizeNames",
                             $"Mapping '{ttsChar.Name}' -> '{matched.Name}'");
                     }
-                }
-
-                if (characterMapping.Count == 0)
-                {
-                    return (true, "Nessuna normalizzazione necessaria: tutti i nomi sono già canonici.");
                 }
 
                 // Update character names in the Characters list
@@ -155,18 +153,30 @@ public sealed partial class StoriesService
 
                     // Update gender from story character if available
                     var storyChar = StoryCharacterParser.FindCharacter(storyCharacters, canonicalName);
+                    var resolvedGender = await ResolveCharacterGenderAsync(
+                        canonicalName,
+                        storyChar?.Gender,
+                        resolvedGenderByLookupName,
+                        context.CancellationToken);
                     var updatedChar = new TtsCharacter
                     {
                         Name = canonicalName,
                         VoiceId = ttsChar.VoiceId,
                         EmotionDefault = ttsChar.EmotionDefault,
-                        Gender = storyChar?.Gender ?? ttsChar.Gender
+                        Gender = resolvedGender
                     };
 
                     newCharacters.Add(updatedChar);
                     if (!ttsChar.Name.Equals(canonicalName, StringComparison.Ordinal))
                     {
                         normalizedCount++;
+                    }
+                    if (!string.Equals(
+                            DatabaseService.NormalizeCharacterGender(ttsChar.Gender),
+                            DatabaseService.NormalizeCharacterGender(resolvedGender),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        genderUpdatedCount++;
                     }
                 }
 
@@ -233,11 +243,16 @@ public sealed partial class StoriesService
                 _service.SaveSanitizedTtsSchemaJson(schemaPath, updatedJson);
 
                 _service._logger?.LogInformation(
-                    "Normalized {Count} character names in tts_schema.json for story {StoryId}",
-                    normalizedCount, story.Id);
+                    "Normalized names={NameCount}, genders={GenderCount} in tts_schema.json for story {StoryId}",
+                    normalizedCount, genderUpdatedCount, story.Id);
+
+                if (normalizedCount == 0 && genderUpdatedCount == 0)
+                {
+                    return (true, "Nessuna modifica necessaria: nomi e gender già allineati.");
+                }
 
                 return (true,
-                    $"Normalizzati {normalizedCount} nomi personaggi. Schema aggiornato con {schema.Characters.Count} personaggi.");
+                    $"Aggiornato schema personaggi: nomi normalizzati={normalizedCount}, gender aggiornati={genderUpdatedCount}, personaggi={schema.Characters.Count}.");
             }
             catch (Exception ex)
             {
@@ -245,5 +260,188 @@ public sealed partial class StoriesService
                 return (false, ex.Message);
             }
         }
+
+        private async Task<string> ResolveCharacterGenderAsync(
+            string? canonicalName,
+            string? fallbackGender,
+            Dictionary<string, string> cache,
+            CancellationToken ct)
+        {
+            var lookupName = ExtractLookupName(canonicalName);
+            if (string.IsNullOrWhiteSpace(lookupName))
+            {
+                return DatabaseService.NormalizeCharacterGender(fallbackGender);
+            }
+
+            if (cache.TryGetValue(lookupName, out var cached))
+            {
+                return cached;
+            }
+
+            try
+            {
+                var existing = _service._database.GetNameGenderByName(lookupName);
+                if (existing != null && !string.IsNullOrWhiteSpace(existing.Gender))
+                {
+                    var dbGender = DatabaseService.NormalizeCharacterGender(existing.Gender);
+                    cache[lookupName] = dbGender;
+                    return dbGender;
+                }
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogWarning(ex, "Lookup name_gender failed for '{Name}'", lookupName);
+            }
+
+            var inferred = await InferGenderViaUtilityAgentAsync(lookupName, canonicalName, ct);
+            var normalized = DatabaseService.NormalizeCharacterGender(
+                string.IsNullOrWhiteSpace(inferred) ? fallbackGender : inferred);
+
+            try
+            {
+                _service._database.UpsertNameGender(lookupName, normalized, verified: false);
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogWarning(ex, "Upsert name_gender failed for '{Name}'", lookupName);
+            }
+
+            cache[lookupName] = normalized;
+            return normalized;
+        }
+
+        private async Task<string?> InferGenderViaUtilityAgentAsync(string lookupName, string? fullName, CancellationToken ct)
+        {
+            try
+            {
+                var utility = _service._database.GetAgentByRole("utility_agent");
+                if (utility == null || !utility.IsActive)
+                {
+                    return "unknown";
+                }
+
+                var callCenter = ResolveCallCenter();
+                if (callCenter == null)
+                {
+                    return "unknown";
+                }
+
+                var history = new ChatHistory();
+                history.AddSystem(
+                    "Classifica il genere/entita' di un nome. Rispondi esclusivamente con UNA parola tra: " +
+                    "male, female, robot, alien, unknown. Nessun testo extra.");
+                history.AddUser(
+                    $"Nome da classificare: {lookupName}\n" +
+                    $"Nome completo (se disponibile): {(string.IsNullOrWhiteSpace(fullName) ? lookupName : fullName)}\n" +
+                    "Output consentito: male | female | robot | alien | unknown");
+
+                var options = new CallOptions
+                {
+                    Operation = "normalize_characters_gender_lookup",
+                    Timeout = TimeSpan.FromSeconds(25),
+                    MaxRetries = 1,
+                    UseResponseChecker = false,
+                    AskFailExplanation = false,
+                    AllowFallback = true
+                };
+
+                var result = await callCenter.CallAgentAsync(
+                    storyId: 0,
+                    threadId: ("utility_agent:name_gender:" + lookupName).GetHashCode(StringComparison.Ordinal),
+                    agent: utility,
+                    history: history,
+                    options: options,
+                    cancellationToken: ct).ConfigureAwait(false);
+
+                if (!result.Success || string.IsNullOrWhiteSpace(result.ResponseText))
+                {
+                    _service._logger?.LogWarning(
+                        "utility_agent failed for name '{Name}': {Reason}",
+                        lookupName,
+                        result.FailureReason ?? "empty response");
+                    return "unknown";
+                }
+
+                return ParseUtilityGenderResponse(result.ResponseText);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _service._logger?.LogWarning(ex, "utility_agent gender inference exception for '{Name}'", lookupName);
+                return "unknown";
+            }
+        }
+
+        private ICallCenter? ResolveCallCenter()
+        {
+            try
+            {
+                using var scope = _service._scopeFactory?.CreateScope();
+                var scoped = scope?.ServiceProvider.GetService(typeof(ICallCenter)) as ICallCenter;
+                if (scoped != null)
+                {
+                    return scoped;
+                }
+            }
+            catch
+            {
+                // best effort
+            }
+
+            return ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter;
+        }
+
+        private static string ParseUtilityGenderResponse(string? text)
+        {
+            var normalized = (text ?? string.Empty).Trim().ToLowerInvariant();
+            if (normalized.Contains('\n'))
+            {
+                normalized = normalized.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? normalized;
+            }
+
+            foreach (var token in Regex.Split(normalized, @"[^a-z]+"))
+            {
+                var t = token.Trim();
+                if (t is "male" or "female" or "robot" or "alien" or "unknown")
+                {
+                    return t;
+                }
+            }
+
+            return "unknown";
+        }
+
+        private static string ExtractLookupName(string? fullName)
+        {
+            if (string.IsNullOrWhiteSpace(fullName))
+            {
+                return string.Empty;
+            }
+
+            var raw = fullName.Trim();
+            raw = raw.Replace("_", " ");
+            raw = Regex.Replace(raw, @"[^\p{L}\p{N}\s'\-\.]", " ");
+            var tokens = raw
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+            if (tokens.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "sig", "sig.", "signor", "signora", "mr", "mrs", "ms", "dr", "dott", "dott.", "dottore",
+                "prof", "prof.", "professoressa", "capitano", "comandante", "tenente", "sergente", "colonnello"
+            };
+
+            var token = tokens.FirstOrDefault(t => !skip.Contains(t)) ?? tokens[0];
+            token = token.Trim('.', '\'', '"', '-', ' ');
+            return token;
+        }
     }
 }
+

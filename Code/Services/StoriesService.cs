@@ -48,8 +48,10 @@ public sealed partial class StoriesService
     private readonly IOptionsMonitor<StoryTaggingPipelineOptions>? _storyTaggingOptions;
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly IServiceHealthMonitor? _healthMonitor;
+    private readonly SoundSearchService? _soundSearchService;
     private readonly StoryMainCommands _mainCommands;
     private readonly ConcurrentDictionary<long, StatusChainState> _statusChains = new();
+    private readonly ConcurrentQueue<long> _autoCompleteDeferredFailures = new();
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -86,7 +88,8 @@ public sealed partial class StoriesService
         IOptionsMonitor<AutomaticOperationsOptions>? idleAutoOptions = null,
         IServiceScopeFactory? scopeFactory = null,
         IOptionsMonitor<StoryTaggingPipelineOptions>? storyTaggingOptions = null,
-        IServiceHealthMonitor? healthMonitor = null)
+        IServiceHealthMonitor? healthMonitor = null,
+        SoundSearchService? soundSearchService = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _ttsService = ttsService ?? throw new ArgumentNullException(nameof(ttsService));
@@ -107,6 +110,7 @@ public sealed partial class StoriesService
         _idleAutoOptions = idleAutoOptions;
         _storyTaggingOptions = storyTaggingOptions;
         _healthMonitor = healthMonitor;
+        _soundSearchService = soundSearchService;
         _mainCommands = new StoryMainCommands(this);
     }
 
@@ -688,16 +692,34 @@ public sealed partial class StoriesService
         return ordered.FirstOrDefault(s => s.Step > current.Step);
     }
 
-    public string? EnqueueAllNextStatusEnqueuer(long storyId, string trigger, int priority = 2, bool ignoreActiveChain = false)
+    public string? EnqueueAllNextStatusEnqueuer(
+        long storyId,
+        string trigger,
+        int priority = 2,
+        bool ignoreActiveChain = false,
+        string? resetToStatusCodeOnFailure = null,
+        bool deferAutoCompleteOnFailure = false)
     {
         var story = GetStoryById(storyId);
         if (story == null)
             return null;
 
-        return EnqueueAllNextStatusEnqueuer(story, trigger, priority, ignoreActiveChain);
+        return EnqueueAllNextStatusEnqueuer(
+            story,
+            trigger,
+            priority,
+            ignoreActiveChain,
+            resetToStatusCodeOnFailure,
+            deferAutoCompleteOnFailure);
     }
 
-    public string? EnqueueAllNextStatusEnqueuer(StoryRecord story, string trigger, int priority = 2, bool ignoreActiveChain = false)
+    public string? EnqueueAllNextStatusEnqueuer(
+        StoryRecord story,
+        string trigger,
+        int priority = 2,
+        bool ignoreActiveChain = false,
+        string? resetToStatusCodeOnFailure = null,
+        bool deferAutoCompleteOnFailure = false)
     {
         if (story == null) return null;
         if (_commandDispatcher == null) return null;
@@ -707,17 +729,23 @@ public sealed partial class StoriesService
             StopStatusChain(story.Id);
         }
 
-        return EnqueueStatusChain(story.Id);
+        return EnqueueStatusChain(story.Id, resetToStatusCodeOnFailure, deferAutoCompleteOnFailure);
     }
 
     private sealed class StatusChainState
     {
         public string ChainId { get; }
         public int? LastEnqueuedStatusId { get; set; }
+        public string? ResetToStatusCodeOnFailure { get; }
+        public bool DeferAutoCompleteOnFailure { get; }
 
-        public StatusChainState(string chainId)
+        public StatusChainState(string chainId, string? resetToStatusCodeOnFailure = null, bool deferAutoCompleteOnFailure = false)
         {
             ChainId = chainId;
+            ResetToStatusCodeOnFailure = string.IsNullOrWhiteSpace(resetToStatusCodeOnFailure)
+                ? null
+                : resetToStatusCodeOnFailure.Trim();
+            DeferAutoCompleteOnFailure = deferAutoCompleteOnFailure;
         }
     }
 
@@ -741,7 +769,7 @@ public sealed partial class StoriesService
         _statusChains.TryRemove(storyId, out _);
     }
 
-    public string? EnqueueStatusChain(long storyId)
+    public string? EnqueueStatusChain(long storyId, string? resetToStatusCodeOnFailure = null, bool deferAutoCompleteOnFailure = false)
     {
         if (storyId <= 0) return null;
         if (_commandDispatcher == null) return null;
@@ -755,7 +783,7 @@ public sealed partial class StoriesService
         if (story == null) return null;
 
         var chainId = $"chain_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
-        var state = new StatusChainState(chainId);
+        var state = new StatusChainState(chainId, resetToStatusCodeOnFailure, deferAutoCompleteOnFailure);
         if (!_statusChains.TryAdd(storyId, state))
         {
             return IsStatusChainActive(storyId, out var current) ? current : null;
@@ -841,6 +869,10 @@ public sealed partial class StoriesService
                     await Task.Delay(100, ctx.CancellationToken);
                     TryAdvanceStatusChain(story.Id, chainId);
                 }
+                else
+                {
+                    HandleStatusChainFailure(story.Id, state, message);
+                }
                 
                 return new CommandResult(success, message);
             },
@@ -851,6 +883,73 @@ public sealed partial class StoriesService
 
         state.LastEnqueuedStatusId = next.Id;
         return true;
+    }
+
+    public IReadOnlyList<long> DrainAutoCompleteDeferredFailures()
+    {
+        var ids = new HashSet<long>();
+        while (_autoCompleteDeferredFailures.TryDequeue(out var storyId))
+        {
+            if (storyId > 0)
+            {
+                ids.Add(storyId);
+            }
+        }
+
+        return ids.Count == 0 ? Array.Empty<long>() : ids.ToList();
+    }
+
+    private void HandleStatusChainFailure(long storyId, StatusChainState state, string? message)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(state.ResetToStatusCodeOnFailure))
+            {
+                TryResetStoryToStatusCode(storyId, state.ResetToStatusCodeOnFailure!, message);
+            }
+
+            if (state.DeferAutoCompleteOnFailure && storyId > 0)
+            {
+                _autoCompleteDeferredFailures.Enqueue(storyId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed handling status-chain failure for story {StoryId}", storyId);
+        }
+        finally
+        {
+            StopStatusChain(storyId);
+        }
+    }
+
+    private void TryResetStoryToStatusCode(long storyId, string statusCode, string? reason = null)
+    {
+        if (storyId <= 0 || string.IsNullOrWhiteSpace(statusCode))
+        {
+            return;
+        }
+
+        try
+        {
+            var status = _database.GetStoryStatusByCode(statusCode);
+            if (status == null)
+            {
+                _logger?.LogWarning("Status code {StatusCode} not found while resetting story {StoryId}", statusCode, storyId);
+                return;
+            }
+
+            _database.UpdateStoryById(storyId, statusId: status.Id, updateStatus: true);
+            _logger?.LogWarning(
+                "Story {StoryId} reset to status {StatusCode} after status-chain failure. Reason: {Reason}",
+                storyId,
+                statusCode,
+                string.IsNullOrWhiteSpace(reason) ? "(none)" : reason);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed resetting story {StoryId} to status {StatusCode}", storyId, statusCode);
+        }
     }
 
     public StoryStatus? GetStoryStatusById(int id)
@@ -886,6 +985,28 @@ public sealed partial class StoriesService
             _logger?.LogWarning(ex, "Failed to load evaluations for story {Id}", id);
         }
         return story;
+    }
+
+    public (bool success, string message) ResetStoryAudioPipelineToTtsGenerated(long storyId, string? runId = null)
+    {
+        if (storyId <= 0) return (false, "storyId non valido");
+        var story = GetStoryById(storyId);
+        if (story == null) return (false, $"Storia {storyId} non trovata");
+
+        try
+        {
+            var allowNext = ApplyStatusTransitionWithCleanup(story, "tts_generated", runId);
+            if (!allowNext)
+            {
+                _customLogger?.Append(runId ?? "live-logs", $"[{storyId}] Reset a tts_generated con cleanup dati audio successivi");
+            }
+            return (true, "Reset a tts_generated completato");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Reset audio pipeline a tts_generated fallito per storyId={StoryId}", storyId);
+            return (false, ex.Message);
+        }
     }
 
     /// <summary>
@@ -4038,8 +4159,11 @@ public sealed partial class StoriesService
                     "text", "Text",
                     "ambience", "Ambience", "ambience_description", "ambienceDescription",
                     "ambient_sound_description", "AmbientSoundDescription", "ambientSoundDescription",
+                    "ambient_sound_tags", "AmbientSoundTags", "ambientSoundTags",
                     "ambientSounds", "AmbientSounds", "ambient_sounds",
+                    "fx_tags", "FxTags", "fxTags",
                     "fx_description", "FxDescription", "fxDescription",
+                    "music_tags", "MusicTags", "musicTags",
                     "music_description", "MusicDescription", "musicDescription");
             }
             catch
@@ -4524,6 +4648,12 @@ public sealed partial class StoriesService
                                 item.Remove("ambientSoundFile");
                                 item.Remove("ambientSoundsFile");
                                 item.Remove("AmbientSoundsFile");
+                                item.Remove("ambient_sound_source_path");
+                                item.Remove("ambientSoundSourcePath");
+                                item.Remove("AmbientSoundSourcePath");
+                                item.Remove("ambient_sound_id");
+                                item.Remove("ambientSoundId");
+                                item.Remove("AmbientSoundId");
                                 item.Remove("ambienceFile");
                                 item.Remove("AmbienceFile");
                                 item.Remove("ambience_file");
@@ -4536,6 +4666,12 @@ public sealed partial class StoriesService
                                 item.Remove("fxFile");
                                 item.Remove("FxFile");
                                 item.Remove("fx_file");
+                                item.Remove("fx_source_path");
+                                item.Remove("fxSourcePath");
+                                item.Remove("FxSourcePath");
+                                item.Remove("fx_sound_id");
+                                item.Remove("fxSoundId");
+                                item.Remove("FxSoundId");
 
                                 var musicFile = ReadString(item, "music_file") ?? ReadString(item, "musicFile") ?? ReadString(item, "MusicFile");
                                 if (!string.IsNullOrWhiteSpace(musicFile))
@@ -4545,6 +4681,12 @@ public sealed partial class StoriesService
                                 item.Remove("musicFile");
                                 item.Remove("MusicFile");
                                 item.Remove("music_file");
+                                item.Remove("music_source_path");
+                                item.Remove("musicSourcePath");
+                                item.Remove("MusicSourcePath");
+                                item.Remove("music_sound_id");
+                                item.Remove("musicSoundId");
+                                item.Remove("MusicSoundId");
                             }
                         }
                     }
@@ -4718,6 +4860,12 @@ public sealed partial class StoriesService
                                 item.Remove("ambient_sound_file");
                                 item.Remove("ambientSoundFile");
                                 item.Remove("AmbientSoundFile");
+                                item.Remove("ambient_sound_source_path");
+                                item.Remove("ambientSoundSourcePath");
+                                item.Remove("AmbientSoundSourcePath");
+                                item.Remove("ambient_sound_id");
+                                item.Remove("ambientSoundId");
+                                item.Remove("AmbientSoundId");
                             }
                         }
                     }
@@ -6334,6 +6482,7 @@ public sealed partial class StoriesService
         var folderPath = context.FolderPath;
         var schemaPath = Path.Combine(folderPath, "tts_schema.json");
         var cancellationToken = CurrentDispatcherCancellationToken ?? CancellationToken.None;
+        var maxMissingTolerated = Math.Max(0, _audioGenerationOptions?.CurrentValue?.Ambience?.MaxMissingSoundsTolerated ?? 0);
 
         if (!File.Exists(schemaPath))
         {
@@ -6383,7 +6532,7 @@ public sealed partial class StoriesService
 
         // Build list of ambient sound segments: each ambient definition lasts until the next definition.
         var ambienceSegments = ExtractAmbienceSegments(phraseEntries);
-        var hasAmbientDefinitions = phraseEntries.Any(e => !string.IsNullOrWhiteSpace(ReadAmbientSoundsDescription(e)));
+        var hasAmbientDefinitions = phraseEntries.Any(HasAmbientSoundRequest);
 
         if (hasAmbientDefinitions)
         {
@@ -6407,23 +6556,19 @@ public sealed partial class StoriesService
             return (true, msg);
         }
 
-        _customLogger?.Append(runId, $"[{story.Id}] Trovati {ambienceSegments.Count} segmenti ambient sounds da generare");
-
-        // Create AudioCraft tool
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        var audioCraft = new AudioCraftTool(httpClient, forceCpu: false, logger: _customLogger);
+        _customLogger?.Append(runId, $"[{story.Id}] Trovati {ambienceSegments.Count} segmenti ambient sounds da assegnare da libreria sounds");
 
         Directory.CreateDirectory(folderPath);
 
         int segmentCounter = 0;
+        int assignedCount = 0;
+        int missingCount = 0;
         foreach (var segment in ambienceSegments)
         {
             segmentCounter++;
             var durationSeconds = (int)Math.Ceiling(segment.DurationMs / 1000.0);
             if (durationSeconds < 1) durationSeconds = 1;
-            if (durationSeconds > 30) durationSeconds = 30; // AudioCraft limit
-
-            _customLogger?.Append(runId, $"[{story.Id}] Generazione segmento {segmentCounter}/{ambienceSegments.Count}: '{segment.AmbiencePrompt}' ({durationSeconds}s)");
+            _customLogger?.Append(runId, $"[{story.Id}] Ricerca ambient {segmentCounter}/{ambienceSegments.Count}: '{segment.AmbiencePrompt}' ({durationSeconds}s)");
 
             // Update dispatcher progress if available
             if (_commandDispatcher != null)
@@ -6433,118 +6578,31 @@ public sealed partial class StoriesService
 
             try
             {
-                // Call AudioCraft to generate ambient sound
-                var audioRequest = new
-                {
-                    operation = "generate_sound",
-                    prompt = segment.AmbiencePrompt,
-                    duration = durationSeconds,
-                    model = "facebook/audiogen-medium"
-                };
-                var requestJson = JsonSerializer.Serialize(audioRequest);
-                string? resultJson = null;
-                
-                // Try to execute with retry logic if service is down
-                try
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    resultJson = await audioCraft.ExecuteAsync(requestJson);
-                }
-                catch (Exception executeEx) when (executeEx.Message.Contains("Connection") || executeEx.Message.Contains("No connection") || executeEx is HttpRequestException)
-                {
-                    _customLogger?.Append(runId, $"[{story.Id}] Errore connessione AudioCraft: {executeEx.Message}. Tentativo di riavvio del servizio...");
-                    
-                    // Try to restart AudioCraft service
-                    var restarted = await StartupTasks.TryRestartAudioCraftAsync(_healthMonitor, _logger);
-                    if (restarted)
-                    {
-                        _customLogger?.Append(runId, $"[{story.Id}] Servizio AudioCraft riavviato. Retry generazione segmento {segmentCounter}...");
-                        
-                        // Retry the request
-                        try
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            resultJson = await audioCraft.ExecuteAsync(requestJson);
-                        }
-                        catch (Exception retryEx)
-                        {
-                            _customLogger?.Append(runId, $"[{story.Id}] Errore anche dopo riavvio servizio: {retryEx.Message}");
-                            throw;
-                        }
-                    }
-                    else
-                    {
-                        _customLogger?.Append(runId, $"[{story.Id}] Impossibile riavviare il servizio AudioCraft. Generazione fallita.");
-                        return (false, "Servizio AudioCraft non disponibile e impossibile riavviare");
-                    }
-                }
-
-                // Parse result to get filename
-                var resultNode = JsonNode.Parse(resultJson) as JsonObject;
-                if (resultNode?["error"] != null)
-                {
-                    var err = resultNode["error"]?.ToString() ?? "Errore AudioCraft";
-                    _customLogger?.Append(runId, $"[{story.Id}] AudioCraft error: {err}");
-                    return (false, err);
-                }
-                var resultField = resultNode?["result"]?.ToString();
-
-                _customLogger?.Append(runId, $"[{story.Id}] AudioCraft response: {resultJson?.Substring(0, Math.Min(500, resultJson?.Length ?? 0))}");
-
-                string? generatedFileName = null;
-                
-                // First check LastGeneratedSoundFile (set by AudioCraftTool)
-                if (!string.IsNullOrWhiteSpace(audioCraft.LastGeneratedSoundFile))
-                {
-                    generatedFileName = audioCraft.LastGeneratedSoundFile;
-                }
-                
-                // If not found, try to parse from result field
-                if (string.IsNullOrWhiteSpace(generatedFileName) && !string.IsNullOrWhiteSpace(resultField))
-                {
-                    // Try to extract filename from result (format varies)
-                    try
-                    {
-                        var resultInner = JsonNode.Parse(resultField) as JsonObject;
-                        generatedFileName = resultInner?["file"]?.ToString() 
-                            ?? resultInner?["filename"]?.ToString()
-                            ?? resultInner?["output"]?.ToString();
-                    }
-                    catch
-                    {
-                        // resultField might not be valid JSON, check if it's a plain filename
-                        if (resultField.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
-                            resultField.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase))
-                        {
-                            generatedFileName = resultField.Trim();
-                        }
-                    }
-                }
-
-                if (string.IsNullOrWhiteSpace(generatedFileName))
-                {
-                    var err = $"Impossibile determinare il file generato per il segmento {segmentCounter}. Result: {resultJson}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
-                generatedFileName = NormalizeAudioCraftFileName(generatedFileName);
-
-                // Download file from AudioCraft server
-                var localFileName = $"ambience_{segmentCounter:D3}.wav";
-                var localFilePath = Path.Combine(folderPath, localFileName);
-
-                var (downloadOk, downloadError) = await TryDownloadAudioCraftFileAsync(
-                    httpClient,
-                    generatedFileName,
-                    localFilePath,
-                    story.Id,
+                cancellationToken.ThrowIfCancellationRequested();
+                var selection = await TrySelectCatalogSoundForSchemaWithAutoSearchAsync(
+                    story,
                     runId,
-                    cancellationToken);
-                if (!downloadOk)
+                    soundType: "amb",
+                    prompt: segment.AmbiencePrompt,
+                    tags: segment.AmbientTags,
+                    source: "tts_schema.ambient_sound_description",
+                    preferredDurationSeconds: durationSeconds,
+                    cancellationToken: cancellationToken);
+
+                if (selection == null)
                 {
-                    return (false, downloadError ?? $"Impossibile scaricare {generatedFileName}");
+                    missingCount++;
+                    var err = $"Nessun suono ambientale trovato per segmento {segmentCounter} ('{segment.AmbiencePrompt}'). Ricerca online fallita o senza risultati.";
+                    _customLogger?.Append(runId, $"[{story.Id}] [WARN] {err}");
+                    if (missingCount > maxMissingTolerated)
+                    {
+                        return (false, $"{err} (mancanti={missingCount}, tollerati={maxMissingTolerated})");
+                    }
+                    continue;
                 }
-                _customLogger?.Append(runId, $"[{story.Id}] Salvato: {localFileName}");
+                var localFileName = $"ambience_{segmentCounter:D3}{Path.GetExtension(selection.SourcePath)}";
+                assignedCount++;
+                _customLogger?.Append(runId, $"[{story.Id}] Salvato da sounds: {localFileName}");
 
                 // Save prompt to .txt file with same name
                 var promptFileName = Path.ChangeExtension(localFileName, ".txt");
@@ -6555,8 +6613,12 @@ public sealed partial class StoriesService
                 // Update tts_schema.json: add ambient sound file reference only on the definition record
                 if (segment.DefinitionIndex >= 0 && segment.DefinitionIndex < phraseEntries.Count)
                 {
-                    phraseEntries[segment.DefinitionIndex]["ambient_sound_file"] = localFileName;
-                    phraseEntries[segment.DefinitionIndex]["ambientSoundsFile"] = localFileName; // backward compat
+                    phraseEntries[segment.DefinitionIndex]["ambient_sound_file"] = null;
+                    phraseEntries[segment.DefinitionIndex]["ambientSoundsFile"] = null;
+                    phraseEntries[segment.DefinitionIndex]["ambient_sound_source_path"] = selection.SourcePath;
+                    phraseEntries[segment.DefinitionIndex]["ambientSoundSourcePath"] = selection.SourcePath;
+                    phraseEntries[segment.DefinitionIndex]["ambient_sound_id"] = selection.Sound.Id;
+                    phraseEntries[segment.DefinitionIndex]["ambientSoundId"] = selection.Sound.Id;
                 }
             }
             catch (OperationCanceledException)
@@ -6591,11 +6653,15 @@ public sealed partial class StoriesService
         }
 
         var successMsg = $"Generazione audio ambientale completata ({segmentCounter} segmenti)";
+        if (missingCount > 0)
+        {
+            successMsg += $", mancanti={missingCount}, assegnati={assignedCount}";
+        }
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
     }
 
-    private sealed record AmbienceSegment(string AmbiencePrompt, int StartMs, int DurationMs, int DefinitionIndex);
+    private sealed record AmbienceSegment(string AmbiencePrompt, string? AmbientTags, int StartMs, int DurationMs, int DefinitionIndex);
 
     /// <summary>
     /// Extracts ambient sound segments from timeline entries.
@@ -6608,14 +6674,15 @@ public sealed partial class StoriesService
         if (entries.Count == 0) return segments;
 
         // Collect ambient definition points (where ambient sounds are explicitly defined).
-        var definitionPoints = new List<(int Index, string Prompt, int StartMs)>();
+        var definitionPoints = new List<(int Index, string Prompt, string? Tags, int StartMs)>();
         for (int i = 0; i < entries.Count; i++)
         {
             var ambientSounds = ReadAmbientSoundsDescription(entries[i]);
             if (string.IsNullOrWhiteSpace(ambientSounds)) continue;
+            var ambientTags = ReadAmbientSoundsTags(entries[i]);
 
             var startMs = ReadEntryStartMs(entries[i]);
-            definitionPoints.Add((i, ambientSounds!.Trim(), startMs));
+            definitionPoints.Add((i, ambientSounds!.Trim(), ambientTags, startMs));
         }
 
         if (definitionPoints.Count == 0) return segments;
@@ -6637,7 +6704,7 @@ public sealed partial class StoriesService
 
             if (duration > 0)
             {
-                segments.Add(new AmbienceSegment(current.Prompt, segmentStartMs, duration, current.Index));
+                segments.Add(new AmbienceSegment(current.Prompt, current.Tags, segmentStartMs, duration, current.Index));
             }
         }
 
@@ -6646,13 +6713,70 @@ public sealed partial class StoriesService
 
     private static string? ReadAmbientSoundsDescription(JsonObject entry)
     {
-        // Read from standardized snake_case first, then legacy/camelCase
+        // Read from standardized snake_case first, then legacy/camelCase.
+        // Fallback to tags for schemas that no longer persist ambient descriptions.
         return ReadString(entry, "ambient_sound_description") ??
                ReadString(entry, "ambientSoundDescription") ??
                ReadString(entry, "AmbientSoundDescription") ??
                ReadString(entry, "ambientSounds") ??
                ReadString(entry, "AmbientSounds") ??
-               ReadString(entry, "ambient_sounds");
+               ReadString(entry, "ambient_sounds") ??
+               ReadAmbientSoundsTags(entry);
+    }
+
+    private static string? ReadAmbientSoundsTags(JsonObject entry)
+    {
+        return ReadString(entry, "ambient_sound_tags") ??
+               ReadString(entry, "ambientSoundTags") ??
+               ReadString(entry, "AmbientSoundTags");
+    }
+
+    private static string? ReadFxTags(JsonObject entry)
+    {
+        return ReadString(entry, "fx_tags") ??
+               ReadString(entry, "fxTags") ??
+               ReadString(entry, "FxTags");
+    }
+
+    private static string? ReadMusicTags(JsonObject entry)
+    {
+        return ReadString(entry, "music_tags") ??
+               ReadString(entry, "musicTags") ??
+               ReadString(entry, "MusicTags");
+    }
+
+    private static bool HasAmbientSoundRequest(JsonObject entry)
+    {
+        return !string.IsNullOrWhiteSpace(ReadAmbientSoundsDescription(entry)) ||
+               !string.IsNullOrWhiteSpace(
+                   ReadString(entry, "ambient_sound_file") ??
+                   ReadString(entry, "AmbientSoundFile") ??
+                   ReadString(entry, "ambientSoundFile") ??
+                   ReadString(entry, "ambientSoundsFile") ??
+                   ReadString(entry, "AmbientSoundsFile") ??
+                   ReadString(entry, "ambient_sounds_file")) ||
+               !string.IsNullOrWhiteSpace(
+                   ReadString(entry, "ambient_sound_source_path") ??
+                   ReadString(entry, "ambientSoundSourcePath") ??
+                   ReadString(entry, "AmbientSoundSourcePath"));
+    }
+
+    private static bool HasFxRequest(JsonObject entry)
+    {
+        return !string.IsNullOrWhiteSpace(
+                   ReadString(entry, "fxDescription") ??
+                   ReadString(entry, "FxDescription") ??
+                   ReadString(entry, "fx_description")) ||
+               !string.IsNullOrWhiteSpace(ReadFxTags(entry));
+    }
+
+    private static bool HasMusicRequest(JsonObject entry)
+    {
+        return !string.IsNullOrWhiteSpace(
+                   ReadString(entry, "music_description") ??
+                   ReadString(entry, "musicDescription") ??
+                   ReadString(entry, "MusicDescription")) ||
+               !string.IsNullOrWhiteSpace(ReadMusicTags(entry));
     }
 
     private static int ReadEntryStartMs(JsonObject entry)
@@ -6900,6 +7024,7 @@ public sealed partial class StoriesService
         var folderPath = context.FolderPath;
         var schemaPath = Path.Combine(folderPath, "tts_schema.json");
         var cancellationToken = CurrentDispatcherCancellationToken ?? CancellationToken.None;
+        var maxMissingTolerated = Math.Max(0, _audioGenerationOptions?.CurrentValue?.Fx?.MaxMissingSoundsTolerated ?? 0);
 
         if (!File.Exists(schemaPath))
         {
@@ -6948,7 +7073,7 @@ public sealed partial class StoriesService
         }
 
         // Find entries with FX properties
-        var fxEntries = new List<(int Index, JsonObject Entry, string Description, int Duration)>();
+        var fxEntries = new List<(int Index, JsonObject Entry, string Description, string? Tags, int Duration)>();
         for (int i = 0; i < phraseEntries.Count; i++)
         {
             var entry = phraseEntries[i];
@@ -6958,7 +7083,7 @@ public sealed partial class StoriesService
                 int fxDuration = 5; // default
                 if (TryReadNumber(entry, "fxDuration", out var dur) || TryReadNumber(entry, "FxDuration", out dur) || TryReadNumber(entry, "fx_duration", out dur))
                     fxDuration = (int)dur;
-                fxEntries.Add((i, entry, fxDesc, fxDuration));
+                fxEntries.Add((i, entry, fxDesc, ReadFxTags(entry), fxDuration));
             }
         }
 
@@ -6969,23 +7094,28 @@ public sealed partial class StoriesService
             return (true, msg);
         }
 
-        _customLogger?.Append(runId, $"[{story.Id}] Trovati {fxEntries.Count} effetti sonori da generare");
-
-        // Create AudioCraft tool
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        var audioCraft = new AudioCraftTool(httpClient, forceCpu: false, logger: _customLogger);
+        _customLogger?.Append(runId, $"[{story.Id}] Trovati {fxEntries.Count} effetti sonori da assegnare da libreria sounds");
 
         Directory.CreateDirectory(folderPath);
 
         int fxCounter = 0;
-        foreach (var (index, entry, description, duration) in fxEntries)
+        int assignedCount = 0;
+        int missingCount = 0;
+        foreach (var (index, entry, description, tags, duration) in fxEntries)
         {
             fxCounter++;
             var durationSeconds = duration;
             if (durationSeconds < 1) durationSeconds = 1;
-            if (durationSeconds > 30) durationSeconds = 30; // AudioCraft limit
 
-            _customLogger?.Append(runId, $"[{story.Id}] Generazione FX {fxCounter}/{fxEntries.Count}: '{description}' ({durationSeconds}s)");
+            var currentFxFile = ReadString(entry, "fxFile") ?? ReadString(entry, "FxFile") ?? ReadString(entry, "fx_file");
+            var currentFxSourcePath = ReadString(entry, "fx_source_path") ?? ReadString(entry, "fxSourcePath") ?? ReadString(entry, "FxSourcePath");
+            if ((!string.IsNullOrWhiteSpace(currentFxFile) && File.Exists(Path.Combine(folderPath, currentFxFile))) ||
+                (!string.IsNullOrWhiteSpace(currentFxSourcePath) && File.Exists(currentFxSourcePath)))
+            {
+                continue;
+            }
+
+            _customLogger?.Append(runId, $"[{story.Id}] Ricerca FX {fxCounter}/{fxEntries.Count}: '{description}' ({durationSeconds}s)");
 
             // Update dispatcher progress if available
             if (_commandDispatcher != null)
@@ -6995,91 +7125,30 @@ public sealed partial class StoriesService
 
             try
             {
-                // Call AudioCraft to generate sound effect
-                var audioRequest = new
-                {
-                    operation = "generate_sound",
-                    prompt = description,
-                    duration = durationSeconds,
-                    model = "facebook/audiogen-medium"
-                };
-                var requestJson = JsonSerializer.Serialize(audioRequest);
                 cancellationToken.ThrowIfCancellationRequested();
-                var resultJson = await audioCraft.ExecuteAsync(requestJson);
-
-                // Parse result to get filename
-                var resultNode = JsonNode.Parse(resultJson) as JsonObject;
-                if (resultNode?["error"] != null)
-                {
-                    var err = resultNode["error"]?.ToString() ?? "Errore AudioCraft";
-                    _customLogger?.Append(runId, $"[{story.Id}] AudioCraft error: {err}");
-                    return (false, err);
-                }
-                var resultField = resultNode?["result"]?.ToString();
-
-                _customLogger?.Append(runId, $"[{story.Id}] AudioCraft FX response: {resultJson?.Substring(0, Math.Min(500, resultJson?.Length ?? 0))}");
-
-                string? generatedFileName = null;
-                
-                // First check LastGeneratedSoundFile (set by AudioCraftTool)
-                if (!string.IsNullOrWhiteSpace(audioCraft.LastGeneratedSoundFile))
-                {
-                    generatedFileName = audioCraft.LastGeneratedSoundFile;
-                }
-                
-                // If not found, try to parse from result field
-                if (string.IsNullOrWhiteSpace(generatedFileName) && !string.IsNullOrWhiteSpace(resultField))
-                {
-                    // Try to extract filename from result
-                    try
-                    {
-                        var resultInner = JsonNode.Parse(resultField) as JsonObject;
-                        generatedFileName = resultInner?["file"]?.ToString()
-                            ?? resultInner?["filename"]?.ToString()
-                            ?? resultInner?["file_path"]?.ToString()
-                            ?? resultInner?["file_url"]?.ToString();
-                        
-                        // Extract just filename from path/url
-                        if (!string.IsNullOrWhiteSpace(generatedFileName))
-                        {
-                            generatedFileName = Path.GetFileName(generatedFileName.Replace("/download/", ""));
-                        }
-                    }
-                    catch
-                    {
-                        // resultField might not be valid JSON, check if it's a plain filename
-                        if (resultField.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
-                            resultField.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase))
-                        {
-                            generatedFileName = resultField.Trim();
-                        }
-                    }
-                }
-
-                if (string.IsNullOrWhiteSpace(generatedFileName))
-                {
-                    var err = $"Impossibile determinare il file generato per FX {fxCounter}. Result: {resultJson}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
-                generatedFileName = NormalizeAudioCraftFileName(generatedFileName);
-
-                // Download file from AudioCraft server
-                var localFileName = $"fx_{fxCounter:D3}.wav";
-                var localFilePath = Path.Combine(folderPath, localFileName);
-
-                var (downloadOk, downloadError) = await TryDownloadAudioCraftFileAsync(
-                    httpClient,
-                    generatedFileName,
-                    localFilePath,
-                    story.Id,
+                var selection = await TrySelectCatalogSoundForSchemaWithAutoSearchAsync(
+                    story,
                     runId,
-                    cancellationToken);
-                if (!downloadOk)
+                    soundType: "fx",
+                    prompt: description,
+                    tags: tags,
+                    source: "tts_schema.fxDescription",
+                    preferredDurationSeconds: durationSeconds,
+                    cancellationToken: cancellationToken);
+                if (selection == null)
                 {
-                    return (false, downloadError ?? $"Impossibile scaricare {generatedFileName}");
+                    missingCount++;
+                    var err = $"Nessun FX trovato per '{description}'. Ricerca online fallita o senza risultati.";
+                    _customLogger?.Append(runId, $"[{story.Id}] [WARN] {err}");
+                    if (missingCount > maxMissingTolerated)
+                    {
+                        return (false, $"{err} (mancanti={missingCount}, tollerati={maxMissingTolerated})");
+                    }
+                    continue;
                 }
-                _customLogger?.Append(runId, $"[{story.Id}] Salvato: {localFileName}");
+                var localFileName = $"fx_{fxCounter:D3}{Path.GetExtension(selection.SourcePath)}";
+                assignedCount++;
+                _customLogger?.Append(runId, $"[{story.Id}] Salvato da sounds: {localFileName}");
                 
                 // Save prompt to .txt file with same name
                 var promptFileName = Path.ChangeExtension(localFileName, ".txt");
@@ -7088,8 +7157,12 @@ public sealed partial class StoriesService
                 _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt: {promptFileName}");
 
                 // Update tts_schema.json: add fxFile property
-                entry["fxFile"] = localFileName;
-                entry["fx_file"] = localFileName;
+                entry["fxFile"] = null;
+                entry["fx_file"] = null;
+                entry["fx_source_path"] = selection.SourcePath;
+                entry["fxSourcePath"] = selection.SourcePath;
+                entry["fx_sound_id"] = selection.Sound.Id;
+                entry["fxSoundId"] = selection.Sound.Id;
             }
             catch (OperationCanceledException)
             {
@@ -7122,9 +7195,735 @@ public sealed partial class StoriesService
             return (false, err);
         }
 
-        var successMsg = $"Generazione effetti sonori completata ({fxCounter} effetti)";
+        var successMsg = $"Generazione effetti sonori completata ({fxCounter} effetti, assegnati={assignedCount}, mancanti={missingCount})";
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
+    }
+
+    private sealed record CatalogSoundMatch(Sound Sound, double Score, int MatchedTokens);
+    private sealed record CatalogSoundSelection(Sound Sound, string SourcePath);
+
+    private async Task<CatalogSoundSelection?> TrySelectCatalogSoundForSchemaWithAutoSearchAsync(
+        StoryRecord story,
+        string runId,
+        string soundType,
+        string prompt,
+        string? tags,
+        string source,
+        int? preferredDurationSeconds,
+        CancellationToken cancellationToken)
+    {
+        var normalizedType = NormalizeSoundType(soundType);
+        _customLogger?.Append(runId, $"[{story.Id}] Ricerca in libreria sounds type={normalizedType} prompt='{prompt}' tags='{tags}'");
+
+        var selection = TrySelectCatalogSoundForSchema(
+            story,
+            runId,
+            soundType,
+            prompt,
+            tags,
+            source,
+            preferredDurationSeconds,
+            out var missingSoundId);
+        if (selection != null)
+        {
+            return selection;
+        }
+
+        if (normalizedType is not ("fx" or "amb"))
+        {
+            return null;
+        }
+
+        if (_soundSearchService == null)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] SoundSearchService non disponibile: impossibile cercare online il suono mancante.");
+            return null;
+        }
+
+        if (!missingSoundId.HasValue || missingSoundId.Value <= 0)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] sounds_missing non registrato correttamente: impossibile lanciare ricerca online.");
+            return null;
+        }
+
+        _customLogger?.Append(runId, $"[{story.Id}] Avvio ricerca online per sounds_missing #{missingSoundId.Value} (type={normalizedType})...");
+        try
+        {
+            var searchResult = await _soundSearchService.ProcessOneMissingSoundAsync(
+                missingSoundId.Value,
+                cancellationToken,
+                runId: runId).ConfigureAwait(false);
+
+            _customLogger?.Append(runId,
+                $"[{story.Id}] Ricerca online completata per sounds_missing #{missingSoundId.Value}: status={searchResult.Status}; candidati={searchResult.CandidatesSeen}; inseriti={searchResult.InsertedCount}; errori={searchResult.Errors.Count}");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Ricerca online suono mancante fallita: {ex.Message}");
+            return null;
+        }
+
+        _customLogger?.Append(runId, $"[{story.Id}] Nuovo tentativo ricerca in libreria sounds dopo download online...");
+        return TrySelectCatalogSoundForSchema(
+            story,
+            runId,
+            soundType,
+            prompt,
+            tags,
+            source,
+            preferredDurationSeconds,
+            out _);
+    }
+
+    private async Task AssignCatalogLibraryReferencesInTtsSchemaAsync(
+        string schemaPath,
+        StoryRecord story,
+        string folderPath,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(schemaPath) || !File.Exists(schemaPath))
+            return;
+
+        var json = await File.ReadAllTextAsync(schemaPath, cancellationToken).ConfigureAwait(false);
+        var rootNode = JsonNode.Parse(json) as JsonObject;
+        if (rootNode == null) return;
+        if (!(rootNode["timeline"] is JsonArray timelineArray)) return;
+
+        var phraseEntries = timelineArray.OfType<JsonObject>().Where(IsPhraseEntry).ToList();
+        if (phraseEntries.Count == 0) return;
+
+        var ambAssigned = 0;
+        var fxAssigned = 0;
+        var musicAssigned = 0;
+
+        // Ambient: assegna il suono alla riga di definizione [RUMORI], poi lascia tag+file/path/id come riferimento principale.
+        foreach (var entry in phraseEntries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var ambientDesc = ReadAmbientSoundsDescription(entry);
+            if (string.IsNullOrWhiteSpace(ambientDesc)) continue;
+
+            var currentSourcePath =
+                ReadString(entry, "ambient_sound_source_path") ??
+                ReadString(entry, "ambientSoundSourcePath") ??
+                ReadString(entry, "AmbientSoundSourcePath");
+            if (!string.IsNullOrWhiteSpace(currentSourcePath) && File.Exists(currentSourcePath))
+                continue;
+
+            var ambientTags = ReadAmbientSoundsTags(entry);
+            var selection = await TrySelectCatalogSoundForSchemaWithAutoSearchAsync(
+                story,
+                runId,
+                soundType: "amb",
+                prompt: ambientDesc,
+                tags: ambientTags,
+                source: "tts_schema.ambient_sound_description",
+                preferredDurationSeconds: null,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (selection == null) continue;
+
+            var libraryFileName = Path.GetFileName(selection.SourcePath);
+            entry["ambient_sound_file"] = libraryFileName;
+            entry["ambientSoundsFile"] = libraryFileName;
+            entry["ambient_sound_source_path"] = selection.SourcePath;
+            entry["ambientSoundSourcePath"] = selection.SourcePath;
+            entry["ambient_sound_id"] = selection.Sound.Id;
+            entry["ambientSoundId"] = selection.Sound.Id;
+            entry["ambient_sound_description"] = null;
+            entry["ambientSoundDescription"] = null;
+            entry["AmbientSoundDescription"] = null;
+            entry["ambientSounds"] = null;
+            entry["AmbientSounds"] = null;
+            entry["ambient_sounds"] = null;
+            ambAssigned++;
+        }
+
+        // FX: se risolto da libreria, salva file/path/id e rimuovi la descrizione (restano i tag).
+        foreach (var entry in phraseEntries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var fxSourcePath = ReadString(entry, "fx_source_path") ?? ReadString(entry, "fxSourcePath") ?? ReadString(entry, "FxSourcePath");
+            if (!string.IsNullOrWhiteSpace(fxSourcePath) && File.Exists(fxSourcePath))
+                continue;
+
+            var fxDesc = ReadString(entry, "fxDescription") ?? ReadString(entry, "FxDescription") ?? ReadString(entry, "fx_description");
+            if (string.IsNullOrWhiteSpace(fxDesc))
+                fxDesc = ReadString(entry, "fx_tags") ?? ReadString(entry, "fxTags") ?? ReadString(entry, "FxTags");
+            if (string.IsNullOrWhiteSpace(fxDesc)) continue;
+
+            int? fxDuration = null;
+            if (TryReadNumber(entry, "fxDuration", out var d1) || TryReadNumber(entry, "FxDuration", out d1) || TryReadNumber(entry, "fx_duration", out d1))
+            {
+                fxDuration = (int)Math.Ceiling(d1);
+            }
+
+            var fxTags = ReadFxTags(entry);
+            var selection = await TrySelectCatalogSoundForSchemaWithAutoSearchAsync(
+                story,
+                runId,
+                soundType: "fx",
+                prompt: fxDesc,
+                tags: fxTags,
+                source: "tts_schema.fx_description",
+                preferredDurationSeconds: fxDuration,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (selection == null) continue;
+
+            var libraryFileName = Path.GetFileName(selection.SourcePath);
+            entry["fx_file"] = libraryFileName;
+            entry["fxFile"] = libraryFileName;
+            entry["fx_source_path"] = selection.SourcePath;
+            entry["fxSourcePath"] = selection.SourcePath;
+            entry["fx_sound_id"] = selection.Sound.Id;
+            entry["fxSoundId"] = selection.Sound.Id;
+            entry["fx_description"] = null;
+            entry["fxDescription"] = null;
+            entry["FxDescription"] = null;
+            fxAssigned++;
+        }
+
+        // Music: solo catalogo locale (nessuna ricerca online); se risolta, salva file/path/id e rimuovi la descrizione.
+        foreach (var entry in phraseEntries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var musicSourcePath = ReadString(entry, "music_source_path") ?? ReadString(entry, "musicSourcePath") ?? ReadString(entry, "MusicSourcePath");
+            if (!string.IsNullOrWhiteSpace(musicSourcePath) && File.Exists(musicSourcePath))
+                continue;
+
+            var musicDesc = ReadString(entry, "music_description") ?? ReadString(entry, "musicDescription") ?? ReadString(entry, "MusicDescription");
+            if (string.IsNullOrWhiteSpace(musicDesc))
+                musicDesc = ReadString(entry, "music_tags") ?? ReadString(entry, "musicTags") ?? ReadString(entry, "MusicTags");
+            if (string.IsNullOrWhiteSpace(musicDesc)) continue;
+
+            var musicTags = ReadMusicTags(entry);
+            var selection = TrySelectCatalogSoundForSchema(
+                story,
+                runId,
+                soundType: "music",
+                prompt: musicDesc,
+                tags: musicTags,
+                source: "tts_schema.music_description",
+                preferredDurationSeconds: null,
+                out _);
+
+            if (selection == null) continue;
+
+            var libraryFileName = Path.GetFileName(selection.SourcePath);
+            entry["music_file"] = libraryFileName;
+            entry["musicFile"] = libraryFileName;
+            entry["music_source_path"] = selection.SourcePath;
+            entry["musicSourcePath"] = selection.SourcePath;
+            entry["music_sound_id"] = selection.Sound.Id;
+            entry["musicSoundId"] = selection.Sound.Id;
+            entry["music_description"] = null;
+            entry["musicDescription"] = null;
+            entry["MusicDescription"] = null;
+            musicAssigned++;
+        }
+
+        SanitizeTtsSchemaTextFields(rootNode);
+        await File.WriteAllTextAsync(schemaPath, rootNode.ToJsonString(SchemaJsonOptions), cancellationToken).ConfigureAwait(false);
+        _customLogger?.Append(runId, $"[{story.Id}] tts_schema: riferimenti libreria assegnati (amb={ambAssigned}, fx={fxAssigned}, music={musicAssigned})");
+    }
+
+    private CatalogSoundSelection? TrySelectCatalogSoundForSchema(
+        StoryRecord story,
+        string runId,
+        string soundType,
+        string prompt,
+        string? tags,
+        string source,
+        int? preferredDurationSeconds,
+        out long? missingSoundId)
+    {
+        missingSoundId = null;
+        var match = FindBestCatalogSoundMatch(soundType, prompt, tags, preferredDurationSeconds);
+        if (match == null)
+        {
+            missingSoundId = RegisterMissingSoundBestEffort(story, soundType, prompt, tags, source, runId);
+            return null;
+        }
+
+        var sourcePath = ResolveExistingSoundFilePath(match.Sound);
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Suono #{match.Sound.Id} selezionato ma file non trovato: {match.Sound.FilePath}");
+            missingSoundId = RegisterMissingSoundBestEffort(story, soundType, prompt, tags, source, runId);
+            return null;
+        }
+
+        try
+        {
+            _database.MarkSoundUsed(match.Sound.Id);
+        }
+        catch
+        {
+            // best-effort
+        }
+
+        _customLogger?.Append(runId, $"[{story.Id}] Match sounds {soundType}: soundId={match.Sound.Id}, score={match.Score:0.##}, matchedTokens={match.MatchedTokens}, file='{match.Sound.FileName}'");
+        return new CatalogSoundSelection(match.Sound, sourcePath);
+    }
+
+    private CatalogSoundMatch? FindBestCatalogSoundMatch(string soundType, string prompt, string? tags, int? preferredDurationSeconds)
+    {
+        List<Sound> candidates;
+        try
+        {
+            candidates = _database.ListSounds(type: NormalizeSoundType(soundType));
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Errore leggendo sounds (type={Type})", soundType);
+            return null;
+        }
+
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        var requestTagTokensOrdered = ParseNormalizedCsvTagsOrdered(tags);
+        var requestTagTokens = new HashSet<string>(requestTagTokensOrdered, StringComparer.OrdinalIgnoreCase);
+        var usePromptFallback = requestTagTokens.Count == 0;
+        var requestTokens = usePromptFallback
+            ? BuildSoundSearchTokens(prompt, null)
+            : new HashSet<string>(requestTagTokens, StringComparer.OrdinalIgnoreCase);
+        var normalizedRequestType = NormalizeSoundType(soundType);
+        var primaryRequiredTag = !usePromptFallback && requestTagTokensOrdered.Count > 0
+            ? requestTagTokensOrdered[0]
+            : null;
+        var secondaryRequiredTag = normalizedRequestType == "fx" && !usePromptFallback && requestTagTokensOrdered.Count > 1
+            ? requestTagTokensOrdered[1]
+            : null;
+        if (requestTokens.Count == 0)
+        {
+            return null;
+        }
+
+        CatalogSoundMatch? best = null;
+
+        foreach (var sound in candidates)
+        {
+            if (!sound.Enabled)
+            {
+                continue;
+            }
+
+            var path = ResolveExistingSoundFilePath(sound);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            var tagTokens = ParseNormalizedCsvTags(sound.Tags);
+            if (tagTokens.Count == 0 && usePromptFallback)
+            {
+                // Compatibilità con librerie sounds ancora non taggate.
+                tagTokens = TokenizeSoundSearchText(sound.Description);
+            }
+
+            if (!usePromptFallback && !string.IsNullOrWhiteSpace(primaryRequiredTag))
+            {
+                if (normalizedRequestType == "fx")
+                {
+                    var matchesPrimaryOrSecondary =
+                        tagTokens.Contains(primaryRequiredTag) ||
+                        (!string.IsNullOrWhiteSpace(secondaryRequiredTag) && tagTokens.Contains(secondaryRequiredTag));
+                    if (!matchesPrimaryOrSecondary)
+                    {
+                        // Regola FX: almeno uno dei primi due tag (sinonimi/varianti principali) deve matchare.
+                        continue;
+                    }
+                }
+                else if (!tagTokens.Contains(primaryRequiredTag))
+                {
+                    // Regola generale: il primo tag richiesto (piu' importante) deve matchare obbligatoriamente.
+                    continue;
+                }
+            }
+
+            var matched = 0;
+            foreach (var token in requestTokens)
+            {
+                if (tagTokens.Contains(token))
+                {
+                    matched++;
+                }
+            }
+
+            if (matched <= 0)
+            {
+                continue;
+            }
+
+            var primaryRankMetric = matched; // fallback legacy: numero tag matchati
+            var score = (double)matched;
+
+            if (!usePromptFallback)
+            {
+                var slotMatch = ComputeSlotMatchScore(normalizedRequestType, requestTagTokensOrdered, tagTokens, preferredDurationSeconds, sound.DurationSeconds);
+                if (!slotMatch.IsValid)
+                {
+                    continue;
+                }
+
+                // Ranking intelligente: prima copertura slot, poi score pesato slot.
+                primaryRankMetric = slotMatch.SlotsMatched;
+                score = slotMatch.Score + (matched * 0.05d);
+
+                // Per richieste strutturate richiediamo almeno il numero minimo di slot sensato.
+                if (slotMatch.SlotsMatched < slotMatch.MinimumRequiredSlots)
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                var minRequiredMatches = GetMinimumRequiredTagMatches(requestTokens.Count);
+                if (matched < minRequiredMatches)
+                {
+                    continue;
+                }
+            }
+
+            var current = new CatalogSoundMatch(sound, score, primaryRankMetric);
+            if (best == null || IsBetterCatalogSoundMatch(current, best))
+            {
+                best = current;
+            }
+        }
+
+        return best;
+    }
+
+    private static int GetMinimumRequiredTagMatches(int requestedTagCount)
+    {
+        if (requestedTagCount <= 0) return 1;
+        if (requestedTagCount >= 6) return 3;
+        if (requestedTagCount >= 3) return 2;
+        return 1;
+    }
+
+    private static bool IsBetterCatalogSoundMatch(CatalogSoundMatch candidate, CatalogSoundMatch current)
+    {
+        if (candidate.MatchedTokens != current.MatchedTokens) return candidate.MatchedTokens > current.MatchedTokens;
+        if (candidate.Score != current.Score) return candidate.Score > current.Score;
+
+        var candidateFinal = candidate.Sound.ScoreFinal ?? double.MinValue;
+        var currentFinal = current.Sound.ScoreFinal ?? double.MinValue;
+        if (candidateFinal != currentFinal) return candidateFinal > currentFinal;
+
+        var candidateHuman = candidate.Sound.ScoreHuman ?? double.MinValue;
+        var currentHuman = current.Sound.ScoreHuman ?? double.MinValue;
+        if (candidateHuman != currentHuman) return candidateHuman > currentHuman;
+
+        var candidateUsage = candidate.Sound.UsageCount;
+        var currentUsage = current.Sound.UsageCount;
+        if (candidateUsage != currentUsage) return candidateUsage < currentUsage;
+
+        return candidate.Sound.Id < current.Sound.Id;
+    }
+
+    private static SlotMatchScore ComputeSlotMatchScore(
+        string requestType,
+        IReadOnlyList<string> orderedRequestTags,
+        HashSet<string> candidateTagTokens,
+        int? preferredDurationSeconds,
+        double? candidateDurationSeconds)
+    {
+        if (orderedRequestTags == null || orderedRequestTags.Count == 0)
+        {
+            return new SlotMatchScore(false, 0, 0d, 1);
+        }
+
+        var slotWeights = new[] { 5d, 3d, 2d, 1d };
+        var slotsAvailable = 0;
+        var slotsMatched = 0;
+        var score = 0d;
+
+        for (var slotIndex = 0; slotIndex < 4; slotIndex++)
+        {
+            var i = slotIndex * 2;
+            var a = i < orderedRequestTags.Count ? orderedRequestTags[i] : null;
+            var b = (i + 1) < orderedRequestTags.Count ? orderedRequestTags[i + 1] : null;
+
+            if (string.IsNullOrWhiteSpace(a) && string.IsNullOrWhiteSpace(b))
+            {
+                continue;
+            }
+
+            slotsAvailable++;
+            var hit =
+                (!string.IsNullOrWhiteSpace(a) && candidateTagTokens.Contains(a)) ||
+                (!string.IsNullOrWhiteSpace(b) && candidateTagTokens.Contains(b));
+
+            if (!hit)
+            {
+                if (slotIndex == 0)
+                {
+                    // Slot principale obbligatorio.
+                    return new SlotMatchScore(false, 0, 0d, 1);
+                }
+                continue;
+            }
+
+            slotsMatched++;
+            score += slotWeights[slotIndex];
+        }
+
+        if (slotsMatched <= 0)
+        {
+            return new SlotMatchScore(false, 0, 0d, 1);
+        }
+
+        // Regola meno rigida per la musica: basta lo slot principale, gli altri migliorano il ranking.
+        // FX e ambience restano piu' restrittivi (main + almeno un altro slot se disponibili).
+        var minRequiredSlots = string.Equals(requestType, "music", StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : (slotsAvailable >= 2 ? 2 : 1);
+
+        if (preferredDurationSeconds.HasValue && preferredDurationSeconds.Value > 0 && candidateDurationSeconds.HasValue && candidateDurationSeconds.Value > 0)
+        {
+            var delta = Math.Abs(candidateDurationSeconds.Value - preferredDurationSeconds.Value);
+            if (delta <= 1.0d) score += 1.0d;
+            else if (delta <= 3.0d) score += 0.5d;
+        }
+
+        return new SlotMatchScore(true, slotsMatched, score, minRequiredSlots);
+    }
+
+    private string? SelectOpeningMusicFromSoundsCatalog(long storyId)
+    {
+        try
+        {
+            var allMusic = _database.ListSounds(type: "music");
+            if (allMusic == null || allMusic.Count == 0)
+            {
+                return null;
+            }
+
+            var candidates = new List<(Sound Sound, string Path, HashSet<string> Tags)>();
+            foreach (var sound in allMusic)
+            {
+                if (!sound.Enabled) continue;
+                var path = ResolveExistingSoundFilePath(sound);
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) continue;
+                candidates.Add((sound, path, ParseNormalizedCsvTags(sound.Tags)));
+            }
+
+            if (candidates.Count == 0)
+            {
+                return null;
+            }
+
+            var preferred = candidates
+                .Where(x => x.Tags.Contains("opening") || x.Tags.Contains("intro") || x.Tags.Contains("title"))
+                .ToList();
+
+            var pool = preferred.Count > 0 ? preferred : candidates;
+            var ordered = pool
+                .OrderByDescending(x => x.Sound.ScoreFinal ?? double.MinValue)
+                .ThenByDescending(x => x.Sound.ScoreHuman ?? double.MinValue)
+                .ThenBy(x => x.Sound.UsageCount)
+                .ThenBy(x => x.Sound.Id)
+                .ToList();
+
+            var topCount = Math.Min(10, ordered.Count);
+            var idx = topCount <= 1 ? 0 : (int)(Math.Abs(storyId) % topCount);
+            return ordered[idx].Path;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Errore selezione opening music da sounds");
+            return null;
+        }
+    }
+
+    private sealed record SlotMatchScore(bool IsValid, int SlotsMatched, double Score, int MinimumRequiredSlots);
+
+    private long? RegisterMissingSoundBestEffort(StoryRecord story, string soundType, string prompt, string? tags, string source, string? runId = null)
+    {
+        try
+        {
+            var effectiveTags = string.IsNullOrWhiteSpace(tags)
+                ? string.Join(", ", BuildSoundSearchTokens(prompt, null).Take(20))
+                : tags;
+
+            var missingId = _database.UpsertMissingSound(
+                type: NormalizeSoundType(soundType),
+                prompt: prompt,
+                tags: effectiveTags,
+                storyId: story.Id,
+                storyTitle: story.Title,
+                source: source);
+            if (!string.IsNullOrWhiteSpace(runId))
+            {
+                _customLogger?.Append(runId!, $"[{story.Id}] sounds_missing registrato/aggiornato: id={missingId}, type={NormalizeSoundType(soundType)}, source={source}");
+            }
+            return missingId;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Impossibile registrare sounds_missing per storyId={StoryId}, type={Type}", story.Id, soundType);
+            if (!string.IsNullOrWhiteSpace(runId))
+            {
+                _customLogger?.Append(runId!, $"[{story.Id}] [WARN] Impossibile registrare sounds_missing ({NormalizeSoundType(soundType)}): {ex.Message}");
+            }
+        }
+        return null;
+    }
+
+    private static string NormalizeSoundType(string? soundType)
+    {
+        var value = (soundType ?? string.Empty).Trim().ToLowerInvariant();
+        return value switch
+        {
+            "amb" => "amb",
+            "music" => "music",
+            _ => "fx"
+        };
+    }
+
+    private static string? ResolveExistingSoundFilePath(Sound sound)
+    {
+        if (sound == null || string.IsNullOrWhiteSpace(sound.FilePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var direct = sound.FilePath.Trim();
+            if (File.Exists(direct)) return direct;
+
+            var full = Path.GetFullPath(direct);
+            if (File.Exists(full)) return full;
+        }
+        catch
+        {
+            // ignore invalid paths
+        }
+
+        return null;
+    }
+
+    private static string? ResolveSchemaAudioReferencePath(string folderPath, string? localFileName, string? sourcePath)
+    {
+        if (!string.IsNullOrWhiteSpace(localFileName))
+        {
+            var localPath = Path.Combine(folderPath, localFileName);
+            if (File.Exists(localPath))
+            {
+                return localPath;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(sourcePath) && File.Exists(sourcePath))
+        {
+            return sourcePath;
+        }
+
+        return null;
+    }
+
+    private static readonly HashSet<string> SoundSearchStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a","ad","al","alla","alle","allo","ai","agli","all","con","da","dal","dalla","delle","degli",
+        "del","dello","dei","di","e","ed","il","lo","la","le","gli","i","in","nel","nella","nelle","nei",
+        "per","su","tra","fra","un","una","uno","the","and","for","with","of","to","background","sottofondo"
+    };
+
+    private static HashSet<string> BuildSoundSearchTokens(string? prompt, string? tags)
+    {
+        var all = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var token in TokenizeSoundSearchText(prompt))
+        {
+            all.Add(token);
+        }
+        foreach (var token in TokenizeSoundSearchText(tags))
+        {
+            all.Add(token);
+        }
+        return all;
+    }
+
+    private static HashSet<string> TokenizeSoundSearchText(string? text)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return result;
+        }
+
+        foreach (Match match in Regex.Matches(text.ToLowerInvariant(), @"[a-z0-9àèéìòù]{2,}"))
+        {
+            var token = match.Value.Trim();
+            if (token.Length < 2) continue;
+            if (SoundSearchStopWords.Contains(token)) continue;
+            result.Add(token);
+        }
+
+        return result;
+    }
+
+    private static HashSet<string> ParseNormalizedCsvTags(string? csv)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(csv))
+        {
+            return result;
+        }
+
+        foreach (var part in csv.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var token = part.Trim().ToLowerInvariant();
+            token = Regex.Replace(token, @"\s+", "_");
+            token = Regex.Replace(token, @"[^a-z0-9_]+", string.Empty);
+            token = Regex.Replace(token, @"_+", "_").Trim('_');
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                result.Add(token);
+            }
+        }
+
+        return result;
+    }
+
+    private static List<string> ParseNormalizedCsvTagsOrdered(string? csv)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrWhiteSpace(csv))
+        {
+            return result;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in csv.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var token = part.Trim().ToLowerInvariant();
+            token = Regex.Replace(token, @"\s+", "_");
+            token = Regex.Replace(token, @"[^a-z0-9_]+", string.Empty);
+            token = Regex.Replace(token, @"_+", "_").Trim('_');
+            if (string.IsNullOrWhiteSpace(token)) continue;
+            if (seen.Add(token))
+            {
+                result.Add(token);
+            }
+        }
+
+        return result;
     }
 
     private static string NormalizeAudioCraftFileName(string fileName)
@@ -7344,6 +8143,7 @@ public sealed partial class StoriesService
         var story = context.Story;
         var folderPath = context.FolderPath;
         var schemaPath = Path.Combine(folderPath, "tts_schema.json");
+        var maxMissingTolerated = Math.Max(0, _audioGenerationOptions?.CurrentValue?.Music?.MaxMissingSoundsTolerated ?? 2);
 
         // Step 1: Verify tts_schema.json exists
         if (!File.Exists(schemaPath))
@@ -7391,102 +8191,9 @@ public sealed partial class StoriesService
             return (false, err);
         }
 
-        // Step 2: Assign music files from curated library (series_folder or data/music_stories)
-        var musicLibraryFolder = GetMusicLibraryFolderForStory(story);
-        var libraryFiles = new List<string>();
-
-        if (string.IsNullOrWhiteSpace(musicLibraryFolder) || !Directory.Exists(musicLibraryFolder))
-        {
-            if (story.SerieId.HasValue)
-            {
-                var serie = _database.GetSeriesById(story.SerieId.Value);
-                if (serie != null)
-                {
-                    _customLogger?.Append(runId, $"[{story.Id}] Cartella musica serie non trovata: {musicLibraryFolder}. Avvio generazione con AudioCraft.");
-                    var gen = await TryGenerateSeriesMusicLibraryAsync(story, serie, phraseEntries, runId);
-                    if (gen.success)
-                    {
-                        libraryFiles = gen.files;
-                        musicLibraryFolder = Path.GetDirectoryName(gen.files.First()) ?? musicLibraryFolder;
-                    }
-                    else
-                    {
-                        var err = gen.error ?? $"Cartella musica serie non trovata: {musicLibraryFolder}";
-                        _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                        return (false, err);
-                    }
-                }
-                else
-                {
-                    var err = $"Cartella musica serie non trovata: {musicLibraryFolder}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
-            }
-            else
-            {
-                var err = $"Cartella musica di fallback non trovata: {musicLibraryFolder}";
-                _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                return (false, err);
-            }
-        }
-
-        if (libraryFiles.Count == 0)
-        {
-            libraryFiles = Directory
-                .GetFiles(musicLibraryFolder)
-                .Where(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
-                            f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
-                            f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-        }
-
-        if (libraryFiles.Count == 0)
-        {
-            if (story.SerieId.HasValue)
-            {
-                var serie = _database.GetSeriesById(story.SerieId.Value);
-                if (serie != null)
-                {
-                    _customLogger?.Append(runId, $"[{story.Id}] Nessun file musica trovato in {musicLibraryFolder}. Avvio generazione con AudioCraft.");
-                    var gen = await TryGenerateSeriesMusicLibraryAsync(story, serie, phraseEntries, runId);
-                    if (gen.success)
-                    {
-                        libraryFiles = gen.files;
-                        musicLibraryFolder = Path.GetDirectoryName(gen.files.First()) ?? musicLibraryFolder;
-                    }
-                    else
-                    {
-                        var err = gen.error ?? $"Nessun file musica trovato in {musicLibraryFolder}";
-                        _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                        return (false, err);
-                    }
-                }
-                else
-                {
-                    var err = $"Nessun file musica trovato in {musicLibraryFolder}";
-                    _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                    return (false, err);
-                }
-            }
-            else
-            {
-                var err = $"Nessun file musica trovato in {musicLibraryFolder}";
-                _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                return (false, err);
-            }
-        }
-
-        var index = BuildMusicLibraryIndex(libraryFiles);
-
-        var usedDestFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var existing in phraseEntries)
-        {
-            var mf = ReadString(existing, "music_file") ?? ReadString(existing, "musicFile") ?? ReadString(existing, "MusicFile");
-            if (!string.IsNullOrWhiteSpace(mf)) usedDestFileNames.Add(mf);
-        }
-
+        // Step 2: Assign music files from sounds catalog (no generative fallback)
         var assigned = 0;
+        var missing = 0;
         for (var i = 0; i < phraseEntries.Count; i++)
         {
             var entry = phraseEntries[i];
@@ -7494,36 +8201,48 @@ public sealed partial class StoriesService
             if (string.IsNullOrWhiteSpace(musicDesc))
                 continue;
 
+            if (string.Equals(musicDesc.Trim(), "silence", StringComparison.OrdinalIgnoreCase))
+            {
+                entry["music_file"] = null;
+                entry["musicFile"] = null;
+                continue;
+            }
+
             var currentMusicFile = ReadString(entry, "music_file") ?? ReadString(entry, "musicFile") ?? ReadString(entry, "MusicFile");
-            if (!string.IsNullOrWhiteSpace(currentMusicFile) && File.Exists(Path.Combine(folderPath, currentMusicFile)))
+            var currentMusicSourcePath = ReadString(entry, "music_source_path") ?? ReadString(entry, "musicSourcePath") ?? ReadString(entry, "MusicSourcePath");
+            if ((!string.IsNullOrWhiteSpace(currentMusicFile) && File.Exists(Path.Combine(folderPath, currentMusicFile))) ||
+                (!string.IsNullOrWhiteSpace(currentMusicSourcePath) && File.Exists(currentMusicSourcePath)))
                 continue; // already assigned and present
+            var musicTags = ReadMusicTags(entry);
 
-            var requestedType = InferMusicTypeFromDescription(musicDesc, index.Keys);
-            var selected = SelectMusicFileDeterministic(index, requestedType, usedDestFileNames, seedA: story.Id, seedB: i);
-            if (string.IsNullOrWhiteSpace(selected) || !File.Exists(selected))
-            {
-                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Nessun file musica selezionabile per type='{requestedType}' desc='{musicDesc}'");
-                continue;
-            }
+            var selection = TrySelectCatalogSoundForSchema(
+                story,
+                runId,
+                soundType: "music",
+                prompt: musicDesc,
+                tags: musicTags,
+                source: "tts_schema.music_description",
+                preferredDurationSeconds: null,
+                out _);
 
-            var destFileName = Path.GetFileName(selected);
-            var destPath = Path.Combine(folderPath, destFileName);
-            try
+            if (selection == null)
             {
-                if (!File.Exists(destPath))
+                missing++;
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Nessuna musica trovata per '{musicDesc}'. Continuo.");
+                if (missing > maxMissingTolerated)
                 {
-                    File.Copy(selected, destPath, overwrite: false);
+                    return (false, $"Nessuna musica trovata per '{musicDesc}'. Superata soglia mancanti tollerati (mancanti={missing}, tollerati={maxMissingTolerated}).");
                 }
-            }
-            catch (Exception ex)
-            {
-                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Copia musica fallita ({destFileName}): {ex.Message}");
                 continue;
             }
 
-            entry["music_file"] = destFileName;
-            entry["musicFile"] = destFileName;
-            usedDestFileNames.Add(destFileName);
+            var localFileName = $"music_{i + 1:D3}{Path.GetExtension(selection.SourcePath)}";
+            entry["music_file"] = null;
+            entry["musicFile"] = null;
+            entry["music_source_path"] = selection.SourcePath;
+            entry["musicSourcePath"] = selection.SourcePath;
+            entry["music_sound_id"] = selection.Sound.Id;
+            entry["musicSoundId"] = selection.Sound.Id;
             assigned++;
         }
 
@@ -7545,8 +8264,10 @@ public sealed partial class StoriesService
         }
 
         var successMsg = assigned > 0
-            ? $"Musica assegnata da libreria ({assigned} voci in timeline)"
-            : "Nessuna musica assegnata (nessuna richiesta o nessun file selezionabile)";
+            ? $"Musica assegnata da sounds ({assigned} voci in timeline, mancanti={missing})"
+            : (missing > 0
+                ? $"Nessuna musica assegnata da sounds (mancanti={missing})"
+                : "Nessuna musica assegnata (nessuna richiesta)");
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
     }
@@ -8029,26 +8750,13 @@ private static string? SelectMusicFileDeterministic(
         }
 
         // Step 3: Check for missing ambient sound files only when ambience is required.
-        var ambientSoundsNeeded = phraseEntries.Any(e =>
-            !string.IsNullOrWhiteSpace(
-                ReadString(e, "ambient_sound_description") ??
-                ReadString(e, "AmbientSoundDescription") ??
-                ReadString(e, "ambientSoundDescription") ??
-                ReadString(e, "ambientSounds") ??
-                ReadString(e, "AmbientSounds") ??
-                ReadString(e, "ambient_sounds")));
+        var ambientSoundsNeeded = phraseEntries.Any(HasAmbientSoundRequest);
 
         if (IsAmbienceRequiredForNextStatus() && ambientSoundsNeeded)
         {
             var missingAmbientSounds = phraseEntries.Where(e =>
             {
-                var ambientSounds =
-                    ReadString(e, "ambient_sound_description") ??
-                    ReadString(e, "AmbientSoundDescription") ??
-                    ReadString(e, "ambientSoundDescription") ??
-                    ReadString(e, "ambientSounds") ??
-                    ReadString(e, "AmbientSounds") ??
-                    ReadString(e, "ambient_sounds");
+                var ambientSounds = ReadAmbientSoundsDescription(e);
                 if (string.IsNullOrWhiteSpace(ambientSounds)) return false;
 
                 var ambientSoundFile =
@@ -8058,8 +8766,16 @@ private static string? SelectMusicFileDeterministic(
                     ReadString(e, "ambientSoundsFile") ??
                     ReadString(e, "AmbientSoundsFile") ??
                     ReadString(e, "ambient_sounds_file");
+                var ambientSourcePath =
+                    ReadString(e, "ambient_sound_source_path") ??
+                    ReadString(e, "ambientSoundSourcePath") ??
+                    ReadString(e, "AmbientSoundSourcePath");
                 if (string.IsNullOrWhiteSpace(ambientSoundFile))
                 {
+                    if (!string.IsNullOrWhiteSpace(ambientSourcePath) && File.Exists(ambientSourcePath))
+                    {
+                        return false;
+                    }
                     // Keep mix check aligned with ambient generation:
                     // entries with ambient description but zero computed duration do not generate a wav.
                     if (TryReadNumber(e, "ambientSoundsDuration", out var ambientDur) ||
@@ -8070,62 +8786,62 @@ private static string? SelectMusicFileDeterministic(
                     }
                     return true;
                 }
-                return !File.Exists(Path.Combine(folderPath, ambientSoundFile));
+                if (File.Exists(Path.Combine(folderPath, ambientSoundFile))) return false;
+                if (!string.IsNullOrWhiteSpace(ambientSourcePath) && File.Exists(ambientSourcePath)) return false;
+                return true;
             }).ToList();
 
             if (missingAmbientSounds.Count > 0)
             {
-                var err = $"File ambient sound mancanti per alcune frasi; genere necessario prima del mix. Missing count: {missingAmbientSounds.Count}";
-                _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                return (false, err);
+                var warn = $"[WARN] File ambient sound mancanti per alcune frasi (count: {missingAmbientSounds.Count}). Il mix prosegue con i soli suoni disponibili.";
+                _customLogger?.Append(runId, $"[{story.Id}] {warn}");
             }
         }
 
         // Step 4: Check for missing FX audio files
-        var fxNeeded = phraseEntries.Any(e => 
-            !string.IsNullOrWhiteSpace(ReadString(e, "fxDescription") ?? ReadString(e, "FxDescription")));
+        var fxNeeded = phraseEntries.Any(HasFxRequest);
         
         if (fxNeeded)
         {
             var missingFx = phraseEntries.Where(e =>
             {
-                var fxDesc = ReadString(e, "fxDescription") ?? ReadString(e, "FxDescription");
-                if (string.IsNullOrWhiteSpace(fxDesc)) return false;
+                if (!HasFxRequest(e)) return false;
                 var fxFile = ReadString(e, "fxFile") ?? ReadString(e, "FxFile");
-                if (string.IsNullOrWhiteSpace(fxFile)) return true;
-                return !File.Exists(Path.Combine(folderPath, fxFile));
+                var fxSourcePath = ReadString(e, "fx_source_path") ?? ReadString(e, "fxSourcePath") ?? ReadString(e, "FxSourcePath");
+                if (!string.IsNullOrWhiteSpace(fxFile) && File.Exists(Path.Combine(folderPath, fxFile))) return false;
+                if (!string.IsNullOrWhiteSpace(fxSourcePath) && File.Exists(fxSourcePath)) return false;
+                return true;
             }).ToList();
 
             if (missingFx.Count > 0)
             {
-                var err = $"File FX mancanti per alcune frasi (count: {missingFx.Count}). Generazione automatica non consentita durante il mix; genera prima gli FX.";
-                _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                return (false, err);
+                var warn = $"[WARN] File FX mancanti per alcune frasi (count: {missingFx.Count}). Il mix prosegue con gli FX disponibili.";
+                _customLogger?.Append(runId, $"[{story.Id}] {warn}");
             }
         }
 
         // Step 4.5: Check for missing music files and generate if needed (music can be regenerated)
-        var musicNeeded = phraseEntries.Any(e => !string.IsNullOrWhiteSpace(ReadString(e, "music_description")));
+        var musicNeeded = phraseEntries.Any(HasMusicRequest);
         if (musicNeeded)
         {
             var missingMusic = phraseEntries.Where(e =>
             {
-                var mdesc = ReadString(e, "music_description");
-                if (string.IsNullOrWhiteSpace(mdesc)) return false;
+                if (!HasMusicRequest(e)) return false;
                 var musicFile = ReadString(e, "music_file");
-                if (string.IsNullOrWhiteSpace(musicFile)) return true;
-                return !File.Exists(Path.Combine(folderPath, musicFile));
+                var musicSourcePath = ReadString(e, "music_source_path") ?? ReadString(e, "musicSourcePath") ?? ReadString(e, "MusicSourcePath");
+                if (!string.IsNullOrWhiteSpace(musicFile) && File.Exists(Path.Combine(folderPath, musicFile))) return false;
+                if (!string.IsNullOrWhiteSpace(musicSourcePath) && File.Exists(musicSourcePath)) return false;
+                return true;
             }).ToList();
 
             if (missingMusic.Count > 0)
             {
-                var err = $"File music mancanti per alcune frasi (count: {missingMusic.Count}). Generazione automatica non consentita durante il mix; genera prima la musica.";
-                _customLogger?.Append(runId, $"[{story.Id}] {err}");
-                return (false, err);
+                var warn = $"[WARN] File music mancanti per alcune frasi (count: {missingMusic.Count}). Il mix prosegue con la musica disponibile.";
+                _customLogger?.Append(runId, $"[{story.Id}] {warn}");
             }
         }
 
-        _customLogger?.Append(runId, $"[{story.Id}] Tutti i file audio presenti. Avvio mixaggio...");
+        _customLogger?.Append(runId, $"[{story.Id}] Verifica audio completata. Avvio mixaggio con gli asset disponibili...");
 
 
         var ttsTrackFiles = new List<(string FilePath, int StartMs)>();
@@ -8138,116 +8854,102 @@ private static string? SelectMusicFileDeterministic(
         var introShiftMs = 0;
         try
         {
-            var musicLibraryFolder = GetMusicLibraryFolderForStory(story);
-            if (!string.IsNullOrWhiteSpace(musicLibraryFolder) && Directory.Exists(musicLibraryFolder))
+            var selectedOpening = SelectOpeningMusicFromSoundsCatalog(story.Id);
+            if (!string.IsNullOrWhiteSpace(selectedOpening) && File.Exists(selectedOpening))
             {
-                var libraryFiles = Directory
-                    .GetFiles(musicLibraryFolder)
-                    .Where(f => f.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase) ||
-                                f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
-                                f.EndsWith(".m4a", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                musicTrackFiles.Add((selectedOpening, 0, 15000));
+                introShiftMs = 15000;
 
-                var index = BuildMusicLibraryIndex(libraryFiles);
-                var selectedOpening = SelectMusicFileDeterministic(
-                    index,
-                    requestedType: "opening",
-                    usedDestFileNames: new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-                    seedA: story.Id,
-                    seedB: -100);
-
-                if (!string.IsNullOrWhiteSpace(selectedOpening) && File.Exists(selectedOpening))
+                // Narrator announcement
+                var narratorVoice = (ReadString(rootNode, "narrator_voice_id")
+                    ?? ReadString(rootNode, "narratorVoiceId")
+                    ?? ReadString(rootNode, "narrator_voice")
+                    ?? ReadString(rootNode, "narratorVoice")
+                    ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(narratorVoice))
                 {
-                    musicTrackFiles.Add((selectedOpening, 0, 15000));
-                    introShiftMs = 15000;
+                    narratorVoice = GetNarratorDefaultVoiceId() ?? string.Empty;
+                }
 
-                    // Narrator announcement
-                    var narratorVoice = (ReadString(rootNode, "narrator_voice_id")
-                        ?? ReadString(rootNode, "narratorVoiceId")
-                        ?? ReadString(rootNode, "narrator_voice")
-                        ?? ReadString(rootNode, "narratorVoice")
-                        ?? string.Empty).Trim();
-                    if (string.IsNullOrWhiteSpace(narratorVoice))
+                string? seriesTitle = null;
+                if (story.SerieId.HasValue)
+                {
+                    try
                     {
-                        narratorVoice = GetNarratorDefaultVoiceId() ?? string.Empty;
+                        seriesTitle = _database.GetSeriesById(story.SerieId.Value)?.Titolo;
                     }
-
-                    string? seriesTitle = null;
-                    if (story.SerieId.HasValue)
+                    catch
                     {
-                        try
-                        {
-                            seriesTitle = _database.GetSeriesById(story.SerieId.Value)?.Titolo;
-                        }
-                        catch
-                        {
-                            seriesTitle = null;
-                        }
-                    }
-                    var episodeNumber = story.SerieEpisode;
-                    var storyTitle = (story.Title ?? string.Empty).Trim();
-                    string? episodeTitle = null;
-                    if (story.SerieId.HasValue && episodeNumber.HasValue)
-                    {
-                        try
-                        {
-                            episodeTitle = _database.GetSeriesEpisodeBySerieAndNumber(story.SerieId.Value, episodeNumber.Value)?.Title;
-                        }
-                        catch
-                        {
-                            episodeTitle = null;
-                        }
-                    }
-                    var titleAlreadyInTimeline = !string.IsNullOrWhiteSpace(storyTitle)
-                        && TimelineContainsTitle(phraseEntries, storyTitle);
-                    var seriesAlreadyInTimeline = !string.IsNullOrWhiteSpace(seriesTitle)
-                        && TimelineContainsTitle(phraseEntries, seriesTitle);
-                    var episodeAlreadyInTimeline = episodeNumber.HasValue && (
-                        TimelineContainsTitle(phraseEntries, $"episodio {episodeNumber.Value}") ||
-                        TimelineContainsTitle(phraseEntries, $"ep {episodeNumber.Value}") ||
-                        TimelineContainsTitle(phraseEntries, $"ep{episodeNumber.Value}")
-                    );
-                    var openingAlreadyInTimeline = titleAlreadyInTimeline || seriesAlreadyInTimeline || episodeAlreadyInTimeline;
-
-                    if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null && !string.IsNullOrWhiteSpace(narratorVoice) && !openingAlreadyInTimeline)
-                    {
-                        var announcement = BuildOpeningAnnouncement(seriesTitle, episodeNumber, storyTitle, episodeTitle);
-
-                        var openingTtsFile = Path.Combine(folderPath, "tts_opening.wav");
-                        var openingAnnouncementFile = Path.Combine(folderPath, "tts_opening.txt");
-                        var mustRegenerateOpening = true;
-                        if (File.Exists(openingTtsFile) && File.Exists(openingAnnouncementFile))
-                        {
-                            try
-                            {
-                                var savedAnnouncement = (await File.ReadAllTextAsync(openingAnnouncementFile)).Trim();
-                                mustRegenerateOpening = !string.Equals(savedAnnouncement, announcement, StringComparison.Ordinal);
-                            }
-                            catch
-                            {
-                                mustRegenerateOpening = true;
-                            }
-                        }
-
-                        if (mustRegenerateOpening)
-                        {
-                            var ttsSafe = ProsodyNormalizer.NormalizeForTTS(announcement);
-                            var narratorProvider = ResolveVoiceProvider(narratorVoice);
-                            var ttsResult = await _ttsService.SynthesizeAsync(narratorVoice, ttsSafe, provider: narratorProvider);
-                            if (ttsResult != null && !string.IsNullOrWhiteSpace(ttsResult.AudioBase64))
-                            {
-                                var audioBytes = Convert.FromBase64String(ttsResult.AudioBase64);
-                                await File.WriteAllBytesAsync(openingTtsFile, audioBytes);
-                                await File.WriteAllTextAsync(openingAnnouncementFile, announcement);
-                            }
-                        }
-
-                        if (File.Exists(openingTtsFile))
-                        {
-                            ttsTrackFiles.Add((openingTtsFile, 5000));
-                        }
+                        seriesTitle = null;
                     }
                 }
+                var episodeNumber = story.SerieEpisode;
+                var storyTitle = (story.Title ?? string.Empty).Trim();
+                string? episodeTitle = null;
+                if (story.SerieId.HasValue && episodeNumber.HasValue)
+                {
+                    try
+                    {
+                        episodeTitle = _database.GetSeriesEpisodeBySerieAndNumber(story.SerieId.Value, episodeNumber.Value)?.Title;
+                    }
+                    catch
+                    {
+                        episodeTitle = null;
+                    }
+                }
+                var titleAlreadyInTimeline = !string.IsNullOrWhiteSpace(storyTitle)
+                    && TimelineContainsTitle(phraseEntries, storyTitle);
+                var seriesAlreadyInTimeline = !string.IsNullOrWhiteSpace(seriesTitle)
+                    && TimelineContainsTitle(phraseEntries, seriesTitle);
+                var episodeAlreadyInTimeline = episodeNumber.HasValue && (
+                    TimelineContainsTitle(phraseEntries, $"episodio {episodeNumber.Value}") ||
+                    TimelineContainsTitle(phraseEntries, $"ep {episodeNumber.Value}") ||
+                    TimelineContainsTitle(phraseEntries, $"ep{episodeNumber.Value}")
+                );
+                var openingAlreadyInTimeline = titleAlreadyInTimeline || seriesAlreadyInTimeline || episodeAlreadyInTimeline;
+
+                if (!string.IsNullOrWhiteSpace(storyTitle) && _ttsService != null && !string.IsNullOrWhiteSpace(narratorVoice) && !openingAlreadyInTimeline)
+                {
+                    var announcement = BuildOpeningAnnouncement(seriesTitle, episodeNumber, storyTitle, episodeTitle);
+
+                    var openingTtsFile = Path.Combine(folderPath, "tts_opening.wav");
+                    var openingAnnouncementFile = Path.Combine(folderPath, "tts_opening.txt");
+                    var mustRegenerateOpening = true;
+                    if (File.Exists(openingTtsFile) && File.Exists(openingAnnouncementFile))
+                    {
+                        try
+                        {
+                            var savedAnnouncement = (await File.ReadAllTextAsync(openingAnnouncementFile)).Trim();
+                            mustRegenerateOpening = !string.Equals(savedAnnouncement, announcement, StringComparison.Ordinal);
+                        }
+                        catch
+                        {
+                            mustRegenerateOpening = true;
+                        }
+                    }
+
+                    if (mustRegenerateOpening)
+                    {
+                        var ttsSafe = ProsodyNormalizer.NormalizeForTTS(announcement);
+                        var narratorProvider = ResolveVoiceProvider(narratorVoice);
+                        var ttsResult = await _ttsService.SynthesizeAsync(narratorVoice, ttsSafe, provider: narratorProvider);
+                        if (ttsResult != null && !string.IsNullOrWhiteSpace(ttsResult.AudioBase64))
+                        {
+                            var audioBytes = Convert.FromBase64String(ttsResult.AudioBase64);
+                            await File.WriteAllBytesAsync(openingTtsFile, audioBytes);
+                            await File.WriteAllTextAsync(openingAnnouncementFile, announcement);
+                        }
+                    }
+
+                    if (File.Exists(openingTtsFile))
+                    {
+                        ttsTrackFiles.Add((openingTtsFile, 5000));
+                    }
+                }
+            }
+            else
+            {
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Nessuna opening music trovata in sounds (type=music). Intro senza musica.");
             }
         }
         catch (Exception ex)
@@ -8303,9 +9005,10 @@ private static string? SelectMusicFileDeterministic(
 
             // FX file - starts at middle of phrase duration
             var fxFile = ReadString(entry, "fxFile") ?? ReadString(entry, "FxFile");
-            if (!string.IsNullOrWhiteSpace(fxFile))
+            var fxSourcePath = ReadString(entry, "fx_source_path") ?? ReadString(entry, "fxSourcePath") ?? ReadString(entry, "FxSourcePath");
+            var fxFilePath = ResolveSchemaAudioReferencePath(folderPath, fxFile, fxSourcePath);
+            if (!string.IsNullOrWhiteSpace(fxFilePath))
             {
-                var fxFilePath = Path.Combine(folderPath, fxFile);
                 if (File.Exists(fxFilePath))
                 {
                     int startMs = introShiftMs;
@@ -8321,9 +9024,10 @@ private static string? SelectMusicFileDeterministic(
 
             // Music file - starts 2 seconds after phrase start
             var musicFile = ReadString(entry, "musicFile") ?? ReadString(entry, "music_file") ?? ReadString(entry, "MusicFile");
-            if (!string.IsNullOrWhiteSpace(musicFile))
+            var musicSourcePath = ReadString(entry, "music_source_path") ?? ReadString(entry, "musicSourcePath") ?? ReadString(entry, "MusicSourcePath");
+            var musicFilePath = ResolveSchemaAudioReferencePath(folderPath, musicFile, musicSourcePath);
+            if (!string.IsNullOrWhiteSpace(musicFilePath))
             {
-                var musicFilePath = Path.Combine(folderPath, musicFile);
                 if (File.Exists(musicFilePath))
                 {
                     int startMs = introShiftMs;
@@ -8362,6 +9066,10 @@ private static string? SelectMusicFileDeterministic(
                     ReadString(e, "ambientSoundsFile") ??
                     ReadString(e, "AmbientSoundsFile") ??
                     ReadString(e, "ambient_sounds_file");
+                var ambientSourcePath =
+                    ReadString(e, "ambient_sound_source_path") ??
+                    ReadString(e, "ambientSoundSourcePath") ??
+                    ReadString(e, "AmbientSoundSourcePath");
 
                 if (string.IsNullOrWhiteSpace(ambientFile)) continue;
 
@@ -8371,7 +9079,7 @@ private static string? SelectMusicFileDeterministic(
                 var durationMs = ReadAmbientSoundsDurationMs(e);
                 if (durationMs <= 0) continue;
 
-                var fullPath = Path.Combine(folderPath, ambientFile);
+                var fullPath = ResolveSchemaAudioReferencePath(folderPath, ambientFile, ambientSourcePath) ?? string.Empty;
                 if (!File.Exists(fullPath))
                 {
                     _customLogger?.Append(runId, $"[{story.Id}] [WARN] File ambient sound NON TROVATO: {fullPath}");
@@ -8379,7 +9087,7 @@ private static string? SelectMusicFileDeterministic(
                 }
 
                 ambienceTrackFiles.Add((fullPath, startMs + introShiftMs, durationMs));
-                _customLogger?.Append(runId, $"[{story.Id}] Ambient segment: {ambientFile} @ {startMs + introShiftMs}ms for {durationMs}ms");
+                _customLogger?.Append(runId, $"[{story.Id}] Ambient segment: {(string.IsNullOrWhiteSpace(ambientFile) ? Path.GetFileName(fullPath) : ambientFile)} @ {startMs + introShiftMs}ms for {durationMs}ms");
             }
         }
         catch (Exception ex)

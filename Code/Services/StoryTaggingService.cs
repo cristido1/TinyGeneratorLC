@@ -186,8 +186,10 @@ public sealed class StoryTaggingService
             if (!TryParseLineWithIdPrefix(raw, out var id, out var tail)) continue;
             if (tail.Length == 0) continue;
 
+            var (ambientBody, csvTags) = SplitBodyAndOptionalCsvTags(tail);
+
             var matchedAny = false;
-            foreach (Match match in Regex.Matches(tail, "\\[[^\\]]+\\]"))
+            foreach (Match match in Regex.Matches(ambientBody, "\\[[^\\]]+\\]"))
             {
                 var tag = match.Value.Trim();
                 if (IsTagAllowedForType(tag, TagTypeAmbient))
@@ -199,10 +201,15 @@ public sealed class StoryTaggingService
 
             if (!matchedAny)
             {
-                var text = CleanAmbientDescription(tail);
+                var text = CleanAmbientDescription(ambientBody);
+                if (string.IsNullOrWhiteSpace(text) && !string.IsNullOrWhiteSpace(csvTags))
+                {
+                    text = BuildFallbackDescriptionFromCsvTags(csvTags);
+                }
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    result.Add(new StoryTagEntry(TagTypeAmbient, id, $"[RUMORI: {text}]"));
+                    var tagsSuffix = string.IsNullOrWhiteSpace(csvTags) ? string.Empty : $" | TAGS: {csvTags}";
+                    result.Add(new StoryTagEntry(TagTypeAmbient, id, $"[RUMORI: {text}{tagsSuffix}]"));
                 }
             }
         }
@@ -222,12 +229,43 @@ public sealed class StoryTaggingService
             if (!TryParseLineWithIdPrefix(raw, out var id, out var tail)) continue;
             if (tail.Length == 0) continue;
 
-            // Accept only strict formats:
-            // 1) "001 descrizione [2]" or "001 descrizione [2 s|2sec|2 sec]"
-            // 2) "001 [2] descrizione" (same duration variants)
-            var durationPattern = @"\[(\d+(?:[.,]\d+)?)(?:\s*(?:s|sec|secondi))?\]";
-            var m1 = Regex.Match(tail, $"^\\s*{durationPattern}\\s*(.+)$", RegexOptions.IgnoreCase);
-            var m2 = Regex.Match(tail, $"^\\s*(.+?)\\s*{durationPattern}\\s*$", RegexOptions.IgnoreCase);
+            // Nuovo/variante reale osservata nel log:
+            // "123 || tag1, tag2, tag3 [4]"
+            // (tag-only, con durata in coda e senza descrizione)
+            var directTagOnlyWithPipe = Regex.Match(
+                tail,
+                @"^\s*\|\|\s*(.+?)\s*[\[\(](\d+(?:[.,]\d+)?)(?:\s*(?:s|sec|secs|second|secondi))?[\]\)]\s*$",
+                RegexOptions.IgnoreCase);
+            if (directTagOnlyWithPipe.Success)
+            {
+                var csvTagsRaw = directTagOnlyWithPipe.Groups[1].Value;
+                var csvTagsDirect = NormalizeCsvTags(csvTagsRaw);
+                var durationNormDirect = directTagOnlyWithPipe.Groups[2].Value.Replace(',', '.');
+                if (!string.IsNullOrWhiteSpace(csvTagsDirect) &&
+                    double.TryParse(durationNormDirect, NumberStyles.Float, CultureInfo.InvariantCulture, out var durationDirect))
+                {
+                    var durationSecondsDirect = (int)Math.Ceiling(durationDirect);
+                    if (durationSecondsDirect > 0)
+                    {
+                        var descriptionDirect = BuildFallbackDescriptionFromCsvTags(csvTagsDirect);
+                        if (!string.IsNullOrWhiteSpace(descriptionDirect))
+                        {
+                            var tagDirect = $"[FX: {durationSecondsDirect} : {descriptionDirect} | TAGS: {csvTagsDirect}]";
+                            result.Add(new StoryTagEntry(TagTypeFx, id, tagDirect));
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            var (fxBody, csvTags) = SplitBodyAndOptionalCsvTags(tail);
+
+            // Accept common formats:
+            // 1) "001 descrizione [2]" / "(2)" / "[2 s]" / "(2 sec)"
+            // 2) "001 [2] descrizione" / "(2) descrizione"
+            var durationPattern = @"[\[\(](\d+(?:[.,]\d+)?)(?:\s*(?:s|sec|secs|second|secondi))?[\]\)]";
+            var m1 = Regex.Match(fxBody, $"^\\s*{durationPattern}\\s*(.+)$", RegexOptions.IgnoreCase);
+            var m2 = Regex.Match(fxBody, $"^\\s*(.+?)\\s*{durationPattern}\\s*$", RegexOptions.IgnoreCase);
 
             string? description = null;
             string? durationStr = null;
@@ -243,7 +281,26 @@ public sealed class StoryTaggingService
                 durationStr = m2.Groups[2].Value;
             }
 
+            if ((string.IsNullOrWhiteSpace(description) || string.IsNullOrWhiteSpace(durationStr)) && !string.IsNullOrWhiteSpace(csvTags))
+            {
+                // Nuovo formato tag-only: "ID [secondi] || tag1, tag2, ..."
+                var onlyDuration = Regex.Match(fxBody, $"^\\s*{durationPattern}\\s*$", RegexOptions.IgnoreCase);
+                if (onlyDuration.Success)
+                {
+                    durationStr = onlyDuration.Groups[1].Value;
+                    description = BuildFallbackDescriptionFromCsvTags(csvTags);
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(description) || string.IsNullOrWhiteSpace(durationStr))
+            {
+                invalidLines++;
+                continue;
+            }
+
+            description = description.Trim();
+            description = Regex.Replace(description, @"^[\.\)\-–—:\s]+", string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(description))
             {
                 invalidLines++;
                 continue;
@@ -263,7 +320,8 @@ public sealed class StoryTaggingService
                 continue;
             }
 
-            var tag = $"[FX: {durationSeconds} : {description.Trim()}]";
+            var tagsSuffix = string.IsNullOrWhiteSpace(csvTags) ? string.Empty : $" | TAGS: {csvTags}";
+            var tag = $"[FX: {durationSeconds} : {description.Trim()}{tagsSuffix}]";
             result.Add(new StoryTagEntry(TagTypeFx, id, tag));
         }
 
@@ -281,8 +339,10 @@ public sealed class StoryTaggingService
             if (!TryParseLineWithIdPrefix(raw, out var id, out var tail)) continue;
             if (tail.Length == 0) continue;
 
+            var (musicBody, csvTags) = SplitBodyAndOptionalCsvTags(tail);
+
             var durationSeconds = (int?)null;
-            var durationMatch = Regex.Match(tail, @"\[(\d+(?:[.,]\d+)?)\]\s*$", RegexOptions.IgnoreCase);
+            var durationMatch = Regex.Match(musicBody, @"\[(\d+(?:[.,]\d+)?)(?:\s*(?:s|sec|secondi))?\]\s*$", RegexOptions.IgnoreCase);
             if (durationMatch.Success)
             {
                 var durationStr = durationMatch.Groups[1].Value.Replace(',', '.');
@@ -291,15 +351,20 @@ public sealed class StoryTaggingService
                     durationSeconds = (int)Math.Ceiling(duration);
                 }
 
-                tail = tail.Substring(0, durationMatch.Index).TrimEnd();
+                musicBody = musicBody.Substring(0, durationMatch.Index).TrimEnd();
             }
 
-            var mood = tail.Trim();
+            var mood = musicBody.Trim();
+            if (string.IsNullOrWhiteSpace(mood) && !string.IsNullOrWhiteSpace(csvTags))
+            {
+                mood = BuildFallbackDescriptionFromCsvTags(csvTags);
+            }
             if (string.IsNullOrWhiteSpace(mood)) continue;
 
+            var tagsSuffix = string.IsNullOrWhiteSpace(csvTags) ? string.Empty : $" | TAGS: {csvTags}";
             var tag = durationSeconds.HasValue
-                ? $"[MUSIC: {durationSeconds.Value} s | {mood}]"
-                : $"[MUSIC: {mood}]";
+                ? $"[MUSIC: {durationSeconds.Value} s | {mood}{tagsSuffix}]"
+                : $"[MUSIC: {mood}{tagsSuffix}]";
             result.Add(new StoryTagEntry(TagTypeMusic, id, tag));
         }
 
@@ -390,6 +455,62 @@ public sealed class StoryTaggingService
         return cleaned.Trim();
     }
 
+    private static (string body, string? csvTags) SplitBodyAndOptionalCsvTags(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return (string.Empty, null);
+        }
+
+        var parts = text.Split(new[] { "||" }, 2, StringSplitOptions.None);
+        var body = (parts[0] ?? string.Empty).Trim();
+        if (parts.Length < 2)
+        {
+            return (body, null);
+        }
+
+        var tags = NormalizeCsvTags(parts[1]);
+        return (body, string.IsNullOrWhiteSpace(tags) ? null : tags);
+    }
+
+    private static string? NormalizeCsvTags(string? csv)
+    {
+        if (string.IsNullOrWhiteSpace(csv)) return null;
+
+        var tokens = csv
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(t => t.Trim().Trim('[', ']', '"', '\''))
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(NormalizeTagToken)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return tokens.Count == 0 ? null : string.Join(", ", tokens);
+    }
+
+    private static string BuildFallbackDescriptionFromCsvTags(string csvTags)
+    {
+        if (string.IsNullOrWhiteSpace(csvTags)) return string.Empty;
+        var first = csvTags
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(NormalizeTagToken)
+            .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
+        return string.IsNullOrWhiteSpace(first)
+            ? string.Empty
+            : first.Replace("_", " ");
+    }
+
+    private static string NormalizeTagToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return string.Empty;
+        var normalized = token.Trim().ToLowerInvariant();
+        normalized = Regex.Replace(normalized, @"\s+", "_");
+        normalized = Regex.Replace(normalized, @"[^a-z0-9_]+", string.Empty);
+        normalized = Regex.Replace(normalized, @"_+", "_").Trim('_');
+        return normalized;
+    }
+
     private static bool TryParseLineWithIdPrefix(string? raw, out int id, out string tail)
     {
         id = 0;
@@ -398,8 +519,10 @@ public sealed class StoryTaggingService
         var line = (raw ?? string.Empty).Trim();
         if (line.Length < 2) return false;
 
-        // Accept optional bullet prefix: "- 054: text"
-        if (line.StartsWith("-", StringComparison.Ordinal))
+        // Accept optional bullet/list prefix: "- 054: text", "* 054 ...", "• 054 ..."
+        if (line.StartsWith("-", StringComparison.Ordinal)
+            || line.StartsWith("*", StringComparison.Ordinal)
+            || line.StartsWith("•", StringComparison.Ordinal))
         {
             line = line.Substring(1).TrimStart();
             if (line.Length < 2) return false;
@@ -411,8 +534,16 @@ public sealed class StoryTaggingService
         if (!int.TryParse(line.Substring(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out id)) return false;
 
         var rest = line.Substring(i).TrimStart();
-        // Accept optional delimiter: "054: text"
-        if (rest.StartsWith(":", StringComparison.Ordinal))
+        // Accept optional delimiters after line id: "054: text", "054. text", "054) text", "054 - text"
+        if (rest.StartsWith(":", StringComparison.Ordinal)
+            || rest.StartsWith(".", StringComparison.Ordinal)
+            || rest.StartsWith(")", StringComparison.Ordinal))
+        {
+            rest = rest.Substring(1).TrimStart();
+        }
+        else if (rest.StartsWith("-", StringComparison.Ordinal)
+                 || rest.StartsWith("–", StringComparison.Ordinal)
+                 || rest.StartsWith("—", StringComparison.Ordinal))
         {
             rest = rest.Substring(1).TrimStart();
         }

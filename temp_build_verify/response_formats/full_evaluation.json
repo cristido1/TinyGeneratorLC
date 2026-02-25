@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "properties": {
+    "narrative_coherence_score": {
+      "type": "integer",
+      "description": "Score for narrative coherence (1-10)"
+    },
+    "narrative_coherence_defects": {
+      "type": "string",
+      "description": "Description of defects in narrative coherence"
+    },
+    "originality_score": {
+      "type": "integer",
+      "description": "Score for originality (1-10)"
+    },
+    "originality_defects": {
+      "type": "string",
+      "description": "Description of defects in originality"
+    },
+    "emotional_impact_score": {
+      "type": "integer",
+      "description": "Score for emotional impact (1-10)"
+    },
+    "emotional_impact_defects": {
+      "type": "string",
+      "description": "Description of defects in emotional impact"
+    },
+    "action_score": {
+      "type": "integer",
+      "description": "Score for action/pacing intensity (1-10)"
+    },
+    "action_defects": {
+      "type": "string",
+      "description": "Description of defects in action/pacing"
+    }
+  },
+  "required": [
+    "narrative_coherence_score",
+    "originality_score",
+    "emotional_impact_score",
+    "action_score"
+  ],
+  "additionalProperties": false
+}

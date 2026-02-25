@@ -77,3 +77,5 @@ appsettings.secrets.json
 wwwroot/data_voices_samples/
 stories_folder/
 series_folder/
+ # Local dataset folder: keep out of repo
+ data/datasets/

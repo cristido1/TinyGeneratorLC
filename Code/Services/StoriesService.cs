@@ -6600,7 +6600,8 @@ public sealed partial class StoriesService
                     }
                     continue;
                 }
-                var localFileName = $"ambience_{segmentCounter:D3}{Path.GetExtension(selection.SourcePath)}";
+                var localCopiedPath = EnsureStoryLocalCopyOfCatalogSound(folderPath, selection.SourcePath, story.Id, runId);
+                var localFileName = Path.GetFileName(localCopiedPath);
                 assignedCount++;
                 _customLogger?.Append(runId, $"[{story.Id}] Salvato da sounds: {localFileName}");
 
@@ -6613,10 +6614,10 @@ public sealed partial class StoriesService
                 // Update tts_schema.json: add ambient sound file reference only on the definition record
                 if (segment.DefinitionIndex >= 0 && segment.DefinitionIndex < phraseEntries.Count)
                 {
-                    phraseEntries[segment.DefinitionIndex]["ambient_sound_file"] = null;
-                    phraseEntries[segment.DefinitionIndex]["ambientSoundsFile"] = null;
-                    phraseEntries[segment.DefinitionIndex]["ambient_sound_source_path"] = selection.SourcePath;
-                    phraseEntries[segment.DefinitionIndex]["ambientSoundSourcePath"] = selection.SourcePath;
+                    phraseEntries[segment.DefinitionIndex]["ambient_sound_file"] = localFileName;
+                    phraseEntries[segment.DefinitionIndex]["ambientSoundsFile"] = localFileName;
+                    phraseEntries[segment.DefinitionIndex]["ambient_sound_source_path"] = localCopiedPath;
+                    phraseEntries[segment.DefinitionIndex]["ambientSoundSourcePath"] = localCopiedPath;
                     phraseEntries[segment.DefinitionIndex]["ambient_sound_id"] = selection.Sound.Id;
                     phraseEntries[segment.DefinitionIndex]["ambientSoundId"] = selection.Sound.Id;
                 }
@@ -7146,7 +7147,8 @@ public sealed partial class StoriesService
                     }
                     continue;
                 }
-                var localFileName = $"fx_{fxCounter:D3}{Path.GetExtension(selection.SourcePath)}";
+                var localCopiedPath = EnsureStoryLocalCopyOfCatalogSound(folderPath, selection.SourcePath, story.Id, runId);
+                var localFileName = Path.GetFileName(localCopiedPath);
                 assignedCount++;
                 _customLogger?.Append(runId, $"[{story.Id}] Salvato da sounds: {localFileName}");
                 
@@ -7157,10 +7159,10 @@ public sealed partial class StoriesService
                 _customLogger?.Append(runId, $"[{story.Id}] Salvato prompt: {promptFileName}");
 
                 // Update tts_schema.json: add fxFile property
-                entry["fxFile"] = null;
-                entry["fx_file"] = null;
-                entry["fx_source_path"] = selection.SourcePath;
-                entry["fxSourcePath"] = selection.SourcePath;
+                entry["fxFile"] = localFileName;
+                entry["fx_file"] = localFileName;
+                entry["fx_source_path"] = localCopiedPath;
+                entry["fxSourcePath"] = localCopiedPath;
                 entry["fx_sound_id"] = selection.Sound.Id;
                 entry["fxSoundId"] = selection.Sound.Id;
             }
@@ -7330,11 +7332,12 @@ public sealed partial class StoriesService
 
             if (selection == null) continue;
 
-            var libraryFileName = Path.GetFileName(selection.SourcePath);
+            var localAmbientPath = EnsureStoryLocalCopyOfCatalogSound(folderPath, selection.SourcePath, story.Id, runId);
+            var libraryFileName = Path.GetFileName(localAmbientPath);
             entry["ambient_sound_file"] = libraryFileName;
             entry["ambientSoundsFile"] = libraryFileName;
-            entry["ambient_sound_source_path"] = selection.SourcePath;
-            entry["ambientSoundSourcePath"] = selection.SourcePath;
+            entry["ambient_sound_source_path"] = localAmbientPath;
+            entry["ambientSoundSourcePath"] = localAmbientPath;
             entry["ambient_sound_id"] = selection.Sound.Id;
             entry["ambientSoundId"] = selection.Sound.Id;
             entry["ambient_sound_description"] = null;
@@ -7379,11 +7382,12 @@ public sealed partial class StoriesService
 
             if (selection == null) continue;
 
-            var libraryFileName = Path.GetFileName(selection.SourcePath);
+            var localFxPath = EnsureStoryLocalCopyOfCatalogSound(folderPath, selection.SourcePath, story.Id, runId);
+            var libraryFileName = Path.GetFileName(localFxPath);
             entry["fx_file"] = libraryFileName;
             entry["fxFile"] = libraryFileName;
-            entry["fx_source_path"] = selection.SourcePath;
-            entry["fxSourcePath"] = selection.SourcePath;
+            entry["fx_source_path"] = localFxPath;
+            entry["fxSourcePath"] = localFxPath;
             entry["fx_sound_id"] = selection.Sound.Id;
             entry["fxSoundId"] = selection.Sound.Id;
             entry["fx_description"] = null;
@@ -7419,11 +7423,12 @@ public sealed partial class StoriesService
 
             if (selection == null) continue;
 
-            var libraryFileName = Path.GetFileName(selection.SourcePath);
+            var localMusicPath = EnsureStoryLocalCopyOfCatalogSound(folderPath, selection.SourcePath, story.Id, runId);
+            var libraryFileName = Path.GetFileName(localMusicPath);
             entry["music_file"] = libraryFileName;
             entry["musicFile"] = libraryFileName;
-            entry["music_source_path"] = selection.SourcePath;
-            entry["musicSourcePath"] = selection.SourcePath;
+            entry["music_source_path"] = localMusicPath;
+            entry["musicSourcePath"] = localMusicPath;
             entry["music_sound_id"] = selection.Sound.Id;
             entry["musicSoundId"] = selection.Sound.Id;
             entry["music_description"] = null;
@@ -7474,6 +7479,34 @@ public sealed partial class StoriesService
 
         _customLogger?.Append(runId, $"[{story.Id}] Match sounds {soundType}: soundId={match.Sound.Id}, score={match.Score:0.##}, matchedTokens={match.MatchedTokens}, file='{match.Sound.FileName}'");
         return new CatalogSoundSelection(match.Sound, sourcePath);
+    }
+
+    private string EnsureStoryLocalCopyOfCatalogSound(string folderPath, string sourcePath, long storyId, string? runId)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath))
+            throw new ArgumentException("Cartella storia non valida", nameof(folderPath));
+        if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+            throw new FileNotFoundException("File sorgente sounds non trovato", sourcePath);
+
+        Directory.CreateDirectory(folderPath);
+
+        var fileName = Path.GetFileName(sourcePath);
+        if (string.IsNullOrWhiteSpace(fileName))
+            throw new InvalidOperationException($"Nome file non valido per '{sourcePath}'");
+
+        var destPath = Path.Combine(folderPath, fileName);
+        if (File.Exists(destPath))
+        {
+            // Gia' presente: usa la copia locale esistente.
+            return destPath;
+        }
+
+        File.Copy(sourcePath, destPath, overwrite: false);
+        if (!string.IsNullOrWhiteSpace(runId))
+        {
+            _customLogger?.Append(runId!, $"[{storyId}] Copiato suono da libreria in cartella storia: {fileName}");
+        }
+        return destPath;
     }
 
     private CatalogSoundMatch? FindBestCatalogSoundMatch(string soundType, string prompt, string? tags, int? preferredDurationSeconds)
@@ -8236,11 +8269,12 @@ public sealed partial class StoriesService
                 continue;
             }
 
-            var localFileName = $"music_{i + 1:D3}{Path.GetExtension(selection.SourcePath)}";
-            entry["music_file"] = null;
-            entry["musicFile"] = null;
-            entry["music_source_path"] = selection.SourcePath;
-            entry["musicSourcePath"] = selection.SourcePath;
+            var localCopiedPath = EnsureStoryLocalCopyOfCatalogSound(folderPath, selection.SourcePath, story.Id, runId);
+            var localFileName = Path.GetFileName(localCopiedPath);
+            entry["music_file"] = localFileName;
+            entry["musicFile"] = localFileName;
+            entry["music_source_path"] = localCopiedPath;
+            entry["musicSourcePath"] = localCopiedPath;
             entry["music_sound_id"] = selection.Sound.Id;
             entry["musicSoundId"] = selection.Sound.Id;
             assigned++;

@@ -86,6 +86,7 @@ namespace TinyGenerator.Services
     public sealed class ResponseValidationCommandPolicy
     {
         public bool? EnableChecker { get; set; }
+        public bool? EnableAgentFallback { get; set; }
 
         /// <summary>
         /// Overrides ResponseValidationOptions.MaxRetries for this operation.

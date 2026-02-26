@@ -177,7 +177,7 @@ public sealed class CallCenter : ICallCenter
                 continue;
             }
 
-            if (options.AllowFallback)
+            if (options.AllowFallback && IsAgentFallbackEnabledForOperation(options.Operation))
             {
                 var fallbackAgent = SelectNextFallbackAgent(currentAgent, usedModels, fallbackStats);
                 if (fallbackAgent != null)
@@ -304,6 +304,60 @@ public sealed class CallCenter : ICallCenter
         {
             return true;
         }
+    }
+
+    private bool IsAgentFallbackEnabledForOperation(string? operation)
+    {
+        try
+        {
+            var op = string.IsNullOrWhiteSpace(operation) ? "call_center" : operation.Trim();
+            var policies = _responseValidationOptions?.CurrentValue?.CommandPolicies;
+            if (policies == null || policies.Count == 0)
+            {
+                return true;
+            }
+
+            if (TryGetResponseValidationPolicyForOperation(policies, op, out var policy) &&
+                policy?.EnableAgentFallback.HasValue == true)
+            {
+                return policy.EnableAgentFallback.Value;
+            }
+
+            return true;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static bool TryGetResponseValidationPolicyForOperation(
+        Dictionary<string, ResponseValidationCommandPolicy> policies,
+        string operation,
+        out ResponseValidationCommandPolicy? policy)
+    {
+        policy = null;
+        if (policies.TryGetValue(operation, out var exact) && exact != null)
+        {
+            policy = exact;
+            return true;
+        }
+
+        // Fallback prefix match: trim path-like suffixes (e.g. "foo/bar/baz" -> "foo/bar" -> "foo")
+        var key = operation;
+        while (!string.IsNullOrWhiteSpace(key))
+        {
+            var slash = key.LastIndexOf('/');
+            if (slash <= 0) break;
+            key = key[..slash];
+            if (policies.TryGetValue(key, out var pref) && pref != null)
+            {
+                policy = pref;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static CommandModelExecutionService.DeterministicValidationResult ExecuteDeterministicChecks(

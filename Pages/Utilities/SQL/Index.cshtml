@@ -1,0 +1,420 @@
+@page
+@model TinyGenerator.Pages.Utilities.SQL.IndexModel
+@{
+    ViewData["Title"] = "SQL Utility";
+}
+
+<style>
+    .sqlu-page {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 14px;
+    }
+    .sqlu-panel {
+        background: #f7f7f8;
+        border: 1px solid #d8dadd;
+        border-radius: 14px;
+        padding: 12px;
+    }
+    .sqlu-toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+    }
+    .sqlu-toolbar .btn {
+        border-radius: 10px;
+    }
+    .sqlu-editor {
+        width: 100%;
+        min-height: 240px;
+        resize: vertical;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: .92rem;
+        border: 1px solid #cfd3d8;
+        border-radius: 12px;
+        padding: 10px;
+        background: #fff;
+        color: #222;
+    }
+    .sqlu-result-wrap {
+        margin-top: 10px;
+        border: 1px solid #d8dadd;
+        border-radius: 12px;
+        background: #fff;
+        overflow: auto;
+        max-height: 55vh;
+    }
+    .sqlu-result-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: .86rem;
+    }
+    .sqlu-result-table th,
+    .sqlu-result-table td {
+        border-bottom: 1px solid #eceef1;
+        border-right: 1px solid #f0f1f2;
+        padding: 6px 8px;
+        vertical-align: top;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .sqlu-result-table th {
+        position: sticky;
+        top: 0;
+        background: #eff1f4;
+        z-index: 1;
+        font-weight: 600;
+    }
+    .sqlu-status {
+        margin-top: 8px;
+        font-size: .87rem;
+        color: #444;
+        min-height: 2.6rem;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .sqlu-status.error { color: #b42318; }
+    .sqlu-tree-toolbar {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+        align-items: center;
+    }
+    .sqlu-tree {
+        max-height: 72vh;
+        overflow: auto;
+        background: #fff;
+        border: 1px solid #d8dadd;
+        border-radius: 12px;
+        padding: 8px;
+    }
+    .sqlu-tree details {
+        border: 1px solid #eef0f2;
+        border-radius: 8px;
+        margin-bottom: 6px;
+        background: #fafafb;
+    }
+    .sqlu-tree summary {
+        cursor: pointer;
+        padding: 6px 8px;
+        font-weight: 600;
+        color: #1f2937;
+        user-select: none;
+    }
+    .sqlu-field-list {
+        list-style: none;
+        margin: 0;
+        padding: 0 6px 6px 6px;
+    }
+    .sqlu-field-item {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 4px 6px;
+        border-radius: 6px;
+        cursor: default;
+        user-select: none;
+    }
+    .sqlu-field-item:hover, .sqlu-table-title:hover {
+        background: #eef3f8;
+    }
+    .sqlu-table-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 4px;
+        border-radius: 6px;
+    }
+    .sqlu-type {
+        color: #6b7280;
+        font-size: .78rem;
+        white-space: nowrap;
+    }
+    .sqlu-muted {
+        color: #6b7280;
+        font-size: .8rem;
+    }
+    @@media (max-width: 1100px) {
+        .sqlu-page { grid-template-columns: 1fr; }
+    }
+</style>
+
+<div class="container-fluid py-3">
+    <form id="sqlUtilityAntiForgeryForm" method="post" class="d-none">
+        @Html.AntiForgeryToken()
+    </form>
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <h4 class="mb-0">SQL Utility</h4>
+        <div class="text-muted small">DB: <code>data/storage.db</code></div>
+    </div>
+
+    <div class="sqlu-page">
+        <div class="sqlu-panel">
+            <div class="sqlu-toolbar">
+                <button id="btnExecute" type="button" class="btn btn-sm btn-light border">
+                    <i class="bi bi-play-fill me-1"></i>Execute
+                </button>
+                <button id="btnClear" type="button" class="btn btn-sm btn-light border">
+                    <i class="bi bi-eraser me-1"></i>Clear
+                </button>
+                <label class="ms-auto small text-muted d-flex align-items-center gap-2">
+                    Row limit
+                    <input id="rowLimit" type="number" min="1" max="5000" value="1000" class="form-control form-control-sm" style="width:90px;" />
+                </label>
+            </div>
+
+            <textarea id="sqlEditor" class="sqlu-editor" spellcheck="false" placeholder="SELECT * FROM sounds LIMIT 20;"></textarea>
+
+            <div id="sqlStatus" class="sqlu-status">
+                <div class="sqlu-muted">Pronto.</div>
+            </div>
+
+            <div class="sqlu-result-wrap">
+                <table id="sqlResultTable" class="sqlu-result-table">
+                    <thead></thead>
+                    <tbody>
+                        <tr><td class="text-muted p-3">Nessun risultato.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="sqlu-panel">
+            <div class="sqlu-tree-toolbar">
+                <select id="tableSelect" class="form-select form-select-sm">
+                    <option value="">Seleziona tabella...</option>
+                </select>
+                <button id="btnSelectAllTable" type="button" class="btn btn-sm btn-light border">
+                    <i class="bi bi-table me-1"></i>Select *
+                </button>
+            </div>
+            <div id="schemaTree" class="sqlu-tree">
+                <div class="sqlu-muted">Caricamento schema...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const editor = document.getElementById('sqlEditor');
+    const statusBox = document.getElementById('sqlStatus');
+    const resultTable = document.getElementById('sqlResultTable');
+    const resultHead = resultTable.querySelector('thead');
+    const resultBody = resultTable.querySelector('tbody');
+    const btnExecute = document.getElementById('btnExecute');
+    const btnClear = document.getElementById('btnClear');
+    const rowLimitInput = document.getElementById('rowLimit');
+    const schemaTree = document.getElementById('schemaTree');
+    const tableSelect = document.getElementById('tableSelect');
+    const btnSelectAllTable = document.getElementById('btnSelectAllTable');
+    const antiForgeryToken = document.querySelector('#sqlUtilityAntiForgeryForm input[name=\"__RequestVerificationToken\"]')?.value || '';
+    const schemaUrl = '@Url.Page("Index", "Schema")';
+    const executeUrl = '@Url.Page("Index", "Execute")';
+    const selectTableBaseUrl = '@Url.Page("Index", "SelectTable")';
+
+    let schemaCache = null;
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function setStatus(lines, isError) {
+        statusBox.classList.toggle('error', !!isError);
+        const html = (Array.isArray(lines) ? lines : [lines])
+            .filter(Boolean)
+            .map(x => `<div>${escapeHtml(x)}</div>`)
+            .join('');
+        statusBox.innerHTML = html || '<div class="sqlu-muted">Pronto.</div>';
+    }
+
+    function renderResult(result) {
+        if (!result || result.success === false) {
+            resultHead.innerHTML = '';
+            resultBody.innerHTML = `<tr><td class="text-danger p-3">${escapeHtml(result?.error || 'Errore sconosciuto')}</td></tr>`;
+            setStatus([`Errore: ${result?.error || 'Errore sconosciuto'}`], true);
+            return;
+        }
+
+        const isQuery = !!result.isQuery;
+        const cols = Array.isArray(result.columns) ? result.columns : [];
+        const rows = Array.isArray(result.rows) ? result.rows : [];
+
+        if (!isQuery) {
+            resultHead.innerHTML = '';
+            resultBody.innerHTML = '<tr><td class="p-3 text-muted">Comando eseguito (nessuna griglia da mostrare).</td></tr>';
+            setStatus([
+                `Comando eseguito correttamente.`,
+                `Affected rows: ${result.affectedRows ?? 0}`
+            ]);
+            return;
+        }
+
+        if (cols.length === 0) {
+            resultHead.innerHTML = '';
+            resultBody.innerHTML = '<tr><td class="p-3 text-muted">Query eseguita, nessuna colonna restituita.</td></tr>';
+            setStatus([
+                `Query eseguita.`,
+                `Record restituiti: ${result.returnedRows ?? 0}`
+            ]);
+            return;
+        }
+
+        resultHead.innerHTML = `<tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
+        if (rows.length === 0) {
+            resultBody.innerHTML = `<tr><td colspan="${cols.length}" class="p-3 text-muted">Nessun record.</td></tr>`;
+        } else {
+            resultBody.innerHTML = rows.map(r => {
+                return `<tr>${cols.map(c => `<td>${escapeHtml(r[c])}</td>`).join('')}</tr>`;
+            }).join('');
+        }
+
+        const total = Number(result.totalRowsBeforeLimit ?? rows.length);
+        const returned = Number(result.returnedRows ?? rows.length);
+        const truncated = !!result.truncated;
+        setStatus([
+            `Record restituiti: ${returned}${truncated ? ` (limitati, totali=${total})` : ` (totali=${total})`}`,
+            `Colonne: ${cols.length}`
+        ]);
+    }
+
+    function insertAtCursor(text) {
+        const start = editor.selectionStart ?? editor.value.length;
+        const end = editor.selectionEnd ?? editor.value.length;
+        editor.value = editor.value.slice(0, start) + text + editor.value.slice(end);
+        const newPos = start + text.length;
+        editor.focus();
+        editor.selectionStart = editor.selectionEnd = newPos;
+    }
+
+    function renderSchema(schema) {
+        schemaCache = schema;
+        const tables = Array.isArray(schema?.tables) ? schema.tables : [];
+
+        tableSelect.innerHTML = '<option value="">Seleziona tabella...</option>' +
+            tables.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join('');
+
+        if (tables.length === 0) {
+            schemaTree.innerHTML = '<div class="sqlu-muted">Nessuna tabella trovata.</div>';
+            return;
+        }
+
+        schemaTree.innerHTML = tables.map((t) => {
+            const fields = Array.isArray(t.columns) ? t.columns : [];
+            const fieldRows = fields.map(c => `
+                <li class="sqlu-field-item" data-insert="${escapeHtml(c.name)}" title="Doppio click per inserire">
+                    <span>${escapeHtml(c.name)}</span>
+                    <span class="sqlu-type">${escapeHtml(c.type || '')}${c.isPrimaryKey ? ' PK' : ''}</span>
+                </li>`).join('');
+
+            return `
+                <details>
+                    <summary>
+                        <span class="sqlu-table-title" data-insert="${escapeHtml(t.name)}" title="Doppio click per inserire nome tabella">
+                            <i class="bi bi-table"></i>${escapeHtml(t.name)}
+                        </span>
+                        <span class="sqlu-muted ms-2">(${fields.length} campi)</span>
+                    </summary>
+                    <ul class="sqlu-field-list">${fieldRows}</ul>
+                </details>`;
+        }).join('');
+
+        schemaTree.querySelectorAll('[data-insert]').forEach(el => {
+            el.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                const text = e.currentTarget.getAttribute('data-insert') || '';
+                if (text) insertAtCursor(text);
+            });
+        });
+    }
+
+    async function loadSchema() {
+        try {
+            const resp = await fetch(schemaUrl, { cache: 'no-store' });
+            const data = await resp.json();
+            renderSchema(data);
+        } catch (err) {
+            schemaTree.innerHTML = `<div class="text-danger small">Errore caricamento schema: ${escapeHtml(err?.message || err)}</div>`;
+        }
+    }
+
+    async function executeSql(sql) {
+        setStatus('Esecuzione in corso...');
+        try {
+            const rowLimit = Math.max(1, Math.min(5000, Number(rowLimitInput.value || 1000)));
+            const resp = await fetch(executeUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(antiForgeryToken ? { 'RequestVerificationToken': antiForgeryToken } : {})
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({ sql, rowLimit })
+            });
+            const raw = await resp.text();
+            let result;
+            try {
+                result = raw ? JSON.parse(raw) : null;
+            } catch {
+                result = {
+                    success: false,
+                    error: `Risposta non JSON (HTTP ${resp.status}). Verifica anti-forgery / errore server.`
+                };
+            }
+            renderResult(result);
+        } catch (err) {
+            renderResult({ success: false, error: err?.message || String(err) });
+        }
+    }
+
+    async function selectAllCurrentTable() {
+        const table = tableSelect.value;
+        if (!table) {
+            setStatus('Seleziona una tabella.');
+            return;
+        }
+
+        setStatus(`SELECT * da ${table}...`);
+        try {
+            const limit = Math.max(1, Math.min(5000, Number(rowLimitInput.value || 1000)));
+            const url = `${selectTableBaseUrl}&table=${encodeURIComponent(table)}&limit=${encodeURIComponent(limit)}`;
+            const resp = await fetch(url, { cache: 'no-store' });
+            const result = await resp.json();
+            renderResult(result);
+        } catch (err) {
+            renderResult({ success: false, error: err?.message || String(err) });
+        }
+    }
+
+    btnExecute.addEventListener('click', () => executeSql(editor.value));
+    btnClear.addEventListener('click', () => {
+        editor.value = '';
+        resultHead.innerHTML = '';
+        resultBody.innerHTML = '<tr><td class="p-3 text-muted">Nessun risultato.</td></tr>';
+        setStatus('Editor pulito.');
+        editor.focus();
+    });
+    btnSelectAllTable.addEventListener('click', () => selectAllCurrentTable());
+
+    editor.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            executeSql(editor.value);
+        }
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            insertAtCursor('    ');
+        }
+    });
+
+    loadSchema();
+})();
+</script>

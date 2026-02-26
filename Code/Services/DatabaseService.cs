@@ -807,6 +807,186 @@ public sealed class DatabaseService
 
     private IDbConnection CreateConnection() => new SqliteConnection(_connectionString);
 
+    public sealed record SqlUtilityColumnDto(string Name, string Type, bool NotNull, bool IsPrimaryKey);
+    public sealed record SqlUtilityTableDto(string Name, IReadOnlyList<SqlUtilityColumnDto> Columns);
+    public sealed record SqlUtilitySchemaDto(IReadOnlyList<SqlUtilityTableDto> Tables);
+    public sealed record SqlUtilityExecutionResult(
+        bool Success,
+        bool IsQuery,
+        string? Error,
+        int? AffectedRows,
+        int ReturnedRows,
+        int TotalRowsBeforeLimit,
+        bool Truncated,
+        IReadOnlyList<string> Columns,
+        IReadOnlyList<Dictionary<string, object?>> Rows);
+
+    public SqlUtilitySchemaDto GetSqlUtilitySchema()
+    {
+        using var conn = (SqliteConnection)CreateConnection();
+        conn.Open();
+
+        var tables = conn.Query<string>(
+            @"SELECT name
+              FROM sqlite_master
+              WHERE type = 'table'
+                AND name NOT LIKE 'sqlite_%'
+              ORDER BY name;").ToList();
+
+        var result = new List<SqlUtilityTableDto>(tables.Count);
+        foreach (var table in tables)
+        {
+            var safeTable = table.Replace("'", "''");
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"PRAGMA table_info('{safeTable}');";
+            using var reader = cmd.ExecuteReader();
+
+            var cols = new List<SqlUtilityColumnDto>();
+            while (reader.Read())
+            {
+                cols.Add(new SqlUtilityColumnDto(
+                    Name: reader["name"]?.ToString() ?? string.Empty,
+                    Type: reader["type"]?.ToString() ?? string.Empty,
+                    NotNull: Convert.ToInt32(reader["notnull"] ?? 0) == 1,
+                    IsPrimaryKey: Convert.ToInt32(reader["pk"] ?? 0) == 1));
+            }
+
+            result.Add(new SqlUtilityTableDto(table, cols));
+        }
+
+        return new SqlUtilitySchemaDto(result);
+    }
+
+    public SqlUtilityExecutionResult ExecuteSqlUtility(string sql, int rowLimit = 1000)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            return new SqlUtilityExecutionResult(
+                Success: false,
+                IsQuery: false,
+                Error: "SQL vuoto.",
+                AffectedRows: null,
+                ReturnedRows: 0,
+                TotalRowsBeforeLimit: 0,
+                Truncated: false,
+                Columns: Array.Empty<string>(),
+                Rows: Array.Empty<Dictionary<string, object?>>());
+        }
+
+        rowLimit = Math.Max(1, Math.Min(10000, rowLimit));
+        var trimmed = sql.Trim();
+        var firstToken = ExtractFirstSqlToken(trimmed);
+        var isQuery = firstToken is "select" or "with" or "pragma" or "explain";
+
+        try
+        {
+            using var conn = (SqliteConnection)CreateConnection();
+            conn.Open();
+
+            if (!isQuery)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = trimmed;
+                var affected = cmd.ExecuteNonQuery();
+                return new SqlUtilityExecutionResult(
+                    Success: true,
+                    IsQuery: false,
+                    Error: null,
+                    AffectedRows: affected,
+                    ReturnedRows: 0,
+                    TotalRowsBeforeLimit: 0,
+                    Truncated: false,
+                    Columns: Array.Empty<string>(),
+                    Rows: Array.Empty<Dictionary<string, object?>>());
+            }
+
+            using var qcmd = conn.CreateCommand();
+            qcmd.CommandText = trimmed;
+            using var reader = qcmd.ExecuteReader();
+
+            var columns = new List<string>();
+            for (var i = 0; i < reader.FieldCount; i++)
+            {
+                columns.Add(reader.GetName(i));
+            }
+
+            var rows = new List<Dictionary<string, object?>>();
+            var total = 0;
+            while (reader.Read())
+            {
+                total++;
+                if (rows.Count >= rowLimit)
+                {
+                    continue;
+                }
+
+                var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    object? value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                    if (value is byte[] bytes)
+                    {
+                        value = $"<BLOB {bytes.Length} bytes>";
+                    }
+                    row[columns[i]] = value;
+                }
+                rows.Add(row);
+            }
+
+            return new SqlUtilityExecutionResult(
+                Success: true,
+                IsQuery: true,
+                Error: null,
+                AffectedRows: null,
+                ReturnedRows: rows.Count,
+                TotalRowsBeforeLimit: total,
+                Truncated: total > rows.Count,
+                Columns: columns,
+                Rows: rows);
+        }
+        catch (Exception ex)
+        {
+            return new SqlUtilityExecutionResult(
+                Success: false,
+                IsQuery: isQuery,
+                Error: ex.Message,
+                AffectedRows: null,
+                ReturnedRows: 0,
+                TotalRowsBeforeLimit: 0,
+                Truncated: false,
+                Columns: Array.Empty<string>(),
+                Rows: Array.Empty<Dictionary<string, object?>>());
+        }
+    }
+
+    private static string ExtractFirstSqlToken(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql)) return string.Empty;
+        var s = sql.TrimStart();
+
+        // Skip line comments and block comments in a minimal way.
+        while (true)
+        {
+            if (s.StartsWith("--", StringComparison.Ordinal))
+            {
+                var nl = s.IndexOf('\n');
+                s = nl >= 0 ? s[(nl + 1)..].TrimStart() : string.Empty;
+                continue;
+            }
+            if (s.StartsWith("/*", StringComparison.Ordinal))
+            {
+                var end = s.IndexOf("*/", StringComparison.Ordinal);
+                s = end >= 0 ? s[(end + 2)..].TrimStart() : string.Empty;
+                continue;
+            }
+            break;
+        }
+
+        var i = 0;
+        while (i < s.Length && char.IsLetter(s[i])) i++;
+        return (i > 0 ? s[..i] : string.Empty).Trim().ToLowerInvariant();
+    }
+
     // Run a synchronous action with an exclusive sqlite connection protected by semaphore.
     public T WithSqliteConnection<T>(Func<Microsoft.Data.Sqlite.SqliteConnection, T> work)
     {

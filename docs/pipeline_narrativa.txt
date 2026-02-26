@@ -1,0 +1,258 @@
+TITOLO: Pipeline Narrativa Stateful con ContinuityState, CallCenter, Check Deterministici e Integrazione Serie
+
+OBIETTIVO
+Trasformare la pipeline narrativa in un sistema STATEFUL riutilizzabile per:
+- storie singole
+- serie (episodi e capitoli)
+
+Ogni generazione passa dal CallCenter, applica check deterministici e un ResponseChecker che valida SOLO le REGOLA X presenti nel prompt dell’agente.
+
+------------------------------------------------------------
+SEZIONE 1 - PRINCIPI ARCHITETTURALI
+
+1) Pipeline unica per tutti i contenuti (storie singole e serie)
+2) Stato persistente (ContinuityState) aggiornato ad ogni blocco
+3) Tutte le chiamate agenti passano dal CallCenter
+4) Check deterministici prima e dopo ogni chiamata
+5) ResponseChecker valida SOLO le REGOLA dichiarate nel prompt
+6) StoryEditor NON creativo (solo enforcement e pulizia)
+
+------------------------------------------------------------
+SEZIONE 2 - INTEGRAZIONE CON LA GENERAZIONE DELLE SERIE
+
+DECISIONE:
+Il nuovo sistema VA integrato nella generazione delle serie come livello trasversale.
+
+NON si devono creare due pipeline separate.
+
+Si introducono due driver sopra la stessa pipeline:
+
+1) DRIVER SERIE
+   - serie → episodi → capitoli
+   - usa PlanningState per outline
+   - usa ContinuityState per i capitoli
+
+2) DRIVER STORIA SINGOLA
+   - storia → capitoli
+   - usa direttamente ContinuityState
+
+Regola operativa:
+
+SE output è planning (outline serie/episodio):
+   usare PlanningState + CallCenter + checks
+
+SE output è testo narrativo:
+   usare ContinuityState completo + CallCenter + checks
+
+------------------------------------------------------------
+SEZIONE 3 - CONTINUITY STATE (STRUTTURA GENERICA)
+
+ContinuityState (JSON serializzato):
+
+- story_id
+- series_id (nullable)
+- episode_id (nullable)
+- chapter_id
+- scene_id
+- timeline_index
+- location_current
+- time_context
+- active_characters [array]
+- dead_characters [array]
+- missing_characters [array]
+- objects_in_scene [array]
+- environment_state [json generico]
+- conflict_state [string]
+- goal_current [string]
+- last_events [array ultimi 5]
+- pov_character
+- tone_current
+- custom_flags [json generico]
+
+------------------------------------------------------------
+SEZIONE 4 - CALLCENTER
+
+Interfaccia logica:
+
+CallCenter.Dispatch(
+   agent_name,
+   input_payload,
+   continuity_state_json,
+   rules_text
+)
+
+Flusso:
+
+1) PreChecks deterministici
+2) Iniezione stato nel prompt
+3) Chiamata agente
+4) PostChecks deterministici
+5) ResponseChecker (usa SOLO REGOLA X del prompt)
+6) Retry/Fallback se fallisce
+7) Logging completo
+8) Output finale
+
+------------------------------------------------------------
+SEZIONE 5 - AGENTI
+
+AGENTI MINIMI:
+
+WriterAgent
+StateExtractorAgent
+StoryEditorAgent (non creativo)
+ResponseChecker
+
+------------------------------------------------------------
+SEZIONE 6 - STATE EXTRACTOR
+
+Input:
+- testo
+- stato precedente
+
+Output:
+- stato aggiornato
+
+Regole:
+
+- nuovo personaggio → active_characters
+- morte → sposta in dead_characters
+- cambio location → aggiorna location_current
+- nuovo oggetto → objects_in_scene
+- aggiungi evento sintetico a last_events
+- aggiorna conflict_state se necessario
+
+------------------------------------------------------------
+SEZIONE 7 - DETERMINISTIC CHECKS
+
+Implementare:
+
+- no_dead_character_speaks
+- no_location_jump_without_transition
+- no_object_appears_without_introduction
+- no_event_repetition_last_3_paragraphs
+- no_pov_shift_without_marker
+- environment_consistency
+- no_duplicate_dialogue_lines
+
+Se FAIL → retry con correzione guidata
+
+------------------------------------------------------------
+SEZIONE 8 - RESPONSE CHECKER
+
+Deve:
+
+- leggere il prompt agente
+- estrarre REGOLA 1, REGOLA 2, ecc.
+- verificare SOLO quelle
+- restituire PASS/FAIL + violazioni
+
+------------------------------------------------------------
+SEZIONE 9 - WRITER PROMPT CON INJECTION STATO
+
+Il prompt deve contenere:
+
+[CONTINUITY STATE]
+location:
+personaggi attivi:
+personaggi morti:
+oggetti:
+situazione:
+ultimi eventi:
+
+VINCOLI:
+- non resuscitare morti
+- non cambiare luogo senza transizione
+- non introdurre elementi non coerenti
+
+------------------------------------------------------------
+SEZIONE 10 - STORY EDITOR (NUOVO COMPORTAMENTO)
+
+Il StoryEditor:
+
+PUÒ:
+- migliorare stile
+- ridurre ridondanza
+- correggere fluidità
+
+NON PUÒ:
+- cambiare eventi
+- introdurre elementi
+- cambiare outcome
+
+------------------------------------------------------------
+SEZIONE 11 - DATABASE - TABELLE DA CREARE
+
+Se non esistono, creare:
+
+TABELLA: narrative_continuity_state
+- id (PK)
+- story_id
+- series_id (nullable)
+- episode_id (nullable)
+- chapter_id
+- scene_id
+- timeline_index
+- state_json (NVARCHAR MAX)
+- created_at
+- updated_at
+
+TABELLA: narrative_story_blocks
+- id (PK)
+- story_id
+- series_id (nullable)
+- episode_id (nullable)
+- chapter_id
+- scene_id
+- block_index
+- text_content (NVARCHAR MAX)
+- continuity_state_id (FK)
+- quality_score
+- coherence_score
+- created_at
+
+TABELLA: narrative_agent_calls_log
+- id (PK)
+- story_id
+- agent_name
+- input_tokens
+- output_tokens
+- deterministic_checks_result (NVARCHAR MAX)
+- response_checker_result (NVARCHAR MAX)
+- retry_count
+- latency_ms
+- created_at
+
+TABELLA: narrative_planning_state
+- id (PK)
+- series_id
+- episode_id
+- planning_json (NVARCHAR MAX)
+- created_at
+
+------------------------------------------------------------
+SEZIONE 12 - LOGGING
+
+Ogni chiamata CallCenter deve salvare:
+
+- agent_name
+- input_tokens
+- output_tokens
+- deterministic_checks_result
+- response_checker_result
+- retry_count
+- latency_ms
+
+------------------------------------------------------------
+SEZIONE 13 - RISULTATO ATTESO
+
+Il sistema deve garantire:
+
+- continuità narrativa
+- nessun reset di scena
+- coerenza personaggi
+- coerenza ambientale
+- compatibilità con qualsiasi genere
+- riuso totale della pipeline per serie e storie singole
+
+------------------------------------------------------------
+FINE DOCUMENTO

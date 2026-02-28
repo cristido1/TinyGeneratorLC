@@ -69,7 +69,13 @@ public static class BatchStoryCommandWorker
 
                 folder = !string.IsNullOrWhiteSpace(story.Folder)
                     ? story.Folder
-                    : new DirectoryInfo(storyService.EnsureStoryFolder(story)).Name;
+                    : ResolveStoryFolderNameFromDisk(request.StoryId);
+            }
+
+            if (string.IsNullOrWhiteSpace(folder))
+            {
+                Console.Error.WriteLine($"Folder non risolta per story {request.StoryId}.");
+                return 2;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -118,5 +124,36 @@ public static class BatchStoryCommandWorker
         }
 
         return null;
+    }
+
+    private static string? ResolveStoryFolderNameFromDisk(long storyId)
+    {
+        try
+        {
+            var storiesRoot = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder");
+            if (!Directory.Exists(storiesRoot))
+            {
+                return null;
+            }
+
+            var idRaw = storyId.ToString();
+            var idPadded = storyId.ToString("D5");
+            var candidates = Directory.EnumerateDirectories(storiesRoot)
+                .Select(Path.GetFileName)
+                .Where(name =>
+                    !string.IsNullOrWhiteSpace(name) &&
+                    (name.StartsWith(idPadded + "_", StringComparison.OrdinalIgnoreCase) ||
+                     name.StartsWith(idRaw + "_", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(name, idRaw, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(name, idPadded, StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return candidates.FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

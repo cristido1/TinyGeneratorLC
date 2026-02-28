@@ -170,6 +170,51 @@ public sealed class DatabaseService
         IReadOnlyDictionary<string, int> CurrentResourceValues,
         IReadOnlyList<StateDrivenConsequenceRuleDto> ConsequenceRules);
 
+    public sealed record NarrativeContinuityStateDto(
+        long Id,
+        long StoryId,
+        int? SeriesId,
+        int? EpisodeId,
+        int? ChapterId,
+        int? SceneId,
+        int TimelineIndex,
+        string StateJson,
+        string CreatedAt,
+        string UpdatedAt);
+
+    public sealed record NarrativeStoryBlockDto(
+        long Id,
+        long StoryId,
+        int? SeriesId,
+        int? EpisodeId,
+        int? ChapterId,
+        int? SceneId,
+        int BlockIndex,
+        string TextContent,
+        long? ContinuityStateId,
+        double? QualityScore,
+        double? CoherenceScore,
+        string CreatedAt);
+
+    public sealed record NarrativeAgentCallLogDto(
+        long Id,
+        long StoryId,
+        string AgentName,
+        int? InputTokens,
+        int? OutputTokens,
+        string? DeterministicChecksResult,
+        string? ResponseCheckerResult,
+        int RetryCount,
+        long? LatencyMs,
+        string CreatedAt);
+
+    public sealed record NarrativePlanningStateDto(
+        long Id,
+        int SeriesId,
+        int? EpisodeId,
+        string PlanningJson,
+        string CreatedAt);
+
     public long StartStateDrivenStory(
         string prompt,
         string title,
@@ -357,6 +402,9 @@ public sealed class DatabaseService
         int failureCountDelta,
         IReadOnlyDictionary<string, int> newResourceValues,
         string newLastContextTail,
+        string? narrativeContinuityStateJson,
+        double? narrativeQualityScore,
+        double? narrativeCoherenceScore,
         out string error)
     {
         error = string.Empty;
@@ -424,8 +472,357 @@ public sealed class DatabaseService
         }
 
         ctx.SaveChanges();
+
+        // Phase 1 narrative pipeline persistence: store a generic continuity snapshot and the generated block.
+        try
+        {
+            int? seriesEpisodeId = null;
+            if (story.SerieId.HasValue && story.SerieEpisode.HasValue)
+            {
+                seriesEpisodeId = ctx.SeriesEpisodes
+                    .Where(e => e.SerieId == story.SerieId.Value && e.Number == story.SerieEpisode.Value)
+                    .Select(e => (int?)e.Id)
+                    .FirstOrDefault();
+            }
+
+            var statePayload = string.IsNullOrWhiteSpace(narrativeContinuityStateJson)
+                ? JsonSerializer.Serialize(new
+            {
+                story_id = story.Id,
+                series_id = story.SerieId,
+                episode_id = seriesEpisodeId,
+                chapter_id = (int?)chapter.Id,
+                scene_id = chapter.ChapterNumber,
+                timeline_index = chapter.ChapterNumber,
+                location_current = (string?)null,
+                time_context = (string?)null,
+                active_characters = Array.Empty<string>(),
+                dead_characters = Array.Empty<string>(),
+                missing_characters = Array.Empty<string>(),
+                objects_in_scene = Array.Empty<string>(),
+                environment_state = new Dictionary<string, object?>
+                {
+                    ["phase"] = phase,
+                    ["pov"] = pov
+                },
+                conflict_state = (string?)null,
+                goal_current = (string?)null,
+                last_events = new[] { $"chunk_{chapter.ChapterNumber}:{phase}" },
+                pov_character = pov,
+                tone_current = phase,
+                custom_flags = new Dictionary<string, object?>
+                {
+                    ["runtime_state_id"] = runtime.Id,
+                    ["failure_count"] = runtime.FailureCount,
+                    ["resources"] = newResourceValues
+                }
+            })
+                : narrativeContinuityStateJson!;
+
+            var nowIso = DateTime.UtcNow.ToString("o");
+            var continuity = new NarrativeContinuityState
+            {
+                StoryId = story.Id,
+                SeriesId = story.SerieId,
+                EpisodeId = seriesEpisodeId,
+                ChapterId = chapter.Id,
+                SceneId = chapter.ChapterNumber,
+                TimelineIndex = chapter.ChapterNumber,
+                StateJson = statePayload,
+                CreatedAt = nowIso,
+                UpdatedAt = nowIso
+            };
+            ctx.Set<NarrativeContinuityState>().Add(continuity);
+            ctx.SaveChanges();
+
+            var narrativeBlock = new NarrativeStoryBlock
+            {
+                StoryId = story.Id,
+                SeriesId = story.SerieId,
+                EpisodeId = seriesEpisodeId,
+                ChapterId = chapter.Id,
+                SceneId = chapter.ChapterNumber,
+                BlockIndex = chapter.ChapterNumber,
+                TextContent = chunkText ?? string.Empty,
+                ContinuityStateId = continuity.Id,
+                QualityScore = narrativeQualityScore,
+                CoherenceScore = narrativeCoherenceScore,
+                CreatedAt = nowIso
+            };
+            ctx.Set<NarrativeStoryBlock>().Add(narrativeBlock);
+            ctx.SaveChanges();
+        }
+        catch
+        {
+            // Narrative tables are phase-1 best-effort: chunk persistence must not fail if schema isn't available yet.
+        }
+
         tx.Commit();
         return true;
+    }
+
+    public NarrativeContinuityStateDto? GetLatestNarrativeContinuityState(long storyId)
+    {
+        if (storyId <= 0) return null;
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            const string sql = @"
+SELECT id AS Id,
+       story_id AS StoryId,
+       series_id AS SeriesId,
+       episode_id AS EpisodeId,
+       chapter_id AS ChapterId,
+       scene_id AS SceneId,
+       timeline_index AS TimelineIndex,
+       state_json AS StateJson,
+       created_at AS CreatedAt,
+       updated_at AS UpdatedAt
+FROM narrative_continuity_state
+WHERE story_id = @storyId
+ORDER BY id DESC
+LIMIT 1;";
+            return conn.QueryFirstOrDefault<NarrativeContinuityStateDto>(sql, new { storyId });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public List<NarrativeContinuityStateDto> ListNarrativeContinuityStates(long? storyId = null, int limit = 200)
+    {
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            var sql = @"
+SELECT id AS Id, story_id AS StoryId, series_id AS SeriesId, episode_id AS EpisodeId,
+       chapter_id AS ChapterId, scene_id AS SceneId, timeline_index AS TimelineIndex,
+       state_json AS StateJson, created_at AS CreatedAt, updated_at AS UpdatedAt
+FROM narrative_continuity_state
+WHERE (@storyId IS NULL OR story_id = @storyId)
+ORDER BY id DESC
+LIMIT @lim;";
+            return conn.Query<NarrativeContinuityStateDto>(sql, new
+            {
+                storyId,
+                lim = Math.Max(1, Math.Min(5000, limit))
+            }).ToList();
+        }
+        catch
+        {
+            return new List<NarrativeContinuityStateDto>();
+        }
+    }
+
+    public List<NarrativeStoryBlockDto> ListNarrativeStoryBlocks(long? storyId = null, int limit = 500)
+    {
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            var sql = @"
+SELECT id AS Id, story_id AS StoryId, series_id AS SeriesId, episode_id AS EpisodeId,
+       chapter_id AS ChapterId, scene_id AS SceneId, block_index AS BlockIndex,
+       text_content AS TextContent, continuity_state_id AS ContinuityStateId,
+       quality_score AS QualityScore, coherence_score AS CoherenceScore, created_at AS CreatedAt
+FROM narrative_story_blocks
+WHERE (@storyId IS NULL OR story_id = @storyId)
+ORDER BY id DESC
+LIMIT @lim;";
+            return conn.Query<NarrativeStoryBlockDto>(sql, new
+            {
+                storyId,
+                lim = Math.Max(1, Math.Min(10000, limit))
+            }).ToList();
+        }
+        catch
+        {
+            return new List<NarrativeStoryBlockDto>();
+        }
+    }
+
+    public List<NarrativeAgentCallLogDto> ListNarrativeAgentCallLogs(long? storyId = null, int limit = 500)
+    {
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            var sql = @"
+SELECT id AS Id, story_id AS StoryId, agent_name AS AgentName, input_tokens AS InputTokens,
+       output_tokens AS OutputTokens, deterministic_checks_result AS DeterministicChecksResult,
+       response_checker_result AS ResponseCheckerResult, retry_count AS RetryCount,
+       latency_ms AS LatencyMs, created_at AS CreatedAt
+FROM narrative_agent_calls_log
+WHERE (@storyId IS NULL OR story_id = @storyId)
+ORDER BY id DESC
+LIMIT @lim;";
+            return conn.Query<NarrativeAgentCallLogDto>(sql, new
+            {
+                storyId,
+                lim = Math.Max(1, Math.Min(10000, limit))
+            }).ToList();
+        }
+        catch
+        {
+            return new List<NarrativeAgentCallLogDto>();
+        }
+    }
+
+    public List<NarrativePlanningStateDto> ListNarrativePlanningStates(int? seriesId = null, int limit = 200)
+    {
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            var sql = @"
+SELECT id AS Id, series_id AS SeriesId, episode_id AS EpisodeId,
+       planning_json AS PlanningJson, created_at AS CreatedAt
+FROM narrative_planning_state
+WHERE (@seriesId IS NULL OR series_id = @seriesId)
+ORDER BY id DESC
+LIMIT @lim;";
+            return conn.Query<NarrativePlanningStateDto>(sql, new
+            {
+                seriesId,
+                lim = Math.Max(1, Math.Min(5000, limit))
+            }).ToList();
+        }
+        catch
+        {
+            return new List<NarrativePlanningStateDto>();
+        }
+    }
+
+    public long InsertNarrativeAgentCallLog(
+        long storyId,
+        string agentName,
+        int? inputTokens,
+        int? outputTokens,
+        string? deterministicChecksResult,
+        string? responseCheckerResult,
+        int retryCount,
+        long? latencyMs)
+    {
+        if (storyId <= 0 || string.IsNullOrWhiteSpace(agentName))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            const string sql = @"
+INSERT INTO narrative_agent_calls_log
+    (story_id, agent_name, input_tokens, output_tokens, deterministic_checks_result, response_checker_result, retry_count, latency_ms, created_at)
+VALUES
+    (@StoryId, @AgentName, @InputTokens, @OutputTokens, @DeterministicChecksResult, @ResponseCheckerResult, @RetryCount, @LatencyMs, @CreatedAt);
+SELECT last_insert_rowid();";
+            return conn.ExecuteScalar<long>(sql, new
+            {
+                StoryId = storyId,
+                AgentName = agentName.Trim(),
+                InputTokens = inputTokens,
+                OutputTokens = outputTokens,
+                DeterministicChecksResult = deterministicChecksResult,
+                ResponseCheckerResult = responseCheckerResult,
+                RetryCount = Math.Max(0, retryCount),
+                LatencyMs = latencyMs,
+                CreatedAt = DateTime.UtcNow.ToString("o")
+            });
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public long UpsertNarrativePlanningState(int seriesId, int? episodeId, string planningJson)
+    {
+        if (seriesId <= 0 || string.IsNullOrWhiteSpace(planningJson))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            const string sql = @"
+INSERT INTO narrative_planning_state (series_id, episode_id, planning_json, created_at)
+VALUES (@SeriesId, @EpisodeId, @PlanningJson, @CreatedAt);
+SELECT last_insert_rowid();";
+            return conn.ExecuteScalar<long>(sql, new
+            {
+                SeriesId = seriesId,
+                EpisodeId = episodeId,
+                PlanningJson = planningJson,
+                CreatedAt = DateTime.UtcNow.ToString("o")
+            });
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public int InsertNarrativeStoryBlocks(
+        long storyId,
+        int? seriesId,
+        int? episodeId,
+        IEnumerable<(int BlockIndex, string TextContent)> blocks)
+    {
+        if (storyId <= 0 || blocks == null)
+        {
+            return 0;
+        }
+
+        var list = blocks
+            .Where(b => b.BlockIndex > 0 && !string.IsNullOrWhiteSpace(b.TextContent))
+            .OrderBy(b => b.BlockIndex)
+            .ToList();
+        if (list.Count == 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            using var tx = conn.BeginTransaction();
+            var now = DateTime.UtcNow.ToString("o");
+
+            // Replace existing blocks for the story to keep the table deterministic on reruns.
+            conn.Execute("DELETE FROM narrative_story_blocks WHERE story_id = @storyId", new { storyId }, tx);
+
+            const string sql = @"
+INSERT INTO narrative_story_blocks
+    (story_id, series_id, episode_id, chapter_id, scene_id, block_index, text_content, continuity_state_id, quality_score, coherence_score, created_at)
+VALUES
+    (@StoryId, @SeriesId, @EpisodeId, NULL, NULL, @BlockIndex, @TextContent, NULL, NULL, NULL, @CreatedAt);";
+
+            var rows = list.Select(b => new
+            {
+                StoryId = storyId,
+                SeriesId = seriesId,
+                EpisodeId = episodeId,
+                BlockIndex = b.BlockIndex,
+                TextContent = b.TextContent,
+                CreatedAt = now
+            }).ToList();
+
+            var inserted = conn.Execute(sql, rows, tx);
+            tx.Commit();
+            return inserted;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     public List<Chapter> ListChaptersForStory(long storyId)

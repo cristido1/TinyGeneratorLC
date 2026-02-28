@@ -58,6 +58,8 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<ConsequenceImpact> ConsequenceImpacts => Set<ConsequenceImpact>();
     public DbSet<StoryRuntimeState> StoryRuntimeStates => Set<StoryRuntimeState>();
     public DbSet<StoryResourceState> StoryResourceStates => Set<StoryResourceState>();
+    public DbSet<NarrativeContinuityState> NarrativeContinuityStates => Set<NarrativeContinuityState>();
+    public DbSet<NarrativeStoryBlock> NarrativeStoryBlocks => Set<NarrativeStoryBlock>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<ModelRole> ModelRoles => Set<ModelRole>();
     // Note: Memory table excluded - using Dapper for embedding queries

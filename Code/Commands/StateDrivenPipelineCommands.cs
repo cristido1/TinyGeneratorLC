@@ -158,6 +158,7 @@ public sealed class CanonExtractorCommand : ICommand
             prompt,
             ct);
 
+        StateDrivenPipelineHelpers.LogNarrativeAgentCall(_database, _storyId, roleOverride, agent, response, useResponseChecker: true);
         if (!response.Success)
         {
             _logger?.Append(_runId, $"CanonExtractor fallito: {response.Error}", "error");
@@ -324,6 +325,7 @@ public sealed class StateDeltaBuilderCommand : ICommand
             prompt,
             ct);
 
+        StateDrivenPipelineHelpers.LogNarrativeAgentCall(_database, _storyId, roleOverride, agent, response, useResponseChecker: true);
         if (!response.Success)
         {
             _logger?.Append(_runId, $"StateDeltaBuilder fallito: {response.Error}", "error");
@@ -498,6 +500,7 @@ public sealed class ContinuityValidatorCommand : ICommand
             prompt,
             ct);
 
+        StateDrivenPipelineHelpers.LogNarrativeAgentCall(_database, _storyId, roleOverride, agent, response, useResponseChecker: true);
         if (!response.Success)
         {
             _logger?.Append(_runId, $"ContinuityValidator fallito: {response.Error}", "error");
@@ -795,6 +798,7 @@ public sealed class StateCompressorCommand : ICommand
             prompt,
             ct);
 
+        StateDrivenPipelineHelpers.LogNarrativeAgentCall(_database, _storyId, roleOverride, agent, response, useResponseChecker: true);
         if (!response.Success)
         {
             _logger?.Append(_runId, $"StateCompressor fallito: {response.Error}", "error");
@@ -933,6 +937,7 @@ public sealed class RecapBuilderCommand : ICommand
             ct,
             skipResponseChecker: skipResponseChecker);
 
+        StateDrivenPipelineHelpers.LogNarrativeAgentCall(_database, _storyId, roleOverride, agent, response, useResponseChecker: !skipResponseChecker);
         if (!response.Success)
         {
             _logger?.Append(_runId, $"RecapBuilder fallito: {response.Error}", "error");
@@ -956,7 +961,13 @@ public sealed class RecapBuilderCommand : ICommand
     }
 }
 
-internal sealed record AgentResponse(bool Success, string? Text, string? Error)
+internal sealed record AgentResponse(
+    bool Success,
+    string? Text,
+    string? Error,
+    string? ModelUsed = null,
+    int Attempts = 0,
+    long? LatencyMs = null)
 {
     public static AgentResponse Fail(string message) => new(false, null, message);
     public static AgentResponse Ok(string text) => new(true, text, null);
@@ -1070,10 +1081,82 @@ internal static class StateDrivenPipelineHelpers
 
         if (result.Success && !string.IsNullOrWhiteSpace(result.ResponseText))
         {
-            return AgentResponse.Ok(result.ResponseText);
+            return new AgentResponse(
+                true,
+                result.ResponseText,
+                null,
+                result.ModelUsed,
+                result.Attempts,
+                Math.Max(0, (long)result.Duration.TotalMilliseconds));
         }
 
-        return AgentResponse.Fail(result.FailureReason ?? "Risposta vuota dal modello");
+        return new AgentResponse(
+            false,
+            null,
+            result.FailureReason ?? "Risposta vuota dal modello",
+            result.ModelUsed,
+            result.Attempts,
+            Math.Max(0, (long)result.Duration.TotalMilliseconds));
+    }
+
+    public static void LogNarrativeAgentCall(
+        DatabaseService database,
+        long storyId,
+        string operation,
+        Agent agent,
+        AgentResponse response,
+        bool useResponseChecker)
+    {
+        if (database == null || storyId <= 0 || agent == null) return;
+
+        var failure = response.Error ?? string.Empty;
+        var deterministicResult = "PASS";
+        var checkerResult = useResponseChecker ? "PASS" : "SKIPPED";
+
+        if (!response.Success && !string.IsNullOrWhiteSpace(failure))
+        {
+            var isDeterministic = failure.Contains("GENERIC_ERROR:", StringComparison.OrdinalIgnoreCase)
+                                  || failure.Contains("deterministic", StringComparison.OrdinalIgnoreCase)
+                                  || failure.Contains("Check", StringComparison.OrdinalIgnoreCase);
+            var looksChecker = failure.Contains("REGOLA", StringComparison.OrdinalIgnoreCase)
+                               || failure.Contains("Rules not followed", StringComparison.OrdinalIgnoreCase)
+                               || failure.Contains("Question asked", StringComparison.OrdinalIgnoreCase)
+                               || failure.Contains("Mixed content", StringComparison.OrdinalIgnoreCase);
+
+            if (isDeterministic)
+            {
+                deterministicResult = $"FAIL ({operation}): {TruncateForLog(failure, 400)}";
+            }
+            else
+            {
+                deterministicResult = "PASS";
+            }
+
+            if (useResponseChecker)
+            {
+                checkerResult = looksChecker
+                    ? $"FAIL ({operation}): {TruncateForLog(failure, 400)}"
+                    : "PASS";
+            }
+        }
+
+        database.InsertNarrativeAgentCallLog(
+            storyId: storyId,
+            agentName: agent.Name,
+            inputTokens: null,
+            outputTokens: null,
+            deterministicChecksResult: deterministicResult,
+            responseCheckerResult: checkerResult,
+            retryCount: Math.Max(0, response.Attempts - 1),
+            latencyMs: response.LatencyMs);
+    }
+
+    private static string TruncateForLog(string text, int maxLen)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var trimmed = text.Trim();
+        if (trimmed.Length <= maxLen) return trimmed;
+        return trimmed[..maxLen] + "...";
     }
 
     public static bool TryExtractJson(string raw, JsonValueKind expectedKind, out string json, out string error)

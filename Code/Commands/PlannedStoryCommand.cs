@@ -115,9 +115,20 @@ namespace TinyGenerator.Services.Commands
                 await LogAndNotifyAsync("🧠 Generazione struttura narrativa (15 beat)...");
 
                 var structurePrompt = BuildPlannerPrompt(_theme, _seriesName, _episodeNumber);
-                var structureJson = await CallPlannerAsync(plannerAgent, structurePrompt, threadId, ct);
+                var plannerCall = await CallPlannerAsync(plannerAgent, structurePrompt, threadId, ct);
+                var structureJson = plannerCall.Text;
 
-                if (string.IsNullOrWhiteSpace(structureJson))
+                _database.InsertNarrativeAgentCallLog(
+                    storyId: 0,
+                    agentName: plannerAgent.Name,
+                    inputTokens: null,
+                    outputTokens: null,
+                    deterministicChecksResult: plannerCall.Success ? "PASS" : $"FAIL: {TrimForDb(plannerCall.Error)}",
+                    responseCheckerResult: "SKIPPED",
+                    retryCount: Math.Max(0, plannerCall.Attempts - 1),
+                    latencyMs: plannerCall.LatencyMs);
+
+                if (!plannerCall.Success || string.IsNullOrWhiteSpace(structureJson))
                 {
                     await LogAndNotifyAsync("❌ Il planner non ha prodotto una struttura valida", "error");
                     return;
@@ -130,6 +141,8 @@ namespace TinyGenerator.Services.Commands
                     await LogAndNotifyAsync("❌ Struttura JSON non valida o vuota", "error");
                     return;
                 }
+
+                TryPersistNarrativePlanningState(structureJson);
 
                 await LogAndNotifyAsync($"✅ Struttura generata: {beatStructure.Count} beat", "success");
 
@@ -185,6 +198,20 @@ namespace TinyGenerator.Services.Commands
                     return;
                 }
 
+                try
+                {
+                    var story = _database.GetStoryById(storyId);
+                    var insertedBlocks = _database.InsertNarrativeStoryBlocks(
+                        storyId,
+                        story?.SerieId,
+                        story?.SerieEpisode,
+                        generatedBeats.Select((text, idx) => (idx + 1, text)));
+                    await LogAndNotifyAsync($"🧱 Narrative story blocks salvati: {insertedBlocks}", "info");
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log("Warning", "PlannedStory", $"Persist narrative_story_blocks skipped: {ex.Message}");
+                }
                 await LogAndNotifyAsync($"✅ Storia {storyId} creata con successo", "success");
 
                 // ╔══════════════════════════════════════════════════════════════╗
@@ -258,7 +285,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
             return prompt;
         }
 
-        private async Task<string> CallPlannerAsync(Agent plannerAgent, string prompt, int threadId, CancellationToken ct)
+        private async Task<(bool Success, string Text, string? Error, int Attempts, long? LatencyMs)> CallPlannerAsync(Agent plannerAgent, string prompt, int threadId, CancellationToken ct)
         {
             _ = threadId;
             try
@@ -267,7 +294,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                 if (callCenter == null)
                 {
                     _logger.Log("Error", "PlannedStory", "ICallCenter non disponibile per planner");
-                    return string.Empty;
+                    return (false, string.Empty, "ICallCenter non disponibile per planner", 0, null);
                 }
 
                 var history = new ChatHistory();
@@ -301,12 +328,17 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                     options: options,
                     cancellationToken: ct).ConfigureAwait(false);
 
-                return result.Success ? (result.ResponseText ?? string.Empty) : string.Empty;
+                return (
+                    result.Success,
+                    result.ResponseText ?? string.Empty,
+                    result.FailureReason,
+                    result.Attempts,
+                    Math.Max(0, (long)result.Duration.TotalMilliseconds));
             }
             catch (Exception ex)
             {
                 _logger.Log("Error", "PlannedStory", $"Planner call failed: {ex.Message}");
-                return string.Empty;
+                return (false, string.Empty, ex.Message, 0, null);
             }
         }
 
@@ -363,7 +395,18 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                 try
                 {
                     var beatPrompt = BuildBeatPrompt(beat, beatNumber, totalBeats, previousBeats, lastError, attempt);
-                    var beatText = await CallWriterAsync(writerAgent, beatPrompt, threadId, ct);
+                    var writerCall = await CallWriterAsync(writerAgent, beatPrompt, threadId, ct);
+                    var beatText = writerCall.Text;
+
+                    _database.InsertNarrativeAgentCallLog(
+                        storyId: 0,
+                        agentName: writerAgent.Name,
+                        inputTokens: null,
+                        outputTokens: null,
+                        deterministicChecksResult: writerCall.Success ? "PASS" : $"FAIL: {TrimForDb(writerCall.Error)}",
+                        responseCheckerResult: "SKIPPED",
+                        retryCount: Math.Max(0, writerCall.Attempts - 1),
+                        latencyMs: writerCall.LatencyMs);
 
                     if (string.IsNullOrWhiteSpace(beatText))
                     {
@@ -454,7 +497,7 @@ REGOLE FONDAMENTALI:
             return prompt;
         }
 
-        private async Task<string> CallWriterAsync(Agent writerAgent, string prompt, int threadId, CancellationToken ct)
+        private async Task<(bool Success, string Text, string? Error, int Attempts, long? LatencyMs)> CallWriterAsync(Agent writerAgent, string prompt, int threadId, CancellationToken ct)
         {
             _ = threadId;
             try
@@ -463,7 +506,7 @@ REGOLE FONDAMENTALI:
                 if (callCenter == null)
                 {
                     _logger.Log("Error", "PlannedStory", "ICallCenter non disponibile per writer");
-                    return string.Empty;
+                    return (false, string.Empty, "ICallCenter non disponibile per writer", 0, null);
                 }
 
                 var history = new ChatHistory();
@@ -496,12 +539,17 @@ REGOLE FONDAMENTALI:
                     options: options,
                     cancellationToken: ct).ConfigureAwait(false);
 
-                return result.Success ? (result.ResponseText ?? string.Empty) : string.Empty;
+                return (
+                    result.Success,
+                    result.ResponseText ?? string.Empty,
+                    result.FailureReason,
+                    result.Attempts,
+                    Math.Max(0, (long)result.Duration.TotalMilliseconds));
             }
             catch (Exception ex)
             {
                 _logger.Log("Error", "PlannedStory", $"Writer call failed: {ex.Message}");
-                return string.Empty;
+                return (false, string.Empty, ex.Message, 0, null);
             }
         }
 
@@ -523,6 +571,45 @@ REGOLE FONDAMENTALI:
             }
 
             return text;
+        }
+
+        private void TryPersistNarrativePlanningState(string structureJson)
+        {
+            try
+            {
+                var normalized = NormalizePotentialJson(structureJson);
+                if (string.IsNullOrWhiteSpace(normalized) || string.IsNullOrWhiteSpace(_seriesName))
+                {
+                    return;
+                }
+
+                var series = _database.ListAllSeries()
+                    .FirstOrDefault(s => string.Equals((s.Titolo ?? string.Empty).Trim(), _seriesName.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (series == null)
+                {
+                    return;
+                }
+
+                int? episodeId = null;
+                if (_episodeNumber.HasValue)
+                {
+                    var ep = _database.GetSeriesEpisodeBySerieAndNumber(series.Id, _episodeNumber.Value);
+                    episodeId = ep?.Id;
+                }
+
+                _database.UpsertNarrativePlanningState(series.Id, episodeId, normalized);
+            }
+            catch (Exception ex)
+            {
+                _logger.Log("Warning", "PlannedStory", $"Planning state persist skipped: {ex.Message}");
+            }
+        }
+
+        private static string? TrimForDb(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return text;
+            var t = text.Trim();
+            return t.Length <= 500 ? t : t.Substring(0, 500);
         }
 
         private bool ContainsAnticipations(string text, int currentBeat, int totalBeats)
@@ -715,6 +802,10 @@ REGOLE FONDAMENTALI:
         }
     }
 }
+
+
+
+
 
 
 

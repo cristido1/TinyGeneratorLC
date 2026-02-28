@@ -1,0 +1,65 @@
+using TinyGenerator.Models;
+
+namespace TinyGenerator.Services;
+
+public interface ISystemPromptBuilder
+{
+    string Build(Agent agent, string? roleCode);
+}
+
+public sealed class DefaultSystemPromptBuilder : ISystemPromptBuilder
+{
+    private readonly DatabaseService _database;
+
+    public DefaultSystemPromptBuilder(DatabaseService database)
+    {
+        _database = database;
+    }
+
+    public string Build(Agent agent, string? roleCode)
+    {
+        var basePrompt = !string.IsNullOrWhiteSpace(agent.Instructions)
+            ? agent.Instructions.Trim()
+            : !string.IsNullOrWhiteSpace(agent.Prompt)
+                ? agent.Prompt.Trim()
+                : "Rispondi in modo utile e coerente con la richiesta.";
+
+        var modelName = ResolveModelName(agent);
+        var errors = _database.ListTopModelRoleErrors(agent.ModelId, modelName, roleCode, 10);
+        if (errors.Count == 0)
+        {
+            return basePrompt;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(basePrompt);
+        sb.AppendLine();
+        sb.AppendLine("IN PASSATO HAI COMMESSO QUESTI ERRORI, NON RIPETERLI:");
+        foreach (var err in errors)
+        {
+            sb.AppendLine($"- {err.ErrorText}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private string? ResolveModelName(Agent agent)
+    {
+        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        {
+            return agent.ModelName.Trim();
+        }
+
+        if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
+        {
+            var byId = _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+            if (!string.IsNullOrWhiteSpace(byId))
+            {
+                return byId.Trim();
+            }
+        }
+
+        return null;
+    }
+}
+

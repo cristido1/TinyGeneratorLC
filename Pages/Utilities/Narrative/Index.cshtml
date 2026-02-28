@@ -1,0 +1,257 @@
+@page
+@model TinyGenerator.Pages.Utilities.Narrative.IndexModel
+@{
+    ViewData["Title"] = "Narrative Debug";
+    ViewData["PageDescription"] = "Ispezione tabelle narrative_* (continuity, story blocks, agent calls, planning)";
+}
+
+<style>
+    .nar-card { border:1px solid #dee2e6; border-radius:.6rem; background:#fff; }
+    .nar-toolbar { display:flex; gap:.5rem; align-items:end; flex-wrap:wrap; }
+    .nar-mono { font-family: Consolas, "Courier New", monospace; font-size:.8rem; white-space:pre-wrap; word-break:break-word; max-width: 520px; }
+    .nar-table-wrap { border:1px solid #dee2e6; border-radius:.6rem; background:#fff; padding:.75rem; }
+    .nav-tabs .nav-link { color:#495057; }
+    .nav-tabs .nav-link.active { font-weight:600; }
+    .btn-group-vertical>.btn, .btn-group>.btn { flex: none; }
+    .table.dataTable tbody tr:hover { background-color:#f8f9fa; }
+    .table.dataTable thead th { font-size:.8rem; text-transform:uppercase; letter-spacing:.4px; }
+    .dt-buttons .btn.btn-light { background:#f8f9fa; }
+</style>
+
+<div class="container-fluid py-3">
+    <div class="nar-card p-3 mb-3">
+        <form method="post" asp-page-handler="Refresh" class="nar-toolbar">
+            @Html.AntiForgeryToken()
+            <div>
+                <label class="form-label mb-1 small text-muted">Story ID (opzionale)</label>
+                <input asp-for="StoryId" class="form-control form-control-sm" style="width:140px;" />
+            </div>
+            <div>
+                <label class="form-label mb-1 small text-muted">Limit</label>
+                <input asp-for="Limit" class="form-control form-control-sm" min="20" max="2000" style="width:120px;" />
+            </div>
+            <button type="submit" class="btn btn-sm btn-light border text-primary">
+                <i class="bi bi-arrow-repeat me-1"></i>Carica
+            </button>
+            <a asp-page="./Index" class="btn btn-sm btn-light border">
+                <i class="bi bi-eraser me-1"></i>Reset
+            </a>
+            <div class="ms-auto small text-muted">
+                continuity: <b>@Model.ContinuityStates.Count</b> · blocks: <b>@Model.StoryBlocks.Count</b> · calls: <b>@Model.AgentCalls.Count</b> · planning: <b>@Model.PlanningStates.Count</b>
+            </div>
+        </form>
+    </div>
+
+    <ul class="nav nav-tabs mb-3" id="narTabs" role="tablist">
+        <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-continuity" type="button">Continuity</button></li>
+        <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-blocks" type="button">Story Blocks</button></li>
+        <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-calls" type="button">Agent Calls</button></li>
+        <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-planning" type="button">Planning</button></li>
+    </ul>
+
+    <div class="tab-content">
+        <div class="tab-pane fade show active" id="tab-continuity">
+            <div class="nar-table-wrap">
+                <table id="tblContinuity" class="table table-hover align-middle" style="width:100%">
+                    <thead>
+                        <tr>
+                            <th data-col="id">Id</th>
+                            <th data-col="story">Story</th>
+                            <th data-col="series">Series</th>
+                            <th data-col="episode">Episode</th>
+                            <th data-col="timeline">Timeline</th>
+                            <th data-col="chapter">Chapter</th>
+                            <th data-col="updated">Updated</th>
+                            <th data-col="state">State Json</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var x in Model.ContinuityStates)
+                    {
+                        <tr>
+                            <td>@x.Id</td>
+                            <td>@x.StoryId</td>
+                            <td>@x.SeriesId</td>
+                            <td>@x.EpisodeId</td>
+                            <td>@x.TimelineIndex</td>
+                            <td>@x.ChapterId</td>
+                            <td>@(DateTime.TryParse(x.UpdatedAt, out var d) ? d.ToString("dd/MM/yyyy HH:mm") : x.UpdatedAt)</td>
+                            <td class="nar-mono">@x.StateJson</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="tab-pane fade" id="tab-blocks">
+            <div class="nar-table-wrap">
+                <table id="tblBlocks" class="table table-hover align-middle" style="width:100%">
+                    <thead>
+                        <tr>
+                            <th data-col="id">Id</th>
+                            <th data-col="story">Story</th>
+                            <th data-col="block">Block</th>
+                            <th data-col="cont">ContinuityId</th>
+                            <th data-col="q">Q</th>
+                            <th data-col="c">C</th>
+                            <th data-col="created">Created</th>
+                            <th data-col="text">Text</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var x in Model.StoryBlocks)
+                    {
+                        <tr>
+                            <td>@x.Id</td>
+                            <td>@x.StoryId</td>
+                            <td>@x.BlockIndex</td>
+                            <td>@x.ContinuityStateId</td>
+                            <td>@x.QualityScore</td>
+                            <td>@x.CoherenceScore</td>
+                            <td>@(DateTime.TryParse(x.CreatedAt, out var d) ? d.ToString("dd/MM/yyyy HH:mm") : x.CreatedAt)</td>
+                            <td class="nar-mono">@x.TextContent</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="tab-pane fade" id="tab-calls">
+            <div class="nar-table-wrap">
+                <table id="tblCalls" class="table table-hover align-middle" style="width:100%">
+                    <thead>
+                        <tr>
+                            <th data-col="id">Id</th>
+                            <th data-col="story">Story</th>
+                            <th data-col="agent">Agent</th>
+                            <th data-col="retry">Retry</th>
+                            <th data-col="lat">Latency ms</th>
+                            <th data-col="det">Deterministic</th>
+                            <th data-col="chk">Checker</th>
+                            <th data-col="created">Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var x in Model.AgentCalls)
+                    {
+                        <tr>
+                            <td>@x.Id</td>
+                            <td>@x.StoryId</td>
+                            <td>@x.AgentName</td>
+                            <td>@x.RetryCount</td>
+                            <td>@x.LatencyMs</td>
+                            <td class="nar-mono">@x.DeterministicChecksResult</td>
+                            <td class="nar-mono">@x.ResponseCheckerResult</td>
+                            <td>@(DateTime.TryParse(x.CreatedAt, out var d) ? d.ToString("dd/MM/yyyy HH:mm") : x.CreatedAt)</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="tab-pane fade" id="tab-planning">
+            <div class="nar-table-wrap">
+                <table id="tblPlanning" class="table table-hover align-middle" style="width:100%">
+                    <thead>
+                        <tr>
+                            <th data-col="id">Id</th>
+                            <th data-col="series">Series</th>
+                            <th data-col="episode">EpisodeId</th>
+                            <th data-col="created">Created</th>
+                            <th data-col="json">Planning Json</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var x in Model.PlanningStates)
+                    {
+                        <tr>
+                            <td>@x.Id</td>
+                            <td>@x.SeriesId</td>
+                            <td>@x.EpisodeId</td>
+                            <td>@(DateTime.TryParse(x.CreatedAt, out var d) ? d.ToString("dd/MM/yyyy HH:mm") : x.CreatedAt)</td>
+                            <td class="nar-mono">@x.PlanningJson</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function initNarrativeTables() {
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initNarrativeTables, 50);
+        return;
+    }
+
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var current = 0;
+    function loadScript(url, cb) {
+        if ([...document.scripts].some(s => s.src && s.src.endsWith(url))) { cb(); return; }
+        var s = document.createElement('script');
+        s.src = url;
+        s.onload = cb;
+        s.onerror = cb;
+        document.head.appendChild(s);
+    }
+    function next() {
+        if (current >= scripts.length) return initTables();
+        loadScript(scripts[current++], next);
+    }
+    next();
+
+    function dtConfig(defaultOrder) {
+        return {
+            dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" + "rt" + "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+            stateSave: true,
+            pageLength: 25,
+            lengthMenu: [[10,25,50,100],[10,25,50,100]],
+            order: defaultOrder,
+            autoWidth: false,
+            responsive: false,
+            buttons: [
+                {
+                    extend: 'colvis',
+                    text: '<i class="bi bi-justify me-1"></i> Colonne',
+                    className: 'btn btn-sm btn-light border',
+                    attr: { style: 'width: auto; flex: 0 0 auto;' }
+                },
+                {
+                    text: '<i class="bi bi-arrow-clockwise me-1"></i> Refresh',
+                    className: 'btn btn-sm btn-light border',
+                    attr: { style: 'width: auto; flex: 0 0 auto;' },
+                    action: function() { location.reload(); }
+                }
+            ],
+            language: {
+                search: 'Cerca:',
+                lengthMenu: 'Mostra _MENU_ record',
+                info: 'Showing _START_ to _END_ of _TOTAL_ entries',
+                paginate: { next: 'Succ', previous: 'Prec' }
+            }
+        };
+    }
+
+    function initTables() {
+        jQuery(function($) {
+            if ($.fn.dataTable && !$.fn.dataTable.isDataTable('#tblContinuity')) $('#tblContinuity').DataTable(dtConfig([[0,'desc']]));
+            if ($.fn.dataTable && !$.fn.dataTable.isDataTable('#tblBlocks')) $('#tblBlocks').DataTable(dtConfig([[0,'desc']]));
+            if ($.fn.dataTable && !$.fn.dataTable.isDataTable('#tblCalls')) $('#tblCalls').DataTable(dtConfig([[0,'desc']]));
+            if ($.fn.dataTable && !$.fn.dataTable.isDataTable('#tblPlanning')) $('#tblPlanning').DataTable(dtConfig([[0,'desc']]));
+        });
+    }
+})();
+</script>
+

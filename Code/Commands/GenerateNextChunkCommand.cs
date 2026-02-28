@@ -96,7 +96,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         }
 
         var prompt = BuildWriterPrompt(snap, phase, pov, _options);
-        var writerResult = await CallWriterWithStandardPatternAsync(writer, prompt, phase, effectiveRunId, ct).ConfigureAwait(false);
+        var writerResult = await CallWriterWithStandardPatternAsync(writer, prompt, phase, pov, effectiveRunId, ct).ConfigureAwait(false);
         var output = (writerResult.Text ?? string.Empty).Trim();
         var failureDelta = 0;
 
@@ -128,6 +128,19 @@ public sealed class GenerateNextChunkCommand : ICommand
             return new CommandResult(false, reason);
         }
 
+        var editedText = await TryApplyNonCreativeStoryEditorAsync(output, snap, phase, pov, effectiveRunId, ct).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(editedText))
+        {
+            output = editedText.Trim();
+        }
+
+        var continuityExtraction = await TryExtractContinuityStateAsync(output, snap, phase, pov, effectiveRunId, ct).ConfigureAwait(false);
+        if (!continuityExtraction.Success)
+        {
+            return new CommandResult(false, continuityExtraction.Error ?? "StateExtractor failed");
+        }
+
+        var extractedContinuityStateJson = continuityExtraction.StateJson;
         var tail = GetTail(output, Math.Max(0, _tuning.GenerateNextChunk.ContextTailChars));
 
         if (!_database.TryApplyStateDrivenChunk(
@@ -139,6 +152,9 @@ public sealed class GenerateNextChunkCommand : ICommand
                 failureCountDelta: failureDelta,
                 newResourceValues: newResources,
                 newLastContextTail: tail,
+                narrativeContinuityStateJson: extractedContinuityStateJson,
+                narrativeQualityScore: null,
+                narrativeCoherenceScore: null,
                 out var error))
         {
             return new CommandResult(false, $"Persist failed: {error}");
@@ -202,6 +218,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         Agent writerAgent,
         string prompt,
         string phase,
+        string pov,
         string runId,
         CancellationToken ct)
     {
@@ -262,6 +279,10 @@ public sealed class GenerateNextChunkCommand : ICommand
                     ["Logger"] = _logger as object ?? new object()
                 })
             });
+            options.DeterministicChecks.Add(new CheckNarrativeContinuityRules
+            {
+                Options = Options.Create<object>(BuildNarrativeChecksOptions(storyHistory, phase, pov))
+            });
             var callResult = await callCenter.CallAgentAsync(
                 storyId: _storyId,
                 threadId: BuildThreadId(_storyId, attempt),
@@ -319,6 +340,182 @@ public sealed class GenerateNextChunkCommand : ICommand
         };
     }
 
+    private async Task<string?> TryApplyNonCreativeStoryEditorAsync(
+        string writerOutput,
+        DatabaseService.StateDrivenStorySnapshot snap,
+        string phase,
+        string pov,
+        string runId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(writerOutput))
+        {
+            return writerOutput;
+        }
+
+        var editor = _database.GetAgentByRole("story_editor_non_creative");
+        if (editor == null || !editor.IsActive)
+        {
+            return writerOutput;
+        }
+
+        var callCenter = ResolveCallCenter();
+        if (callCenter == null)
+        {
+            return writerOutput;
+        }
+
+        var prompt = BuildStoryEditorNonCreativePrompt(writerOutput, snap, phase, pov);
+        var systemPrompt = editor.Instructions ?? editor.Prompt ?? "Sei uno story editor non creativo.";
+        var history = new ChatHistory();
+        history.AddSystem(systemPrompt);
+        history.AddUser(prompt);
+
+        var options = new CallOptions
+        {
+            Operation = "story_editor_non_creative",
+            Timeout = TimeSpan.FromSeconds(120),
+            MaxRetries = 1,
+            UseResponseChecker = true,
+            AllowFallback = true,
+            AskFailExplanation = true,
+            SystemPromptOverride = systemPrompt
+        };
+        options.DeterministicChecks.Add(new CheckEmpty
+        {
+            Options = Options.Create<object>(new Dictionary<string, object>
+            {
+                ["ErrorMessage"] = "StoryEditor non creativo: risposta vuota"
+            })
+        });
+        options.DeterministicChecks.Add(new CheckNarrativeContinuityRules
+        {
+            Options = Options.Create<object>(BuildNarrativeChecksOptions(BuildStoryHistorySnapshot(), phase, pov))
+        });
+
+        var started = DateTime.UtcNow;
+        var result = await callCenter.CallAgentAsync(
+            storyId: _storyId,
+            threadId: BuildThreadId(_storyId, 9001),
+            agent: editor,
+            history: history,
+            options: options,
+            cancellationToken: ct).ConfigureAwait(false);
+
+        _database.InsertNarrativeAgentCallLog(
+            storyId: _storyId,
+            agentName: editor.Name,
+            inputTokens: null,
+            outputTokens: null,
+            deterministicChecksResult: result.Success ? "PASS" : $"FAIL: {TrimForDb(result.FailureReason)}",
+            responseCheckerResult: options.UseResponseChecker ? (result.Success ? "PASS" : $"FAIL: {TrimForDb(result.FailureReason)}") : "SKIPPED",
+            retryCount: Math.Max(0, result.Attempts - 1),
+            latencyMs: Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds));
+
+        if (!result.Success || string.IsNullOrWhiteSpace(result.ResponseText))
+        {
+            _logger?.Append(runId, $"StoryEditor non creativo fallito/skip: {result.FailureReason}", "warning");
+            return writerOutput;
+        }
+
+        _logger?.Append(runId, $"StoryEditor non creativo applicato: agente={editor.Name}; modello={result.ModelUsed}");
+        return result.ResponseText.Trim();
+    }
+
+    private async Task<(bool Success, string? StateJson, string? Error)> TryExtractContinuityStateAsync(
+        string blockText,
+        DatabaseService.StateDrivenStorySnapshot snap,
+        string phase,
+        string pov,
+        string runId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(blockText))
+        {
+            return (false, null, "StateExtractor: blocco narrativo vuoto");
+        }
+
+        var extractor = _database.GetAgentByRole("state_extractor");
+        if (extractor == null || !extractor.IsActive)
+        {
+            return (false, null, "StateExtractor non configurato o non attivo");
+        }
+
+        var callCenter = ResolveCallCenter();
+        if (callCenter == null)
+        {
+            return (false, null, "CallCenter non disponibile per StateExtractor");
+        }
+
+        var previousState = _database.GetLatestNarrativeContinuityState(_storyId)?.StateJson ?? "{}";
+        var prompt = BuildStateExtractorPrompt(blockText, previousState, snap, phase, pov);
+        var systemPrompt = extractor.Instructions ?? extractor.Prompt ?? "Aggiorna stato narrativo strutturato.";
+        var history = new ChatHistory();
+        history.AddSystem(systemPrompt);
+        history.AddUser(prompt);
+
+        var options = new CallOptions
+        {
+            Operation = "state_extractor",
+            Timeout = TimeSpan.FromSeconds(120),
+            MaxRetries = 1,
+            UseResponseChecker = true,
+            AllowFallback = true,
+            AskFailExplanation = true,
+            SystemPromptOverride = systemPrompt
+        };
+        options.DeterministicChecks.Add(new CheckEmpty
+        {
+            Options = Options.Create<object>(new Dictionary<string, object>
+            {
+                ["ErrorMessage"] = "StateExtractor: risposta vuota"
+            })
+        });
+
+        var started = DateTime.UtcNow;
+        var result = await callCenter.CallAgentAsync(
+            storyId: _storyId,
+            threadId: BuildThreadId(_storyId, 9002),
+            agent: extractor,
+            history: history,
+            options: options,
+            cancellationToken: ct).ConfigureAwait(false);
+
+        _database.InsertNarrativeAgentCallLog(
+            storyId: _storyId,
+            agentName: extractor.Name,
+            inputTokens: null,
+            outputTokens: null,
+            deterministicChecksResult: result.Success ? "PASS" : $"FAIL: {TrimForDb(result.FailureReason)}",
+            responseCheckerResult: options.UseResponseChecker ? (result.Success ? "PASS" : $"FAIL: {TrimForDb(result.FailureReason)}") : "SKIPPED",
+            retryCount: Math.Max(0, result.Attempts - 1),
+            latencyMs: Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds));
+
+        if (!result.Success || string.IsNullOrWhiteSpace(result.ResponseText))
+        {
+            _logger?.Append(runId, $"StateExtractor fallito: {result.FailureReason}", "error");
+            return (false, null, result.FailureReason ?? "StateExtractor failed");
+        }
+
+        var raw = result.ResponseText.Trim();
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                _logger?.Append(runId, "StateExtractor ha restituito JSON non object.", "error");
+                return (false, null, "StateExtractor output JSON non object");
+            }
+            _logger?.Append(runId, $"StateExtractor applicato: agente={extractor.Name}; modello={result.ModelUsed}");
+            return (true, raw, null);
+        }
+        catch (Exception ex)
+        {
+            _logger?.Append(runId, $"StateExtractor JSON invalido: {ex.Message}", "error");
+            return (false, null, $"StateExtractor JSON invalido: {ex.Message}");
+        }
+    }
+
     private static string BuildRetryConversationPrompt(string reason)
     {
         var sb = new StringBuilder();
@@ -326,6 +523,73 @@ public sealed class GenerateNextChunkCommand : ICommand
         sb.AppendLine("Motivo: " + reason);
         sb.AppendLine("Rigenera la risposta COMPLETA rispettando tutti i vincoli.");
         return sb.ToString();
+    }
+
+    private Dictionary<string, object> BuildNarrativeChecksOptions(string storyHistory, string phase, string pov)
+    {
+        var latestStateJson = _database.GetLatestNarrativeContinuityState(_storyId)?.StateJson ?? "{}";
+        return new Dictionary<string, object>
+        {
+            ["StoryHistory"] = storyHistory,
+            ["Phase"] = phase,
+            ["CurrentPOV"] = pov,
+            ["ContinuityStateJson"] = latestStateJson
+        };
+    }
+
+    private static string BuildStoryEditorNonCreativePrompt(
+        string writerOutput,
+        DatabaseService.StateDrivenStorySnapshot snap,
+        string phase,
+        string pov)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Ripulisci il testo mantenendo invariati eventi, outcome e continuity.");
+        sb.AppendLine("NON introdurre elementi nuovi. NON cambiare il contenuto fattuale.");
+        sb.AppendLine("Mantieni la stessa lingua del testo.");
+        sb.AppendLine("Restituisci SOLO il testo finale ripulito, senza commenti.");
+        sb.AppendLine();
+        sb.AppendLine($"PHASE: {phase}");
+        sb.AppendLine($"POV: {pov}");
+        sb.AppendLine($"TITLE: {snap.Title}");
+        sb.AppendLine();
+        sb.AppendLine("TESTO:");
+        sb.AppendLine(writerOutput);
+        return sb.ToString();
+    }
+
+    private static string BuildStateExtractorPrompt(
+        string blockText,
+        string previousStateJson,
+        DatabaseService.StateDrivenStorySnapshot snap,
+        string phase,
+        string pov)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Aggiorna lo stato narrativo e restituisci SOLO un JSON object valido.");
+        sb.AppendLine("Non scrivere testo narrativo.");
+        sb.AppendLine("Mantieni i campi esistenti quando non cambiano.");
+        sb.AppendLine("Schema minimo richiesto:");
+        sb.AppendLine("{\"story_id\":0,\"series_id\":null,\"episode_id\":null,\"chapter_id\":null,\"scene_id\":null,\"timeline_index\":0,\"location_current\":null,\"time_context\":null,\"active_characters\":[],\"dead_characters\":[],\"missing_characters\":[],\"objects_in_scene\":[],\"environment_state\":{},\"conflict_state\":null,\"goal_current\":null,\"last_events\":[],\"pov_character\":null,\"tone_current\":null,\"custom_flags\":{}}");
+        sb.AppendLine();
+        sb.AppendLine($"STORY_ID: {snap.StoryId}");
+        sb.AppendLine($"TITLE: {snap.Title}");
+        sb.AppendLine($"PHASE: {phase}");
+        sb.AppendLine($"POV: {pov}");
+        sb.AppendLine();
+        sb.AppendLine("PREVIOUS_STATE_JSON:");
+        sb.AppendLine(previousStateJson);
+        sb.AppendLine();
+        sb.AppendLine("NUOVO_BLOCCO:");
+        sb.AppendLine(blockText);
+        return sb.ToString();
+    }
+
+    private static string? TrimForDb(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+        var t = text.Trim();
+        return t.Length <= 500 ? t : t[..500];
     }
 
     private static string ResolveCommandKey()
@@ -748,3 +1012,4 @@ public sealed class GenerateNextChunkCommand : ICommand
     }
 
 }
+

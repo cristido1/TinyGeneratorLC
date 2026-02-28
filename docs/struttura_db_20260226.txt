@@ -1,0 +1,1177 @@
+STRUTTURA DB - storage.db
+Data generazione: 2026-02-26
+Percorso: data/storage.db
+
+Totale tabelle utente: 55
+
+====================================================================================================
+TABELLA: agents
+- Scopo: Configurazione agenti LLM (ruolo, modello, prompt/instructions, attivazione).
+- Numerosit? (COUNT*): 40
+- Campi:
+  - id: INTEGER PK
+  - name: TEXT NOT NULL
+  - role: TEXT NOT NULL
+  - model_id: INTEGER
+  - voice_rowid: INTEGER
+  - skills: TEXT
+  - config: TEXT
+  - json_response_format: TEXT
+  - prompt: TEXT
+  - instructions: TEXT
+  - execution_plan: TEXT
+  - is_active: INTEGER NOT NULL DEFAULT 1
+  - created_at: TEXT NOT NULL
+  - updated_at: TEXT
+  - notes: TEXT
+  - temperature: REAL
+  - top_p: REAL
+  - multi_step_template_id: INTEGER
+  - RowVersion: BLOB
+  - repeat_penalty: REAL DEFAULT NULL
+  - top_k: INTEGER DEFAULT NULL
+  - repeat_last_n: INTEGER DEFAULT NULL
+  - num_predict: INTEGER DEFAULT NULL
+  - priority: INTEGER NOT NULL DEFAULT 0
+  - allowed_profiles: TEXT
+  - thinking: INTEGER
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: app_events
+- Scopo: Definizioni eventi applicativi / telemetria locale.
+- Numerosit? (COUNT*): 17
+- Campi:
+  - id: INTEGER PK
+  - event_type: TEXT NOT NULL
+  - description: TEXT
+  - enabled: INTEGER NOT NULL DEFAULT 1
+  - logged: INTEGER NOT NULL DEFAULT 1
+  - notified: INTEGER NOT NULL DEFAULT 1
+  - created_at: TEXT NOT NULL DEFAULT datetime('now')
+  - updated_at: TEXT NOT NULL DEFAULT datetime('now')
+- Indici:
+  - sqlite_autoindex_app_events_1: UNIQUE, origin=u, cols=[event_type]
+
+====================================================================================================
+TABELLA: chapters
+- Scopo: Blocchi/capitoli testuali salvati per memory_key/storia.
+- Numerosit? (COUNT*): 483
+- Campi:
+  - id: INTEGER PK
+  - memory_key: TEXT
+  - chapter_number: INTEGER
+  - content: TEXT
+  - ts: TEXT
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: consequence_impacts
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 44
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - consequence_rule_id: INTEGER NOT NULL
+  - resource_name: TEXT NOT NULL
+  - delta_value: INTEGER NOT NULL
+- Indici:
+  - IX_consequence_impacts_consequence_rule_id: NON UNIQUE, origin=c, cols=[consequence_rule_id]
+- Foreign Keys:
+  - consequence_rule_id -> consequence_rules.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: consequence_rules
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 34
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - narrative_profile_id: INTEGER NOT NULL
+  - description: TEXT
+- Indici:
+  - IX_consequence_rules_narrative_profile_id: NON UNIQUE, origin=c, cols=[narrative_profile_id]
+- Foreign Keys:
+  - narrative_profile_id -> narrative_profiles.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: evaluations
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 0
+- Campi:
+  - Id: INTEGER PK NOT NULL
+  - StoryId: INTEGER NOT NULL
+  - NarrativeCoherenceScore: INTEGER NOT NULL
+  - NarrativeCoherenceDefects: TEXT NOT NULL
+  - OriginalityScore: INTEGER NOT NULL
+  - OriginalityDefects: TEXT NOT NULL
+  - EmotionalImpactScore: INTEGER NOT NULL
+  - EmotionalImpactDefects: TEXT NOT NULL
+  - ActionScore: INTEGER NOT NULL
+  - ActionDefects: TEXT NOT NULL
+  - TotalScore: REAL NOT NULL
+  - Model: TEXT NOT NULL
+  - RawJson: TEXT NOT NULL
+  - ModelId: INTEGER
+  - AgentId: INTEGER
+  - AgentName: TEXT NOT NULL
+  - AgentModel: TEXT NOT NULL
+  - Timestamp: TEXT NOT NULL
+  - RowVersion: BLOB
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: failure_rules
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 34
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - narrative_profile_id: INTEGER NOT NULL
+  - description: TEXT
+  - trigger_type: TEXT NOT NULL
+- Indici:
+  - IX_failure_rules_narrative_profile_id: NON UNIQUE, origin=c, cols=[narrative_profile_id]
+- Foreign Keys:
+  - narrative_profile_id -> narrative_profiles.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: global_coherence
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - story_id: INTEGER NOT NULL
+  - global_coherence_value: REAL NOT NULL
+  - chunk_count: INTEGER NOT NULL DEFAULT 0
+  - notes: TEXT
+  - ts: TEXT DEFAULT datetime('now')
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: Log
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 3041
+- Campi:
+  - Id: INTEGER PK
+  - Ts: TEXT NOT NULL
+  - Level: TEXT NOT NULL
+  - Category: TEXT NOT NULL
+  - Message: TEXT NOT NULL
+  - Exception: TEXT
+  - State: TEXT
+  - ThreadId: INTEGER NOT NULL DEFAULT 0
+  - ThreadScope: TEXT
+  - AgentName: TEXT
+  - Context: TEXT
+  - analized: INTEGER NOT NULL DEFAULT 0
+  - chat_text: TEXT
+  - Result: TEXT
+  - RowVersion: BLOB
+  - StepNumber: INTEGER
+  - MaxStep: INTEGER
+  - story_id: INTEGER
+  - ResultFailReason: TEXT
+  - Examined: INTEGER
+  - model_name: TEXT
+  - durationSecs: INTEGER NOT NULL DEFAULT 1
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: Log_analysis
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 417
+- Campi:
+  - id: INTEGER PK
+  - threadId: TEXT NOT NULL
+  - model_id: TEXT NOT NULL
+  - run_scope: TEXT NOT NULL
+  - description: TEXT NOT NULL
+  - succeeded: INTEGER NOT NULL
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: mapped_sentiments
+- Scopo: Tabella di mapping/associazione tra entit?.
+- Numerosit? (COUNT*): 1124
+- Campi:
+  - id: INTEGER PK
+  - source_sentiment: TEXT NOT NULL
+  - dest_sentiment: TEXT NOT NULL
+  - confidence: REAL
+  - source_type: TEXT
+  - created_at: TEXT DEFAULT datetime('now')
+- Indici:
+  - sqlite_autoindex_mapped_sentiments_1: UNIQUE, origin=u, cols=[source_sentiment]
+
+====================================================================================================
+TABELLA: Memory
+- Scopo: Memoria persistente semantica (embedding + contenuti) se presente.
+- Numerosit? (COUNT*): 86
+- Campi:
+  - Id: TEXT PK
+  - Collection: TEXT NOT NULL
+  - TextValue: TEXT NOT NULL
+  - Metadata: TEXT
+  - model_id: INTEGER
+  - agent_id: INTEGER
+  - Embedding: BLOB
+  - CreatedAt: TEXT NOT NULL
+- Indici:
+  - sqlite_autoindex_Memory_1: UNIQUE, origin=pk, cols=[Id]
+
+====================================================================================================
+TABELLA: micro_objectives
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 34
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - narrative_profile_id: INTEGER NOT NULL
+  - code: TEXT NOT NULL
+  - description: TEXT
+  - difficulty: INTEGER NOT NULL
+- Indici:
+  - IX_micro_objectives_narrative_profile_id: NON UNIQUE, origin=c, cols=[narrative_profile_id]
+- Foreign Keys:
+  - narrative_profile_id -> narrative_profiles.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: model_roles
+- Scopo: Associazione modelli <-> ruoli con metriche/errore/fallback.
+- Numerosit? (COUNT*): 130
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - model_id: INTEGER NOT NULL
+  - role_id: INTEGER NOT NULL
+  - enabled: INTEGER NOT NULL
+  - use_count: INTEGER NOT NULL
+  - use_successed: INTEGER NOT NULL
+  - use_failed: INTEGER NOT NULL
+  - last_use: TEXT
+  - instructions: TEXT
+  - top_p: REAL
+  - top_k: INTEGER
+  - created_at: TEXT
+  - updated_at: TEXT
+  - is_primary: INTEGER NOT NULL DEFAULT 0
+  - total_prompt_tokens: INTEGER DEFAULT 0
+  - total_output_tokens: INTEGER DEFAULT 0
+  - total_prompt_time_ns: INTEGER DEFAULT 0
+  - total_gen_time_ns: INTEGER DEFAULT 0
+  - total_load_time_ns: INTEGER DEFAULT 0
+  - total_total_time_ns: INTEGER DEFAULT 0
+  - thinking: INTEGER
+- Indici:
+  - IX_model_roles_role_id: NON UNIQUE, origin=c, cols=[role_id]
+  - IX_model_roles_model_id: NON UNIQUE, origin=c, cols=[model_id]
+- Foreign Keys:
+  - role_id -> roles.id (on_update=NO ACTION, on_delete=CASCADE)
+  - model_id -> models.Id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: model_roles_errors
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 258
+- Campi:
+  - id: INTEGER PK
+  - parent_id: INTEGER NOT NULL
+  - error_text: TEXT NOT NULL
+  - error_type: TEXT NOT NULL
+  - error_count: INTEGER NOT NULL DEFAULT 1
+  - date_insert: TEXT NOT NULL
+  - date_last: TEXT NOT NULL
+- Indici:
+  - idx_model_roles_errors_parent_date_last: NON UNIQUE, origin=c, cols=[parent_id, date_last]
+  - uq_model_roles_errors_parent_text_type: UNIQUE, origin=c, cols=[parent_id, error_text, error_type]
+- Foreign Keys:
+  - parent_id -> model_roles.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: model_test_assets
+- Scopo: Asset associati ai test di modelli.
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - step_id: INTEGER NOT NULL
+  - file_type: TEXT
+  - file_path: TEXT
+  - description: TEXT
+  - duration_sec: REAL
+  - size_bytes: INTEGER
+  - story_id: INTEGER
+- Indici:
+  - idx_model_test_assets_step_id: NON UNIQUE, origin=c, cols=[step_id]
+- Foreign Keys:
+  - step_id -> model_test_steps.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: model_test_runs
+- Scopo: Run di test modelli.
+- Numerosit? (COUNT*): 38
+- Campi:
+  - id: INTEGER PK
+  - model_id: INTEGER
+  - test_group: TEXT NOT NULL
+  - description: TEXT
+  - passed: INTEGER DEFAULT 0
+  - duration_ms: INTEGER
+  - notes: TEXT
+  - run_date: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  - test_folder: TEXT
+- Indici:
+  - idx_model_test_runs_model_id: NON UNIQUE, origin=c, cols=[model_id]
+- Foreign Keys:
+  - model_id -> models.Id (on_update=NO ACTION, on_delete=SET NULL)
+
+====================================================================================================
+TABELLA: model_test_steps
+- Scopo: Step dei test di modelli.
+- Numerosit? (COUNT*): 253
+- Campi:
+  - id: INTEGER PK
+  - run_id: INTEGER NOT NULL
+  - step_number: INTEGER
+  - step_name: TEXT
+  - input_json: TEXT
+  - output_json: TEXT
+  - passed: INTEGER DEFAULT 0
+  - error: TEXT
+  - duration_ms: INTEGER
+- Indici:
+  - idx_model_test_steps_run_step: NON UNIQUE, origin=c, cols=[run_id, step_number]
+  - idx_model_test_steps_run_id: NON UNIQUE, origin=c, cols=[run_id]
+- Foreign Keys:
+  - run_id -> model_test_runs.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: models
+- Scopo: Catalogo modelli AI con punteggi, limiti e metadata di esecuzione.
+- Numerosit? (COUNT*): 48
+- Campi:
+  - Id: INTEGER PK
+  - Name: TEXT NOT NULL
+  - Provider: TEXT NOT NULL
+  - Endpoint: TEXT
+  - IsLocal: INTEGER NOT NULL DEFAULT 1
+  - MaxContext: INTEGER NOT NULL DEFAULT 4096
+  - ContextToUse: INTEGER NOT NULL DEFAULT 4096
+  - FunctionCallingScore: INTEGER NOT NULL DEFAULT 0
+  - CostInPerToken: REAL NOT NULL DEFAULT 0
+  - CostOutPerToken: REAL NOT NULL DEFAULT 0
+  - LimitTokensDay: INTEGER NOT NULL DEFAULT 0
+  - LimitTokensWeek: INTEGER NOT NULL DEFAULT 0
+  - LimitTokensMonth: INTEGER NOT NULL DEFAULT 0
+  - Metadata: TEXT NOT NULL DEFAULT ''
+  - Enabled: INTEGER NOT NULL DEFAULT 1
+  - CreatedAt: TEXT
+  - UpdatedAt: TEXT
+  - TestDurationSeconds: REAL
+  - NoTools: INTEGER NOT NULL DEFAULT 0
+  - WriterScore: REAL NOT NULL DEFAULT 0
+  - BaseScore: REAL NOT NULL DEFAULT 0
+  - TextEvalScore: REAL NOT NULL DEFAULT 0
+  - TtsScore: REAL NOT NULL DEFAULT 0
+  - MusicScore: REAL NOT NULL DEFAULT 0
+  - FxScore: REAL NOT NULL DEFAULT 0
+  - AmbientScore: REAL NOT NULL DEFAULT 0
+  - TotalScore: REAL NOT NULL DEFAULT 0
+  - Note: TEXT
+  - LastTestResults: TEXT
+  - LastMusicTestFile: TEXT
+  - LastSoundTestFile: TEXT
+  - LastTtsTestFile: TEXT
+  - LastScore_Base: INTEGER
+  - LastScore_Tts: INTEGER
+  - LastScore_Music: INTEGER
+  - LastScore_Write: INTEGER
+  - LastResults_BaseJson: TEXT
+  - LastResults_TtsJson: TEXT
+  - LastResults_MusicJson: TEXT
+  - LastResults_WriteJson: TEXT
+  - RowVersion: BLOB
+  - speed: number
+  - IsNarrativeCompatible: INTEGER NOT NULL DEFAULT 0
+  - MaxContextTokens: INTEGER NOT NULL DEFAULT 0
+  - InstructionFollowingScore: INTEGER NOT NULL DEFAULT 0
+  - JsonScore: REAL DEFAULT NULL
+  - InstructionScore: REAL DEFAULT NULL
+  - IntelligenceScore: REAL DEFAULT NULL
+  - IntelligenceTime: REAL DEFAULT NULL
+  - intelliScore: INTEGER DEFAULT NULL
+  - intelliTime: INTEGER DEFAULT NULL
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: name_gender
+- Scopo: Lookup nome -> gender con flag verified.
+- Numerosit? (COUNT*): 257
+- Campi:
+  - id: INTEGER PK
+  - name: TEXT NOT NULL
+  - gender: TEXT NOT NULL DEFAULT 'unknown'
+  - insert_date: TEXT NOT NULL
+  - verified: INTEGER NOT NULL DEFAULT 0
+- Indici:
+  - idx_name_gender_verified: NON UNIQUE, origin=c, cols=[verified, name]
+  - idx_name_gender_name_nocase: UNIQUE, origin=c, cols=[name]
+
+====================================================================================================
+TABELLA: narrative_agent_calls_log
+- Scopo: Log sintetico chiamate agenti della pipeline narrativa.
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - story_id: INTEGER NOT NULL
+  - agent_name: TEXT NOT NULL
+  - input_tokens: INTEGER
+  - output_tokens: INTEGER
+  - deterministic_checks_result: TEXT
+  - response_checker_result: TEXT
+  - retry_count: INTEGER NOT NULL DEFAULT 0
+  - latency_ms: INTEGER
+  - created_at: TEXT NOT NULL
+- Indici:
+  - ix_narrative_agent_calls_log_agent: NON UNIQUE, origin=c, cols=[agent_name, created_at]
+  - ix_narrative_agent_calls_log_story: NON UNIQUE, origin=c, cols=[story_id, created_at]
+
+====================================================================================================
+TABELLA: narrative_continuity_state
+- Scopo: Snapshot ContinuityState per blocchi narrativi stateful.
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - story_id: INTEGER NOT NULL
+  - series_id: INTEGER
+  - episode_id: INTEGER
+  - chapter_id: INTEGER
+  - scene_id: INTEGER
+  - timeline_index: INTEGER NOT NULL DEFAULT 0
+  - state_json: TEXT NOT NULL
+  - created_at: TEXT NOT NULL
+  - updated_at: TEXT NOT NULL
+- Indici:
+  - ix_narrative_continuity_state_series_episode: NON UNIQUE, origin=c, cols=[series_id, episode_id, id]
+  - ix_narrative_continuity_state_story: NON UNIQUE, origin=c, cols=[story_id, id]
+
+====================================================================================================
+TABELLA: narrative_planning_state
+- Scopo: Snapshot planning/outline narrativo per serie/episodio.
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - series_id: INTEGER NOT NULL
+  - episode_id: INTEGER
+  - planning_json: TEXT NOT NULL
+  - created_at: TEXT NOT NULL
+- Indici:
+  - ix_narrative_planning_state_series_episode: NON UNIQUE, origin=c, cols=[series_id, episode_id, id]
+
+====================================================================================================
+TABELLA: narrative_profiles
+- Scopo: Profili del Narrative Engine (base prompts e setup).
+- Numerosit? (COUNT*): 17
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - name: TEXT NOT NULL
+  - description: TEXT
+  - base_system_prompt: TEXT
+  - style_prompt: TEXT
+  - pov_list_json: TEXT
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: narrative_resources
+- Scopo: Risorse narrative per profilo (valori iniziali/min/max).
+- Numerosit? (COUNT*): 51
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - narrative_profile_id: INTEGER NOT NULL
+  - name: TEXT NOT NULL
+  - initial_value: INTEGER NOT NULL
+  - min_value: INTEGER NOT NULL
+  - max_value: INTEGER NOT NULL
+- Indici:
+  - IX_narrative_resources_narrative_profile_id: NON UNIQUE, origin=c, cols=[narrative_profile_id]
+- Foreign Keys:
+  - narrative_profile_id -> narrative_profiles.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: narrative_story_blocks
+- Scopo: StoryBlock narrativi (testo blocchi) con link a continuity state.
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - story_id: INTEGER NOT NULL
+  - series_id: INTEGER
+  - episode_id: INTEGER
+  - chapter_id: INTEGER
+  - scene_id: INTEGER
+  - block_index: INTEGER NOT NULL
+  - text_content: TEXT NOT NULL
+  - continuity_state_id: INTEGER
+  - quality_score: REAL
+  - coherence_score: REAL
+  - created_at: TEXT NOT NULL
+- Indici:
+  - ix_narrative_story_blocks_cont_state: NON UNIQUE, origin=c, cols=[continuity_state_id]
+  - ix_narrative_story_blocks_story: NON UNIQUE, origin=c, cols=[story_id, block_index]
+- Foreign Keys:
+  - continuity_state_id -> narrative_continuity_state.id (on_update=NO ACTION, on_delete=NO ACTION)
+
+====================================================================================================
+TABELLA: numerators_state
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 2
+- Campi:
+  - key: TEXT PK
+  - value: INTEGER NOT NULL
+- Indici:
+  - sqlite_autoindex_numerators_state_1: UNIQUE, origin=pk, cols=[key]
+
+====================================================================================================
+TABELLA: planner_methods
+- Scopo: Metodi di planning strategico.
+- Numerosit? (COUNT*): 4
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - RowVersion: BLOB
+  - code: TEXT NOT NULL
+  - description: TEXT
+  - is_active: INTEGER NOT NULL
+  - notes: TEXT
+- Indici:
+  - IX_planner_methods_code: UNIQUE, origin=c, cols=[code]
+
+====================================================================================================
+TABELLA: roles
+- Scopo: Ruoli logici usati per associare comandi/modelli/agenti.
+- Numerosit? (COUNT*): 34
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - ruolo: TEXT NOT NULL
+  - comando_collegato: TEXT
+  - created_at: TEXT
+  - updated_at: TEXT
+- Indici:
+  - IX_roles_ruolo: UNIQUE, origin=c, cols=[ruolo]
+
+====================================================================================================
+TABELLA: sentiment_embeddings
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 7
+- Campi:
+  - sentiment: TEXT PK
+  - embedding: TEXT NOT NULL
+  - model: TEXT
+  - created_at: TEXT DEFAULT datetime('now')
+- Indici:
+  - sqlite_autoindex_sentiment_embeddings_1: UNIQUE, origin=pk, cols=[sentiment]
+
+====================================================================================================
+TABELLA: series
+- Scopo: Anagrafica serie e impostazioni narrative/planning.
+- Numerosit? (COUNT*): 15
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - ambientazione_base: TEXT
+  - arco_narrativo_serie: TEXT
+  - data_inserimento: TEXT NOT NULL
+  - default_narrative_profile_id: INTEGER
+  - default_planner_mode: TEXT
+  - default_tipo_planning_id: INTEGER
+  - episodi_generati: INTEGER NOT NULL
+  - folder: TEXT
+  - genere: TEXT
+  - images_style: TEXT
+  - lingua: TEXT
+  - narrative_consistency_level: INTEGER NOT NULL
+  - note_ai: TEXT
+  - periodo_narrativo: TEXT
+  - planner_method_id: INTEGER
+  - premessa_serie: TEXT
+  - regole_narrative: TEXT
+  - sottogenere: TEXT
+  - stile_scrittura: TEXT
+  - target: TEXT
+  - timestamp: BLOB
+  - titolo: TEXT NOT NULL
+  - tono_base: TEXT
+  - serie_final_goal: TEXT
+  - serie_state_summary: TEXT
+  - last_major_event: TEXT
+  - cosa_non_deve_mai_succedere: TEXT
+  - temi_obbligatori: TEXT
+  - livello_tecnologico_medio: TEXT
+  - world_rules_locked: INTEGER NOT NULL DEFAULT 0
+- Indici:
+  - IX_series_planner_method_id: NON UNIQUE, origin=c, cols=[planner_method_id]
+  - IX_series_default_tipo_planning_id: NON UNIQUE, origin=c, cols=[default_tipo_planning_id]
+- Foreign Keys:
+  - default_tipo_planning_id -> tipo_planning.id_tipo_planning (on_update=NO ACTION, on_delete=NO ACTION)
+  - planner_method_id -> planner_methods.id (on_update=NO ACTION, on_delete=NO ACTION)
+
+====================================================================================================
+TABELLA: series_characters
+- Scopo: Personaggi associati a una serie.
+- Numerosit? (COUNT*): 90
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - serie_id: INTEGER NOT NULL
+  - name: TEXT NOT NULL
+  - gender: TEXT NOT NULL
+  - description: TEXT
+  - voice_id: INTEGER
+  - episode_in: INTEGER
+  - episode_out: INTEGER
+  - image: TEXT
+  - conflitto_interno: TEXT
+  - eta: TEXT
+  - formazione: TEXT
+  - profilo: TEXT
+  - specializzazione: TEXT
+  - aspect: TEXT
+  - ruolo_narrativo: TEXT
+  - arco_personale: TEXT
+  - stato_attuale: TEXT
+  - stato_attuale_json: TEXT
+  - alleanza_relazione: TEXT
+  - last_seen_episode_number: INTEGER
+- Indici:
+  - IX_series_characters_voice_id: NON UNIQUE, origin=c, cols=[voice_id]
+  - IX_series_characters_serie_id: NON UNIQUE, origin=c, cols=[serie_id]
+
+====================================================================================================
+TABELLA: series_episodes
+- Scopo: Episodi della serie e stato specifico episodio.
+- Numerosit? (COUNT*): 104
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - number: INTEGER NOT NULL
+  - serie_id: INTEGER NOT NULL
+  - tipo_planning_id: INTEGER
+  - title: TEXT
+  - trama: TEXT
+  - episode_goal: TEXT
+  - initial_phase: TEXT
+  - start_situation: TEXT
+  - state_in_json: TEXT
+  - state_out_json: TEXT
+  - delta_json: TEXT
+  - canon_events: TEXT
+  - open_threads_out: TEXT
+  - recap_text: TEXT
+- Indici:
+  - IX_series_episodes_tipo_planning_id: NON UNIQUE, origin=c, cols=[tipo_planning_id]
+  - IX_series_episodes_serie_id: NON UNIQUE, origin=c, cols=[serie_id]
+- Foreign Keys:
+  - tipo_planning_id -> tipo_planning.id_tipo_planning (on_update=NO ACTION, on_delete=NO ACTION)
+  - serie_id -> series.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: series_state
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 12
+- Campi:
+  - id: INTEGER PK
+  - serie_id: INTEGER NOT NULL
+  - is_current: INTEGER NOT NULL DEFAULT 0
+  - state_version: INTEGER NOT NULL DEFAULT 1
+  - state_summary: TEXT
+  - world_state_json: TEXT
+  - open_threads_json: TEXT
+  - last_major_event: TEXT
+  - created_at: TEXT NOT NULL DEFAULT datetime('now')
+  - created_by: TEXT
+  - source_episode_id: INTEGER
+- Indici:
+  - idx_series_state_serie: NON UNIQUE, origin=c, cols=[serie_id]
+  - idx_series_state_current: UNIQUE, origin=c partial, cols=[serie_id]
+- Foreign Keys:
+  - serie_id -> series.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: sounds
+- Scopo: Catalogo suoni (fx/amb/music) con path, tag, score, metadata.
+- Numerosit? (COUNT*): 35637
+- Campi:
+  - id: INTEGER PK
+  - type: TEXT NOT NULL
+  - library: TEXT
+  - filepath: TEXT NOT NULL
+  - filename: TEXT NOT NULL
+  - description: TEXT
+  - tags: TEXT
+  - embedding: TEXT
+  - usage_count: INTEGER NOT NULL DEFAULT 0
+  - usage_last: TEXT
+  - score_loudness: REAL
+  - score_dynamic: REAL
+  - score_clipping: REAL
+  - score_noise: REAL
+  - score_duration: REAL
+  - score_format: REAL
+  - score_consistency: REAL
+  - score_tag_match: REAL
+  - score_human: REAL
+  - score_final: REAL
+  - score_last_calc: TEXT
+  - score_version: TEXT
+  - duration_seconds: REAL
+  - enabled: INTEGER NOT NULL DEFAULT 1
+  - insert_date: TEXT
+  - license: TEXT
+- Indici:
+  - idx_sounds_filepath: UNIQUE, origin=c, cols=[filepath]
+
+====================================================================================================
+TABELLA: sounds_missing
+- Scopo: Richieste di suoni mancanti per storia/tag/prompt.
+- Numerosit? (COUNT*): 94
+- Campi:
+  - id: INTEGER PK
+  - type: TEXT NOT NULL
+  - prompt: TEXT NOT NULL
+  - tags: TEXT
+  - story_id: INTEGER
+  - story_title: TEXT
+  - source: TEXT
+  - occurrences: INTEGER NOT NULL DEFAULT 1
+  - status: TEXT NOT NULL DEFAULT 'open'
+  - first_seen_at: TEXT NOT NULL
+  - last_seen_at: TEXT NOT NULL
+  - notes: TEXT
+- Indici:
+  - idx_sounds_missing_story: NON UNIQUE, origin=c, cols=[story_id]
+  - idx_sounds_missing_last_seen: NON UNIQUE, origin=c, cols=[last_seen_at]
+  - idx_sounds_missing_status_type: NON UNIQUE, origin=c, cols=[status, type]
+
+====================================================================================================
+TABELLA: stats_models
+- Scopo: Tabella statistiche/aggregazioni.
+- Numerosit? (COUNT*): 26
+- Campi:
+  - model_name: TEXT PK NOT NULL
+  - operation: TEXT PK NOT NULL
+  - count_used: INTEGER NOT NULL DEFAULT 0
+  - count_successed: INTEGER NOT NULL DEFAULT 0
+  - count_failed: INTEGER NOT NULL DEFAULT 0
+  - total_success_time_secs: REAL NOT NULL DEFAULT 0
+  - total_fail_time_secs: REAL NOT NULL DEFAULT 0
+  - last_operation_date: TEXT
+  - first_operation_date: TEXT
+  - duration_total_count: INTEGER NOT NULL DEFAULT 0
+  - duration_total_time: REAL NOT NULL DEFAULT 0
+  - runtime_total_count: INTEGER NOT NULL DEFAULT 0
+  - prompt_eval_count_total: INTEGER NOT NULL DEFAULT 0
+  - prompt_eval_duration_total: REAL NOT NULL DEFAULT 0
+  - eval_count_total: INTEGER NOT NULL DEFAULT 0
+  - eval_duration_total: REAL NOT NULL DEFAULT 0
+  - total_duration_total: REAL NOT NULL DEFAULT 0
+  - load_duration_total: REAL NOT NULL DEFAULT 0
+  - done_stop_count: INTEGER NOT NULL DEFAULT 0
+  - done_length_count: INTEGER NOT NULL DEFAULT 0
+  - done_other_count: INTEGER NOT NULL DEFAULT 0
+- Indici:
+  - sqlite_autoindex_stats_models_1: UNIQUE, origin=pk, cols=[model_name, operation]
+
+====================================================================================================
+TABELLA: step_templates
+- Scopo: Template di step multi-step riusabili.
+- Numerosit? (COUNT*): 12
+- Campi:
+  - id: INTEGER PK
+  - name: TEXT NOT NULL
+  - task_type: TEXT NOT NULL
+  - step_prompt: TEXT NOT NULL
+  - instructions: TEXT
+  - description: TEXT
+  - created_at: TEXT NOT NULL
+  - updated_at: TEXT NOT NULL
+  - RowVersion: BLOB
+  - characters_step: INTEGER
+  - evaluation_steps: TEXT
+  - trama_steps: TEXT
+  - agent_id: INTEGER
+  - voice_id: INTEGER
+  - min_chars_trama: INTEGER
+  - min_chars_story: INTEGER
+  - full_story_step: INTEGER
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: stories
+- Scopo: Archivio principale storie generate e stato pipeline.
+- Numerosit? (COUNT*): 206
+- Campi:
+  - id: INTEGER PK
+  - generation_id: TEXT NOT NULL DEFAULT ''
+  - memory_key: TEXT NOT NULL DEFAULT ''
+  - ts: TEXT NOT NULL DEFAULT ''
+  - prompt: TEXT NOT NULL DEFAULT ''
+  - story_raw: TEXT NOT NULL DEFAULT ''
+  - char_count: INTEGER NOT NULL DEFAULT 0
+  - eval: TEXT NOT NULL DEFAULT ''
+  - score: REAL NOT NULL DEFAULT 0
+  - approved: INTEGER NOT NULL DEFAULT 0
+  - status_id: INTEGER
+  - folder: TEXT
+  - model_id: INTEGER
+  - agent_id: INTEGER
+  - RowVersion: BLOB
+  - characters: TEXT
+  - generated_tts_json: INTEGER DEFAULT 0
+  - generated_tts: INTEGER DEFAULT 0
+  - generated_ambient: INTEGER DEFAULT 0
+  - generated_music: INTEGER DEFAULT 0
+  - generated_effects: INTEGER DEFAULT 0
+  - generated_mixed_audio: INTEGER DEFAULT 0
+  - title: TEXT
+  - serie_id: INTEGER
+  - serie_episode: INTEGER
+  - summary: TEXT
+  - story_tagged: TEXT
+  - story_tagged_version: INTEGER
+  - formatter_model: INTEGER
+  - formatter_prompt_hash: TEXT
+  - story_id: INTEGER
+  - story_revised: TEXT
+  - story_structure: TEXT
+  - narrative_profile_id: INTEGER
+  - runtime_state_id: INTEGER
+  - narrative_status: TEXT
+  - planner_mode: TEXT
+  - story_rows: TEXT
+  - story_tags: TEXT
+  - deleted: INTEGER NOT NULL DEFAULT 0
+  - auto_tts_failed: INTEGER DEFAULT 0
+  - auto_tts_failed_at: TEXT
+  - auto_tts_fail_count: INTEGER DEFAULT 0
+  - auto_tts_last_error: TEXT
+  - parent_story_id: INTEGER
+- Indici:
+  - IX_stories_serie_id: NON UNIQUE, origin=c, cols=[serie_id]
+
+====================================================================================================
+TABELLA: stories_evaluations
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 343
+- Campi:
+  - id: INTEGER PK
+  - story_id: INTEGER NOT NULL
+  - narrative_coherence_score: INTEGER NOT NULL
+  - narrative_coherence_defects: TEXT NOT NULL
+  - originality_score: INTEGER NOT NULL
+  - originality_defects: TEXT NOT NULL
+  - emotional_impact_score: INTEGER NOT NULL
+  - emotional_impact_defects: TEXT NOT NULL
+  - action_score: INTEGER NOT NULL
+  - action_defects: TEXT NOT NULL
+  - total_score: REAL NOT NULL
+  - raw_json: TEXT NOT NULL
+  - model_id: INTEGER
+  - agent_id: INTEGER
+  - ts: TEXT NOT NULL
+  - RowVersion: BLOB
+  - story_length_chars: INTEGER DEFAULT 0
+  - lenght_penality_chars_limit: INTEGER DEFAULT 0
+  - lenght_penality_percentage_applyed: REAL DEFAULT 0
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: stories_status
+- Scopo: Definizione stati della pipeline storie e metadati step.
+- Numerosit? (COUNT*): 13
+- Campi:
+  - id: INTEGER PK
+  - code: TEXT
+  - description: TEXT
+  - step: INTEGER NOT NULL
+  - color: TEXT
+  - operation_type: TEXT
+  - agent_type: TEXT
+  - function_name: TEXT
+  - caption_to_execute: TEXT
+  - RowVersion: BLOB
+  - delete_next_items: INTEGER NOT NULL DEFAULT 0
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: story_chunk_facts
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - story_id: INTEGER NOT NULL
+  - chunk_number: INTEGER NOT NULL
+  - facts_json: TEXT NOT NULL
+  - ts: TEXT NOT NULL
+- Indici:
+  - idx_story_chunk_facts_story: NON UNIQUE, origin=c, cols=[story_id, chunk_number]
+- Foreign Keys:
+  - story_id -> stories.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: story_coherence_scores
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - story_id: INTEGER NOT NULL
+  - chunk_number: INTEGER NOT NULL
+  - local_coherence: REAL NOT NULL
+  - global_coherence: REAL NOT NULL
+  - errors: TEXT
+  - ts: TEXT NOT NULL
+- Indici:
+  - idx_story_coherence_scores_story: NON UNIQUE, origin=c, cols=[story_id, chunk_number]
+- Foreign Keys:
+  - story_id -> stories.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: story_global_coherence
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - story_id: INTEGER NOT NULL
+  - global_coherence: REAL NOT NULL
+  - chunk_count: INTEGER NOT NULL
+  - notes: TEXT
+  - ts: TEXT NOT NULL
+- Indici:
+  - sqlite_autoindex_story_global_coherence_1: UNIQUE, origin=u, cols=[story_id]
+- Foreign Keys:
+  - story_id -> stories.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: story_resource_states
+- Scopo: Valori correnti delle risorse per runtime state di una storia.
+- Numerosit? (COUNT*): 183
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - story_runtime_state_id: INTEGER NOT NULL
+  - resource_name: TEXT NOT NULL
+  - current_value: INTEGER NOT NULL
+- Indici:
+  - IX_story_resource_states_story_runtime_state_id: NON UNIQUE, origin=c, cols=[story_runtime_state_id]
+- Foreign Keys:
+  - story_runtime_state_id -> story_runtime_states.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: story_runtime_states
+- Scopo: Runtime state della generazione state-driven (chunk, phase, pov, active).
+- Numerosit? (COUNT*): 61
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - story_id: INTEGER NOT NULL
+  - narrative_profile_id: INTEGER NOT NULL
+  - current_chunk_index: INTEGER NOT NULL
+  - current_phase: TEXT
+  - current_pov: TEXT
+  - failure_count: INTEGER NOT NULL
+  - last_context: TEXT
+  - is_active: INTEGER NOT NULL
+- Indici:
+  - IX_story_runtime_states_story_id: NON UNIQUE, origin=c, cols=[story_id]
+  - IX_story_runtime_states_narrative_profile_id: NON UNIQUE, origin=c, cols=[narrative_profile_id]
+- Foreign Keys:
+  - story_id -> stories.id (on_update=NO ACTION, on_delete=CASCADE)
+  - narrative_profile_id -> narrative_profiles.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: system_reports
+- Scopo: Report/errori di sistema strutturati con severit? e contesto.
+- Numerosit? (COUNT*): 1439
+- Campi:
+  - id: INTEGER PK NOT NULL
+  - created_at: TEXT NOT NULL
+  - severity: TEXT NOT NULL
+  - status: TEXT NOT NULL
+  - deleted: INTEGER NOT NULL
+  - deleted_at: TEXT
+  - deleted_by: TEXT
+  - title: TEXT
+  - message: TEXT
+  - failure_reason: TEXT
+  - agent_name: TEXT
+  - agent_role: TEXT
+  - model_name: TEXT
+  - story_id: INTEGER
+  - series_id: INTEGER
+  - series_episode: INTEGER
+  - operation_type: TEXT
+  - execution_time_ms: INTEGER
+  - retry_count: INTEGER
+  - raw_log_ref: TEXT
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: task_execution_steps
+- Scopo: Dettaglio step delle task execution.
+- Numerosit? (COUNT*): 2792
+- Campi:
+  - id: INTEGER PK
+  - execution_id: INTEGER NOT NULL
+  - step_number: INTEGER NOT NULL
+  - step_instruction: TEXT NOT NULL
+  - step_output: TEXT
+  - validation_result: TEXT
+  - attempt_count: INTEGER DEFAULT 1
+  - started_at: TEXT
+  - completed_at: TEXT
+- Indici:
+  - (nessuno)
+- Foreign Keys:
+  - execution_id -> task_executions.id (on_update=NO ACTION, on_delete=CASCADE)
+
+====================================================================================================
+TABELLA: task_executions
+- Scopo: Tracciamento esecuzioni task multi-step.
+- Numerosit? (COUNT*): 504
+- Campi:
+  - id: INTEGER PK
+  - task_type: TEXT NOT NULL
+  - entity_id: INTEGER
+  - step_prompt: TEXT NOT NULL
+  - current_step: INTEGER DEFAULT 1
+  - max_step: INTEGER NOT NULL
+  - retry_count: INTEGER DEFAULT 0
+  - status: TEXT DEFAULT 'pending'
+  - executor_agent_id: INTEGER
+  - checker_agent_id: INTEGER
+  - config: TEXT
+  - created_at: TEXT NOT NULL
+  - updated_at: TEXT NOT NULL
+  - initial_context: TEXT
+- Indici:
+  - idx_task_executions_active: UNIQUE, origin=c partial, cols=[entity_id, task_type]
+
+====================================================================================================
+TABELLA: task_types
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 2
+- Campi:
+  - id: INTEGER PK
+  - code: TEXT NOT NULL
+  - description: TEXT
+  - default_executor_role: TEXT NOT NULL
+  - default_checker_role: TEXT NOT NULL
+  - output_merge_strategy: TEXT NOT NULL
+  - validation_criteria: TEXT
+  - RowVersion: BLOB
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: test_definitions
+- Scopo: Definizioni test/modello.
+- Numerosit? (COUNT*): 42
+- Campi:
+  - id: INTEGER PK
+  - test_group: TEXT
+  - library: TEXT
+  - allowed_plugins: TEXT
+  - function_name: TEXT
+  - prompt: TEXT
+  - expected_behavior: TEXT
+  - expected_asset: TEXT
+  - test_type: TEXT
+  - expected_prompt_value: TEXT
+  - valid_score_range: TEXT
+  - timeout_secs: INTEGER NOT NULL DEFAULT 30000
+  - priority: INTEGER NOT NULL DEFAULT 1
+  - execution_plan: TEXT
+  - active: INTEGER NOT NULL DEFAULT 1
+  - json_response_format: TEXT
+  - files_to_copy: TEXT
+  - temperature: REAL
+  - top_p: REAL
+  - min_score: INTEGER DEFAULT 0
+  - created_at: TEXT
+  - updated_at: TEXT
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: test_prompts
+- Scopo: Prompt di test salvati.
+- Numerosit? (COUNT*): 0
+- Campi:
+  - id: INTEGER PK
+  - group_name: TEXT
+  - library: TEXT
+  - prompt: TEXT
+  - active: INTEGER DEFAULT 1
+  - priority: INTEGER DEFAULT 0
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: tipo_planning
+- Scopo: Grammatiche tattiche di planning/successione stati.
+- Numerosit? (COUNT*): 5
+- Campi:
+  - id_tipo_planning: INTEGER PK NOT NULL
+  - codice: TEXT NOT NULL
+  - nome: TEXT NOT NULL
+  - descrizione: TEXT
+  - successione_stati: TEXT NOT NULL
+  - is_active: INTEGER NOT NULL
+- Indici:
+  - IX_tipo_planning_codice: UNIQUE, origin=c, cols=[codice]
+
+====================================================================================================
+TABELLA: tts_voices
+- Scopo: Catalogo voci TTS disponibili.
+- Numerosit? (COUNT*): 107
+- Campi:
+  - id: INTEGER PK
+  - voice_id: TEXT NOT NULL
+  - name: TEXT NOT NULL
+  - model: TEXT
+  - language: TEXT
+  - gender: TEXT
+  - age: TEXT
+  - confidence: REAL
+  - score: REAL
+  - tags: TEXT
+  - template_wav: TEXT
+  - archetype: TEXT
+  - notes: TEXT
+  - created_at: TEXT
+  - updated_at: TEXT
+  - RowVersion: BLOB
+  - sample_path: TEXT
+  - metadata: TEXT
+  - disabled: INTEGER NOT NULL DEFAULT 0
+  - provider: TEXT NOT NULL DEFAULT 'localtts'
+- Indici:
+  - (nessuno)
+
+====================================================================================================
+TABELLA: usage_state
+- Scopo: Tabella applicativa del sistema (scopo da verificare dal dominio specifico).
+- Numerosit? (COUNT*): 1
+- Campi:
+  - Id: INTEGER PK
+  - month: TEXT NOT NULL
+  - tokens_this_run: INTEGER NOT NULL DEFAULT 0
+  - tokens_this_month: INTEGER NOT NULL DEFAULT 0
+  - cost_this_month: REAL NOT NULL DEFAULT 0
+- Indici:
+  - sqlite_autoindex_usage_state_1: UNIQUE, origin=u, cols=[month]
+
+====================================================================================================
+NOTE
+- Numerosit? calcolata con COUNT(*) su ogni tabella (pu? cambiare nel tempo).
+- Tipi e indici derivano dal DB SQLite reale, non dal codice C#.
+- Descrizioni "Scopo" sono sintetiche (euristiche + mapping manuale per tabelle principali).

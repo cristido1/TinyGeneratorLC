@@ -15,17 +15,32 @@ public sealed class CallCenter : ICallCenter
     private readonly IHubContext<StoryLiveHub>? _hubContext;
     private readonly ICustomLogger? _logger;
     private readonly IOptionsMonitor<ResponseValidationOptions>? _responseValidationOptions;
+    private readonly IAgentExecutor _agentExecutor;
+    private readonly IDeterministicValidator _deterministicValidator;
+    private readonly IResponseValidator _responseValidator;
+    private readonly IRetryPolicy _retryPolicy;
+    private readonly ISystemPromptBuilder _systemPromptBuilder;
 
     public CallCenter(
         IAgentCallService agentCallService,
         DatabaseService database,
         IOptionsMonitor<ResponseValidationOptions>? responseValidationOptions,
+        IAgentExecutor? agentExecutor,
+        IDeterministicValidator? deterministicValidator,
+        IResponseValidator? responseValidator,
+        IRetryPolicy? retryPolicy,
+        ISystemPromptBuilder? systemPromptBuilder,
         IHubContext<StoryLiveHub>? hubContext = null,
         ICustomLogger? logger = null)
     {
         _agentCallService = agentCallService;
         _database = database;
         _responseValidationOptions = responseValidationOptions;
+        _agentExecutor = agentExecutor ?? new DefaultAgentExecutor(agentCallService, database, responseValidationOptions, logger);
+        _deterministicValidator = deterministicValidator ?? new DefaultDeterministicValidator();
+        _responseValidator = responseValidator ?? new DefaultResponseValidator();
+        _retryPolicy = retryPolicy ?? new DefaultRetryPolicy(database, responseValidationOptions);
+        _systemPromptBuilder = systemPromptBuilder ?? new DefaultSystemPromptBuilder(database);
         _hubContext = hubContext;
         _logger = logger;
     }
@@ -38,6 +53,11 @@ public sealed class CallCenter : ICallCenter
             agentCallService,
             database,
             ServiceLocator.Services?.GetService<IOptionsMonitor<ResponseValidationOptions>>(),
+            ServiceLocator.Services?.GetService<IAgentExecutor>(),
+            ServiceLocator.Services?.GetService<IDeterministicValidator>(),
+            ServiceLocator.Services?.GetService<IResponseValidator>(),
+            ServiceLocator.Services?.GetService<IRetryPolicy>(),
+            ServiceLocator.Services?.GetService<ISystemPromptBuilder>(),
             ServiceLocator.Services?.GetService<IHubContext<StoryLiveHub>>(),
             logger)
     {
@@ -59,7 +79,6 @@ public sealed class CallCenter : ICallCenter
         var operationName = string.IsNullOrWhiteSpace(options.Operation) ? "call_center" : options.Operation.Trim();
         var updatedHistory = new ChatHistory(history.Messages);
         var usedModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var maxAttemptsPerAgent = Math.Max(1, options.MaxRetries + 1);
         var attemptsTotal = 0;
         var attemptsCurrentAgent = 0;
         string? lastFailure = null;
@@ -114,20 +133,60 @@ public sealed class CallCenter : ICallCenter
 
             var roleCode = string.IsNullOrWhiteSpace(currentAgent.Role) ? "agent" : currentAgent.Role;
             var systemPromptForCurrentCall = string.IsNullOrWhiteSpace(options.SystemPromptOverride)
-                ? BuildSystemPrompt(currentAgent, roleCode)
+                ? _systemPromptBuilder.Build(currentAgent, roleCode)
                 : options.SystemPromptOverride!;
             UpsertConversationSystemMessage(updatedHistory, systemPromptForCurrentCall);
 
-            var result = await ExecuteWithCurrentAgentAsync(
-                storyId,
-                threadId,
-                currentAgent,
-                updatedHistory,
-                systemPromptForCurrentCall,
-                options,
-                shouldStreamLive,
-                liveGroup,
+            string? previousNormalizedResponse = null;
+            var (resolvedResponseFormat, jsonFormatCheck) = ResolveResponseFormatArtifacts(currentAgent);
+            var effectiveChecks = BuildEffectiveDeterministicChecks(options, jsonFormatCheck);
+            CommandModelExecutionService.DeterministicValidationResult DeterministicCallback(string output)
+            {
+                var validation = _deterministicValidator.Validate(new AgentExecutionContext
+                {
+                    Operation = operationName,
+                    Agent = currentAgent,
+                    Options = options,
+                    OutputText = output ?? string.Empty,
+                    PreviousNormalizedResponse = previousNormalizedResponse,
+                    DeterministicChecks = effectiveChecks
+                });
+
+                if (validation.IsValid)
+                {
+                    previousNormalizedResponse = NormalizeForComparison(output);
+                }
+
+                return new CommandModelExecutionService.DeterministicValidationResult(validation.IsValid, validation.FailureReason);
+            }
+
+            var result = await _agentExecutor.ExecuteAsync(
+                new AgentExecutionRequest
+                {
+                    StoryId = storyId,
+                    ThreadId = threadId,
+                    Agent = currentAgent,
+                    History = updatedHistory,
+                    SystemPrompt = systemPromptForCurrentCall,
+                    Options = options,
+                    EnableStoryLiveStream = shouldStreamLive,
+                    StoryLiveGroup = liveGroup,
+                    ResponseFormat = resolvedResponseFormat ?? options.ResponseFormat,
+                    DeterministicValidatorCallback = DeterministicCallback,
+                    StreamChunkCallback = !string.IsNullOrWhiteSpace(liveGroup)
+                        ? (chunk => PublishStoryLiveChunkAsync(liveGroup!, storyId, chunk))
+                        : null
+                },
                 cancellationToken).ConfigureAwait(false);
+
+            _ = _responseValidator.Validate(new AgentExecutionContext
+            {
+                Operation = operationName,
+                Agent = currentAgent,
+                Options = options,
+                ExecutionResult = result,
+                OutputText = result.Text ?? string.Empty
+            });
 
             attemptsCurrentAgent += Math.Max(1, result.AttemptsUsed);
             attemptsTotal += Math.Max(1, result.AttemptsUsed);
@@ -172,25 +231,31 @@ public sealed class CallCenter : ICallCenter
                 result: "FAILED");
 
             // Retry with the same agent first, preserving full conversation history.
-            if (attemptsCurrentAgent < maxAttemptsPerAgent)
+            var retryDecision = _retryPolicy.Evaluate(new RetryContext
+            {
+                CurrentAgent = currentAgent,
+                Options = options,
+                AttemptsCurrentAgent = attemptsCurrentAgent,
+                AttemptsTotal = attemptsTotal,
+                UsedModels = usedModels,
+                FallbackStats = fallbackStats
+            });
+
+            if (retryDecision.Kind == RetryDecisionKind.RetrySameAgent)
             {
                 continue;
             }
 
-            if (options.AllowFallback && IsAgentFallbackEnabledForOperation(options.Operation))
+            if (retryDecision.Kind == RetryDecisionKind.FallbackAgent && retryDecision.FallbackAgent != null)
             {
-                var fallbackAgent = SelectNextFallbackAgent(currentAgent, usedModels, fallbackStats);
-                if (fallbackAgent != null)
-                {
-                    // Requested behavior: when switching to fallback agent, do not append fail-explanation
-                    // requests tied to the previous model failure.
-                    currentAgent = fallbackAgent;
-                    attemptsCurrentAgent = 0;
-                    continue;
-                }
+                // Requested behavior: when switching to fallback agent, do not append fail-explanation
+                // requests tied to the previous model failure.
+                currentAgent = retryDecision.FallbackAgent;
+                attemptsCurrentAgent = 0;
+                continue;
             }
 
-            if (options.AskFailExplanation)
+            if (retryDecision.ShouldAskFailureExplanation)
             {
                 await TryAskFailureExplanationAsync(
                     storyId,
@@ -212,208 +277,6 @@ public sealed class CallCenter : ICallCenter
                 FailureReason = lastFailure
             };
         }
-    }
-
-    private async Task<CommandModelExecutionService.Result> ExecuteWithCurrentAgentAsync(
-        long storyId,
-        int threadId,
-        Agent agent,
-        ChatHistory history,
-        string systemPrompt,
-        CallOptions options,
-        bool enableStoryLiveStream,
-        string? storyLiveGroup,
-        CancellationToken cancellationToken)
-    {
-        var timeoutSec = Math.Max(1, (int)Math.Ceiling(options.Timeout.TotalSeconds));
-        string? previousNormalizedResponse = null;
-        var roleCode = string.IsNullOrWhiteSpace(agent.Role) ? "agent" : agent.Role;
-        var (resolvedResponseFormat, jsonFormatCheck) = ResolveResponseFormatArtifacts(agent);
-        var effectiveChecks = BuildEffectiveDeterministicChecks(options, jsonFormatCheck);
-
-        var request = new CommandModelExecutionService.Request
-        {
-            CommandKey = string.IsNullOrWhiteSpace(options.Operation) ? "call_center" : options.Operation.Trim(),
-            Agent = agent,
-            RoleCode = roleCode,
-            Prompt = BuildPromptFromHistory(history),
-            SystemPrompt = systemPrompt,
-            MaxAttempts = 1,
-            StepTimeoutSec = timeoutSec,
-            UseResponseChecker = options.UseResponseChecker,
-            EnableFallback = options.AllowFallback && IsModelFallbackEnabledByConfig(),
-            DiagnoseOnFinalFailure = false,
-            ExplainAfterAttempt = 0,
-            RunId = $"callcenter_{Guid.NewGuid():N}",
-            EnableDeterministicValidation = true,
-            ResponseFormat = resolvedResponseFormat ?? options.ResponseFormat,
-            DeterministicValidator = output =>
-            {
-                var validation = ExecuteDeterministicChecks(output, effectiveChecks, previousNormalizedResponse);
-                if (validation.IsValid)
-                {
-                    previousNormalizedResponse = NormalizeForComparison(output);
-                }
-
-                return validation;
-            },
-            EnableStreamingOutput = enableStoryLiveStream && !string.IsNullOrWhiteSpace(storyLiveGroup),
-            StreamChunkCallback = enableStoryLiveStream && !string.IsNullOrWhiteSpace(storyLiveGroup)
-                ? (chunk => PublishStoryLiveChunkAsync(storyLiveGroup!, storyId, chunk))
-                : null,
-            AttemptFailureCallback = async (failure, token) =>
-            {
-                var role = string.IsNullOrWhiteSpace(agent.Role) ? failure.RoleCode : agent.Role!;
-                if (!IsCancellationReason(failure.Reason))
-                {
-                    var effectiveFailureModelId = ResolveEffectiveModelId(agent.ModelId, failure.ModelName);
-                    _database.RecordModelRoleUsage(role, effectiveFailureModelId, failure.ModelName, success: false);
-
-                    var errorTexts = BuildTrackedErrorTexts(failure);
-                    var errorType = ResolveErrorType(failure);
-                    var modelRoleId = _database.ResolveOrCreateModelRoleId(effectiveFailureModelId, failure.ModelName, role);
-                    if (modelRoleId.HasValue && modelRoleId.Value > 0)
-                    {
-                        foreach (var errorText in errorTexts)
-                        {
-                            _database.UpsertModelRoleError(modelRoleId.Value, errorText, errorType);
-                        }
-                    }
-                }
-                await Task.CompletedTask;
-            }
-        };
-
-        _logger?.Log(
-            "Information",
-            "StoryLive",
-            $"story_live request setup: story_id={storyId}; role={request.RoleCode}; enable_stream={request.EnableStreamingOutput}; group={storyLiveGroup ?? "(none)"}; agent={agent.Name}; model={ResolveModelName(agent) ?? "unknown"}",
-            result: "SUCCESS");
-        var exec = await _agentCallService.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
-
-        return exec;
-    }
-
-    private bool IsModelFallbackEnabledByConfig()
-    {
-        try
-        {
-            return _responseValidationOptions?.CurrentValue?.EnableFallback ?? true;
-        }
-        catch
-        {
-            return true;
-        }
-    }
-
-    private bool IsAgentFallbackEnabledForOperation(string? operation)
-    {
-        try
-        {
-            var op = string.IsNullOrWhiteSpace(operation) ? "call_center" : operation.Trim();
-            var policies = _responseValidationOptions?.CurrentValue?.CommandPolicies;
-            if (policies == null || policies.Count == 0)
-            {
-                return true;
-            }
-
-            if (TryGetResponseValidationPolicyForOperation(policies, op, out var policy) &&
-                policy?.EnableAgentFallback.HasValue == true)
-            {
-                return policy.EnableAgentFallback.Value;
-            }
-
-            return true;
-        }
-        catch
-        {
-            return true;
-        }
-    }
-
-    private static bool TryGetResponseValidationPolicyForOperation(
-        Dictionary<string, ResponseValidationCommandPolicy> policies,
-        string operation,
-        out ResponseValidationCommandPolicy? policy)
-    {
-        policy = null;
-        if (policies.TryGetValue(operation, out var exact) && exact != null)
-        {
-            policy = exact;
-            return true;
-        }
-
-        // Fallback prefix match: trim path-like suffixes (e.g. "foo/bar/baz" -> "foo/bar" -> "foo")
-        var key = operation;
-        while (!string.IsNullOrWhiteSpace(key))
-        {
-            var slash = key.LastIndexOf('/');
-            if (slash <= 0) break;
-            key = key[..slash];
-            if (policies.TryGetValue(key, out var pref) && pref != null)
-            {
-                policy = pref;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static CommandModelExecutionService.DeterministicValidationResult ExecuteDeterministicChecks(
-        string output,
-        IReadOnlyList<IDeterministicCheck> checks,
-        string? previousNormalizedResponse)
-    {
-        var text = output ?? string.Empty;
-
-        var nonEmptyCheck = new NonEmptyResponseCheck();
-        var nonEmptyResult = nonEmptyCheck.Execute(text);
-        if (!nonEmptyResult.Successed)
-        {
-            var reason = BuildDeterministicFailureReason(nonEmptyCheck, nonEmptyResult);
-            return new CommandModelExecutionService.DeterministicValidationResult(false, reason);
-        }
-
-        var normalizedCurrent = NormalizeForComparison(text);
-        if (!string.IsNullOrWhiteSpace(previousNormalizedResponse) &&
-            string.Equals(previousNormalizedResponse, normalizedCurrent, StringComparison.Ordinal))
-        {
-            return new CommandModelExecutionService.DeterministicValidationResult(
-                false,
-                "CallCenterDuplicateResponseCheck: risposta identica al tentativo precedente");
-        }
-
-        foreach (var check in checks)
-        {
-            if (check == null)
-            {
-                continue;
-            }
-
-            var result = check.Execute(text);
-            if (!result.Successed)
-            {
-                var reason = BuildDeterministicFailureReason(check, result);
-                return new CommandModelExecutionService.DeterministicValidationResult(false, reason);
-            }
-        }
-
-        return new CommandModelExecutionService.DeterministicValidationResult(true, null);
-    }
-
-    private int? ResolveEffectiveModelId(int? fallbackModelId, string? modelName)
-    {
-        if (!string.IsNullOrWhiteSpace(modelName))
-        {
-            var resolved = _database.GetModelIdByName(modelName);
-            if (resolved.HasValue && resolved.Value > 0)
-            {
-                return resolved.Value;
-            }
-        }
-
-        return fallbackModelId;
     }
 
     private static List<IDeterministicCheck> BuildEffectiveDeterministicChecks(
@@ -483,26 +346,18 @@ public sealed class CallCenter : ICallCenter
         return (responseFormat, new JsonSchemaResponseFormatCheck(schemaJson, safeFileName));
     }
 
-    private static bool IsCancellationReason(string? reason)
+    private int? ResolveEffectiveModelId(int? fallbackModelId, string? modelName)
     {
-        if (string.IsNullOrWhiteSpace(reason)) return false;
-        var r = reason.Trim();
-        return r.Contains("annull", StringComparison.OrdinalIgnoreCase)
-               || r.Contains("cancel", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string ResolveErrorType(CommandModelExecutionService.AttemptFailure failure)
-    {
-        if (failure == null) return "exception";
-        if (failure.IsChecker) return "checker";
-        if (failure.IsDeterministic) return "deterministic";
-        if (!string.IsNullOrWhiteSpace(failure.Reason) &&
-            failure.Reason.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(modelName))
         {
-            return "timeout";
+            var resolved = _database.GetModelIdByName(modelName);
+            if (resolved.HasValue && resolved.Value > 0)
+            {
+                return resolved.Value;
+            }
         }
 
-        return "exception";
+        return fallbackModelId;
     }
 
     private async Task TryAskFailureExplanationAsync(
@@ -568,32 +423,6 @@ public sealed class CallCenter : ICallCenter
         }
     }
 
-    private Agent? SelectNextFallbackAgent(
-        Agent currentAgent,
-        HashSet<string> usedModels,
-        IReadOnlyDictionary<string, (double successRate, double tokensPerSec)> stats)
-    {
-        var candidates = _database.ListAgents()
-            .Where(a =>
-                a.IsActive &&
-                a.Id != currentAgent.Id &&
-                string.Equals(a.Role, currentAgent.Role, StringComparison.OrdinalIgnoreCase))
-            .Select(a => new { Agent = a, Model = ResolveModelName(a) ?? string.Empty })
-            .Where(x => !string.IsNullOrWhiteSpace(x.Model) && !usedModels.Contains(x.Model))
-            .ToList();
-
-        if (candidates.Count == 0)
-        {
-            return null;
-        }
-
-        return candidates
-            .OrderByDescending(c => stats.TryGetValue(c.Model, out var m) ? m.successRate : 0.0)
-            .ThenByDescending(c => stats.TryGetValue(c.Model, out var m) ? m.tokensPerSec : 0.0)
-            .Select(c => c.Agent)
-            .FirstOrDefault();
-    }
-
     private static string BuildPromptFromHistory(ChatHistory history)
     {
         var messages = history.Messages
@@ -622,184 +451,6 @@ public sealed class CallCenter : ICallCenter
         }
 
         return sb.ToString().Trim();
-    }
-
-    private string BuildSystemPrompt(Agent agent, string? roleCode)
-    {
-        var basePrompt = !string.IsNullOrWhiteSpace(agent.Instructions)
-            ? agent.Instructions.Trim()
-            : !string.IsNullOrWhiteSpace(agent.Prompt)
-                ? agent.Prompt.Trim()
-                : "Rispondi in modo utile e coerente con la richiesta.";
-
-        var modelName = ResolveModelName(agent);
-        var errors = _database.ListTopModelRoleErrors(agent.ModelId, modelName, roleCode, 10);
-        if (errors.Count == 0)
-        {
-            return basePrompt;
-        }
-
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine(basePrompt);
-        sb.AppendLine();
-        sb.AppendLine("IN PASSATO HAI COMMESSO QUESTI ERRORI, NON RIPETERLI:");
-        foreach (var err in errors)
-        {
-            var count = Math.Max(0, err.ErrorCount);
-            var emphasis = count > 0 ? new string('!', count / 5) : string.Empty;
-            sb.AppendLine($"- {err.ErrorText}");
-        }
-
-        return sb.ToString().TrimEnd();
-    }
-
-    private static List<string> BuildTrackedErrorTexts(CommandModelExecutionService.AttemptFailure failure)
-    {
-        if (failure.IsChecker)
-        {
-            var ruleRows = new List<string>();
-
-            if (failure.ViolatedRuleDetails != null && failure.ViolatedRuleDetails.Count > 0)
-            {
-                foreach (var ruleDetail in failure.ViolatedRuleDetails)
-                {
-                    if (!string.IsNullOrWhiteSpace(ruleDetail))
-                    {
-                        ruleRows.Add(ruleDetail.Trim());
-                    }
-                }
-            }
-
-            var rulesByIdFromSystem = ExtractRuleRowsFromSystemMessage(failure.SystemPromptSent);
-            var ruleIds = failure.ViolatedRules != null && failure.ViolatedRules.Count > 0
-                ? failure.ViolatedRules
-                    .Where(r => r > 0)
-                    .Distinct()
-                    .OrderBy(r => r)
-                    .ToList()
-                : ExtractRuleIdsFromReason(failure.Reason);
-
-            foreach (var ruleId in ruleIds)
-            {
-                if (rulesByIdFromSystem.TryGetValue(ruleId, out var row) && !string.IsNullOrWhiteSpace(row))
-                {
-                    ruleRows.Add(row.Trim());
-                }
-                else
-                {
-                    ruleRows.Add($"rules:{ruleId}");
-                }
-            }
-
-            var normalized = ruleRows
-                .Where(r => !string.IsNullOrWhiteSpace(r))
-                .Select(r => r.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (normalized.Count > 0)
-            {
-                return normalized;
-            }
-
-            return new List<string> { "rules:unknown" };
-        }
-
-        return new List<string> { BuildTrackedErrorTextSingle(failure) };
-    }
-
-    private static string BuildTrackedErrorTextSingle(CommandModelExecutionService.AttemptFailure failure)
-    {
-        if (failure.IsDeterministic)
-        {
-            var generic = ExtractGenericDeterministicDescription(failure.Reason);
-            if (!string.IsNullOrWhiteSpace(generic))
-            {
-                return generic;
-            }
-        }
-
-        return string.IsNullOrWhiteSpace(failure.Reason) ? "unknown_error" : failure.Reason.Trim();
-    }
-
-    private static Dictionary<int, string> ExtractRuleRowsFromSystemMessage(string? systemMessage)
-    {
-        var result = new Dictionary<int, string>();
-        if (string.IsNullOrWhiteSpace(systemMessage))
-        {
-            return result;
-        }
-
-        var matches = System.Text.RegularExpressions.Regex.Matches(
-            systemMessage,
-            @"REGOLA\s+(\d+)\s*:\s*(.+)",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-        foreach (System.Text.RegularExpressions.Match match in matches)
-        {
-            if (!match.Success || match.Groups.Count < 3)
-            {
-                continue;
-            }
-
-            if (!int.TryParse(match.Groups[1].Value, out var ruleId) || ruleId <= 0)
-            {
-                continue;
-            }
-
-            var row = $"REGOLA {ruleId}: {match.Groups[2].Value.Trim()}";
-            if (!result.ContainsKey(ruleId))
-            {
-                result[ruleId] = row;
-            }
-        }
-
-        return result;
-    }
-
-    private static List<int> ExtractRuleIdsFromReason(string? reason)
-    {
-        var result = new List<int>();
-        if (string.IsNullOrWhiteSpace(reason))
-        {
-            return result;
-        }
-
-        var matches = System.Text.RegularExpressions.Regex.Matches(reason, @"\d+");
-        foreach (System.Text.RegularExpressions.Match match in matches)
-        {
-            if (int.TryParse(match.Value, out var n) && n > 0 && !result.Contains(n))
-            {
-                result.Add(n);
-            }
-        }
-
-        result.Sort();
-        return result;
-    }
-
-    private static string? ExtractGenericDeterministicDescription(string? reason)
-    {
-        if (string.IsNullOrWhiteSpace(reason))
-        {
-            return null;
-        }
-
-        const string marker = "GENERIC_ERROR:";
-        var idx = reason.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0)
-        {
-            return null;
-        }
-
-        var tail = reason[(idx + marker.Length)..].Trim();
-        var detailIdx = tail.IndexOf("|", StringComparison.Ordinal);
-        if (detailIdx >= 0)
-        {
-            tail = tail[..detailIdx].Trim();
-        }
-
-        return string.IsNullOrWhiteSpace(tail) ? null : tail;
     }
 
     private string? ResolveModelName(Agent agent)
@@ -866,251 +517,6 @@ public sealed class CallCenter : ICallCenter
             : check.GenericErrorDescription;
         var message = string.IsNullOrWhiteSpace(result.Message) ? "failed" : result.Message;
         return $"{className}: {rule} | GENERIC_ERROR: {generic} | DETAIL: {message}";
-    }
-
-    private sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
-    {
-        private readonly string _schemaJson;
-        private readonly string _schemaName;
-
-        public JsonSchemaResponseFormatCheck(string schemaJson, string schemaName)
-        {
-            _schemaJson = schemaJson ?? string.Empty;
-            _schemaName = string.IsNullOrWhiteSpace(schemaName) ? "schema.json" : schemaName;
-        }
-
-        public string Rule => $"La risposta deve rispettare il JSON schema '{_schemaName}'.";
-        public string GenericErrorDescription => "Formato di risposta JSON non rispettato";
-        public Microsoft.Extensions.Options.IOptions<object>? Options { get; set; }
-
-        public IDeterministicResult Execute(string textToCheck)
-        {
-            var started = DateTime.UtcNow;
-            try
-            {
-                var raw = (textToCheck ?? string.Empty).Trim();
-                if (string.IsNullOrWhiteSpace(raw))
-                {
-                    return Fail("Risposta vuota: atteso JSON conforme allo schema.");
-                }
-
-                using var schemaDoc = JsonDocument.Parse(_schemaJson);
-                using var responseDoc = JsonDocument.Parse(raw);
-
-                var errors = new List<string>();
-                ValidateAgainstSchema(
-                    responseDoc.RootElement,
-                    schemaDoc.RootElement,
-                    "$",
-                    errors,
-                    depth: 0);
-
-                if (errors.Count == 0)
-                {
-                    return new DeterministicResult
-                    {
-                        Successed = true,
-                        Message = "ok",
-                        CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds)
-                    };
-                }
-
-                return Fail(string.Join(" | ", errors));
-            }
-            catch (JsonException ex)
-            {
-                return Fail($"Risposta non JSON valida: {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                return Fail($"Errore validazione JSON schema: {ex.Message}");
-            }
-
-            DeterministicResult Fail(string message) => new()
-            {
-                Successed = false,
-                Message = $"json_response_format_check: non ha rispettato il formato di risposta JSON richiesto ({_schemaName}): {message}",
-                CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds)
-            };
-        }
-
-        private static void ValidateAgainstSchema(
-            JsonElement data,
-            JsonElement schema,
-            string path,
-            List<string> errors,
-            int depth)
-        {
-            if (depth > 64)
-            {
-                errors.Add($"{path}: profondita schema eccessiva");
-                return;
-            }
-
-            var schemaType = GetSchemaType(schema);
-            if (!IsTypeCompatible(data, schemaType))
-            {
-                errors.Add($"{path}: tipo atteso '{schemaType}', ricevuto '{data.ValueKind}'");
-                return;
-            }
-
-            if (string.Equals(schemaType, "object", StringComparison.OrdinalIgnoreCase))
-            {
-                ValidateObject(data, schema, path, errors, depth + 1);
-                return;
-            }
-
-            if (string.Equals(schemaType, "array", StringComparison.OrdinalIgnoreCase))
-            {
-                ValidateArray(data, schema, path, errors, depth + 1);
-            }
-        }
-
-        private static void ValidateObject(
-            JsonElement data,
-            JsonElement schema,
-            string path,
-            List<string> errors,
-            int depth)
-        {
-            if (TryGetPropertyIgnoreCase(schema, "required", out var required) &&
-                required.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var req in required.EnumerateArray())
-                {
-                    if (req.ValueKind != JsonValueKind.String) continue;
-                    var propName = req.GetString();
-                    if (string.IsNullOrWhiteSpace(propName)) continue;
-                    if (!TryGetPropertyIgnoreCase(data, propName!, out _))
-                    {
-                        errors.Add($"{path}: manca campo obbligatorio '{propName}'");
-                    }
-                }
-            }
-
-            if (!TryGetPropertyIgnoreCase(schema, "properties", out var properties) ||
-                properties.ValueKind != JsonValueKind.Object)
-            {
-                return;
-            }
-
-            foreach (var propSchema in properties.EnumerateObject())
-            {
-                if (!TryGetPropertyIgnoreCase(data, propSchema.Name, out var child))
-                {
-                    continue;
-                }
-
-                ValidateAgainstSchema(
-                    child,
-                    propSchema.Value,
-                    $"{path}.{propSchema.Name}",
-                    errors,
-                    depth + 1);
-            }
-        }
-
-        private static void ValidateArray(
-            JsonElement data,
-            JsonElement schema,
-            string path,
-            List<string> errors,
-            int depth)
-        {
-            if (!TryGetPropertyIgnoreCase(schema, "items", out var itemsSchema))
-            {
-                return;
-            }
-
-            var index = 0;
-            foreach (var item in data.EnumerateArray())
-            {
-                ValidateAgainstSchema(item, itemsSchema, $"{path}[{index}]", errors, depth + 1);
-                index++;
-            }
-        }
-
-        private static string GetSchemaType(JsonElement schema)
-        {
-            if (TryGetPropertyIgnoreCase(schema, "type", out var t))
-            {
-                if (t.ValueKind == JsonValueKind.String)
-                {
-                    return t.GetString() ?? string.Empty;
-                }
-
-                if (t.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var item in t.EnumerateArray())
-                    {
-                        if (item.ValueKind == JsonValueKind.String)
-                        {
-                            var candidate = item.GetString();
-                            if (!string.IsNullOrWhiteSpace(candidate) &&
-                                !string.Equals(candidate, "null", StringComparison.OrdinalIgnoreCase))
-                            {
-                                return candidate!;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (TryGetPropertyIgnoreCase(schema, "properties", out _))
-            {
-                return "object";
-            }
-
-            if (TryGetPropertyIgnoreCase(schema, "items", out _))
-            {
-                return "array";
-            }
-
-            return string.Empty;
-        }
-
-        private static bool IsTypeCompatible(JsonElement data, string schemaType)
-        {
-            if (string.IsNullOrWhiteSpace(schemaType))
-            {
-                return true;
-            }
-
-            return schemaType.ToLowerInvariant() switch
-            {
-                "object" => data.ValueKind == JsonValueKind.Object,
-                "array" => data.ValueKind == JsonValueKind.Array,
-                "string" => data.ValueKind == JsonValueKind.String,
-                "number" => data.ValueKind == JsonValueKind.Number,
-                "integer" => data.ValueKind == JsonValueKind.Number && data.TryGetInt64(out _),
-                "boolean" => data.ValueKind == JsonValueKind.True || data.ValueKind == JsonValueKind.False,
-                "null" => data.ValueKind == JsonValueKind.Null,
-                _ => true
-            };
-        }
-
-        private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
-        {
-            if (element.ValueKind == JsonValueKind.Object)
-            {
-                if (element.TryGetProperty(propertyName, out value))
-                {
-                    return true;
-                }
-
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        value = property.Value;
-                        return true;
-                    }
-                }
-            }
-
-            value = default;
-            return false;
-        }
     }
 
     private IReadOnlyDictionary<string, (double successRate, double tokensPerSec)> LoadFallbackStats()

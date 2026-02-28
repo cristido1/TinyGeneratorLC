@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,10 +39,13 @@ namespace TinyGenerator.Services
         private readonly CommandTuningOptions _tuning;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly TextValidationService _textValidationService;
+        private readonly IOptionsMonitor<NarrativeRuntimeEngineOptions> _nreOptionsMonitor;
+        private readonly ICallCenter _callCenter;
         private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(10);
         private DateTime _lastActivityUtc;
         private DateTime _lastAttemptUtc;
         private DateTime _lastAutoSeriesEpisodeAttemptUtc;
+        private DateTime _lastAutoNreStoryAttemptUtc;
         private int _lastAutoSeriesId;
         private int _lastTaskIndex = -1;
         private bool _idleAttempted;
@@ -59,6 +63,8 @@ namespace TinyGenerator.Services
             IOptions<CommandTuningOptions> tuningOptions,
             IServiceScopeFactory scopeFactory,
             TextValidationService textValidationService,
+            IOptionsMonitor<NarrativeRuntimeEngineOptions> nreOptionsMonitor,
+            ICallCenter callCenter,
             ILogger<AutomaticOperationsService> logger)
         {
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
@@ -70,6 +76,8 @@ namespace TinyGenerator.Services
             _tuning = tuningOptions?.Value ?? new CommandTuningOptions();
             _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
             _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
+            _nreOptionsMonitor = nreOptionsMonitor ?? throw new ArgumentNullException(nameof(nreOptionsMonitor));
+            _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _enabled = _optionsMonitor.CurrentValue?.Enabled ?? false;
             _optionsSubscription = _optionsMonitor.OnChange(OnOptionsChanged);
@@ -80,6 +88,7 @@ namespace TinyGenerator.Services
             _lastActivityUtc = DateTime.UtcNow;
             _lastAttemptUtc = DateTime.UtcNow;
             _lastAutoSeriesEpisodeAttemptUtc = DateTime.MinValue;
+            _lastAutoNreStoryAttemptUtc = DateTime.MinValue;
             _idleAttempted = false;
 
             while (!stoppingToken.IsCancellationRequested)
@@ -95,7 +104,7 @@ namespace TinyGenerator.Services
                     }
 
                     DrainAutoCompleteDeferredFailures();
-                    TryRunAutoStateDrivenSeriesEpisode(opts);
+                    TryRunSelectedAutoAdvancement(opts);
 
                     if (TryRunAutoCompleteBacklogImmediate(opts))
                     {
@@ -212,9 +221,22 @@ namespace TinyGenerator.Services
             _lastActivityUtc = DateTime.UtcNow;
             _lastAttemptUtc = DateTime.UtcNow;
             _lastAutoSeriesEpisodeAttemptUtc = DateTime.MinValue;
+            _lastAutoNreStoryAttemptUtc = DateTime.MinValue;
             _idleAttempted = false;
             _autoCompleteDeferredStoryIds.Clear();
             _logger.LogInformation("AutomaticOperationsService {State} via config reload", _enabled ? "enabled" : "disabled");
+        }
+
+        private void TryRunSelectedAutoAdvancement(AutomaticOperationsOptions opts)
+        {
+            var mode = NormalizeAutoAdvancementMode(opts.AutoAdvancementMode);
+            if (mode == "nre")
+            {
+                TryRunAutoNreStoryGeneration(opts);
+                return;
+            }
+
+            TryRunAutoStateDrivenSeriesEpisode(opts);
         }
 
         private void TryRunAutoStateDrivenSeriesEpisode(AutomaticOperationsOptions opts)
@@ -251,6 +273,43 @@ namespace TinyGenerator.Services
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Auto state-driven episode check failed inside AutomaticOperationsService");
+            }
+        }
+
+        private void TryRunAutoNreStoryGeneration(AutomaticOperationsOptions opts)
+        {
+            try
+            {
+                var auto = opts.AutoNreStoryGeneration;
+                if (auto == null || !auto.Enabled)
+                {
+                    return;
+                }
+
+                var interval = TimeSpan.FromMinutes(Math.Max(1, auto.IntervalMinutes));
+                var nowUtc = DateTime.UtcNow;
+                if (nowUtc - _lastAutoNreStoryAttemptUtc < interval)
+                {
+                    return;
+                }
+
+                if (HasPendingStoryAutomationBacklog(opts))
+                {
+                    return;
+                }
+
+                if (IsOperationQueued("AutoNreStoryGeneration") || IsOperationQueued("run_nre"))
+                {
+                    _lastAutoNreStoryAttemptUtc = nowUtc;
+                    return;
+                }
+
+                TryEnqueueAutoNreStoryGeneration(auto);
+                _lastAutoNreStoryAttemptUtc = nowUtc;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Auto NRE story generation check failed inside AutomaticOperationsService");
             }
         }
 
@@ -1014,6 +1073,99 @@ namespace TinyGenerator.Services
             }
         }
 
+        private bool TryEnqueueAutoNreStoryGeneration(AutoNreStoryGenerationOptions auto)
+        {
+            try
+            {
+                var nreOptions = _nreOptionsMonitor.CurrentValue ?? new NarrativeRuntimeEngineOptions();
+                var runId = Guid.NewGuid().ToString();
+                var priority = Math.Max(1, auto.Priority);
+                var maxSteps = Math.Max(1, auto.MaxSteps <= 0 ? 15 : auto.MaxSteps);
+
+                _customLogger.Start(runId);
+                _customLogger.Append(runId, "🤖 Auto NRE: accodato suggerimento titolo+prompt.");
+
+                _dispatcher.Enqueue(
+                    "AutoNreStoryGeneration",
+                    async ctx =>
+                    {
+                        var suggestionCommand = new GenerateNrePromptSuggestionCommand(
+                            database: _database,
+                            callCenter: _callCenter,
+                            options: Options.Create(nreOptions),
+                            logger: _customLogger,
+                            themeHint: null,
+                            settingHint: null,
+                            genreHint: null,
+                            toneHint: null,
+                            constraintsHint: null);
+
+                        var suggestionResult = await suggestionCommand.ExecuteAsync(ctx.CancellationToken, $"{ctx.RunId}_suggest").ConfigureAwait(false);
+                        if (!suggestionResult.Success)
+                        {
+                            return new CommandResult(false, $"Auto NRE: suggerimento fallito: {suggestionResult.Message}");
+                        }
+
+                        if (!TryParseNreSuggestion(suggestionResult.Message, out var suggestion, out var parseError))
+                        {
+                            return new CommandResult(false, $"Auto NRE: suggerimento non parseabile: {parseError}");
+                        }
+
+                        var (structureMode, costSeverity, combatIntensity) = PickRandomNreParameters();
+                        _customLogger.Append(ctx.RunId, $"🎲 Parametri NRE casuali: structure={structureMode}, cost={costSeverity}, combat={combatIntensity}");
+
+                        var request = new EngineRequest
+                        {
+                            EngineName = nreOptions.EngineName,
+                            Method = string.IsNullOrWhiteSpace(nreOptions.DefaultMethod) ? "state_driven" : nreOptions.DefaultMethod.Trim(),
+                            StructureMode = structureMode,
+                            CostSeverity = costSeverity,
+                            CombatIntensity = combatIntensity,
+                            MaxSteps = maxSteps,
+                            SnapshotOnFailure = nreOptions.SnapshotOnFailure,
+                            RunId = ctx.RunId,
+                            UserPrompt = string.IsNullOrWhiteSpace(suggestion.Prompt) ? "Tema:\nlibero" : suggestion.Prompt.Trim(),
+                            ResourceHints = string.IsNullOrWhiteSpace(suggestion.ResourceHints) ? null : suggestion.ResourceHints.Trim()
+                        };
+
+                        using var scope = _scopeFactory.CreateScope();
+                        var engine = scope.ServiceProvider.GetRequiredService<NreEngine>();
+                        var runNre = new RunNreCommand(
+                            title: string.IsNullOrWhiteSpace(suggestion.Title) ? "NRE Story" : suggestion.Title.Trim(),
+                            request: request,
+                            database: _database,
+                            engine: engine,
+                            options: Options.Create(nreOptions),
+                            logger: _customLogger,
+                            dispatcher: _dispatcher,
+                            storiesService: _stories,
+                            callCenter: _callCenter);
+
+                        return await runNre.ExecuteAsync(ctx.CancellationToken, ctx.RunId).ConfigureAwait(false);
+                    },
+                    runId: runId,
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["operation"] = "auto_nre_story_generation",
+                        ["mode"] = "nre",
+                        ["engine"] = nreOptions.EngineName,
+                        ["method"] = nreOptions.DefaultMethod,
+                        ["maxSteps"] = maxSteps.ToString(),
+                        ["stepCurrent"] = "0",
+                        ["stepMax"] = maxSteps.ToString(),
+                        ["agentName"] = nreOptions.WriterAgentName
+                    },
+                    priority: priority);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to enqueue automatic NRE story generation");
+                return false;
+            }
+        }
+
         private bool TryEnqueueAutoStateDrivenSeriesEpisode(AutoStateDrivenSeriesEpisodeOptions auto)
         {
             var serie = PickNextSeriesForAutoEpisode();
@@ -1262,6 +1414,73 @@ namespace TinyGenerator.Services
             }
 
             return 1.0;
+        }
+
+        private static string NormalizeAutoAdvancementMode(string? mode)
+        {
+            return string.Equals(mode, "nre", StringComparison.OrdinalIgnoreCase) ? "nre" : "series";
+        }
+
+        private static (string StructureMode, string CostSeverity, string CombatIntensity) PickRandomNreParameters()
+        {
+            var structureModes = new[] { "standard", "military_strict" };
+            var costSeverities = new[] { "low", "medium", "high" };
+            var combatIntensities = new[] { "low", "normal", "high", "total_war" };
+
+            var structureMode = structureModes[Random.Shared.Next(structureModes.Length)];
+            var costSeverity = structureMode == "military_strict"
+                ? costSeverities[Random.Shared.Next(costSeverities.Length)]
+                : "medium";
+            var combatIntensity = structureMode == "military_strict"
+                ? combatIntensities[Random.Shared.Next(combatIntensities.Length)]
+                : "normal";
+
+            return (structureMode, costSeverity, combatIntensity);
+        }
+
+        private static bool TryParseNreSuggestion(string? json, out AutoNrePromptSuggestionDto suggestion, out string? error)
+        {
+            suggestion = new AutoNrePromptSuggestionDto();
+            error = null;
+
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<AutoNrePromptSuggestionDto>(json ?? string.Empty, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (parsed == null)
+                {
+                    error = "json vuoto";
+                    return false;
+                }
+
+                parsed.Title = (parsed.Title ?? string.Empty).Trim();
+                parsed.Prompt = (parsed.Prompt ?? string.Empty).Trim();
+                parsed.ResourceHints = (parsed.ResourceHints ?? string.Empty).Trim();
+
+                if (string.IsNullOrWhiteSpace(parsed.Title) || string.IsNullOrWhiteSpace(parsed.Prompt))
+                {
+                    error = "campi obbligatori mancanti (title/prompt)";
+                    return false;
+                }
+
+                suggestion = parsed;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private sealed class AutoNrePromptSuggestionDto
+        {
+            public string? Title { get; set; }
+            public string? Prompt { get; set; }
+            public string? ResourceHints { get; set; }
         }
 
         private sealed record IdleTaskResult(

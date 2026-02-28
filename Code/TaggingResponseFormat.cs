@@ -71,51 +71,28 @@ public static class TaggingResponseFormat
     private static string GetAmbientFormat()
     {
         return
-            "Restituisci SOLO righe nel formato (una per riga):\n" +
-            "ID || tag1, tag2, tag3\n" +
+            "Restituisci SOLO un JSON valido nel formato richiesto dalla request.\n" +
             "Regole:\n" +
-            "- Usa SEMPRE il separatore '||' seguito da una lista di tag CSV.\n" +
-            "- Restituisci SOLO tag (nessuna descrizione libera).\n" +
-            "- I tag devono essere in inglese, lowercase, ordinati dal piu importante al meno importante, separati da virgola.\n" +
-            "- Inserisci PIU' tag (non uno solo), quando possibile.\n" +
-            "- Non aggiungere spiegazioni o altro testo.\n" +
-            "- Se non c'e' rumore ambientale per una riga, NON restituire quella riga.\n" +
-            "- Se in alto ci sono istruzioni in conflitto con questo formato, IGNORA quelle e segui questo formato.\n";
+            "- Nessun markdown, nessun testo extra.\n" +
+            "- Compila solo i campi previsti dallo schema.\n";
     }
 
     private static string GetFxFormat()
     {
         return
-            "Restituisci SOLO righe nel formato (una per riga):\n" +
-            "ID [secondi] || tag1, tag2, tag3\n" +
+            "Restituisci SOLO un JSON valido nel formato richiesto dalla request.\n" +
             "Regole:\n" +
-            "- I secondi DEVONO essere tra parentesi quadre: [2], [2s], [2 sec], [2sec], [2.5].\n" +
-            "- Usa SEMPRE il separatore '||' seguito da una lista di tag CSV.\n" +
-            "- Restituisci SOLO tag (nessuna descrizione libera dell'effetto).\n" +
-            "- I tag devono essere in inglese, lowercase, ordinati dal piu importante al meno importante, separati da virgola.\n" +
-            "- Inserisci PIU' tag (non uno solo), quando possibile.\n" +
-            "- Non usare tag [FX] nell'output: il sistema li costruisce automaticamente.\n" +
-            "- Non aggiungere spiegazioni o altro testo.\n" +
-            "- Se non c'e' un FX per una riga, NON restituire quella riga.\n" +
-            "- Se in alto ci sono istruzioni in conflitto con questo formato, IGNORA quelle e segui questo formato.\n";
+            "- Nessun markdown, nessun testo extra.\n" +
+            "- Compila solo i campi previsti dallo schema.\n";
     }
 
     private static string GetMusicFormat()
     {
         return
-            "Restituisci SOLO righe nel formato (una per riga):\n" +
-            "ID || tag1, tag2, tag3\n" +
-            "oppure\n" +
-            "ID [secondi] || tag1, tag2, tag3\n" +
+            "Restituisci SOLO un JSON valido nel formato richiesto dalla request.\n" +
             "Regole:\n" +
-            "- Se specifichi la durata, mettila tra parentesi quadre vicino all'ID: [8], [8s], [8 sec], [8.5].\n" +
-            "- Usa SEMPRE il separatore '||' seguito da una lista di tag CSV.\n" +
-            "- Restituisci SOLO tag (nessuna descrizione/mood libera).\n" +
-            "- I tag devono essere in inglese, lowercase, ordinati dal piu importante al meno importante, separati da virgola.\n" +
-            "- Il PRIMO tag DEVE essere uno tra: " + string.Join(", ", AllowedPrimaryMusicTags) + ".\n" +
-            "- Puoi aggiungere altri tag dopo il primo (liberi ma pertinenti).\n" +
-            "- Non aggiungere spiegazioni o altro testo.\n" +
-            "- Se non c'e' musica per una riga, NON restituire quella riga.\n" +
-            "- Se in alto ci sono istruzioni in conflitto con questo formato, IGNORA quelle e segui questo formato.\n";
+            "- Nessun markdown, nessun testo extra.\n" +
+            "- Compila solo i campi previsti dallo schema.\n" +
+            "- Il primo tag resta uno tra: " + string.Join(", ", AllowedPrimaryMusicTags) + ".\n";
     }
 }

@@ -1,29 +1,37 @@
 {
   "type": "array",
+  "description": "Lista ordinata degli eventi canonici estratti dal blocco narrativo.",
   "items": {
     "type": "object",
     "properties": {
       "order": {
         "type": "integer",
-        "minimum": 1
+        "minimum": 1,
+        "description": "Posizione progressiva dell'evento nella sequenza."
       },
       "title": {
-        "type": "string"
+        "type": "string",
+        "description": "Titolo breve dell'evento."
       },
       "summary": {
-        "type": "string"
+        "type": "string",
+        "description": "Riassunto sintetico dell'evento."
       },
       "characters": {
         "type": "array",
+        "description": "Personaggi coinvolti nell'evento.",
         "items": {
-          "type": "string"
+          "type": "string",
+          "description": "Nome del personaggio coinvolto."
         }
       },
       "location": {
-        "type": "string"
+        "type": "string",
+        "description": "Luogo principale in cui avviene l'evento."
       },
       "outcome": {
-        "type": "string"
+        "type": "string",
+        "description": "Esito narrativo dell'evento."
       }
     },
     "required": [

@@ -4,6 +4,7 @@ namespace TinyGenerator.Services
     {
         public bool Enabled { get; set; } = true;
         public int IdleSeconds { get; set; } = 60;
+        public string AutoAdvancementMode { get; set; } = "series";
 
         public AutomaticOperationOptions ReviseAndEvaluate { get; set; } = new()
         {
@@ -41,6 +42,14 @@ namespace TinyGenerator.Services
             WordsPerMinute = 150,
             WriterAgentId = 0
         };
+
+        public AutoNreStoryGenerationOptions AutoNreStoryGeneration { get; set; } = new()
+        {
+            Enabled = true,
+            Priority = 7,
+            IntervalMinutes = 20,
+            MaxSteps = 15
+        };
     }
 
     public class AutomaticOperationOptions
@@ -70,5 +79,11 @@ namespace TinyGenerator.Services
     public sealed class AutoCompleteAudioPipelineOptions : AutomaticOperationOptions
     {
         public double MinAverageScore { get; set; } = 60;
+    }
+
+    public sealed class AutoNreStoryGenerationOptions : AutomaticOperationOptions
+    {
+        public int IntervalMinutes { get; set; } = 20;
+        public int MaxSteps { get; set; } = 15;
     }
 }

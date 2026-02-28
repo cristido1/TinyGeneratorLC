@@ -179,6 +179,26 @@ public sealed class StoryTaggingService
     {
         var result = new List<StoryTagEntry>();
         if (string.IsNullOrWhiteSpace(mappingText)) return result;
+        if (TryParseTaggingEntriesJson(mappingText, requireDuration: false, out var jsonEntries))
+        {
+            foreach (var entry in jsonEntries)
+            {
+                var csvTags = NormalizeCsvTags(string.Join(", ", entry.Tags));
+                if (string.IsNullOrWhiteSpace(csvTags))
+                {
+                    continue;
+                }
+
+                var text = BuildFallbackDescriptionFromCsvTags(csvTags);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    continue;
+                }
+
+                result.Add(new StoryTagEntry(TagTypeAmbient, entry.Line, $"[RUMORI: {text} | TAGS: {csvTags}]"));
+            }
+            return result;
+        }
 
         var lines = mappingText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         foreach (var raw in lines)
@@ -222,6 +242,36 @@ public sealed class StoryTaggingService
         var result = new List<StoryTagEntry>();
         invalidLines = 0;
         if (string.IsNullOrWhiteSpace(mappingText)) return result;
+        if (TryParseTaggingEntriesJson(mappingText, requireDuration: true, out var jsonEntries))
+        {
+            foreach (var entry in jsonEntries)
+            {
+                if (!entry.DurationSeconds.HasValue || entry.DurationSeconds.Value <= 0)
+                {
+                    invalidLines++;
+                    continue;
+                }
+
+                var csvTags = NormalizeCsvTags(string.Join(", ", entry.Tags));
+                if (string.IsNullOrWhiteSpace(csvTags))
+                {
+                    invalidLines++;
+                    continue;
+                }
+
+                var description = BuildFallbackDescriptionFromCsvTags(csvTags);
+                if (string.IsNullOrWhiteSpace(description))
+                {
+                    invalidLines++;
+                    continue;
+                }
+
+                var tag = $"[FX: {entry.DurationSeconds.Value} : {description} | TAGS: {csvTags}]";
+                result.Add(new StoryTagEntry(TagTypeFx, entry.Line, tag));
+            }
+
+            return result;
+        }
 
         var lines = mappingText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         foreach (var raw in lines)
@@ -332,6 +382,33 @@ public sealed class StoryTaggingService
     {
         var result = new List<StoryTagEntry>();
         if (string.IsNullOrWhiteSpace(mappingText)) return result;
+        if (TryParseTaggingEntriesJson(mappingText, requireDuration: true, out var jsonEntries))
+        {
+            foreach (var entry in jsonEntries)
+            {
+                if (!entry.DurationSeconds.HasValue || entry.DurationSeconds.Value <= 0)
+                {
+                    continue;
+                }
+
+                var csvTags = NormalizeCsvTags(string.Join(", ", entry.Tags));
+                if (string.IsNullOrWhiteSpace(csvTags))
+                {
+                    continue;
+                }
+
+                var mood = BuildFallbackDescriptionFromCsvTags(csvTags);
+                if (string.IsNullOrWhiteSpace(mood))
+                {
+                    continue;
+                }
+
+                var tag = $"[MUSIC: {entry.DurationSeconds.Value} s | {mood} | TAGS: {csvTags}]";
+                result.Add(new StoryTagEntry(TagTypeMusic, entry.Line, tag));
+            }
+
+            return result;
+        }
 
         var lines = mappingText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
         foreach (var raw in lines)
@@ -550,6 +627,90 @@ public sealed class StoryTaggingService
 
         tail = rest;
         return true;
+    }
+
+    private sealed record JsonTagEntry(int Line, int? DurationSeconds, IReadOnlyList<string> Tags);
+
+    private static bool TryParseTaggingEntriesJson(
+        string mappingText,
+        bool requireDuration,
+        out List<JsonTagEntry> entries)
+    {
+        entries = new List<JsonTagEntry>();
+        var text = (mappingText ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        if (!text.StartsWith("{", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            if (!root.TryGetProperty("entries", out var entriesNode) || entriesNode.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            foreach (var item in entriesNode.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (!item.TryGetProperty("line", out var lineNode) || !lineNode.TryGetInt32(out var line) || line <= 0)
+                {
+                    continue;
+                }
+
+                int? duration = null;
+                if (item.TryGetProperty("duration_seconds", out var durationNode) && durationNode.TryGetInt32(out var parsedDuration))
+                {
+                    duration = parsedDuration;
+                }
+
+                if (requireDuration && (!duration.HasValue || duration.Value <= 0))
+                {
+                    entries.Add(new JsonTagEntry(line, null, Array.Empty<string>()));
+                    continue;
+                }
+
+                var tags = new List<string>();
+                if (item.TryGetProperty("tags", out var tagsNode) && tagsNode.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var tag in tagsNode.EnumerateArray())
+                    {
+                        if (tag.ValueKind == JsonValueKind.String)
+                        {
+                            var value = tag.GetString();
+                            if (!string.IsNullOrWhiteSpace(value))
+                            {
+                                tags.Add(value.Trim());
+                            }
+                        }
+                    }
+                }
+
+                entries.Add(new JsonTagEntry(line, duration, tags));
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public static string BuildStoryTagged(string storyRevised, IReadOnlyList<StoryTagEntry> tags)

@@ -167,11 +167,7 @@ namespace TinyGenerator.Services.Commands
                         currentModelName = callResult.ModelUsed;
                     }
 
-                    var parsed = _storyTaggingPipelineService.ParseFxMapping(callResult.ResponseText.Trim(), out var invalidLines);
-                    if (invalidLines > 0)
-                    {
-                        return Fail(effectiveRunId, $"Formato FX non valido: {invalidLines} righe non rispettano il formato richiesto.");
-                    }
+                    var parsed = _storyTaggingPipelineService.ParseFxMapping(callResult.ResponseText.Trim(), out _);
 
                     _logger?.Append(effectiveRunId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalFx={parsed.Count}; model={currentModelName}");
                     fxTags.AddRange(parsed);

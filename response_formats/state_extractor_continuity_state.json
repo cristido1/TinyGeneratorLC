@@ -2,12 +2,6 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "story_id",
-    "series_id",
-    "episode_id",
-    "chapter_id",
-    "scene_id",
-    "timeline_index",
     "location_current",
     "time_context",
     "active_characters",
@@ -23,43 +17,44 @@
     "custom_flags"
   ],
   "properties": {
-    "story_id": { "type": "integer" },
-    "series_id": { "type": ["integer", "null"] },
-    "episode_id": { "type": ["integer", "null"] },
-    "chapter_id": { "type": ["integer", "null"] },
-    "scene_id": { "type": ["integer", "null"] },
-    "timeline_index": { "type": "integer" },
-    "location_current": { "type": ["string", "null"] },
-    "time_context": { "type": ["string", "null"] },
+    "location_current": { "type": ["string", "null"], "description": "Luogo narrativo corrente." },
+    "time_context": { "type": ["string", "null"], "description": "Contesto temporale della scena." },
     "active_characters": {
       "type": "array",
-      "items": { "type": "string" }
+      "description": "Personaggi attivamente presenti nella scena.",
+      "items": { "type": "string", "description": "Nome personaggio attivo." }
     },
     "dead_characters": {
       "type": "array",
-      "items": { "type": "string" }
+      "description": "Personaggi dichiarati morti nel canone corrente.",
+      "items": { "type": "string", "description": "Nome personaggio morto." }
     },
     "missing_characters": {
       "type": "array",
-      "items": { "type": "string" }
+      "description": "Personaggi dispersi/non rintracciabili.",
+      "items": { "type": "string", "description": "Nome personaggio disperso." }
     },
     "objects_in_scene": {
       "type": "array",
-      "items": { "type": "string" }
+      "description": "Oggetti o risorse rilevanti presenti in scena.",
+      "items": { "type": "string", "description": "Nome oggetto o risorsa in scena." }
     },
     "environment_state": {
-      "type": "object"
+      "type": "object",
+      "description": "Stato ambientale/contestuale della scena."
     },
-    "conflict_state": { "type": ["string", "null"] },
-    "goal_current": { "type": ["string", "null"] },
+    "conflict_state": { "type": ["string", "null"], "description": "Conflitto dominante attuale." },
+    "goal_current": { "type": ["string", "null"], "description": "Obiettivo corrente dei protagonisti." },
     "last_events": {
       "type": "array",
-      "items": { "type": "string" }
+      "description": "Eventi più recenti da mantenere in continuità.",
+      "items": { "type": "string", "description": "Evento sintetico recente." }
     },
-    "pov_character": { "type": ["string", "null"] },
-    "tone_current": { "type": ["string", "null"] },
+    "pov_character": { "type": ["string", "null"], "description": "Personaggio POV corrente." },
+    "tone_current": { "type": ["string", "null"], "description": "Tono narrativo corrente." },
     "custom_flags": {
-      "type": "object"
+      "type": "object",
+      "description": "Metadati aggiuntivi tecnici del flusso."
     }
   }
 }

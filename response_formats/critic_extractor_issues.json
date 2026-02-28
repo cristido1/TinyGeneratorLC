@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "issues"
+  ],
+  "properties": {
+    "issues": {
+      "type": "array",
+      "description": "Elenco criticità narrative da correggere.",
+      "items": { "type": "string", "description": "Singola criticità narrativa." }
+    }
+  }
+}

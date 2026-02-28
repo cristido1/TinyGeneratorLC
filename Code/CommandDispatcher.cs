@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Diagnostics;
+using System.IO;
 using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Services
@@ -15,6 +17,8 @@ namespace TinyGenerator.Services
     public sealed class CommandDispatcherOptions
     {
         public int MaxParallelCommands { get; set; } = 3;
+        public int MaxBatchProcessesGlobal { get; set; } = 8;
+        public int MaxBatchProcessesPerOperation { get; set; } = 3;
     }
 
     internal sealed class CommandWorkItem : IComparable<CommandWorkItem>
@@ -91,6 +95,16 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, Task<CommandResult>> _completionTasks = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _commandCancellations = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task> _batchExecutions = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<long, SemaphoreSlim> _batchStoryLocks = new();
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _batchOperationSemaphores = new(StringComparer.OrdinalIgnoreCase);
+        private readonly SemaphoreSlim _batchGlobalSemaphore;
+        private readonly int _maxBatchProcessesPerOperation;
+        private static readonly HashSet<string> ExternalBatchStoryOperations = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "generate_ambience_audio",
+            "generate_fx_audio",
+            "generate_music"
+        };
 
         public event Action<CommandCompletedEventArgs>? CommandCompleted;
 
@@ -103,6 +117,9 @@ namespace TinyGenerator.Services
             IServiceProvider? services = null)
         {
             _parallelism = Math.Max(1, options?.Value?.MaxParallelCommands ?? 2);
+            var maxBatchGlobal = Math.Max(1, options?.Value?.MaxBatchProcessesGlobal ?? 8);
+            _maxBatchProcessesPerOperation = Math.Max(1, options?.Value?.MaxBatchProcessesPerOperation ?? 3);
+            _batchGlobalSemaphore = new SemaphoreSlim(maxBatchGlobal, maxBatchGlobal);
             _logger = logger;
             _hubContext = hubContext;
             _numerator = numerator;
@@ -210,8 +227,11 @@ namespace TinyGenerator.Services
                     modelName = database.GetModelInfoById(modelId.Value)?.Name;
                 }
             }
+            var effectiveHandler = runAsBatch
+                ? WrapBatchHandler(op, metadata, handler)
+                : handler;
             var commandCts = new CancellationTokenSource();
-            var workItem = new CommandWorkItem(id, op, safeScope, metadata, handler, opNumber, priority, enqueueSeq, commandCts, agentName, agentRole);
+            var workItem = new CommandWorkItem(id, op, safeScope, metadata, effectiveHandler, opNumber, priority, enqueueSeq, commandCts, agentName, agentRole);
 
             var state = new CommandState
             {
@@ -259,6 +279,246 @@ namespace TinyGenerator.Services
             _ = BroadcastCommandsAsync();
 
             return new CommandHandle(id, op, workItem.Completion.Task);
+        }
+
+        private Func<CommandContext, Task<CommandResult>> WrapBatchHandler(
+            string operationName,
+            IReadOnlyDictionary<string, string>? metadata,
+            Func<CommandContext, Task<CommandResult>> originalHandler)
+        {
+            return async ctx =>
+            {
+                var normalizedOperation = ResolveNormalizedOperation(operationName, metadata);
+                var lockHandle = await AcquireBatchStoryLockAsync(metadata, ctx.CancellationToken).ConfigureAwait(false);
+                var slotHandle = await AcquireBatchExecutionSlotsAsync(normalizedOperation, ctx.CancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var batchRequest = TryBuildBatchWorkerRequest(ctx.RunId, operationName, metadata);
+                    if (batchRequest == null)
+                    {
+                        return await originalHandler(ctx).ConfigureAwait(false);
+                    }
+
+                    var externalResult = await ExecuteInExternalBatchWorkerAsync(batchRequest.Value, ctx.CancellationToken).ConfigureAwait(false);
+                    if (externalResult.success)
+                    {
+                        return new CommandResult(true, externalResult.message);
+                    }
+
+                    _logger?.Log("Warning", "Command", $"[{ctx.RunId}] External batch worker failed for {operationName}, fallback in-process. {externalResult.message}");
+                    return await originalHandler(ctx).ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (slotHandle != null)
+                    {
+                        await slotHandle.DisposeAsync().ConfigureAwait(false);
+                    }
+                    if (lockHandle != null)
+                    {
+                        await lockHandle.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+            };
+        }
+
+        private async ValueTask<IAsyncDisposable?> AcquireBatchExecutionSlotsAsync(string operationName, CancellationToken cancellationToken)
+        {
+            await _batchGlobalSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            var operationSemaphore = _batchOperationSemaphores.GetOrAdd(
+                operationName,
+                _ => new SemaphoreSlim(_maxBatchProcessesPerOperation, _maxBatchProcessesPerOperation));
+            try
+            {
+                await operationSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                _batchGlobalSemaphore.Release();
+                throw;
+            }
+
+            return new AsyncReleaseHandle(() =>
+            {
+                operationSemaphore.Release();
+                _batchGlobalSemaphore.Release();
+            });
+        }
+
+        private async ValueTask<IAsyncDisposable?> AcquireBatchStoryLockAsync(IReadOnlyDictionary<string, string>? metadata, CancellationToken cancellationToken)
+        {
+            if (!TryGetStoryId(metadata, out var storyId))
+            {
+                return null;
+            }
+
+            var semaphore = _batchStoryLocks.GetOrAdd(storyId, _ => new SemaphoreSlim(1, 1));
+            await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return new AsyncReleaseHandle(() => semaphore.Release());
+        }
+
+        private static bool TryGetStoryId(IReadOnlyDictionary<string, string>? metadata, out long storyId)
+        {
+            storyId = 0;
+            if (metadata == null)
+            {
+                return false;
+            }
+
+            if (!metadata.TryGetValue("storyId", out var raw) || string.IsNullOrWhiteSpace(raw))
+            {
+                return false;
+            }
+
+            return long.TryParse(raw, out storyId) && storyId > 0;
+        }
+
+        private static (string operation, long storyId, string? folder, string runId)? TryBuildBatchWorkerRequest(
+            string runId,
+            string operationName,
+            IReadOnlyDictionary<string, string>? metadata)
+        {
+            if (!TryGetStoryId(metadata, out var storyId))
+            {
+                return null;
+            }
+
+            var metadataOperation = metadata != null && metadata.TryGetValue("operation", out var op) ? op : null;
+            var operation = string.IsNullOrWhiteSpace(metadataOperation) ? operationName : metadataOperation;
+            if (operation.StartsWith("story_", StringComparison.OrdinalIgnoreCase))
+            {
+                operation = operation["story_".Length..];
+            }
+
+            if (!ExternalBatchStoryOperations.Contains(operation))
+            {
+                return null;
+            }
+
+            var folder = metadata != null && metadata.TryGetValue("folder", out var folderValue) ? folderValue : null;
+            return (operation, storyId, folder, runId);
+        }
+
+        private static string ResolveNormalizedOperation(string operationName, IReadOnlyDictionary<string, string>? metadata)
+        {
+            var metadataOperation = metadata != null && metadata.TryGetValue("operation", out var op) ? op : null;
+            var resolved = string.IsNullOrWhiteSpace(metadataOperation) ? operationName : metadataOperation;
+            if (resolved.StartsWith("story_", StringComparison.OrdinalIgnoreCase))
+            {
+                resolved = resolved["story_".Length..];
+            }
+
+            return resolved.Trim();
+        }
+
+        private async Task<(bool success, string message)> ExecuteInExternalBatchWorkerAsync(
+            (string operation, long storyId, string? folder, string runId) request,
+            CancellationToken cancellationToken)
+        {
+            var processPath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(processPath))
+            {
+                return (false, "Environment.ProcessPath non disponibile.");
+            }
+
+            var commandLineArgs = Environment.GetCommandLineArgs();
+            if (commandLineArgs.Length == 0 || string.IsNullOrWhiteSpace(commandLineArgs[0]))
+            {
+                return (false, "Argomento entry assembly non disponibile.");
+            }
+
+            var isDotnetHost = string.Equals(Path.GetFileNameWithoutExtension(processPath), "dotnet", StringComparison.OrdinalIgnoreCase);
+            var serializedOperation = EscapeCliValue(request.operation);
+            var serializedRunId = EscapeCliValue(request.runId);
+            var serializedFolder = string.IsNullOrWhiteSpace(request.folder) ? null : EscapeCliValue(request.folder!);
+
+            var workerArgs = $"--batch-worker --operation \"{serializedOperation}\" --story-id {request.storyId} --run-id \"{serializedRunId}\"";
+            if (!string.IsNullOrWhiteSpace(serializedFolder))
+            {
+                workerArgs += $" --folder \"{serializedFolder}\"";
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = isDotnetHost ? processPath : processPath,
+                Arguments = isDotnetHost
+                    ? $"\"{EscapeCliValue(commandLineArgs[0])}\" {workerArgs}"
+                    : workerArgs,
+                WorkingDirectory = Directory.GetCurrentDirectory(),
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = new Process { StartInfo = startInfo };
+            if (!process.Start())
+            {
+                return (false, "Avvio processo worker non riuscito.");
+            }
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                }
+                catch
+                {
+                    // Best effort.
+                }
+                throw;
+            }
+
+            var stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
+            var stderr = (await stderrTask.ConfigureAwait(false)).Trim();
+            if (process.ExitCode == 0)
+            {
+                var message = string.IsNullOrWhiteSpace(stdout) ? $"Worker batch {request.operation} completato." : stdout;
+                return (true, message);
+            }
+
+            var error = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                error = $"Worker batch terminato con exit code {process.ExitCode}.";
+            }
+            return (false, error);
+        }
+
+        private static string EscapeCliValue(string value) => value.Replace("\"", "\\\"");
+
+        private sealed class AsyncReleaseHandle : IAsyncDisposable
+        {
+            private readonly Action _release;
+            private bool _released;
+
+            public AsyncReleaseHandle(Action release)
+            {
+                _release = release ?? throw new ArgumentNullException(nameof(release));
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                if (_released)
+                {
+                    return ValueTask.CompletedTask;
+                }
+
+                _released = true;
+                _release();
+                return ValueTask.CompletedTask;
+            }
         }
 
         private static string? ResolveAgentRoleFromOperation(string? operationName)
@@ -402,7 +662,10 @@ namespace TinyGenerator.Services
             var commandId = RequestIdGenerator.Generate();
             var storyIdInfo = allocatedStoryId.HasValue ? $" (Story: {allocatedStoryId})" : "";
             var startMessage = $"[CmdID: {commandId}][{workItem.RunId}]{storyIdInfo} ▶️ START {workItem.OperationName}";
-            _logger?.Log("Information", "Command", startMessage);
+            if (ShouldLogCommandStart(workItem.OperationName))
+            {
+                _logger?.Log("Information", "Command", startMessage);
+            }
 
             try
             {
@@ -487,7 +750,10 @@ Completed:
                 var finalMessage = result.Message ?? (result.Success ? "OK" : "FAILED");
                 var endLevel = result.Success ? "Information" : "Error";
                 var endIcon = result.Success ? "✅" : "❌";
-                _logger?.Log(endLevel, "Command", $"[CmdID: {commandId}][{workItem.RunId}] {endIcon} END {workItem.OperationName} => {finalMessage}");
+                if (ShouldLogCommandEnd(workItem.OperationName, result))
+                {
+                    _logger?.Log(endLevel, "Command", $"[CmdID: {commandId}][{workItem.RunId}] {endIcon} END {workItem.OperationName} => {finalMessage}");
+                }
                 workItem.Completion.TrySetResult(result);
 
                 if (!result.Success)
@@ -692,6 +958,29 @@ Completed:
             }
         }
 
+        private static bool ShouldLogCommandStart(string? operationName)
+        {
+            // Richiesta esplicita: update_model_stats_from_logs non deve emettere lo START.
+            return !string.Equals(operationName, "update_model_stats_from_logs", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool ShouldLogCommandEnd(string? operationName, CommandResult result)
+        {
+            if (!string.Equals(operationName, "update_model_stats_from_logs", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // Per update_model_stats_from_logs: loggare solo il messaggio finale utile quando ha elaborato record.
+            if (!result.Success)
+            {
+                return true;
+            }
+
+            var message = (result.Message ?? string.Empty).Trim();
+            return message.StartsWith("Model stats aggiornate da log:", StringComparison.OrdinalIgnoreCase);
+        }
+
         public void UpdateRetry(string runId, int retryCount)
         {
             if (_active.TryGetValue(runId, out var state))
@@ -706,6 +995,22 @@ Completed:
             if (_active.TryGetValue(runId, out var state) && !string.IsNullOrWhiteSpace(newOperationName))
             {
                 state.OperationName = newOperationName.Trim();
+                _ = BroadcastCommandsAsync();
+            }
+        }
+
+        public void UpdateAgentModel(string runId, string? agentName = null, string? modelName = null)
+        {
+            if (_active.TryGetValue(runId, out var state))
+            {
+                if (!string.IsNullOrWhiteSpace(agentName))
+                {
+                    state.AgentName = agentName.Trim();
+                }
+                if (!string.IsNullOrWhiteSpace(modelName))
+                {
+                    state.ModelName = modelName.Trim();
+                }
                 _ = BroadcastCommandsAsync();
             }
         }

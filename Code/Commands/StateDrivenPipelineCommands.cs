@@ -254,20 +254,11 @@ public sealed class StateDeltaBuilderCommand : ICommand
         }
 
         var rawDelta = response.Text ?? string.Empty;
-        // Prefer TAG payload (no JSON). Store the raw text (trimmed) for StateUpdater.
-        if (BracketTagParser.ContainsTag(rawDelta, "WORLD_STATE"))
+        if (!StateDrivenPipelineHelpers.TryExtractJson(rawDelta, JsonValueKind.Object, out var deltaJson, out var jsonErr))
         {
-            _database.UpdateSeriesEpisodeStateFields(_serieId, _episodeNumber, deltaJson: rawDelta.Trim());
+            return new CommandResult(false, $"StateDeltaBuilder output non valido: {jsonErr}");
         }
-        else
-        {
-            // Backward-compatible JSON mode.
-            if (!StateDrivenPipelineHelpers.TryExtractJson(rawDelta, JsonValueKind.Object, out var deltaJson, out var jsonErr))
-            {
-                return new CommandResult(false, $"StateDeltaBuilder output non valido: {jsonErr}");
-            }
-            _database.UpdateSeriesEpisodeStateFields(_serieId, _episodeNumber, deltaJson: deltaJson);
-        }
+        _database.UpdateSeriesEpisodeStateFields(_serieId, _episodeNumber, deltaJson: deltaJson);
 
         EnqueueContinuityValidator();
         return new CommandResult(true, $"Delta costruito (serie {_serieId}, episodio {_episodeNumber})");
@@ -336,20 +327,12 @@ public sealed class StateDeltaBuilderCommand : ICommand
     private static string BuildDeltaPrompt(string stateSummaryCompact, string stateInJson, string canonEventsJson)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("AGGIORNA STATO SERIE (TAG tra parentesi quadre, NO JSON).");
+        sb.AppendLine("AGGIORNA STATO SERIE.");
         sb.AppendLine();
         sb.AppendLine("Vincoli:");
-        sb.AppendLine("- Restituisci SOLO TAG (nessun JSON).");
-        sb.AppendLine("- Scrivi WORLD_STATE come testo compatto ma completo (coerente con input).");
-        sb.AppendLine("- Devi restituire SEMPRE tutti e tre i tag: WORLD_STATE, OPEN_THREADS, LAST_MAJOR_EVENT.");
-        sb.AppendLine("- LAST_MAJOR_EVENT e' OBBLIGATORIO e non puo' mancare.");
-        sb.AppendLine("- OPEN_THREADS deve essere presente anche se vuoto.");
-        sb.AppendLine("- Nessun testo extra prima o dopo i tag.");
-        sb.AppendLine();
-        sb.AppendLine("Formato richiesto:");
-        sb.AppendLine("[WORLD_STATE]...[/WORLD_STATE]");
-        sb.AppendLine("[OPEN_THREADS]... (uno per riga, oppure vuoto) ...[/OPEN_THREADS]");
-        sb.AppendLine("[LAST_MAJOR_EVENT]...[/LAST_MAJOR_EVENT]");
+        sb.AppendLine("- Restituisci SOLO il JSON richiesto dalla request.");
+        sb.AppendLine("- Nessun markdown, nessun testo extra.");
+        sb.AppendLine("- Compila i campi delta, open_threads, last_major_event.");
         sb.AppendLine();
         sb.AppendLine("STATE_SUMMARY_COMPACT:");
         sb.AppendLine(stateSummaryCompact);
@@ -729,18 +712,32 @@ public sealed class StateCompressorCommand : ICommand
         }
 
         var rawSummary = response.Text ?? string.Empty;
-        if (BracketTagParser.TryGetTagContent(rawSummary, "STATE_SUMMARY_COMPACT", out var summaryText))
+        if (!StateDrivenPipelineHelpers.TryExtractJson(rawSummary, JsonValueKind.Object, out var summaryJson, out var jsonErr))
         {
+            return new CommandResult(false, $"StateCompressor output non valido: {jsonErr}");
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(summaryJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                !doc.RootElement.TryGetProperty("state_summary_compact", out var summaryNode) ||
+                summaryNode.ValueKind != JsonValueKind.String)
+            {
+                return new CommandResult(false, "StateCompressor output non valido: campo 'state_summary_compact' mancante.");
+            }
+
+            var summaryText = summaryNode.GetString()?.Trim();
+            if (string.IsNullOrWhiteSpace(summaryText))
+            {
+                return new CommandResult(false, "StateCompressor output non valido: 'state_summary_compact' vuoto.");
+            }
+
             _database.UpdateSeriesStateSummaryAndCache(_seriesStateId, summaryText);
         }
-        else
+        catch (Exception ex)
         {
-            // Backward-compatible JSON mode.
-            if (!StateDrivenPipelineHelpers.TryExtractJson(rawSummary, JsonValueKind.Object, out var summaryJson, out var jsonErr))
-            {
-                return new CommandResult(false, $"StateCompressor output non valido: {jsonErr}");
-            }
-            _database.UpdateSeriesStateSummaryAndCache(_seriesStateId, summaryJson);
+            return new CommandResult(false, $"StateCompressor output non valido: {ex.Message}");
         }
 
         EnqueueRecapBuilder();
@@ -809,11 +806,12 @@ public sealed class StateCompressorCommand : ICommand
     private static string BuildStateCompressorPrompt(SeriesState state, Series? series)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("COMPRIMI STATO SERIE (TAG tra parentesi quadre, NO JSON).");
+        sb.AppendLine("COMPRIMI STATO SERIE.");
         sb.AppendLine();
         sb.AppendLine("Vincoli:");
-        sb.AppendLine("- Output SOLO TAG: [STATE_SUMMARY_COMPACT]...[/STATE_SUMMARY_COMPACT]");
-        sb.AppendLine("- Max 1200-1500 parole.");
+        sb.AppendLine("- Restituisci SOLO il JSON richiesto dalla request.");
+        sb.AppendLine("- Nessun markdown, nessun testo extra.");
+        sb.AppendLine("- Compila il campo state_summary_compact con un riassunto compatto max 1200-1500 parole.");
         sb.AppendLine();
         sb.AppendLine("WORLD_STATE_JSON:");
         sb.AppendLine(state.WorldStateJson ?? "{}");

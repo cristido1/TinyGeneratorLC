@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "state_summary_compact"
+  ],
+  "properties": {
+    "state_summary_compact": { "type": "string" }
+  }
+}

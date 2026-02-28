@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entries"
+  ],
+  "properties": {
+    "entries": {
+      "type": "array",
+      "description": "Mappature musicali per riga.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "line",
+          "duration_seconds",
+          "tags"
+        ],
+        "properties": {
+          "line": { "type": "integer", "description": "Numero riga (1-based) del segmento nel testo taggato." },
+          "duration_seconds": { "type": "integer", "description": "Durata desiderata della musica in secondi." },
+          "tags": {
+            "type": "array",
+            "description": "Tag musicali per la ricerca in libreria.",
+            "items": { "type": "string", "description": "Singolo tag musicale." }
+          }
+        }
+      }
+    }
+  }
+}

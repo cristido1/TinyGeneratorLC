@@ -1,0 +1,230 @@
+﻿RAPPORTO TECNICO
+Persistenza stato risorse (Serie / State-Driven) e allineamento con NRE in-memory
+
+Data: 2026-02-27
+Progetto: TinyGeneratorLC
+
+============================================================
+1) SCOPO
+============================================================
+Questo documento descrive:
+- quali tabelle persistono lo stato risorse durante la generazione state-driven;
+- chi le popola;
+- chi le legge/usa;
+- come sono collegate al concetto di serie/episodio;
+- quale shape dati attuale conviene allineare con l'oggetto in-memory NRE.
+
+============================================================
+2) TABELLE COINVOLTE
+============================================================
+A) narrative_resources
+Scopo: definizione risorse per NarrativeProfile (template/base line).
+
+Campi:
+- id (INTEGER, PK)
+- narrative_profile_id (INTEGER, FK -> narrative_profiles.id)
+- name (TEXT)
+- initial_value (INTEGER)
+- min_value (INTEGER)
+- max_value (INTEGER)
+
+Uso:
+- non contiene stato runtime della storia;
+- contiene solo la configurazione iniziale e i limiti.
+
+
+B) story_runtime_states
+Scopo: stato runtime della singola storia durante generazione state-driven.
+
+Campi:
+- id (INTEGER, PK)
+- story_id (INTEGER, FK -> stories.id)
+- narrative_profile_id (INTEGER, FK -> narrative_profiles.id)
+- current_chunk_index (INTEGER)
+- current_phase (TEXT, nullable)
+- current_pov (TEXT, nullable)
+- failure_count (INTEGER)
+- last_context (TEXT, nullable)
+- is_active (INTEGER/BOOLEAN)
+
+Uso:
+- rappresenta il "contenitore" runtime della storia in corso;
+- aggancia risorse correnti via story_resource_states.
+
+
+C) story_resource_states
+Scopo: valori correnti delle risorse per uno specifico runtime state.
+
+Campi:
+- id (INTEGER, PK)
+- story_runtime_state_id (INTEGER, FK -> story_runtime_states.id)
+- resource_name (TEXT)
+- current_value (INTEGER)
+
+Uso:
+- contiene il valore live per ogni risorsa nel runtime di quella storia.
+
+============================================================
+3) CHI LE COMPILA (WRITE PATH)
+============================================================
+3.1 Avvio storia state-driven
+Metodo: DatabaseService.StartStateDrivenStory(...)
+File: Code/Services/DatabaseService.cs
+
+Cosa fa:
+1) crea record stories;
+2) crea record story_runtime_states (chunk_index=0, phase/pov null, failure_count=0, is_active=true);
+3) legge narrative_resources del profilo;
+4) crea una riga in story_resource_states per ogni risorsa, con current_value iniziale clampato su [min,max];
+5) collega stories.runtime_state_id al runtime creato.
+
+Nota implementativa:
+- prima disattiva eventuali runtime attivi globalmente:
+  UPDATE story_runtime_states SET is_active = 0 WHERE is_active = 1
+
+
+3.2 Persistenza di ogni chunk
+Metodo: DatabaseService.TryApplyStateDrivenChunk(...)
+File: Code/Services/DatabaseService.cs
+
+Cosa fa:
+1) verifica coerenza runtime (attivo + expected chunk index);
+2) incrementa current_chunk_index;
+3) aggiorna current_phase/current_pov/last_context/failure_count;
+4) aggiorna story_resource_states.current_value in base a newResourceValues passati dal comando.
+
+
+3.3 Chiusura episodio
+Metodo: DatabaseService.CompleteStateDrivenStory(...)
+File: Code/Services/DatabaseService.cs
+
+Cosa fa:
+- salva testo finale su stories.story_raw;
+- imposta stories.narrative_engine_status = completed;
+- imposta story_runtime_states.is_active = false.
+
+============================================================
+4) CHI LE USA (READ PATH)
+============================================================
+4.1 Costruzione snapshot runtime
+Metodo: DatabaseService.GetStateDrivenStorySnapshot(...)
+File: Code/Services/DatabaseService.cs
+
+Cosa legge:
+- stories + story_runtime_states;
+- narrative_resources (definizioni risorsa);
+- story_resource_states (valori correnti risorsa);
+- consequence_rules/consequence_impacts.
+
+Output principale:
+- ProfileResources: lista definizioni risorse (name, initial, min, max)
+- CurrentResourceValues: dictionary name -> current_value
+- metadati runtime (chunk index, phase, pov, failure_count, is_active, last_context)
+
+
+4.2 Comando chunk generator
+Comando: GenerateNextChunkCommand
+File: Code/Commands/GenerateNextChunkCommand.cs
+
+Uso risorse:
+- legge snapshot;
+- applica consumo base per fase;
+- applica impatti conseguenze (EFFETTO);
+- passa i nuovi valori a TryApplyStateDrivenChunk(...), che persiste.
+
+
+4.3 Comando episodio auto
+Comando: GenerateStateDrivenEpisodeToDurationCommand
+File: Code/Commands/GenerateStateDrivenEpisodeToDurationCommand.cs
+
+Uso risorse:
+- a ogni iterazione ricarica snapshot runtime;
+- il loop continua usando stato/risorse aggiornati dal chunk precedente.
+
+============================================================
+5) LEGAME CON SERIE/EPISODIO
+============================================================
+Punto importante:
+- story_runtime_states e story_resource_states NON hanno direttamente series_id/episode_id.
+- il legame serie/episodio passa da stories:
+  story_runtime_states.story_id -> stories.id
+  e stories contiene serie_id + serie_episode.
+
+Quindi:
+- persistenza risorse = per storia runtime;
+- associazione a serie/episodio = indiretta tramite stories.
+
+============================================================
+6) NRE VS STATE-DRIVEN
+============================================================
+Stato attuale:
+- run_nre NON usa story_runtime_states/story_resource_states;
+- queste tabelle sono usate dal flusso state-driven.
+
+Implica:
+- se per NRE vuoi risorse solo in memoria, non serve persisterle;
+- se per serie vuoi persisterle, puoi mantenere una shape dati compatibile con quella runtime già esistente.
+
+============================================================
+7) SHAPE DATI CONSIGLIATA PER ALLINEAMENTO
+============================================================
+Per conciliare NRE in-memory con persistenza serie, la forma più vicina già presente è:
+
+A) RuntimeMeta
+- current_chunk_index
+- current_phase
+- current_pov
+- failure_count
+- last_context
+- is_active
+- narrative_profile_id
+
+B) ResourceDefinition
+- name
+- initial_value
+- min_value
+- max_value
+
+C) ResourceState
+- resource_name
+- current_value
+
+Mapping naturale:
+- ResourceDefinition <-> narrative_resources
+- RuntimeMeta <-> story_runtime_states
+- ResourceState <-> story_resource_states
+
+============================================================
+8) FILE/METODI CHIAVE (RIFERIMENTI)
+============================================================
+- Code/Services/DatabaseService.cs
+  - StartStateDrivenStory(...)
+  - GetStateDrivenStorySnapshot(...)
+  - TryApplyStateDrivenChunk(...)
+  - CompleteStateDrivenStory(...)
+
+- Code/Commands/StartStateDrivenStoryCommand.cs
+  - avvia la creazione runtime iniziale.
+
+- Code/Commands/GenerateNextChunkCommand.cs
+  - calcola nuove risorse e ne innesca la persistenza.
+
+- Code/Commands/GenerateStateDrivenEpisodeToDurationCommand.cs
+  - orchestration chunk loop su snapshot runtime.
+
+- Models/NarrativeResource.cs
+- Models/StoryRuntimeState.cs
+- Models/StoryResourceState.cs
+
+- data/TinyGeneratorDbContext.cs
+  - DbSet + relazioni FK delle tre entità.
+
+============================================================
+9) CONCLUSIONI OPERATIVE
+============================================================
+- Le tabelle di persistenza risorse sono usate realmente e in modo centrale nel pipeline state-driven.
+- Il runtime risorse è già separato in modo chiaro da definizione (template) e valori correnti.
+- Per NRE in-memory puoi mantenere la stessa shape oggettuale senza obbligo di scrittura DB.
+- Per serie, la persistenza attuale è compatibile con una futura convergenza su un unico modello logico (in-memory + persisted projection).
+
+FINE

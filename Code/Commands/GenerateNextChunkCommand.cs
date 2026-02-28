@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -86,15 +87,6 @@ public sealed class GenerateNextChunkCommand : ICommand
         var phase = DecidePhase(snap);
         var pov = DecidePov(snap);
 
-        // Apply base resource consumption per phase (deterministic, no semantic inference)
-        var newResources = ApplyBaseConsumption(snap, phase);
-
-        // Apply consequence impacts only in EFFETTO phase
-        if (string.Equals(phase, "EFFETTO", StringComparison.OrdinalIgnoreCase))
-        {
-            ApplyConsequenceImpactsInPlace(snap, newResources);
-        }
-
         var prompt = BuildWriterPrompt(snap, phase, pov, _options);
         var writerResult = await CallWriterWithStandardPatternAsync(writer, prompt, phase, pov, effectiveRunId, ct).ConfigureAwait(false);
         var output = (writerResult.Text ?? string.Empty).Trim();
@@ -142,6 +134,19 @@ public sealed class GenerateNextChunkCommand : ICommand
 
         var extractedContinuityStateJson = continuityExtraction.StateJson;
         var tail = GetTail(output, Math.Max(0, _tuning.GenerateNextChunk.ContextTailChars));
+        var resourceManagerResult = await TryUpdateResourcesWithAgentAsync(
+            snap,
+            output,
+            phase,
+            pov,
+            effectiveRunId,
+            ct).ConfigureAwait(false);
+        if (!resourceManagerResult.Success || string.IsNullOrWhiteSpace(resourceManagerResult.CanonStateJson))
+        {
+            return new CommandResult(false, resourceManagerResult.Error ?? "resource_manager update failed");
+        }
+
+        var newResources = ParseResourceValuesFromCanonState(resourceManagerResult.CanonStateJson);
 
         if (!_database.TryApplyStateDrivenChunk(
                 storyId: snap.StoryId,
@@ -152,6 +157,7 @@ public sealed class GenerateNextChunkCommand : ICommand
                 failureCountDelta: failureDelta,
                 newResourceValues: newResources,
                 newLastContextTail: tail,
+                canonStateJson: resourceManagerResult.CanonStateJson,
                 narrativeContinuityStateJson: extractedContinuityStateJson,
                 narrativeQualityScore: null,
                 narrativeCoherenceScore: null,
@@ -448,7 +454,27 @@ public sealed class GenerateNextChunkCommand : ICommand
         }
 
         var previousState = _database.GetLatestNarrativeContinuityState(_storyId)?.StateJson ?? "{}";
-        var prompt = BuildStateExtractorPrompt(blockText, previousState, snap, phase, pov);
+        var story = _database.GetStoryById(_storyId);
+        var seriesId = story?.SerieId ?? 0;
+        var episodeId = 0;
+        if ((story?.SerieId).HasValue && (story?.SerieEpisode).HasValue)
+        {
+            episodeId = _database.GetSeriesEpisodeBySerieAndNumber(story.SerieId.Value, story.SerieEpisode.Value)?.Id
+                ?? story.SerieEpisode.Value;
+        }
+        var chapterId = Math.Max(1, snap.CurrentChunkIndex + 1);
+        var sceneId = chapterId;
+
+        var prompt = BuildStateExtractorPrompt(
+            blockText,
+            previousState,
+            snap,
+            phase,
+            pov,
+            seriesId,
+            episodeId,
+            chapterId,
+            sceneId);
         var systemPrompt = extractor.Instructions ?? extractor.Prompt ?? "Aggiorna stato narrativo strutturato.";
         var history = new ChatHistory();
         history.AddSystem(systemPrompt);
@@ -506,8 +532,22 @@ public sealed class GenerateNextChunkCommand : ICommand
                 _logger?.Append(runId, "StateExtractor ha restituito JSON non object.", "error");
                 return (false, null, "StateExtractor output JSON non object");
             }
+            var normalizedStateJson = NormalizeContinuityStateJson(
+                raw,
+                snap.StoryId,
+                seriesId,
+                episodeId,
+                chapterId,
+                sceneId,
+                out var normalizeError);
+            if (string.IsNullOrWhiteSpace(normalizedStateJson))
+            {
+                _logger?.Append(runId, $"StateExtractor normalizzazione JSON fallita: {normalizeError}", "error");
+                return (false, null, $"StateExtractor output non normalizzabile: {normalizeError}");
+            }
+
             _logger?.Append(runId, $"StateExtractor applicato: agente={extractor.Name}; modello={result.ModelUsed}");
-            return (true, raw, null);
+            return (true, normalizedStateJson, null);
         }
         catch (Exception ex)
         {
@@ -563,16 +603,21 @@ public sealed class GenerateNextChunkCommand : ICommand
         string previousStateJson,
         DatabaseService.StateDrivenStorySnapshot snap,
         string phase,
-        string pov)
+        string pov,
+        int seriesId,
+        int episodeId,
+        int chapterId,
+        int sceneId)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Aggiorna lo stato narrativo e restituisci SOLO un JSON object valido.");
         sb.AppendLine("Non scrivere testo narrativo.");
         sb.AppendLine("Mantieni i campi esistenti quando non cambiano.");
+        sb.AppendLine("NON includere i campi tecnici story_id, series_id, episode_id, chapter_id, scene_id, timeline_index: vengono valorizzati automaticamente dal sistema.");
+        sb.AppendLine($"Valori tecnici correnti (gestiti dal sistema): story_id={snap.StoryId}, series_id={seriesId}, episode_id={episodeId}, chapter_id={chapterId}, scene_id={sceneId}, timeline_index={chapterId}.");
         sb.AppendLine("Schema minimo richiesto:");
-        sb.AppendLine("{\"story_id\":0,\"series_id\":null,\"episode_id\":null,\"chapter_id\":null,\"scene_id\":null,\"timeline_index\":0,\"location_current\":null,\"time_context\":null,\"active_characters\":[],\"dead_characters\":[],\"missing_characters\":[],\"objects_in_scene\":[],\"environment_state\":{},\"conflict_state\":null,\"goal_current\":null,\"last_events\":[],\"pov_character\":null,\"tone_current\":null,\"custom_flags\":{}}");
+        sb.AppendLine("{\"location_current\":null,\"time_context\":null,\"active_characters\":[],\"dead_characters\":[],\"missing_characters\":[],\"objects_in_scene\":[],\"environment_state\":{},\"conflict_state\":null,\"goal_current\":null,\"last_events\":[],\"pov_character\":null,\"tone_current\":null,\"custom_flags\":{}}");
         sb.AppendLine();
-        sb.AppendLine($"STORY_ID: {snap.StoryId}");
         sb.AppendLine($"TITLE: {snap.Title}");
         sb.AppendLine($"PHASE: {phase}");
         sb.AppendLine($"POV: {pov}");
@@ -583,6 +628,44 @@ public sealed class GenerateNextChunkCommand : ICommand
         sb.AppendLine("NUOVO_BLOCCO:");
         sb.AppendLine(blockText);
         return sb.ToString();
+    }
+
+    private static string? NormalizeContinuityStateJson(
+        string rawStateJson,
+        long storyId,
+        int seriesId,
+        int episodeId,
+        int chapterId,
+        int sceneId,
+        out string? error)
+    {
+        error = null;
+        try
+        {
+            var node = JsonNode.Parse(rawStateJson);
+            if (node is not JsonObject obj)
+            {
+                error = "root non object";
+                return null;
+            }
+
+            obj["story_id"] = storyId;
+            obj["series_id"] = seriesId > 0 ? seriesId : null;
+            obj["episode_id"] = episodeId > 0 ? episodeId : null;
+            obj["chapter_id"] = chapterId > 0 ? chapterId : null;
+            obj["scene_id"] = sceneId > 0 ? sceneId : null;
+            obj["timeline_index"] = chapterId > 0 ? chapterId : 0;
+
+            return obj.ToJsonString(new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+            });
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return null;
+        }
     }
 
     private static string? TrimForDb(string? text)
@@ -866,6 +949,9 @@ public sealed class GenerateNextChunkCommand : ICommand
         sb.AppendLine();
         sb.AppendLine("TEMA/CANONE (input utente):");
         sb.AppendLine(snap.Prompt);
+        sb.AppendLine();
+        sb.AppendLine("CANON STATE RISORSE (JSON, da rispettare nel chunk):");
+        sb.AppendLine(string.IsNullOrWhiteSpace(snap.CanonStateJson) ? "{}" : snap.CanonStateJson);
 
         var isFirstChunk = snap.CurrentChunkIndex <= 0;
         if (isFirstChunk)
@@ -940,6 +1026,198 @@ public sealed class GenerateNextChunkCommand : ICommand
         if (maxChars <= 0) return string.Empty;
         var t = text.Trim();
         return t.Length <= maxChars ? t : t.Substring(t.Length - maxChars);
+    }
+
+    private sealed record ResourceManagerUpdateResult(bool Success, string? CanonStateJson, string? Error);
+
+    private async Task<ResourceManagerUpdateResult> TryUpdateResourcesWithAgentAsync(
+        DatabaseService.StateDrivenStorySnapshot snap,
+        string newChunkText,
+        string phase,
+        string pov,
+        string runId,
+        CancellationToken ct)
+    {
+        var callCenter = ResolveCallCenter();
+        if (callCenter == null)
+        {
+            return new ResourceManagerUpdateResult(false, null, "CallCenter non disponibile per resource_manager");
+        }
+
+        var resourceManager = _database.GetAgentByRole("resource_manager");
+        if (resourceManager == null || !resourceManager.IsActive)
+        {
+            return new ResourceManagerUpdateResult(false, null, "Agente resource_manager non configurato o non attivo");
+        }
+
+        var systemPrompt = resourceManager.Instructions ?? resourceManager.Prompt ?? "Aggiorna il canon state delle risorse e rispondi SOLO in JSON valido.";
+        var history = new ChatHistory();
+        history.AddSystem(systemPrompt);
+        history.AddUser(BuildResourceManagerUpdatePrompt(snap, newChunkText, phase, pov));
+
+        var options = new CallOptions
+        {
+            Operation = "state_driven_resource_manager_update",
+            Timeout = TimeSpan.FromSeconds(120),
+            MaxRetries = 1,
+            UseResponseChecker = true,
+            AllowFallback = true,
+            AskFailExplanation = true,
+            SystemPromptOverride = systemPrompt
+        };
+        options.DeterministicChecks.Add(new CheckEmpty
+        {
+            Options = Options.Create<object>(new Dictionary<string, object>
+            {
+                ["ErrorMessage"] = "resource_manager: risposta vuota"
+            })
+        });
+
+        var started = DateTime.UtcNow;
+        var result = await callCenter.CallAgentAsync(
+            storyId: _storyId,
+            threadId: BuildThreadId(_storyId, 9100 + snap.CurrentChunkIndex),
+            agent: resourceManager,
+            history: history,
+            options: options,
+            cancellationToken: ct).ConfigureAwait(false);
+
+        _database.InsertNarrativeAgentCallLog(
+            storyId: _storyId,
+            agentName: resourceManager.Name,
+            inputTokens: null,
+            outputTokens: null,
+            deterministicChecksResult: result.Success ? "PASS" : $"FAIL: {TrimForDb(result.FailureReason)}",
+            responseCheckerResult: options.UseResponseChecker ? (result.Success ? "PASS" : $"FAIL: {TrimForDb(result.FailureReason)}") : "SKIPPED",
+            retryCount: Math.Max(0, result.Attempts - 1),
+            latencyMs: Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds));
+
+        if (!result.Success || string.IsNullOrWhiteSpace(result.ResponseText))
+        {
+            return new ResourceManagerUpdateResult(false, null, result.FailureReason ?? "resource_manager update fallito");
+        }
+
+        var canonStateJson = ExtractCanonStateJson(result.ResponseText);
+        if (string.IsNullOrWhiteSpace(canonStateJson))
+        {
+            return new ResourceManagerUpdateResult(false, null, "resource_manager: impossibile estrarre canon_state");
+        }
+
+        _logger?.Append(runId, $"ResourceManager update ok: agente={resourceManager.Name}; modello={result.ModelUsed}");
+        return new ResourceManagerUpdateResult(true, canonStateJson, null);
+    }
+
+    private static string BuildResourceManagerUpdatePrompt(
+        DatabaseService.StateDrivenStorySnapshot snap,
+        string newChunkText,
+        string phase,
+        string pov)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Aggiorna lo stato risorse e restituisci SOLO JSON valido.");
+        sb.AppendLine("Modalita: UPDATE.");
+        sb.AppendLine("Puoi aggiungere nuove risorse solo se il chunk le giustifica esplicitamente.");
+        sb.AppendLine("Se lo stato narrativo contiene eventi estremi (es. morte, distruzione), aggiorna in modo coerente.");
+        sb.AppendLine();
+        sb.AppendLine("{");
+        sb.AppendLine("  \"mode\": \"UPDATE\",");
+        sb.AppendLine($"  \"story_id\": {snap.StoryId},");
+        sb.AppendLine("  \"episode_number\": null,");
+        sb.AppendLine($"  \"chunk_index\": {snap.CurrentChunkIndex + 1},");
+        sb.AppendLine($"  \"phase\": \"{EscapeJsonText(phase)}\",");
+        sb.AppendLine($"  \"pov\": \"{EscapeJsonText(pov)}\",");
+        sb.AppendLine("  \"previous_canon_state\": " + (string.IsNullOrWhiteSpace(snap.CanonStateJson) ? "{}" : snap.CanonStateJson) + ",");
+        sb.AppendLine("  \"new_chunk_text\": \"" + EscapeJsonText(newChunkText) + "\"");
+        sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("Output atteso:");
+        sb.AppendLine("{");
+        sb.AppendLine("  \"canon_state\": { ... },");
+        sb.AppendLine("  \"delta\": { \"updated_resources\": [...], \"events\": [...] }");
+        sb.AppendLine("}");
+        return sb.ToString();
+    }
+
+    private static IReadOnlyDictionary<string, int> ParseResourceValuesFromCanonState(string canonStateJson)
+    {
+        var values = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(canonStateJson))
+        {
+            return values;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(canonStateJson);
+            if (!doc.RootElement.TryGetProperty("resources", out var resources) || resources.ValueKind != JsonValueKind.Array)
+            {
+                return values;
+            }
+
+            foreach (var item in resources.EnumerateArray())
+            {
+                if (!item.TryGetProperty("name", out var nameEl)) continue;
+                var name = nameEl.GetString();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+
+                var quantity = 0;
+                if (item.TryGetProperty("quantity", out var qtyEl) && qtyEl.ValueKind == JsonValueKind.Number)
+                {
+                    quantity = qtyEl.GetInt32();
+                }
+                else if (item.TryGetProperty("integrity_percent", out var integEl) && integEl.ValueKind == JsonValueKind.Number)
+                {
+                    quantity = integEl.GetInt32();
+                }
+
+                values[name.Trim()] = Math.Max(0, quantity);
+            }
+        }
+        catch
+        {
+            // best effort
+        }
+
+        return values;
+    }
+
+    private static string ExtractCanonStateJson(string rawResponse)
+    {
+        if (string.IsNullOrWhiteSpace(rawResponse))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawResponse);
+            if (doc.RootElement.TryGetProperty("canon_state", out var canonState) &&
+                canonState.ValueKind == JsonValueKind.Object)
+            {
+                return canonState.GetRawText();
+            }
+
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("resources", out _))
+            {
+                return doc.RootElement.GetRawText();
+            }
+        }
+        catch
+        {
+            // best effort
+        }
+
+        return string.Empty;
+    }
+
+    private static string EscapeJsonText(string text)
+    {
+        return (text ?? string.Empty)
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal);
     }
 
     private string BuildStoryHistorySnapshot()

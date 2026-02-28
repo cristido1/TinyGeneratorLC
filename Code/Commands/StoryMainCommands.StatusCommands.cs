@@ -140,7 +140,7 @@ public sealed partial class StoryMainCommands
 
                 return enqueued > 0
                     ? (true, $"Valutazioni accodate: {enqueued}")
-                    : (false, "Nessuna valutazione accodata");
+                    : (true, "Nessuna valutazione accodata (no-op)");
             }
 
             return await RunParallelAsync(story, evaluators);

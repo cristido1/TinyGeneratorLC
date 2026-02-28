@@ -207,7 +207,7 @@ public sealed class ResetStoriesWithResolvedMissingSoundsCommand : ICommand
             return Task.FromResult(new CommandResult(true, "Nessuna storia idonea da resettare"));
         }
 
-        int resetOk = 0, resetFail = 0, deletedResolved = 0, skipped = 0;
+        int resetOk = 0, resetFail = 0, deletedResolved = 0;
         var errors = new List<string>();
 
         for (var i = 0; i < groups.Count; i++)
@@ -223,23 +223,24 @@ public sealed class ResetStoriesWithResolvedMissingSoundsCommand : ICommand
             {
                 resetFail++;
                 errors.Add($"story {storyId}: {reset.message}");
-                continue;
+            }
+            else
+            {
+                resetOk++;
             }
 
-            resetOk++;
             try
             {
-                var idsToDelete = g.Select(x => x.Id).Distinct().ToList();
-                deletedResolved += _database.DeleteMissingSoundsByIds(idsToDelete);
+                // Cancellazione robusta: elimina tutti i resolved correnti della storia.
+                deletedResolved += _database.DeleteMissingSoundsByStoryAndStatus(storyId, "resolved");
             }
             catch (Exception ex)
             {
-                resetFail++;
-                errors.Add($"story {storyId}: reset OK ma delete resolved fallita: {ex.Message}");
+                errors.Add($"story {storyId}: delete resolved fallita: {ex.Message}");
             }
         }
 
-        var msg = $"Reset completato: storie_ok={resetOk}, fail={resetFail}, resolved_cancellati={deletedResolved}, skipped={skipped}.";
+        var msg = $"Reset completato: storie_ok={resetOk}, fail={resetFail}, resolved_cancellati={deletedResolved}.";
         if (errors.Count > 0)
         {
             msg += " " + string.Join(" | ", errors.Take(3)) + (errors.Count > 3 ? $" (+{errors.Count - 3} altri)" : string.Empty);

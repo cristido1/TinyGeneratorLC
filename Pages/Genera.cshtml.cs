@@ -29,6 +29,9 @@ public class GeneraModel : PageModel
     private readonly CinoOptions _cinoOptions;
     private readonly RepetitionDetectionOptions _repetitionOptions;
     private readonly EmbeddingRepetitionOptions _embeddingRepetitionOptions;
+    private readonly NreEngine _nreEngine;
+    private readonly NarrativeRuntimeEngineOptions _nreOptions;
+    private readonly ICallCenter _callCenter;
 
     public GeneraModel(
         DatabaseService database,
@@ -43,6 +46,9 @@ public class GeneraModel : PageModel
         IOptions<CinoOptions> cinoOptions,
         IOptions<RepetitionDetectionOptions> repetitionOptions,
         IOptions<EmbeddingRepetitionOptions> embeddingRepetitionOptions,
+        NreEngine nreEngine,
+        IOptions<NarrativeRuntimeEngineOptions> nreOptions,
+        ICallCenter callCenter,
         MultiStepOrchestrationService? orchestrator = null,
         IServiceScopeFactory? scopeFactory = null)
     {
@@ -60,6 +66,9 @@ public class GeneraModel : PageModel
         _cinoOptions = cinoOptions?.Value ?? new CinoOptions();
         _repetitionOptions = repetitionOptions?.Value ?? new RepetitionDetectionOptions();
         _embeddingRepetitionOptions = embeddingRepetitionOptions?.Value ?? new EmbeddingRepetitionOptions();
+        _nreEngine = nreEngine ?? throw new ArgumentNullException(nameof(nreEngine));
+        _nreOptions = nreOptions?.Value ?? new NarrativeRuntimeEngineOptions();
+        _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
     }
 
     [BindProperty]
@@ -132,6 +141,54 @@ public class GeneraModel : PageModel
     [BindProperty]
     public int StateSingleWordsPerMinute { get; set; } = 150;
 
+    [BindProperty]
+    public string NreTitle { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string NreMethod { get; set; } = "state_driven";
+
+    [BindProperty]
+    public string NreStructureMode { get; set; } = "standard";
+
+    [BindProperty]
+    public string NreCostSeverity { get; set; } = "medium";
+
+    [BindProperty]
+    public string NreCombatIntensity { get; set; } = "normal";
+
+    [BindProperty]
+    public int NreMaxSteps { get; set; } = 10;
+
+    [BindProperty]
+    public string NrePrompt { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string NreTheme { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string NreSetting { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string NreGenre { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string NreTone { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string NreConstraints { get; set; } = string.Empty;
+
+    [BindProperty]
+    public string NreResourceHints { get; set; } = string.Empty;
+
+    [BindProperty]
+    public long? NreSeriesId { get; set; }
+
+    [BindProperty]
+    public int? NreSeriesEpisodeNumber { get; set; }
+
+    [BindProperty]
+    public bool NreSnapshotOnFailure { get; set; } = true;
+
     public List<Agent> Agents { get; set; } = new();
     public List<Agent> StateWriterAgents { get; set; } = new();
     public List<NarrativeProfile> NarrativeProfiles { get; set; } = new();
@@ -148,6 +205,27 @@ public class GeneraModel : PageModel
     public void OnGet()
     {
         CinoUseResponseChecker = _cinoOptions.UseResponseChecker;
+        if (string.IsNullOrWhiteSpace(NreMethod))
+        {
+            NreMethod = _nreOptions.DefaultMethod;
+        }
+        if (NreMaxSteps <= 0)
+        {
+            NreMaxSteps = Math.Max(1, _nreOptions.DefaultMaxSteps);
+        }
+        if (!IsValidNreStructureMode(NreStructureMode))
+        {
+            NreStructureMode = "standard";
+        }
+        if (!IsValidNreCostSeverity(NreCostSeverity))
+        {
+            NreCostSeverity = "medium";
+        }
+        if (!IsValidNreCombatIntensity(NreCombatIntensity))
+        {
+            NreCombatIntensity = "normal";
+        }
+        NreSnapshotOnFailure = _nreOptions.SnapshotOnFailure;
 
         // Load writer agents for dropdown (only those with a multi-step template)
         Agents = _database.ListAgents()
@@ -499,7 +577,7 @@ public class GeneraModel : PageModel
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
 
-        var startCmd = new StartStateDrivenStoryCommand(_database);
+        var startCmd = new StartStateDrivenStoryCommand(_database, _callCenter, _customLogger);
         var (success, storyId, error) = await startCmd.ExecuteAsync(
             theme: theme,
             title: title,
@@ -507,6 +585,7 @@ public class GeneraModel : PageModel
             serieId: serie.Id,
             serieEpisode: episode.Number,
             plannerMode: plannerMode,
+            resourceHints: null,
             ct: HttpContext.RequestAborted);
 
         if (!success)
@@ -608,7 +687,7 @@ public class GeneraModel : PageModel
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
 
-        var startCmd = new StartStateDrivenStoryCommand(_database);
+        var startCmd = new StartStateDrivenStoryCommand(_database, _callCenter, _customLogger);
         var (success, storyId, error) = await startCmd.ExecuteAsync(
             theme: theme,
             title: title,
@@ -616,6 +695,7 @@ public class GeneraModel : PageModel
             serieId: serie.Id,
             serieEpisode: episode.Number,
             plannerMode: plannerMode,
+            resourceHints: null,
             ct: HttpContext.RequestAborted);
 
         if (!success)
@@ -770,6 +850,221 @@ public class GeneraModel : PageModel
         return new JsonResult(new { id = genId.ToString() });
     }
 
+    public IActionResult OnPostStartNre()
+    {
+        var compositePrompt = BuildNreCompositePrompt(
+            theme: NreTheme,
+            setting: NreSetting,
+            genre: NreGenre,
+            tone: NreTone,
+            constraints: NreConstraints,
+            resourceHints: NreResourceHints);
+
+        if (string.IsNullOrWhiteSpace(compositePrompt))
+        {
+            return BadRequest(new { error = "Compila almeno il campo Tema per NRE." });
+        }
+
+        NrePrompt = compositePrompt;
+
+        var maxSteps = NreMaxSteps <= 0 ? Math.Max(1, _nreOptions.DefaultMaxSteps) : NreMaxSteps;
+        var method = string.IsNullOrWhiteSpace(NreMethod) ? _nreOptions.DefaultMethod : NreMethod.Trim();
+        var structureMode = IsValidNreStructureMode(NreStructureMode) ? NreStructureMode.Trim().ToLowerInvariant() : "standard";
+        var costSeverity = IsValidNreCostSeverity(NreCostSeverity) ? NreCostSeverity.Trim().ToLowerInvariant() : "medium";
+        var combatIntensity = IsValidNreCombatIntensity(NreCombatIntensity) ? NreCombatIntensity.Trim().ToLowerInvariant() : "normal";
+
+        var request = new EngineRequest
+        {
+            EngineName = _nreOptions.EngineName,
+            Method = method,
+            StructureMode = structureMode,
+            CostSeverity = costSeverity,
+            CombatIntensity = combatIntensity,
+            MaxSteps = maxSteps,
+            SnapshotOnFailure = NreSnapshotOnFailure,
+            RunId = Guid.NewGuid().ToString("N"),
+            UserPrompt = compositePrompt,
+            ResourceHints = string.IsNullOrWhiteSpace(NreResourceHints) ? null : NreResourceHints.Trim(),
+            SeriesId = NreSeriesId,
+            SeriesEpisodeNumber = NreSeriesEpisodeNumber
+        };
+
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+        _customLogger.Append(genId.ToString(), "🧠 NRE accodato");
+
+        var cmd = new RunNreCommand(
+            title: string.IsNullOrWhiteSpace(NreTitle) ? "NRE Story" : NreTitle.Trim(),
+            request: request,
+            database: _database,
+            engine: _nreEngine,
+            options: Microsoft.Extensions.Options.Options.Create(_nreOptions),
+            logger: _customLogger,
+            dispatcher: _dispatcher,
+            storiesService: _storiesService,
+            callCenter: _callCenter);
+
+        _dispatcher.Enqueue(
+            "run_nre",
+            async ctx => await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId),
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "run_nre",
+                ["engine"] = _nreOptions.EngineName,
+                ["method"] = method,
+                ["structureMode"] = structureMode,
+                ["costSeverity"] = costSeverity,
+                ["combatIntensity"] = combatIntensity,
+                ["maxSteps"] = maxSteps.ToString(),
+                ["stepCurrent"] = "0",
+                ["stepMax"] = maxSteps.ToString(),
+                ["agentName"] = _nreOptions.PlannerAgentName
+            },
+            priority: 2);
+
+        return new JsonResult(new { id = genId.ToString() });
+    }
+
+    public IActionResult OnPostStartNrePromptSuggestion()
+    {
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+        _customLogger.Append(genId.ToString(), "💡 Accodo suggerimento prompt NRE (batch)...");
+
+        var cmd = new GenerateNrePromptSuggestionCommand(
+            database: _database,
+            callCenter: _callCenter,
+            options: Microsoft.Extensions.Options.Options.Create(_nreOptions),
+            logger: _customLogger,
+            themeHint: null,
+            settingHint: null,
+            genreHint: null,
+            toneHint: null,
+            constraintsHint: null);
+
+        _dispatcher.Enqueue(
+            cmd,
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "nre_prompt_suggestion",
+                ["agentName"] = _nreOptions.WriterAgentName,
+                ["mode"] = "batch",
+                ["transparent"] = "1"
+            },
+            priority: 2);
+
+        return new JsonResult(new { id = genId.ToString() });
+    }
+
+    public IActionResult OnPostStartNrePromptSuggestionItalianSpaceFleet()
+    {
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+        _customLogger.Append(genId.ToString(), "🚀 Accodo suggerimento NRE (flotta spaziale italiana)...");
+
+        var baseSetting = "flotta spaziale militare italiana, teatro orbitale e profondo spazio, catena di comando navale";
+        var baseTheme = "operazione militare ad alto rischio, crisi strategica interplanetaria, lealtà e disciplina sotto pressione";
+        var baseGenre = "fantascienza militare, thriller bellico, space opera tattica";
+        var baseTone = "teso, realistico, disciplinato, epico controllato";
+        var baseConstraints = "includi le navi Colombo, Giovanni delle Bande Nere, Thaon di Revel, coerenza militare, terminologia navale";
+
+        string MergeHints(string? userValue, string fixedValue)
+        {
+            var user = string.IsNullOrWhiteSpace(userValue) ? null : userValue.Trim();
+            return string.IsNullOrWhiteSpace(user)
+                ? fixedValue
+                : $"{fixedValue}, {user}";
+        }
+
+        var cmd = new GenerateNrePromptSuggestionCommand(
+            database: _database,
+            callCenter: _callCenter,
+            options: Microsoft.Extensions.Options.Options.Create(_nreOptions),
+            logger: _customLogger,
+            themeHint: MergeHints(NreTheme, baseTheme),
+            settingHint: MergeHints(NreSetting, baseSetting),
+            genreHint: MergeHints(NreGenre, baseGenre),
+            toneHint: MergeHints(NreTone, baseTone),
+            constraintsHint: MergeHints(NreConstraints, baseConstraints));
+
+        _dispatcher.Enqueue(
+            cmd,
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "nre_prompt_suggestion_italian_space_fleet",
+                ["agentName"] = _nreOptions.WriterAgentName,
+                ["mode"] = "batch",
+                ["transparent"] = "1"
+            },
+            priority: 2);
+
+        return new JsonResult(new { id = genId.ToString() });
+    }
+
+    private static string BuildNreCompositePrompt(
+        string? theme,
+        string? setting,
+        string? genre,
+        string? tone,
+        string? constraints,
+        string? resourceHints)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(theme))
+        {
+            parts.Add($"Tema:{Environment.NewLine}{theme.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(setting))
+        {
+            parts.Add($"Ambientazione:{Environment.NewLine}{setting.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(genre))
+        {
+            parts.Add($"Genere:{Environment.NewLine}{genre.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(tone))
+        {
+            parts.Add($"Tono desiderato:{Environment.NewLine}{tone.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(constraints))
+        {
+            parts.Add($"Vincoli:{Environment.NewLine}{constraints.Trim()}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(resourceHints))
+        {
+            parts.Add($"Risorse iniziali opzionali:{Environment.NewLine}{resourceHints.Trim()}");
+        }
+
+        return string.Join(Environment.NewLine + Environment.NewLine, parts);
+    }
+
+    private static bool IsValidNreStructureMode(string? value)
+    {
+        var v = (value ?? string.Empty).Trim().ToLowerInvariant();
+        return v == "standard" || v == "military_strict";
+    }
+
+    private static bool IsValidNreCostSeverity(string? value)
+    {
+        var v = (value ?? string.Empty).Trim().ToLowerInvariant();
+        return v == "low" || v == "medium" || v == "high";
+    }
+
+    private static bool IsValidNreCombatIntensity(string? value)
+    {
+        var v = (value ?? string.Empty).Trim().ToLowerInvariant();
+        return v == "low" || v == "normal" || v == "high" || v == "total_war";
+    }
+
     public IActionResult OnPostStartStateSingleStoryAuto()
     {
         if (string.IsNullOrWhiteSpace(StateSingleTitle))
@@ -816,8 +1111,9 @@ public class GeneraModel : PageModel
                         database: _database,
                         kernelFactory: _kernelFactory,
                         storiesService: _storiesService,
-                        logger: _customLogger,
                         textValidationService: _textValidationService,
+                        callCenter: _callCenter,
+                        logger: _customLogger,
                         tuning: _tuning,
                         scopeFactory: _scopeFactory);
 

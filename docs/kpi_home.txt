@@ -1,0 +1,238 @@
+============================================================
+KPI DASHBOARD – DOCUMENTAZIONE TECNICA
+Database: storage.db
+SEZIONE 1 – PRODUZIONE
+
+KPI_01 – STORIE TOTALI
+Tabella: stories
+Filtro: deleted = 0
+Calcolo:
+SELECT COUNT(*)
+FROM stories
+WHERE deleted = 0;
+
+KPI_02 – STORIE IN PIPELINE ATTIVA
+Tabella: story_runtime_states
+Filtro: is_active = 1
+Calcolo:
+SELECT COUNT(*)
+FROM story_runtime_states
+WHERE is_active = 1;
+
+KPI_03 – STORIE CON VALUTAZIONE (almeno 1)
+Tabella: stories_evaluations
+Calcolo:
+SELECT COUNT(DISTINCT story_id)
+FROM stories_evaluations;
+
+KPI_04 – STORIE APPROVATE (media > 60)
+Tabella: stories_evaluations
+Calcolo:
+SELECT COUNT(*)
+FROM (
+SELECT story_id, AVG(total_score) AS media
+FROM stories_evaluations
+GROUP BY story_id
+HAVING media > 60
+);
+
+KPI_05 – PERCENTUALE APPROVAZIONE
+Calcolo:
+(storie con media > 60) / (storie con almeno una valutazione) * 100
+
+SEZIONE 2 – QUALITÀ NARRATIVA
+
+KPI_06 – SCORE MEDIO GLOBALE
+Tabella: stories_evaluations
+Calcolo:
+SELECT AVG(total_score)
+FROM stories_evaluations;
+
+KPI_07 – SCORE MEDIO ULTIME 20 STORIE
+Tabella: stories_evaluations
+Calcolo:
+SELECT AVG(total_score)
+FROM (
+SELECT story_id, AVG(total_score) AS media
+FROM stories_evaluations
+GROUP BY story_id
+ORDER BY MAX(ts) DESC
+LIMIT 20
+);
+
+KPI_09 – PENALITÀ LUNGHEZZA MEDIA
+Tabella: stories_evaluations
+Calcolo:
+SELECT AVG(lenght_penality_percentage_applyed)
+FROM stories_evaluations;
+
+KPI_10 – DIFETTI COERENZA (<60)
+Tabella: stories_evaluations
+Calcolo:
+SELECT COUNT(*)
+FROM stories_evaluations
+WHERE narrative_coherence_score < 60;
+
+KPI_11 – DIFETTI ORIGINALITÀ (<60)
+SELECT COUNT(*)
+FROM stories_evaluations
+WHERE originality_score < 60;
+
+KPI_12 – DIFETTI IMPATTO EMOTIVO (<60)
+SELECT COUNT(*)
+FROM stories_evaluations
+WHERE emotional_impact_score < 60;
+
+KPI_13 – DIFETTI AZIONE (<60)
+SELECT COUNT(*)
+FROM stories_evaluations
+WHERE action_score < 60;
+
+SEZIONE 3 – PERFORMANCE MODELLI
+
+KPI_14 – SUCCESS RATE PER MODELLO
+Tabella: stats_models
+Calcolo:
+SELECT model_name,
+count_successed * 1.0 / count_used AS success_rate
+FROM stats_models
+WHERE count_used > 0;
+
+KPI_15 – TEMPO MEDIO GENERAZIONE
+Tabella: stats_models
+Calcolo:
+SELECT model_name,
+duration_total_time * 1.0 / duration_total_count AS avg_time
+FROM stats_models
+WHERE duration_total_count > 0;
+
+KPI_16 – MODELLO WRITER PRIMARIO – SUCCESS RATE
+Tabelle: model_roles, roles
+Filtro: role = 'writer' AND is_primary = 1
+Calcolo:
+SELECT mr.id,
+mr.use_successed * 1.0 / mr.use_count AS success_rate
+FROM model_roles mr
+JOIN roles r ON mr.role_id = r.id
+WHERE r.ruolo = 'writer'
+AND mr.is_primary = 1;
+
+KPI_17 – ERRORI PER MODELLO
+Tabella: model_roles_errors
+Calcolo:
+SELECT parent_id,
+SUM(error_count) AS total_errors
+FROM model_roles_errors
+GROUP BY parent_id
+ORDER BY total_errors DESC;
+
+SEZIONE 4 – ENGINE STATE-DRIVEN
+
+KPI_18 – FAILURE MEDIO PER STORIA
+Tabella: story_runtime_states
+Calcolo:
+SELECT AVG(failure_count)
+FROM story_runtime_states;
+
+KPI_19 – STORIE CON FAILURE > 0
+SELECT COUNT(*)
+FROM story_runtime_states
+WHERE failure_count > 0;
+
+KPI_20 – CHUNK MEDIO PER STORIA
+Tabella: story_runtime_states
+Calcolo:
+SELECT AVG(current_chunk_index)
+FROM story_runtime_states;
+
+KPI_21 – BLOCCHI MEDI PER STORIA
+Tabella: narrative_story_blocks
+Calcolo:
+SELECT AVG(cnt)
+FROM (
+SELECT story_id, COUNT(*) AS cnt
+FROM narrative_story_blocks
+GROUP BY story_id
+);
+
+KPI_22 – QUALITÀ MEDIA BLOCCHI
+Tabella: narrative_story_blocks
+Calcolo:
+SELECT AVG(quality_score)
+FROM narrative_story_blocks;
+
+SEZIONE 5 – AUDIO
+
+KPI_23 – % STORIE CON TTS
+Tabella: stories
+Calcolo:
+SELECT COUNT() * 100.0 /
+(SELECT COUNT() FROM stories WHERE deleted = 0)
+FROM stories
+WHERE generated_tts = 1
+AND deleted = 0;
+
+KPI_24 – % STORIE AUDIO COMPLETO
+SELECT COUNT() * 100.0 /
+(SELECT COUNT() FROM stories WHERE deleted = 0)
+FROM stories
+WHERE generated_tts = 1
+AND generated_music = 1
+AND generated_ambient = 1
+AND generated_effects = 1
+AND generated_mixed_audio = 1
+AND deleted = 0;
+
+KPI_25 – SUONI MANCANTI APERTI
+Tabella: sounds_missing
+Calcolo:
+SELECT COUNT(*)
+FROM sounds_missing
+WHERE status = 'open';
+
+KPI_26 – UTILIZZO MEDIO SUONI
+Tabella: sounds
+Calcolo:
+SELECT AVG(usage_count)
+FROM sounds
+WHERE enabled = 1;
+
+SEZIONE 6 – SERIE
+
+KPI_27 – SERIE TOTALI
+Tabella: series
+Calcolo:
+SELECT COUNT(*)
+FROM series;
+
+KPI_28 – EPISODI MEDI PER SERIE
+Tabella: series_episodes
+Calcolo:
+SELECT AVG(cnt)
+FROM (
+SELECT serie_id, COUNT(*) AS cnt
+FROM series_episodes
+GROUP BY serie_id
+);
+
+KPI_29 – PERSONAGGI MEDI PER SERIE
+Tabella: series_characters
+Calcolo:
+SELECT AVG(cnt)
+FROM (
+SELECT serie_id, COUNT(*) AS cnt
+FROM series_characters
+GROUP BY serie_id
+);
+
+SEZIONE 7 – TEST MODELLI
+
+KPI_30 – TEST RUN PASS RATE
+Tabella: model_test_runs
+Calcolo:
+SELECT SUM(passed) * 100.0 / COUNT(*)
+FROM model_test_runs;
+
+KPI_31 – DURATA MEDIA TEST
+SELECT AVG(duration_ms)
+FROM model_test_runs;

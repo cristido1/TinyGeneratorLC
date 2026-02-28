@@ -1,0 +1,65 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "story_id",
+    "series_id",
+    "episode_id",
+    "chapter_id",
+    "scene_id",
+    "timeline_index",
+    "location_current",
+    "time_context",
+    "active_characters",
+    "dead_characters",
+    "missing_characters",
+    "objects_in_scene",
+    "environment_state",
+    "conflict_state",
+    "goal_current",
+    "last_events",
+    "pov_character",
+    "tone_current",
+    "custom_flags"
+  ],
+  "properties": {
+    "story_id": { "type": "integer" },
+    "series_id": { "type": ["integer", "null"] },
+    "episode_id": { "type": ["integer", "null"] },
+    "chapter_id": { "type": ["integer", "null"] },
+    "scene_id": { "type": ["integer", "null"] },
+    "timeline_index": { "type": "integer" },
+    "location_current": { "type": ["string", "null"] },
+    "time_context": { "type": ["string", "null"] },
+    "active_characters": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "dead_characters": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "missing_characters": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "objects_in_scene": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "environment_state": {
+      "type": "object"
+    },
+    "conflict_state": { "type": ["string", "null"] },
+    "goal_current": { "type": ["string", "null"] },
+    "last_events": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "pov_character": { "type": ["string", "null"] },
+    "tone_current": { "type": ["string", "null"] },
+    "custom_flags": {
+      "type": "object"
+    }
+  }
+}

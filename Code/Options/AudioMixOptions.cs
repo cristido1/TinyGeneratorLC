@@ -6,5 +6,7 @@ namespace TinyGenerator.Services
         public double BackgroundSoundsVolume { get; set; } = 3;
         public double FxSourdsVolume { get; set; } = 6;
         public double VoiceVolume { get; set; } = 7;
+        public int DefaultPhraseGapMs { get; set; } = 2000;
+        public int CommaAttributionGapMs { get; set; } = 350;
     }
 }

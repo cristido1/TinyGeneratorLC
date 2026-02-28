@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["canon_state"],
+  "properties": {
+    "canon_state": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["resources"],
+      "properties": {
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["name", "quantity"],
+            "properties": {
+              "resource_id": { "type": "string" },
+              "name": { "type": "string" },
+              "type": {
+                "type": "string",
+                "enum": ["person", "ship", "vehicle", "weapon", "system", "asset", "unit", "location", "intel", "supply", "energy", "generic"]
+              },
+              "status_flag": {
+                "type": "string",
+                "enum": ["active", "damaged", "critical", "destroyed", "missing", "inactive", "depleted", "captured", "lost", "unavailable"]
+              },
+              "status_text": { "type": ["string", "null"] },
+              "quantity": { "type": "integer", "minimum": 0 },
+              "integrity_percent": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+              "location": { "type": ["string", "null"] },
+              "last_update_chunk": { "type": "integer", "minimum": 0 },
+              "morale_level": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+              "stress_level": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+              "fatigue_level": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+              "mental_state_flag": {
+                "type": ["string", "null"],
+                "enum": ["stable", "focused", "stressed", "anxious", "panicked", "fearful", "angry", "confused", "traumatized", "exhausted", "numb", "motivated", null]
+              },
+              "psych_notes": { "type": ["string", "null"] },
+              "notes_json": { "type": ["object", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "phases": {
+      "type": "array",
+      "description": "Sequenza delle fasi narrative pianificate.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "integer", "minimum": 1, "description": "Indice progressivo della fase." },
+          "name": { "type": "string", "description": "Nome breve della fase." },
+          "objective": { "type": "string", "description": "Obiettivo narrativo della fase." },
+          "conflict": { "type": "string", "description": "Conflitto dominante della fase." },
+          "tension_level": { "type": "integer", "minimum": 1, "maximum": 5, "description": "Livello di tensione della fase (1 basso, 5 alto)." }
+        },
+        "required": ["index", "name", "objective", "conflict", "tension_level"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["phases"],
+  "additionalProperties": false
+}

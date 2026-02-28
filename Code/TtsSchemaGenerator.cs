@@ -256,8 +256,18 @@ namespace TinyGenerator.Services
                     }
                     if (!string.IsNullOrWhiteSpace(desc))
                     {
-                        pendingAmbientSounds = FilterTextField(desc);
-                        pendingAmbientSoundTags = tagsCsv;
+                        // Common tagger format: [RUMORI: tag1, tag2, tag3] without explicit "| TAGS:" clause.
+                        // In that case prefer storing normalized tags in ambientSoundTags.
+                        if (string.IsNullOrWhiteSpace(tagsCsv) && TryDeriveTagsFromInlineList(desc, out var derivedAmbientTags))
+                        {
+                            pendingAmbientSounds = null;
+                            pendingAmbientSoundTags = derivedAmbientTags;
+                        }
+                        else
+                        {
+                            pendingAmbientSounds = FilterTextField(desc);
+                            pendingAmbientSoundTags = tagsCsv;
+                        }
                         _logger?.Log("Debug", "TtsSchemaGenerator",
                             $"Parsed ambient sounds (for AudioCraft): '{pendingAmbientSounds}' | tags='{pendingAmbientSoundTags ?? string.Empty}'");
                     }
@@ -305,14 +315,24 @@ namespace TinyGenerator.Services
                     var parts = afterColon.Split('|', 2, StringSplitOptions.TrimEntries);
                     if (parts.Length >= 1)
                     {
-                        string type;
+                        string? type;
                         pendingMusicDuration = null;
                         if (parts.Length == 2 &&
-                            double.TryParse(parts[0].Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var durSeconds) &&
-                            durSeconds > 0)
+                            TryParseDurationSeconds(parts[0], out var parsedSeconds))
                         {
-                            pendingMusicDuration = (int)Math.Ceiling(durSeconds);
-                            type = parts[1].Trim();
+                            pendingMusicDuration = parsedSeconds;
+                            var right = FilterTextField(parts[1].Trim());
+                            if (string.IsNullOrWhiteSpace(musicTagsCsv))
+                            {
+                                // Common format: [MUSIC: 15 s | combat, battle, ...]
+                                // When explicit TAGS clause is missing, treat right side as tag list.
+                                pendingMusicTags = right;
+                                type = null;
+                            }
+                            else
+                            {
+                                type = right;
+                            }
                         }
                         else
                         {
@@ -323,7 +343,10 @@ namespace TinyGenerator.Services
                         pendingMusicDescription = !string.IsNullOrWhiteSpace(type)
                             ? FilterTextField(type)
                             : null;
-                        pendingMusicTags = musicTagsCsv;
+                        if (string.IsNullOrWhiteSpace(pendingMusicTags))
+                        {
+                            pendingMusicTags = musicTagsCsv;
+                        }
 
                         // opening/ending are always applied in the final mix, not inside tts_schema.json timeline.
                         if (string.Equals(pendingMusicDescription, "opening", StringComparison.OrdinalIgnoreCase) ||
@@ -367,6 +390,21 @@ namespace TinyGenerator.Services
                             pendingMusicDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
                             pendingMusicDescription = FilterTextField(durationAtStartMatch.Groups[2].Value.Trim());
                             _logger?.Log("Debug", "TtsSchemaGenerator", $"Parsed MUSICA (duration+desc): duration={pendingMusicDuration}s, desc='{pendingMusicDescription}'");
+                            continue;
+                        }
+
+                        // Pattern A2: "15 s | tag1, tag2, ..." (without explicit TAGS: clause)
+                        var durationWithPipeMatch = Regex.Match(desc, @"^(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)\s*\|\s*(.+)$", RegexOptions.IgnoreCase);
+                        if (durationWithPipeMatch.Success)
+                        {
+                            var durationStr = durationWithPipeMatch.Groups[1].Value.Replace(',', '.');
+                            pendingMusicDuration = (int)Math.Ceiling(double.Parse(durationStr, System.Globalization.CultureInfo.InvariantCulture));
+                            if (string.IsNullOrWhiteSpace(pendingMusicTags))
+                            {
+                                pendingMusicTags = FilterTextField(durationWithPipeMatch.Groups[2].Value.Trim());
+                            }
+                            pendingMusicDescription = null;
+                            _logger?.Log("Debug", "TtsSchemaGenerator", $"Parsed MUSICA (duration+tags): duration={pendingMusicDuration}s, tags='{pendingMusicTags}'");
                             continue;
                         }
 
@@ -433,7 +471,25 @@ namespace TinyGenerator.Services
                             !string.IsNullOrWhiteSpace(description))
                         {
                             pendingFxDuration = (int)Math.Ceiling(duration);
-                            pendingFxDescription = FilterTextField(description);
+                            // Common format generated by taggers: [FX: 5 : boom, explosion, metal, ...]
+                            // If no explicit TAGS clause is present, treat comma-separated payload as tags.
+                            if (string.IsNullOrWhiteSpace(pendingFxTags))
+                            {
+                                var derivedTags = NormalizeCsvTags(description);
+                                if (!string.IsNullOrWhiteSpace(derivedTags))
+                                {
+                                    pendingFxTags = derivedTags;
+                                    pendingFxDescription = null;
+                                }
+                                else
+                                {
+                                    pendingFxDescription = FilterTextField(description);
+                                }
+                            }
+                            else
+                            {
+                                pendingFxDescription = FilterTextField(description);
+                            }
                         }
                         else
                         {
@@ -580,9 +636,13 @@ namespace TinyGenerator.Services
                     ["fx_file"] = null,
 
                     ["music_description"] = pendingMusicDescription,
+                    ["musicDescription"] = pendingMusicDescription,
                     ["music_tags"] = pendingMusicTags,
                     ["musicTags"] = pendingMusicTags,
                     ["music_duration"] = pendingMusicDuration ?? (pendingMusicDescription != null ? 10 : null),
+                    ["musicDuration"] = pendingMusicDuration ?? (pendingMusicDescription != null ? 10 : null),
+                    ["music_duration_secs"] = pendingMusicDuration ?? (pendingMusicDescription != null ? 10 : null),
+                    ["musicDurationSecs"] = pendingMusicDuration ?? (pendingMusicDescription != null ? 10 : null),
                     ["music_file"] = null
                 };
 
@@ -641,6 +701,36 @@ namespace TinyGenerator.Services
             return (body, tags);
         }
 
+        private static bool TryParseDurationSeconds(string? raw, out int seconds)
+        {
+            seconds = 0;
+            var value = (raw ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            var withUnit = Regex.Match(value, @"^(\d+(?:[.,]\d+)?)\s*(?:secondi?|sec|s)?$", RegexOptions.IgnoreCase);
+            if (!withUnit.Success)
+            {
+                return false;
+            }
+
+            var n = withUnit.Groups[1].Value.Replace(',', '.');
+            if (!double.TryParse(n, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            {
+                return false;
+            }
+
+            if (parsed <= 0)
+            {
+                return false;
+            }
+
+            seconds = (int)Math.Ceiling(parsed);
+            return seconds > 0;
+        }
+
         private static string? NormalizeCsvTags(string? csv)
         {
             if (string.IsNullOrWhiteSpace(csv)) return null;
@@ -656,6 +746,43 @@ namespace TinyGenerator.Services
                 .ToList();
 
             return tokens.Count == 0 ? null : string.Join(", ", tokens);
+        }
+
+        private static bool TryDeriveTagsFromInlineList(string? raw, out string? normalizedTags)
+        {
+            normalizedTags = null;
+            var text = (raw ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            // Heuristic: comma-separated short fragments without sentence punctuation.
+            if (!text.Contains(','))
+            {
+                return false;
+            }
+            if (text.Contains('.') || text.Contains('!') || text.Contains('?') || text.Contains(':') || text.Contains(';'))
+            {
+                return false;
+            }
+
+            var parts = text.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Trim())
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .ToList();
+            if (parts.Count < 2 || parts.Count > 20)
+            {
+                return false;
+            }
+
+            if (parts.Any(p => p.Length > 32 || p.Count(char.IsWhiteSpace) > 2))
+            {
+                return false;
+            }
+
+            normalizedTags = NormalizeCsvTags(text);
+            return !string.IsNullOrWhiteSpace(normalizedTags);
         }
 
         /// <summary>

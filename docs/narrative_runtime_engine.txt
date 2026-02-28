@@ -1,0 +1,240 @@
+===============================================================================
+NARRATIVE RUNTIME ENGINE (NRE)
+Algoritmo Ultra-Pragmatico – Documentazione Tecnica
+===============================================================================
+
+OBIETTIVO
+-------------------------------------------------------------------------------
+Implementare un motore narrativo in-memory (NRE) che:
+- venga eseguito tramite ICommand (Command Dispatcher)
+- utilizzi il CallCenter per tutte le chiamate agli agenti
+- NON utilizzi nuove tabelle DB per lo stato runtime
+- salvi snapshot SOLO in caso di failure
+- produca una nuova riga in stories con il testo finale
+
+Il sistema è progettato per essere semplice, estendibile e riutilizzabile
+per futuri engine narrativi.
+
+===============================================================================
+ARCHITETTURA GENERALE
+===============================================================================
+
+LIVELLO 1 – Command
+- RunNreCommand : ICommand
+- Crea la nuova story nel DB
+- Prepara cartelle
+- Crea EngineContext
+- Invoca NreEngine
+- Gestisce successo/failure
+- Scrive DB e log
+
+LIVELLO 2 – Engine
+- NreEngine : IEngine
+- Orchestrazione in memoria
+- Loop di generazione
+- Validazioni
+- Snapshot su failure
+
+LIVELLO 3 – CallCenter
+- Tutte le chiamate agli agenti passano esclusivamente da qui
+- Gestione retry / deterministic checks / response checks
+
+===============================================================================
+FLUSSO COMPLETO DELL’ALGORITMO
+===============================================================================
+
+1) AVVIO COMANDO
+
+RunNreCommand.Execute(context):
+
+1.1 Inserisce nuova riga in stories:
+     - status = "running"
+     - prompt
+     - eventuale serie/episodio
+     - folder
+     - timestamp
+
+1.2 Ottiene StoryId (PK autoincrement)
+
+1.3 Crea cartelle:
+     /stories/{folder}/
+     /stories/{folder}/snapshots/
+
+1.4 Crea EngineRequest:
+     - EngineName = "NRE"
+     - Method = es: "state_driven"
+     - MaxSteps = es: 10
+     - SnapshotOnFailure = true
+     - RunId = guid
+     - UserPrompt = prompt iniziale
+
+1.5 Crea EngineContext:
+     - StoryId
+     - StoryFolder
+     - SnapshotsFolder
+     - CancellationToken
+     - ReportProgress delegate
+     - Telemetry inizializzato
+     - Trace buffer vuoto
+
+1.6 Invoca:
+     result = await NreEngine.RunAsync(ctx)
+
+-------------------------------------------------------------------------------
+
+2) ESECUZIONE NRE (IN MEMORY)
+
+NreEngine.RunAsync(ctx):
+
+2.1 Inizializza stato narrativo:
+     - NarrativeState
+     - List<NarrativeBlock> Blocks
+     - eventuali ResourceState
+     - eventuale Planning
+
+2.2 Loop fino a MaxSteps:
+
+     a) ctx.CancellationToken.ThrowIfCancellationRequested()
+
+     b) ctx.ReportProgress(stepIndex, MaxSteps, "Generating...")
+
+     c) Costruisce input per agente:
+        - Prompt base
+        - Stato corrente
+        - Blocchi precedenti
+        - Planning (se presente)
+
+     d) Chiama CallCenter:
+        agentResult = await CallCenter.Execute(...)
+
+     e) Aggiorna Telemetry:
+        - StepCount++
+        - Token count
+        - Latency
+        - LastAgentName / LastModelName
+
+     f) Se agentResult fallisce:
+        - FailureCount++
+        - Se superata soglia -> STOP con failure
+
+     g) Se successo:
+        - Crea NarrativeBlock
+        - Aggiunge a Blocks
+        - Aggiorna NarrativeState
+        - Registra EngineEvent in Trace
+
+2.3 Condizioni di STOP:
+     - MaxSteps raggiunto
+     - Criterio di completamento narrativo
+     - Errore non recuperabile
+     - Cancellation
+
+-------------------------------------------------------------------------------
+
+3) SUCCESSO
+
+Se completato correttamente:
+
+3.1 Concatena Blocks in FinalText
+3.2 Crea EngineResult:
+     - StoryId
+     - Succeeded = true
+     - StopReason = "Completed"
+     - FinalText
+     - Telemetry
+
+3.3 Ritorna al Command
+
+-------------------------------------------------------------------------------
+
+4) FAILURE
+
+Se errore:
+
+4.1 Crea NreFailureSnapshotPayload contenente:
+     - EngineName
+     - Method
+     - RunId
+     - StoryId
+     - Timestamp
+     - NarrativeState
+     - Ultimi N blocchi (es 10)
+     - Telemetry
+     - Ultimi N eventi trace (es 50)
+     - ErrorMessage
+     - ExceptionStack
+     - LastAgentName
+     - LastModelName
+     - SnapshotSchemaVersion
+
+4.2 SnapshotWriter salva file:
+
+snapshots/
+nre_<method>__<storyId>__<yyyyMMdd_HHmmss>__step<NN>__fail.json
+
+4.3 EngineResult:
+     - Succeeded = false
+     - StopReason = "Exception" o equivalente
+     - SnapshotFilePath valorizzato
+     - ErrorSummary
+
+-------------------------------------------------------------------------------
+
+5) RITORNO AL COMMAND
+
+RunNreCommand:
+
+5.1 Se success:
+     - aggiorna stories.story_raw
+     - status = "done"
+
+5.2 Se failure:
+     - status = "failed"
+     - crea record in system_reports
+     - logga snapshot path
+
+===============================================================================
+REGOLE ARCHITETTURALI
+===============================================================================
+
+1) L’engine NON accede direttamente al database.
+2) L’engine NON chiama provider LLM direttamente.
+3) Tutte le chiamate agenti passano da CallCenter.
+4) Nessuna tabella runtime viene creata.
+5) Snapshot solo su failure.
+6) L’engine deve essere riutilizzabile per altri algoritmi.
+
+===============================================================================
+OGGETTI PRINCIPALI
+===============================================================================
+
+- EngineRequest
+- EngineContext
+- EngineResult
+- IEngine
+- NreEngine
+- EngineTelemetry
+- EngineEvent
+- NarrativeState
+- NarrativeBlock
+- NreFailureSnapshotPayload
+- SnapshotWriter
+
+===============================================================================
+ESTENSIONI FUTURE
+===============================================================================
+
+Il design permette:
+- nuovi metodi (Method diversi)
+- engine alternativi (altre classi IEngine)
+- modalità single-pass
+- modalità multi-agent
+- politiche diverse di stop
+- snapshot manuali
+- metriche più avanzate
+
+Senza aggiungere tabelle al database.
+
+===============================================================================
+FINE DOCUMENTO
+===============================================================================

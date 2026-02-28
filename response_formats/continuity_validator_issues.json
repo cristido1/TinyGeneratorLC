@@ -3,14 +3,18 @@
   "properties": {
     "issues": {
       "type": "array",
+      "description": "Problemi di continuità rilevati nel blocco.",
       "items": {
         "type": "object",
         "properties": {
           "severity": {
-            "type": "string"
+            "type": "string",
+            "description": "Livello di gravità del problema.",
+            "enum": ["low", "medium", "high"]
           },
           "description": {
-            "type": "string"
+            "type": "string",
+            "description": "Descrizione sintetica del problema."
           }
         },
         "required": [

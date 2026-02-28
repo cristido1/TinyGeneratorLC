@@ -22,6 +22,8 @@ public sealed class GenerateStateDrivenSingleStoryCommand
     private readonly ICustomLogger? _logger;
     private readonly CommandTuningOptions _tuning;
     private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly ICallCenter? _callCenter;
+    private readonly string? _resourceHints;
 
     public GenerateStateDrivenSingleStoryCommand(
         string theme,
@@ -35,6 +37,8 @@ public sealed class GenerateStateDrivenSingleStoryCommand
         ILangChainKernelFactory kernelFactory,
         StoriesService storiesService,
         TextValidationService textValidationService,
+        ICallCenter? callCenter = null,
+        string? resourceHints = null,
         ICustomLogger? logger = null,
         CommandTuningOptions? tuning = null,
         IServiceScopeFactory? scopeFactory = null)
@@ -50,6 +54,8 @@ public sealed class GenerateStateDrivenSingleStoryCommand
         _kernelFactory = kernelFactory ?? throw new ArgumentNullException(nameof(kernelFactory));
         _storiesService = storiesService ?? throw new ArgumentNullException(nameof(storiesService));
         _textValidationService = textValidationService ?? throw new ArgumentNullException(nameof(textValidationService));
+        _callCenter = callCenter;
+        _resourceHints = resourceHints;
         _logger = logger;
         _tuning = tuning ?? new CommandTuningOptions();
         _scopeFactory = scopeFactory;
@@ -81,7 +87,7 @@ public sealed class GenerateStateDrivenSingleStoryCommand
             return new CommandResult(false, "WriterAgentId is required");
         }
 
-        var startCmd = new StartStateDrivenStoryCommand(_database);
+        var startCmd = new StartStateDrivenStoryCommand(_database, _callCenter, _logger);
         var (success, storyId, error) = await startCmd.ExecuteAsync(
             theme: _theme,
             title: _title,
@@ -89,6 +95,7 @@ public sealed class GenerateStateDrivenSingleStoryCommand
             serieId: null,
             serieEpisode: null,
             plannerMode: _plannerMode,
+            resourceHints: _resourceHints,
             ct: ct).ConfigureAwait(false);
 
         if (!success || storyId <= 0)

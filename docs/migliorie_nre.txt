@@ -1,0 +1,247 @@
+===============================================================================
+NRE – DOCUMENTAZIONE PER CODEX
+Integrazione agenti nre_* + riuso/estensione DeterministicChecks + CallCenter
+===============================================================================
+
+OBIETTIVO
+-------------------------------------------------------------------------------
+1) Far funzionare NRE con 3 agenti: nre_planner, nre_writer, nre_evaluator.
+2) Tutte le chiamate agenti passano dal CallCenter.
+3) Ogni chiamata agente applica:
+   - DeterministicChecks (IDeterministicCheck)
+   - ResponseChecker (solo regole dell’agente)
+4) Nessuna tabella nuova per stato runtime.
+5) Snapshot solo su failure.
+
+CONVENZIONI
+-------------------------------------------------------------------------------
+- Tutti gli agenti NRE hanno prefisso: nre_
+  (nre_planner, nre_writer, nre_evaluator, eventuali futuri: nre_continuity, nre_formatter)
+- I deterministic checks sono riutilizzabili e composabili per “policy” per agente.
+- Separare chiaramente:
+  - Retry CallCenter (intra-step)
+  - Retry Engine (macro, step-level) [future]
+
+===============================================================================
+1) COSA RIUSARE SUBITO (SENZA RISCRIVERE)
+===============================================================================
+
+A) Per output TESTO di nre_writer (block narrativo)
+-------------------------------------------------------------------------------
+RIUSARE:
+- CheckEmpty
+- CheckMinLength
+- CheckMaxLength
+- CheckTextValidation  (usa TextValidationService: ripetizioni, loop, ecc.)
+- CheckCliffhangerEnding  (SOLO se Method=state_driven richiede cliffhanger)
+
+NOTE:
+- CheckTextValidation è il cuore della qualità: applicarlo SEMPRE al writer.
+- Se CheckCliffhangerEnding oggi è globale, rendilo opzionale via Method/policy.
+
+B) Per output JSON di nre_planner (phases JSON)
+-------------------------------------------------------------------------------
+RIUSARE:
+- CheckEmpty
+- CheckJsonArray  (solo se l’output è array; se l’output è un oggetto JSON, serve un check diverso)
+- (se esiste) CheckSeriesOutputValidity -> NON usarlo, è per serie; meglio un check planner-specific.
+
+DA AGGIUNGERE (nuovo check planner):
+- CheckNrePlannerJsonValidity (IDeterministicCheck)
+  Verifica che il JSON sia un oggetto con campo "phases" array e che ogni phase abbia:
+  index (int), name/objective/conflict (string), tension_level (1..5).
+
+C) Per output JSON di nre_evaluator (score/issues)
+-------------------------------------------------------------------------------
+RIUSARE:
+- CheckEmpty
+- (se esiste) CheckJsonObjectValidity -> se non esiste, crearne uno.
+DA AGGIUNGERE (nuovo check evaluator):
+- CheckNreEvaluatorJsonValidity (IDeterministicCheck)
+  Verifica JSON con campi:
+  score 0..100, needs_retry bool, issues array di string.
+
+===============================================================================
+2) COSA TRASFORMARE IN IDeterministicCheck (e dove applicarlo)
+===============================================================================
+
+Tutto ciò che “boccia” un output in modo deterministico deve essere un IDeterministicCheck.
+Non mettere queste regole nell’evaluator LLM: è spreco di token e instabile.
+
+2.1 Checks già esistenti (riuso diretto come IDeterministicCheck)
+-------------------------------------------------------------------------------
+- CheckEmpty
+- CheckMinLength
+- CheckMaxLength
+- CheckTextValidation
+- CheckCliffhangerEnding (solo per Method che lo richiede)
+
+2.2 Nuovi IDeterministicCheck da creare (minimi, ad alto impatto)
+-------------------------------------------------------------------------------
+
+[NUOVO] CheckNoDuplicateSentencesAcrossBlocks
+Scopo:
+- Bloccare frasi già comparse nella storia (tra blocchi diversi), per evitare duplicazioni.
+Input:
+- history = concatenazione di Blocks precedenti (o ultime N frasi)
+- newText = blocco proposto
+Logica:
+- split in frasi, normalizza, escludi frasi < 6 parole e frasi “standard” (Ricevuto, Sì signore, ecc.)
+- match esatto normalizzato => FAIL
+- match similarità (Jaccard) oltre soglia (es 0.92) => FAIL
+Applicazione:
+- SOLO su nre_writer
+
+[NUOVO] CheckFilterBannedPhrases
+Scopo:
+- Filtrare frasi bannate richieste da Cris:
+  - "Sottotitoli e revisione a cura di QTSS"
+  - "Grazie per aver guardato il video."
+Applicazione:
+- nre_writer (Block)
+- opzionale su altri agenti (SoftFail)
+
+[NUOVO] CheckNrePlannerJsonValidity
+Scopo:
+- Planner deve emettere JSON parseable con schema atteso.
+Applicazione:
+- nre_planner (Block)
+
+[NUOVO] CheckNreEvaluatorJsonValidity
+Scopo:
+- Evaluator deve emettere JSON parseable con campi attesi.
+Applicazione:
+- nre_evaluator (Block)
+
+[OPZIONALE – fase 2] CheckShipStateMachine
+Scopo:
+- Evitare “resurrezione” navi distrutte.
+Dipendenze:
+- richiede un mini-state tracking in memoria (Dictionary<string, ShipState>)
+Applicazione:
+- nre_writer (Block o StopEngine se persistente)
+Nota:
+- Se non hai già un extractor deterministico di eventi “destroyed/damaged”, partire con una versione base:
+  - se trova pattern “X è distrutta/esplosa/annientata” => set Destroyed
+  - se in blocchi successivi trova “X manovra/spara/risponde” => FAIL
+
+===============================================================================
+3) POLICY: QUALI CHECK APPLICARE A QUALE AGENTE (CallCenter)
+===============================================================================
+
+Implementare una “AgentCheckPolicyResolver” (anche semplice) che ritorni la lista di checks
+in base a agent_name (o agent_role).
+
+Esempio policy minima:
+
+- nre_writer:
+  [CheckEmpty,
+   CheckMinLength,
+   CheckMaxLength,
+   CheckFilterBannedPhrases,
+   CheckTextValidation,
+   CheckNoDuplicateSentencesAcrossBlocks,
+   (opzionale) CheckCliffhangerEnding]
+
+- nre_planner:
+  [CheckEmpty,
+   CheckNrePlannerJsonValidity]
+
+- nre_evaluator:
+  [CheckEmpty,
+   CheckNreEvaluatorJsonValidity]
+
+NOTA:
+- CheckTextValidation e CheckNoDuplicateSentencesAcrossBlocks devono ricevere HISTORY.
+  Per NRE: history = concatenazione dei blocchi già accettati (o ultimi N blocchi).
+
+===============================================================================
+4) RESPONSE CHECKER: COSA DEVE FARE (regole dell’agente)
+===============================================================================
+
+Per NRE mantenere ResponseChecker “pulito”:
+- controlla SOLO le regole specifiche dell’agente (REGOLA 1..N nel system prompt dell’agente)
+- non duplicare in ResponseChecker ciò che è deterministic check
+
+Esempio:
+- nre_planner: “Rispondi solo JSON”
+- nre_evaluator: “Rispondi solo JSON”
+- nre_writer: “Solo testo narrativo, niente titoli/riassunti/meta” (ma la parte ‘meta’ è anche deterministic)
+
+===============================================================================
+5) SERVONO NUOVI AGENTI?
+===============================================================================
+
+Per farlo funzionare: NO.
+Minimo per NRE v1:
+- nre_planner
+- nre_writer
+- nre_evaluator
+
+AGENTI DA AGGIUNGERE SOLO SE SERVE (fase 2):
+- nre_continuity (estrazione fatti in JSON per aiutare coerenza tra blocchi)
+  Motivo: migliora continuità senza appesantire prompt writer con tutta la storia.
+  Nota: non è obbligatorio se implementi CheckShipStateMachine in modo deterministico.
+
+- nre_formatter (se vuoi normalizzare virgolette, spazi, ecc.)
+  Motivo: pulizia output, non qualità narrativa.
+
+===============================================================================
+6) DOVE COLLEGARE IL TUTTO (punti precisi)
+===============================================================================
+
+A) NreEngine
+- Per ogni step:
+  1) CallCenter.ExecuteAgent("nre_writer", inputWriter, historyText)
+     -> CallCenter applica policy checks + response checker
+  2) CallCenter.ExecuteAgent("nre_evaluator", inputEval, historyText)
+     -> JSON validity check + response checker
+  3) se evaluator.needs_retry => (future) EngineRetryCount++ e ripeti step
+  4) se ok => append blocco a Blocks
+
+B) CallCenter
+- Aggiungere (o usare se già esiste) un hook:
+  - ResolveChecksForAgent(agentName) -> List<IDeterministicCheck>
+- Passare sempre:
+  - newText (output agente)
+  - historyText (blocchi già accettati) quando serve
+
+C) DeterministicChecks
+- Ogni check deve implementare IDeterministicCheck e funzionare con:
+  - newText
+  - historyText (opzionale)
+  - agentName (opzionale)
+- Il check deve restituire:
+  - Pass/Fail
+  - ReasonCode + Details (per log/system_reports)
+
+===============================================================================
+7) TELEMETRY: SEMANTICA RETRY (importante per UI/log/snapshot)
+===============================================================================
+
+- Telemetry.AgentRetryCount = retry consumati dal CallCenter
+  (Attempts - 1) su chiamata agente, include fallback model/agent se nel CallCenter.
+
+- Telemetry.EngineRetryCount (futuro) = retry macro (NRE ripete lo step dopo failure definitivo).
+
+Non mischiare i due contatori.
+
+===============================================================================
+8) OUTPUT E SNAPSHOT
+===============================================================================
+
+- Se una chiamata agente fallisce dopo i retry del CallCenter:
+  - NreEngine produce EngineResult failed
+  - SnapshotWriter scrive NreFailureSnapshotPayload in /snapshots/
+  - Command salva system_reports e marca story come failed
+
+- Snapshot payload deve includere:
+  - EngineRequest, StoryId, Method, timestamp
+  - ultimi N blocks
+  - Telemetry
+  - ultimi N trace events
+  - last agent output + error reason
+
+===============================================================================
+FINE
+===============================================================================

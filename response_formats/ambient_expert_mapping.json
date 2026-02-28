@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entries"
+  ],
+  "properties": {
+    "entries": {
+      "type": "array",
+      "description": "Mappature dei tag ambientali per riga di dialogo.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "line",
+          "tags"
+        ],
+        "properties": {
+          "line": { "type": "integer", "description": "Numero riga (1-based) del segmento nel testo taggato." },
+          "tags": {
+            "type": "array",
+            "description": "Tag ambientali da usare per la ricerca suoni.",
+            "items": { "type": "string", "description": "Singolo tag ambientale." }
+          }
+        }
+      }
+    }
+  }
+}

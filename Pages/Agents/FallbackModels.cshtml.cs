@@ -313,7 +313,10 @@ namespace TinyGenerator.Pages.Agents
 
         private void LoadReferenceData()
         {
-            Models = _database.ListModels();
+            Models = _database.ListModels()
+                .Where(m => m.Enabled)
+                .OrderBy(m => m.Name)
+                .ToList();
             var roles = _context.Roles.ToList();
             var existing = new HashSet<string>(roles.Select(r => r.Ruolo), StringComparer.OrdinalIgnoreCase);
             var agentRoles = _database.ListAgentRoles();

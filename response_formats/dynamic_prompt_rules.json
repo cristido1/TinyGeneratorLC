@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rules"
+  ],
+  "properties": {
+    "rules": {
+      "type": "array",
+      "description": "Regole dinamiche da applicare al prompt.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "repeat_count"
+        ],
+        "properties": {
+          "text": { "type": "string", "description": "Testo della regola da applicare." },
+          "repeat_count": { "type": "integer", "description": "Numero di ripetizioni della regola nel prompt finale." }
+        }
+      }
+    }
+  }
+}

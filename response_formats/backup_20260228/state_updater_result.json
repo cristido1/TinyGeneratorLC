@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "world_state",
+    "open_threads",
+    "last_major_event"
+  ],
+  "properties": {
+    "world_state": {
+      "type": "object"
+    },
+    "open_threads": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "last_major_event": { "type": "string" }
+  }
+}

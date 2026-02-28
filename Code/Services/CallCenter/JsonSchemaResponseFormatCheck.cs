@@ -1,9 +1,13 @@
+using System.Globalization;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 
 namespace TinyGenerator.Services;
 
 public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
 {
+    private const int MaxReportedProblems = 5;
     private readonly string _schemaJson;
     private readonly string _schemaName;
 
@@ -31,7 +35,7 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
             using var schemaDoc = JsonDocument.Parse(_schemaJson);
             using var responseDoc = JsonDocument.Parse(raw);
 
-            var errors = new List<string>();
+            var errors = new List<string>(MaxReportedProblems);
             ValidateAgainstSchema(responseDoc.RootElement, schemaDoc.RootElement, "$", errors, depth: 0);
 
             if (errors.Count == 0)
@@ -44,7 +48,7 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
                 };
             }
 
-            return Fail(string.Join(" | ", errors));
+            return Fail($"primi {Math.Min(MaxReportedProblems, errors.Count)} problemi: {string.Join(" | ", errors)}");
         }
         catch (JsonException ex)
         {
@@ -63,45 +67,67 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
         };
     }
 
-    private static void ValidateAgainstSchema(
+    private static bool ValidateAgainstSchema(
         JsonElement data,
         JsonElement schema,
         string path,
         List<string> errors,
         int depth)
     {
+        if (errors.Count >= MaxReportedProblems)
+        {
+            return false;
+        }
+
         if (depth > 64)
         {
-            errors.Add($"{path}: profondita schema eccessiva");
-            return;
+            return AddError(errors, $"{path}: profondita schema eccessiva");
         }
 
-        var schemaType = GetSchemaType(schema);
-        if (!IsTypeCompatible(data, schemaType))
+        var schemaTypes = GetSchemaTypes(schema);
+        if (!IsTypeCompatible(data, schemaTypes))
         {
-            errors.Add($"{path}: tipo atteso '{schemaType}', ricevuto '{data.ValueKind}'");
-            return;
+            var expectedType = schemaTypes.Count == 0 ? "(any)" : string.Join("|", schemaTypes);
+            return AddError(errors, $"{path}: tipo atteso '{expectedType}', ricevuto '{data.ValueKind}'");
         }
 
-        if (string.Equals(schemaType, "object", StringComparison.OrdinalIgnoreCase))
+        if (!ValidateEnum(data, schema, path, errors))
         {
-            ValidateObject(data, schema, path, errors, depth + 1);
-            return;
+            return false;
         }
 
-        if (string.Equals(schemaType, "array", StringComparison.OrdinalIgnoreCase))
+        if (!ValidateNumericRange(data, schema, path, errors))
         {
-            ValidateArray(data, schema, path, errors, depth + 1);
+            return false;
         }
+
+        if (schemaTypes.Any(t => string.Equals(t, "object", StringComparison.OrdinalIgnoreCase)) &&
+            data.ValueKind == JsonValueKind.Object)
+        {
+            return ValidateObject(data, schema, path, errors, depth + 1);
+        }
+
+        if (schemaTypes.Any(t => string.Equals(t, "array", StringComparison.OrdinalIgnoreCase)) &&
+            data.ValueKind == JsonValueKind.Array)
+        {
+            return ValidateArray(data, schema, path, errors, depth + 1);
+        }
+
+        return true;
     }
 
-    private static void ValidateObject(
+    private static bool ValidateObject(
         JsonElement data,
         JsonElement schema,
         string path,
         List<string> errors,
         int depth)
     {
+        if (errors.Count >= MaxReportedProblems)
+        {
+            return false;
+        }
+
         if (TryGetPropertyIgnoreCase(schema, "required", out var required) &&
             required.ValueKind == JsonValueKind.Array)
         {
@@ -112,15 +138,39 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
                 if (string.IsNullOrWhiteSpace(propName)) continue;
                 if (!TryGetPropertyIgnoreCase(data, propName!, out _))
                 {
-                    errors.Add($"{path}: manca campo obbligatorio '{propName}'");
+                    if (!AddError(errors, $"{path}: manca campo obbligatorio '{propName}'"))
+                    {
+                        return false;
+                    }
                 }
             }
         }
 
-        if (!TryGetPropertyIgnoreCase(schema, "properties", out var properties) ||
-            properties.ValueKind != JsonValueKind.Object)
+        var hasProperties = TryGetPropertyIgnoreCase(schema, "properties", out var properties) &&
+                            properties.ValueKind == JsonValueKind.Object;
+
+        if (TryGetPropertyIgnoreCase(schema, "additionalProperties", out var additionalProps) &&
+            additionalProps.ValueKind == JsonValueKind.False &&
+            hasProperties)
         {
-            return;
+            var allowedNames = properties.EnumerateObject().Select(p => p.Name).ToList();
+            foreach (var dataProp in data.EnumerateObject())
+            {
+                if (allowedNames.Any(n => string.Equals(n, dataProp.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                if (!AddError(errors, $"{path}: campo non consentito '{dataProp.Name}'"))
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (!hasProperties)
+        {
+            return errors.Count < MaxReportedProblems;
         }
 
         foreach (var propSchema in properties.EnumerateObject())
@@ -130,76 +180,116 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
                 continue;
             }
 
-            ValidateAgainstSchema(child, propSchema.Value, $"{path}.{propSchema.Name}", errors, depth + 1);
+            if (!ValidateAgainstSchema(child, propSchema.Value, $"{path}.{propSchema.Name}", errors, depth + 1))
+            {
+                return false;
+            }
         }
+
+        return errors.Count < MaxReportedProblems;
     }
 
-    private static void ValidateArray(
+    private static bool ValidateArray(
         JsonElement data,
         JsonElement schema,
         string path,
         List<string> errors,
         int depth)
     {
+        if (errors.Count >= MaxReportedProblems)
+        {
+            return false;
+        }
+
         if (!TryGetPropertyIgnoreCase(schema, "items", out var itemsSchema))
         {
-            return;
+            return true;
         }
 
         var index = 0;
         foreach (var item in data.EnumerateArray())
         {
-            ValidateAgainstSchema(item, itemsSchema, $"{path}[{index}]", errors, depth + 1);
+            if (!ValidateAgainstSchema(item, itemsSchema, $"{path}[{index}]", errors, depth + 1))
+            {
+                return false;
+            }
+
             index++;
         }
+
+        return true;
     }
 
-    private static string GetSchemaType(JsonElement schema)
+    private static List<string> GetSchemaTypes(JsonElement schema)
     {
         if (TryGetPropertyIgnoreCase(schema, "type", out var t))
         {
             if (t.ValueKind == JsonValueKind.String)
             {
-                return t.GetString() ?? string.Empty;
+                var single = t.GetString();
+                return string.IsNullOrWhiteSpace(single) ? new List<string>() : new List<string> { single! };
             }
 
             if (t.ValueKind == JsonValueKind.Array)
             {
+                var types = new List<string>();
                 foreach (var item in t.EnumerateArray())
                 {
                     if (item.ValueKind == JsonValueKind.String)
                     {
                         var candidate = item.GetString();
-                        if (!string.IsNullOrWhiteSpace(candidate) &&
-                            !string.Equals(candidate, "null", StringComparison.OrdinalIgnoreCase))
+                        if (!string.IsNullOrWhiteSpace(candidate))
                         {
-                            return candidate!;
+                            types.Add(candidate!);
                         }
                     }
+                }
+
+                if (types.Count > 0)
+                {
+                    return types;
                 }
             }
         }
 
         if (TryGetPropertyIgnoreCase(schema, "properties", out _))
         {
-            return "object";
+            return new List<string> { "object" };
         }
 
         if (TryGetPropertyIgnoreCase(schema, "items", out _))
         {
-            return "array";
+            return new List<string> { "array" };
         }
 
-        return string.Empty;
+        return new List<string>();
     }
 
-    private static bool IsTypeCompatible(JsonElement data, string schemaType)
+    private static bool IsTypeCompatible(JsonElement data, IReadOnlyCollection<string> schemaTypes)
     {
-        if (string.IsNullOrWhiteSpace(schemaType))
+        if (schemaTypes == null || schemaTypes.Count == 0)
         {
             return true;
         }
 
+        foreach (var schemaType in schemaTypes)
+        {
+            if (string.IsNullOrWhiteSpace(schemaType))
+            {
+                continue;
+            }
+
+            if (IsTypeCompatibleSingle(data, schemaType))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsTypeCompatibleSingle(JsonElement data, string schemaType)
+    {
         return schemaType.ToLowerInvariant() switch
         {
             "object" => data.ValueKind == JsonValueKind.Object,
@@ -211,6 +301,99 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
             "null" => data.ValueKind == JsonValueKind.Null,
             _ => true
         };
+    }
+
+    private static bool ValidateEnum(JsonElement data, JsonElement schema, string path, List<string> errors)
+    {
+        if (!TryGetPropertyIgnoreCase(schema, "enum", out var enumNode) ||
+            enumNode.ValueKind != JsonValueKind.Array)
+        {
+            return true;
+        }
+
+        foreach (var allowed in enumNode.EnumerateArray())
+        {
+            if (JsonElementsEqual(data, allowed))
+            {
+                return true;
+            }
+        }
+
+        return AddError(errors, $"{path}: valore '{FormatValue(data)}' non ammesso da enum");
+    }
+
+    private static bool ValidateNumericRange(JsonElement data, JsonElement schema, string path, List<string> errors)
+    {
+        if (data.ValueKind != JsonValueKind.Number)
+        {
+            return true;
+        }
+
+        if (!data.TryGetDecimal(out var value))
+        {
+            return AddError(errors, $"{path}: numero non valido");
+        }
+
+        if (TryGetPropertyIgnoreCase(schema, "minimum", out var minNode) &&
+            minNode.ValueKind == JsonValueKind.Number &&
+            minNode.TryGetDecimal(out var minValue))
+        {
+            if (value < minValue)
+            {
+                return AddError(errors, $"{path}: valore {value.ToString(CultureInfo.InvariantCulture)} < minimum {minValue.ToString(CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        if (TryGetPropertyIgnoreCase(schema, "maximum", out var maxNode) &&
+            maxNode.ValueKind == JsonValueKind.Number &&
+            maxNode.TryGetDecimal(out var maxValue))
+        {
+            if (value > maxValue)
+            {
+                return AddError(errors, $"{path}: valore {value.ToString(CultureInfo.InvariantCulture)} > maximum {maxValue.ToString(CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        return true;
+    }
+
+    private static bool JsonElementsEqual(JsonElement left, JsonElement right)
+    {
+        if (left.ValueKind != right.ValueKind)
+        {
+            return false;
+        }
+
+        return left.ValueKind switch
+        {
+            JsonValueKind.String => string.Equals(left.GetString(), right.GetString(), StringComparison.Ordinal),
+            JsonValueKind.Number => left.TryGetDecimal(out var l) && right.TryGetDecimal(out var r) && l == r,
+            JsonValueKind.True => true,
+            JsonValueKind.False => true,
+            JsonValueKind.Null => true,
+            _ => string.Equals(left.GetRawText(), right.GetRawText(), StringComparison.Ordinal)
+        };
+    }
+
+    private static string FormatValue(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString() ?? string.Empty,
+            JsonValueKind.Null => "null",
+            _ => element.GetRawText()
+        };
+    }
+
+    private static bool AddError(List<string> errors, string message)
+    {
+        if (errors.Count >= MaxReportedProblems)
+        {
+            return false;
+        }
+
+        errors.Add(message);
+        return errors.Count < MaxReportedProblems;
     }
 
     private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
@@ -236,4 +419,3 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
         return false;
     }
 }
-

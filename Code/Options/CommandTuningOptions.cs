@@ -13,7 +13,7 @@ public sealed class CommandTuningOptions
     public sealed class AmbientExpertTuning
     {
         public bool AutolaunchNextCommand { get; set; } = true;
-        public int RequestTimeoutSeconds { get; set; } = 45;
+        public int RequestTimeoutSeconds { get; set; } = 90;
         public int MinTokensPerChunk { get; set; } = 1000;
         public int MaxTokensPerChunk { get; set; } = 2000;
         public int TargetTokensPerChunk { get; set; } = 1500;

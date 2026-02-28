@@ -5,8 +5,289 @@
     ViewData["PageDescription"] = "Crea una storia completa con trama, personaggi e capitoli";
 }
 
-<details class="note-card" style="max-width:900px; margin-bottom:18px">
-    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Genera storia multi-step</summary>
+<style>
+    .generator-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        align-items: start;
+        margin-bottom: 18px;
+    }
+
+    .generator-panel.note-card {
+        margin-bottom: 0 !important;
+        max-width: none !important;
+        width: 100%;
+        border: 1px solid #dbe4ea;
+        border-radius: 14px;
+        background:
+            radial-gradient(circle at 85% 12%, rgba(44, 111, 187, 0.10), transparent 42%),
+            linear-gradient(180deg, #ffffff, #f8fbff);
+        overflow: hidden;
+        box-shadow: 0 4px 14px rgba(18, 42, 66, 0.06);
+    }
+
+    /* Disable global note-card animated green orbit border on this page */
+    .generator-panel.note-card::before,
+    .generator-panel.note-card:hover::before {
+        content: none !important;
+        display: none !important;
+        animation: none !important;
+        opacity: 0 !important;
+        background: none !important;
+    }
+
+    .generator-panel.note-card:hover {
+        transform: none !important;
+    }
+
+    .generator-panel[open] {
+        grid-column: 1 / -1;
+        box-shadow: 0 12px 28px rgba(18, 42, 66, 0.12);
+    }
+
+    .generator-panel:focus-within {
+        background:
+            linear-gradient(180deg, #f4fbf6, #edf8f0) !important;
+        border-color: #cfe6d5 !important;
+        box-shadow: 0 6px 18px rgba(77, 135, 95, 0.10) !important;
+        animation: none !important;
+    }
+
+    .generator-panel:focus-within > summary.generator-summary {
+        background: linear-gradient(180deg, rgba(240, 251, 244, 0.95), rgba(247, 253, 249, 0.95)) !important;
+        animation: none !important;
+    }
+
+    .generator-panel summary:focus,
+    .generator-panel summary:focus-visible {
+        outline: none;
+    }
+
+    .generator-panel > summary.generator-summary {
+        list-style: none;
+        cursor: pointer;
+        margin: 0 !important;
+        padding: 12px 14px 12px 84px;
+        min-height: 76px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        position: relative;
+        border-bottom: 1px solid transparent;
+        user-select: none;
+    }
+
+    .generator-panel > summary.generator-summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .generator-panel[open] > summary.generator-summary {
+        border-bottom-color: #e5edf4;
+        background: linear-gradient(180deg, rgba(244, 249, 255, 0.95), rgba(255,255,255,0.95));
+    }
+
+    .generator-panel > summary.generator-summary::before {
+        content: attr(data-icon);
+        position: absolute;
+        left: 10px;
+        top: 50%;
+        transform: translateY(-52%);
+        width: 62px;
+        height: 62px;
+        display: grid;
+        place-items: center;
+        font-size: 2.15rem;
+        color: rgba(0, 0, 0, 0.22);
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        filter: grayscale(1) saturate(0);
+        pointer-events: none;
+        z-index: 0;
+    }
+
+    .generator-panel > summary.generator-summary::after {
+        content: attr(data-subtitle);
+        margin-top: 2px;
+        font-size: 0.78rem;
+        color: #557087;
+        font-weight: 500;
+    }
+
+    .generator-panel > summary.generator-summary .generator-summary-title {
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: #102335;
+        line-height: 1.2;
+        padding-right: 24px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .generator-panel > summary.generator-summary .generator-summary-chevron {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: #5d7387;
+        font-size: 1rem;
+        transition: transform .15s ease;
+        z-index: 1;
+    }
+
+    .generator-panel[open] > summary.generator-summary .generator-summary-chevron {
+        transform: translateY(-50%) rotate(180deg);
+    }
+
+    .generator-panel .generator-panel-body {
+        padding: 14px;
+    }
+
+    @@media (max-width: 1100px) {
+        .generator-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .generator-panel[open] {
+            grid-column: 1 / -1;
+        }
+    }
+
+    @@media (max-width: 760px) {
+        .generator-grid {
+            grid-template-columns: 1fr;
+        }
+        .generator-panel[open] {
+            grid-column: auto;
+        }
+        .generator-panel > summary.generator-summary {
+            min-height: 70px;
+            padding-left: 78px;
+        }
+        .generator-panel > summary.generator-summary::before {
+            width: 52px;
+            height: 52px;
+            font-size: 1.8rem;
+        }
+    }
+</style>
+
+<div class="generator-grid" id="generationPanels">
+<details class="note-card generator-panel">
+    <summary class="note-title generator-summary" data-icon="◎" data-subtitle="Nuovo runtime in-memory (skeleton UI)">
+        <span class="generator-summary-title">Narrative Runtime Engine (NRE)</span>
+        <span class="generator-summary-chevron">▾</span>
+    </summary>
+    <div class="generator-panel-body">
+    <form id="nreForm">
+        @Html.AntiForgeryToken()
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+            <div style="min-width:260px; flex:1;">
+                <label for="NreTitle" class="note-title">Titolo (opzionale)</label>
+                <input id="NreTitle" name="NreTitle" class="keep-input font-monospace" style="width:100%; padding:8px" maxlength="160" placeholder="Titolo working" value="@Model.NreTitle" />
+            </div>
+            <div style="min-width:220px; flex:0 0 220px;">
+                <label for="NreMethod" class="note-title">Method</label>
+                <select id="NreMethod" name="NreMethod" class="keep-input" style="width:100%; padding:8px">
+                    <option value="state_driven" selected="@(string.Equals(Model.NreMethod, "state_driven", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">state_driven</option>
+                    <option value="single_pass" selected="@(string.Equals(Model.NreMethod, "single_pass", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">single_pass</option>
+                </select>
+            </div>
+            <div style="min-width:220px; flex:0 0 220px;">
+                <label for="NreStructureMode" class="note-title">Struttura narrativa</label>
+                <select id="NreStructureMode" name="NreStructureMode" class="keep-input" style="width:100%; padding:8px">
+                    <option value="standard" selected="@(string.Equals(Model.NreStructureMode, "standard", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Standard</option>
+                    <option value="military_strict" selected="@(string.Equals(Model.NreStructureMode, "military_strict", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Militare rigorosa</option>
+                </select>
+            </div>
+            <div style="min-width:220px; flex:0 0 220px;">
+                <label for="NreCostSeverity" class="note-title">Gravità conseguenze</label>
+                <select id="NreCostSeverity" name="NreCostSeverity" class="keep-input" style="width:100%; padding:8px">
+                    <option value="low" selected="@(string.Equals(Model.NreCostSeverity, "low", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Bassa</option>
+                    <option value="medium" selected="@(string.Equals(Model.NreCostSeverity, "medium", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Media</option>
+                    <option value="high" selected="@(string.Equals(Model.NreCostSeverity, "high", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Alta</option>
+                </select>
+            </div>
+            <div style="min-width:220px; flex:0 0 220px;">
+                <label for="NreCombatIntensity" class="note-title">Intensità combattimento</label>
+                <select id="NreCombatIntensity" name="NreCombatIntensity" class="keep-input" style="width:100%; padding:8px">
+                    <option value="low" selected="@(string.Equals(Model.NreCombatIntensity, "low", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Bassa</option>
+                    <option value="normal" selected="@(string.Equals(Model.NreCombatIntensity, "normal", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Normale</option>
+                    <option value="high" selected="@(string.Equals(Model.NreCombatIntensity, "high", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Alta</option>
+                    <option value="total_war" selected="@(string.Equals(Model.NreCombatIntensity, "total_war", StringComparison.OrdinalIgnoreCase) ? "selected" : null)">Guerra totale</option>
+                </select>
+            </div>
+            <div style="min-width:160px; flex:0 0 160px;">
+                <label for="NreMaxSteps" class="note-title">MaxSteps</label>
+                <input id="NreMaxSteps" name="NreMaxSteps" class="keep-input" style="width:100%; padding:8px" type="number" min="1" max="200" value="@Model.NreMaxSteps" />
+            </div>
+        </div>
+        <div style="margin-bottom:10px;">
+            <label for="NreTheme" class="note-title">Tema</label>
+            <textarea id="NreTheme" name="NreTheme" class="keep-input font-monospace" rows="3" style="width:100%; padding:8px" placeholder="ribellione contro una corporazione, missione fallita, protagonista ambigua">@Model.NreTheme</textarea>
+        </div>
+        <div style="margin-bottom:10px;">
+            <label for="NreSetting" class="note-title">Ambientazione</label>
+            <textarea id="NreSetting" name="NreSetting" class="keep-input font-monospace" rows="3" style="width:100%; padding:8px" placeholder="megalopoli costiera allagata, colonia orbitale isolata, Italia anni 90 alternativa">@Model.NreSetting</textarea>
+        </div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+            <div style="min-width:220px; flex:1;">
+                <label for="NreGenre" class="note-title">Genere</label>
+                <input id="NreGenre" name="NreGenre" class="keep-input" style="width:100%; padding:8px" placeholder="thriller, fantascienza, noir" value="@Model.NreGenre" />
+            </div>
+            <div style="min-width:220px; flex:1;">
+                <label for="NreTone" class="note-title">Tono desiderato</label>
+                <input id="NreTone" name="NreTone" class="keep-input" style="width:100%; padding:8px" placeholder="teso, cupo, realistico" value="@Model.NreTone" />
+            </div>
+        </div>
+        <div style="margin-bottom:10px;">
+            <label for="NreConstraints" class="note-title">Eventuali vincoli</label>
+            <textarea id="NreConstraints" name="NreConstraints" class="keep-input font-monospace" rows="3" style="width:100%; padding:8px" placeholder="niente magia, POV in terza persona, finale aperto, dialoghi brevi">@Model.NreConstraints</textarea>
+        </div>
+        <div style="margin-bottom:10px;">
+            <label for="NreResourceHints" class="note-title">Risorse iniziali (opzionale)</label>
+            <textarea id="NreResourceHints" name="NreResourceHints" class="keep-input font-monospace" rows="3" style="width:100%; padding:8px" placeholder="nave Colombo: 10 missili antimateria, capitano Carta, squadra abbordaggio alfa, drone ricognitore OR-7">@Model.NreResourceHints</textarea>
+        </div>
+        <div id="savedNreStories" style="margin-bottom:10px; display:flex; gap:8px; flex-wrap:wrap"></div>
+        <input type="hidden" id="NrePrompt" name="NrePrompt" value="@Model.NrePrompt" />
+        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+            <div style="min-width:220px; flex:0 0 220px;">
+                <label for="NreSeriesId" class="note-title">SeriesId (opzionale)</label>
+                <input id="NreSeriesId" name="NreSeriesId" class="keep-input" style="width:100%; padding:8px" type="number" min="1" value="@Model.NreSeriesId" />
+            </div>
+            <div style="min-width:240px; flex:0 0 240px;">
+                <label for="NreSeriesEpisodeNumber" class="note-title">SeriesEpisodeNumber (opzionale)</label>
+                <input id="NreSeriesEpisodeNumber" name="NreSeriesEpisodeNumber" class="keep-input" style="width:100%; padding:8px" type="number" min="1" value="@Model.NreSeriesEpisodeNumber" />
+            </div>
+            <div style="display:flex; align-items:flex-end; min-width:260px; flex:1;">
+                <label style="display:flex; align-items:center; gap:8px; margin:0 0 8px 0;">
+                    <input type="checkbox" id="NreSnapshotOnFailure" name="NreSnapshotOnFailure" value="true" @(Model.NreSnapshotOnFailure ? "checked" : null) />
+                    <span class="note-title" style="margin:0;">Snapshot on failure</span>
+                </label>
+            </div>
+        </div>
+        <div id="nreError" role="alert" style="color:#b00020; margin-bottom:8px; display:none"></div>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" id="suggestNrePromptBtn" class="action-btn" style="font-weight:600; padding:8px 14px; display:inline-flex; align-items:center; gap:8px;">
+                <span id="suggestNrePromptSpinner" class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="display:none;"></span>
+                <span id="suggestNrePromptBtnText">Suggerisci titolo+prompt</span>
+            </button>
+            <button type="button" id="suggestNreMilitaryPromptBtn" class="action-btn" style="font-weight:600; padding:8px 14px">
+                Suggerisci militare (flotta italiana)
+            </button>
+            <button type="button" id="startNreBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia NRE</button>
+            <span style="font-size:0.85em; color:#5d7387;">Versione iniziale collegata a planner/writer/evaluator via CallCenter.</span>
+        </div>
+    </form>
+    </div>
+</details>
+
+<details class="note-card generator-panel">
+    <summary class="note-title generator-summary" data-icon="◫" data-subtitle="Template multi-step + writer selezionato">
+        <span class="generator-summary-title">Genera storia multi-step</span>
+        <span class="generator-summary-chevron">▾</span>
+    </summary>
+    <div class="generator-panel-body">
     <form id="genForm">
         @Html.AntiForgeryToken()
         <div style="margin-bottom:10px">
@@ -53,10 +334,15 @@
             <div id="stepStatus" style="margin-top:6px; font-size:0.9em; color:#666;"></div>
         </div>
     </form>
+    </div>
 </details>
 
-<details class="note-card" style="max-width:900px; margin-bottom:18px">
-    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">CINO Optimize Story</summary>
+<details class="note-card generator-panel">
+    <summary class="note-title generator-summary" data-icon="◉" data-subtitle="Ottimizzazione e valutazione iterativa">
+        <span class="generator-summary-title">CINO Optimize Story</span>
+        <span class="generator-summary-chevron">▾</span>
+    </summary>
+    <div class="generator-panel-body">
     <form id="cinoForm">
         @Html.AntiForgeryToken()
         <div style="margin-bottom:10px">
@@ -76,10 +362,15 @@
             <button type="button" id="startCinoBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia CINO</button>
         </div>
     </form>
+    </div>
 </details>
 
-<details class="note-card" style="max-width:900px; margin-bottom:18px">
-    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Genera episodio da serie</summary>
+<details class="note-card generator-panel">
+    <summary class="note-title generator-summary" data-icon="▤" data-subtitle="Da serie/episodio con writer multi-step">
+        <span class="generator-summary-title">Genera episodio da serie</span>
+        <span class="generator-summary-chevron">▾</span>
+    </summary>
+    <div class="generator-panel-body">
     <form id="seriesEpisodeForm">
         @Html.AntiForgeryToken()
         <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
@@ -117,10 +408,15 @@
             <button type="button" id="startSeriesEpisodeBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia episodio serie</button>
         </div>
     </form>
+    </div>
 </details>
 
-<details class="note-card" style="max-width:900px; margin-bottom:18px">
-    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Genera episodio state-driven</summary>
+<details class="note-card generator-panel">
+    <summary class="note-title generator-summary" data-icon="◌" data-subtitle="Serie + episodio in modalità state-driven">
+        <span class="generator-summary-title">Genera episodio state-driven</span>
+        <span class="generator-summary-chevron">▾</span>
+    </summary>
+    <div class="generator-panel-body">
     <form id="stateSeriesEpisodeForm">
         @Html.AntiForgeryToken()
         <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
@@ -166,10 +462,15 @@
             <button type="button" id="startStateSeriesEpisodeAutoBtn" class="action-btn" style="font-weight:600; padding:8px 14px">Avvia episodio completo (~minuti TTS)</button>
         </div>
     </form>
+    </div>
 </details>
 
-<details class="note-card" style="max-width:900px; margin-bottom:18px">
-    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Genera storia singola state-driven</summary>
+<details class="note-card generator-panel">
+    <summary class="note-title generator-summary" data-icon="✎" data-subtitle="Storia standalone state-driven con durata target">
+        <span class="generator-summary-title">Genera storia singola state-driven</span>
+        <span class="generator-summary-chevron">▾</span>
+    </summary>
+    <div class="generator-panel-body">
     <form id="stateSingleStoryForm">
         @Html.AntiForgeryToken()
         <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
@@ -232,10 +533,15 @@
             <button type="button" id="startStateSingleStoryBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia storia singola</button>
         </div>
     </form>
+    </div>
 </details>
 
-<details class="note-card" style="max-width:900px; margin-bottom:18px">
-    <summary class="note-title" style="cursor:pointer; margin-bottom:10px;">Continua storia state-driven</summary>
+<details class="note-card generator-panel">
+    <summary class="note-title generator-summary" data-icon="⟲" data-subtitle="Riprende una story state-driven da StoryId">
+        <span class="generator-summary-title">Continua storia state-driven</span>
+        <span class="generator-summary-chevron">▾</span>
+    </summary>
+    <div class="generator-panel-body">
     <form id="stateNextChunkForm">
         @Html.AntiForgeryToken()
         <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
@@ -261,7 +567,10 @@
             <button type="button" id="startStateNextChunkBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Genera chunk successivo</button>
         </div>
     </form>
+    </div>
 </details>
+
+</div>
 
 <hr />
 <h2>Stato generazione (live):</h2>
@@ -292,8 +601,195 @@
     const stateNextChunkError = document.getElementById('stateNextChunkError');
     const startCinoBtn = document.getElementById('startCinoBtn');
     const cinoError = document.getElementById('cinoError');
+    const startNreBtn = document.getElementById('startNreBtn');
+    const suggestNrePromptBtn = document.getElementById('suggestNrePromptBtn');
+    const suggestNreMilitaryPromptBtn = document.getElementById('suggestNreMilitaryPromptBtn');
+    const suggestNrePromptSpinner = document.getElementById('suggestNrePromptSpinner');
+    const suggestNrePromptBtnText = document.getElementById('suggestNrePromptBtnText');
+    const nreError = document.getElementById('nreError');
     let pollInterval = null;
     let connection = null;
+
+    // Card behavior: keep one generation panel expanded at a time.
+    document.querySelectorAll('#generationPanels .generator-panel').forEach(panel => {
+        panel.addEventListener('toggle', () => {
+            if (!panel.open) return;
+            document.querySelectorAll('#generationPanels .generator-panel').forEach(other => {
+                if (other !== panel) other.open = false;
+            });
+        });
+    });
+
+    if (startNreBtn) {
+        startNreBtn.addEventListener('click', async () => {
+            if (nreError) {
+                nreError.textContent = '';
+                nreError.style.display = 'none';
+            }
+
+            const method = document.getElementById('NreMethod')?.value || 'state_driven';
+            const maxSteps = document.getElementById('NreMaxSteps')?.value || '10';
+            const theme = document.getElementById('NreTheme')?.value || '';
+            const genre = document.getElementById('NreGenre')?.value || '';
+            const tone = document.getElementById('NreTone')?.value || '';
+            const snapshot = document.getElementById('NreSnapshotOnFailure')?.checked ? 'true' : 'false';
+
+            if (!theme.trim()) {
+                if (nreError) {
+                    nreError.textContent = 'Inserisci almeno il Tema per NRE.';
+                    nreError.style.display = 'block';
+                }
+                return;
+            }
+
+            clearMessages();
+            appendMessage('🧠 Avvio NRE...');
+
+            const form = document.getElementById('nreForm');
+            const fd = new FormData(form);
+            const res = await fetch('?handler=StartNre', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const text = await res.text();
+                if (nreError) {
+                    nreError.textContent = text;
+                    nreError.style.display = 'block';
+                }
+                appendMessage('Errore avvio NRE: ' + text, 'error');
+                return;
+            }
+
+            const data = await res.json();
+            const id = data.id;
+            try { localStorage.setItem('lastGenId', id); } catch { }
+            saveNreStoryToCookie();
+            appendMessage(`🟢 NRE avviato. id: ${id}`);
+            appendMessage(`Parametri: method=${method}; maxSteps=${maxSteps}; genre=${genre || '-'}; tone=${tone || '-'}; snapshotOnFailure=${snapshot}`);
+            await loadHistory(id);
+            await connectSignalRAndJoin(id);
+        });
+    }
+
+    if (suggestNrePromptBtn) {
+        suggestNrePromptBtn.addEventListener('click', async () => {
+            await requestNreSuggestion('?handler=StartNrePromptSuggestion', '💡 Richiesta suggerimento NRE (batch)...');
+        });
+    }
+
+    if (suggestNreMilitaryPromptBtn) {
+        suggestNreMilitaryPromptBtn.addEventListener('click', async () => {
+            await requestNreSuggestion(
+                '?handler=StartNrePromptSuggestionItalianSpaceFleet',
+                '🚀 Richiesta suggerimento NRE militare (flotta spaziale italiana)...');
+        });
+    }
+
+    async function requestNreSuggestion(url, startMessage) {
+        if (nreError) {
+            nreError.textContent = '';
+            nreError.style.display = 'none';
+        }
+
+        setNreSuggestionLoading(true);
+        clearMessages();
+        appendMessage(startMessage);
+        try {
+            const form = document.getElementById('nreForm');
+            const fd = new FormData(form);
+            const res = await fetch(url, { method: 'POST', body: fd });
+            if (!res.ok) {
+                const text = await res.text();
+                if (nreError) {
+                    nreError.textContent = text;
+                    nreError.style.display = 'block';
+                }
+                appendMessage('Errore suggerimento NRE: ' + text, 'error');
+                return;
+            }
+
+            const data = await res.json();
+            const id = data.id;
+            try { localStorage.setItem('lastGenId', id); } catch { }
+            appendMessage(`🟢 Suggerimento NRE accodato. id: ${id}`);
+            await loadHistory(id);
+            await connectSignalRAndJoin(id);
+            await waitAndApplyNreSuggestion(id);
+        } finally {
+            setNreSuggestionLoading(false);
+        }
+    }
+
+    function setNreSuggestionLoading(isLoading) {
+        if (!suggestNrePromptBtn) return;
+        suggestNrePromptBtn.disabled = !!isLoading;
+        suggestNrePromptBtn.style.opacity = isLoading ? '0.75' : '';
+        suggestNrePromptBtn.style.cursor = isLoading ? 'wait' : '';
+        if (suggestNreMilitaryPromptBtn) {
+            suggestNreMilitaryPromptBtn.disabled = !!isLoading;
+            suggestNreMilitaryPromptBtn.style.opacity = isLoading ? '0.75' : '';
+            suggestNreMilitaryPromptBtn.style.cursor = isLoading ? 'wait' : '';
+        }
+        if (suggestNrePromptSpinner) {
+            suggestNrePromptSpinner.style.display = isLoading ? 'inline-block' : 'none';
+        }
+        if (suggestNrePromptBtnText) {
+            suggestNrePromptBtnText.textContent = isLoading
+                ? 'Generazione suggerimento...'
+                : 'Suggerisci titolo+prompt';
+        }
+    }
+
+    async function waitAndApplyNreSuggestion(id) {
+        const started = Date.now();
+        const timeoutMs = 120000;
+        while (Date.now() - started < timeoutMs) {
+            try {
+                const p = await fetch(`?handler=progress&id=${encodeURIComponent(id)}`);
+                if (p.ok) {
+                    const js = await p.json();
+                    if (js && js.completed) {
+                        if (!js.result) {
+                            appendMessage('Suggerimento NRE completato senza payload.', 'warning');
+                            return;
+                        }
+
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(js.result);
+                        } catch (e) {
+                            appendMessage('Payload suggerimento NRE non è JSON valido.', 'warning');
+                            return;
+                        }
+
+        applyNreSuggestionToForm(payload);
+        renderSavedNreButtons();
+        appendMessage('✅ Campi NRE aggiornati con proposta automatica.', 'success');
+        return;
+                    }
+                }
+            } catch (e) {
+                console.error('waitAndApplyNreSuggestion', e);
+            }
+            await new Promise(r => setTimeout(r, 1200));
+        }
+        appendMessage('Timeout attesa suggerimento NRE.', 'warning');
+    }
+
+    function applyNreSuggestionToForm(payload) {
+        if (!payload || typeof payload !== 'object') return;
+        const setVal = (id, value) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = (value ?? '').toString();
+        };
+        setVal('NreTitle', payload.title);
+        setVal('NreTheme', payload.theme);
+        setVal('NreSetting', payload.setting);
+        setVal('NreGenre', payload.genre);
+        setVal('NreTone', payload.tone);
+        setVal('NreConstraints', payload.constraints);
+        setVal('NreResourceHints', payload.resource_hints ?? payload.resourceHints);
+        setVal('NrePrompt', payload.prompt);
+    }
 
     // helper: fetch and render history for a genId
     async function loadHistory(id) {
@@ -731,6 +1227,7 @@
     (async () => {
         // render any saved stories from cookie
         renderSavedButtons();
+        renderSavedNreButtons();
         try {
             const existing = localStorage.getItem('lastGenId');
             if (existing) {
@@ -856,6 +1353,91 @@
                 const promptEl = document.getElementById('Prompt');
                 if (titleEl) titleEl.value = item.title;
                 if (promptEl) promptEl.value = item.prompt;
+            });
+            container.appendChild(btn);
+        });
+    }
+
+    // --- Saved NRE prompts (cookie) helpers ---
+    function getSavedNreStories() {
+        const raw = getCookie('tg_nre_history');
+        if (!raw) return [];
+        try { return JSON.parse(raw); } catch (e) { return []; }
+    }
+
+    function saveNreStoryToCookie() {
+        try {
+            const titleEl = document.getElementById('NreTitle');
+            const themeEl = document.getElementById('NreTheme');
+            const settingEl = document.getElementById('NreSetting');
+            const genreEl = document.getElementById('NreGenre');
+            const toneEl = document.getElementById('NreTone');
+            const constraintsEl = document.getElementById('NreConstraints');
+            const resourceHintsEl = document.getElementById('NreResourceHints');
+            if (!themeEl) return;
+
+            const item = {
+                title: (titleEl?.value || '').trim(),
+                theme: (themeEl?.value || '').trim(),
+                setting: (settingEl?.value || '').trim(),
+                genre: (genreEl?.value || '').trim(),
+                tone: (toneEl?.value || '').trim(),
+                constraints: (constraintsEl?.value || '').trim(),
+                resourceHints: (resourceHintsEl?.value || '').trim()
+            };
+
+            if (!item.theme) return;
+
+            const labelBase = item.title || item.theme;
+            const label = labelBase.length > 40 ? (labelBase.substring(0, 40) + '...') : labelBase;
+            const arr = getSavedNreStories();
+
+            const duplicateIdx = arr.findIndex(x =>
+                (x.title || '') === item.title &&
+                (x.theme || '') === item.theme &&
+                (x.setting || '') === item.setting &&
+                (x.genre || '') === item.genre &&
+                (x.tone || '') === item.tone &&
+                (x.constraints || '') === item.constraints &&
+                (x.resourceHints || '') === item.resourceHints);
+            if (duplicateIdx >= 0) arr.splice(duplicateIdx, 1);
+
+            arr.unshift({ ...item, label });
+            setCookie('tg_nre_history', JSON.stringify(arr.slice(0, 10)), 365);
+            renderSavedNreButtons();
+        } catch (e) { console.error('saveNreStoryToCookie', e); }
+    }
+
+    function renderSavedNreButtons() {
+        const container = document.getElementById('savedNreStories');
+        if (!container) return;
+        container.innerHTML = '';
+        const arr = getSavedNreStories();
+        if (!arr || arr.length === 0) return;
+
+        arr.forEach(item => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'action-btn';
+            btn.style.padding = '6px 10px';
+            btn.style.background = '#eef3f0';
+            btn.style.border = '1px solid #d6e3da';
+            btn.style.borderRadius = '6px';
+            btn.style.cursor = 'pointer';
+            btn.textContent = item.label || item.title || 'NRE';
+            btn.title = 'Ripristina campi NRE salvati';
+            btn.addEventListener('click', () => {
+                const setVal = (id, value) => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = value || '';
+                };
+                setVal('NreTitle', item.title);
+                setVal('NreTheme', item.theme);
+                setVal('NreSetting', item.setting);
+                setVal('NreGenre', item.genre);
+                setVal('NreTone', item.tone);
+                setVal('NreConstraints', item.constraints);
+                setVal('NreResourceHints', item.resourceHints);
             });
             container.appendChild(btn);
         });

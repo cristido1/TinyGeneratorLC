@@ -19,9 +19,11 @@ public class IndexModel : PageModel
     public List<WriterRanking> TopWriters { get; set; } = new();
     public List<TopStory> TopStories { get; set; } = new();
     public List<SystemReportSummary> RecentReports { get; set; } = new();
+    public List<KpiCard> AdditionalKpis { get; set; } = new();
     
     // Auto-advancement property
     public bool EnableAutoAdvancement { get; set; }
+    public string AutoAdvancementMode { get; set; } = "series";
 
     public class WriterRanking
     {
@@ -54,6 +56,13 @@ public class IndexModel : PageModel
         public string? OperationType { get; set; }
     }
 
+    public class KpiCard
+    {
+        public string Code { get; set; } = string.Empty;
+        public string Label { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+    }
+
     public IndexModel(ILogger<IndexModel> logger, DatabaseService database, StoriesService stories)
     {
         _logger = logger;
@@ -67,6 +76,7 @@ public class IndexModel : PageModel
         {
             // Load auto-advancement setting from config/state
             EnableAutoAdvancement = _stories.IsAutoAdvancementEnabled();
+            AutoAdvancementMode = _stories.GetAutoAdvancementMode();
             
             // Total stories
             var allStories = _stories.GetAllStories();
@@ -122,6 +132,8 @@ public class IndexModel : PageModel
                 ModelName = r.ModelName,
                 OperationType = r.OperationType
             }).ToList();
+
+            AdditionalKpis = LoadAdditionalKpis();
         }
         catch (Exception ex)
         {
@@ -129,13 +141,17 @@ public class IndexModel : PageModel
         }
     }
     
-    public IActionResult OnPostToggleAutoAdvancement(bool enabled)
+    public IActionResult OnPostToggleAutoAdvancement(bool enabled, string? mode)
     {
         try
         {
             _stories.SetAutoAdvancementEnabled(enabled);
+            _stories.SetAutoAdvancementMode(mode);
+            var selectedMode = string.Equals(mode, "nre", StringComparison.OrdinalIgnoreCase) ? "nre" : "series";
             TempData["Message"] = enabled 
-                ? "✓ Avanzamento automatico abilitato. Dopo 10 minuti di inattività verrà processata la storia con punteggio più alto."
+                ? selectedMode == "nre"
+                    ? "✓ Avanzamento automatico abilitato in modalità NRE: in inattività verrà accodata una nuova storia NRE con parametri casuali (15 step)."
+                    : "✓ Avanzamento automatico abilitato in modalità Serie: in inattività verrà avanzata una serie."
                 : "Avanzamento automatico disabilitato.";
         }
         catch (Exception ex)
@@ -144,5 +160,205 @@ public class IndexModel : PageModel
             TempData["Error"] = "Errore durante il cambio impostazione.";
         }
         return RedirectToPage();
+    }
+
+    private List<KpiCard> LoadAdditionalKpis()
+    {
+        return _database.WithSqliteConnection(conn =>
+        {
+            var cards = new List<KpiCard>();
+
+            bool HasRows(string tableName)
+            {
+                using var existsCmd = conn.CreateCommand();
+                existsCmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@name;";
+                existsCmd.Parameters.AddWithValue("@name", tableName);
+                var exists = Convert.ToInt64(existsCmd.ExecuteScalar() ?? 0L) > 0;
+                if (!exists) return false;
+
+                using var rowsCmd = conn.CreateCommand();
+                rowsCmd.CommandText = $"SELECT EXISTS(SELECT 1 FROM {tableName} LIMIT 1);";
+                return Convert.ToInt64(rowsCmd.ExecuteScalar() ?? 0L) > 0;
+            }
+
+            long ScalarLong(string sql)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = sql;
+                return Convert.ToInt64(cmd.ExecuteScalar() ?? 0L);
+            }
+
+            double? ScalarDoubleNullable(string sql)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = sql;
+                var raw = cmd.ExecuteScalar();
+                if (raw == null || raw == DBNull.Value) return null;
+                return Convert.ToDouble(raw);
+            }
+
+            if (HasRows("stories_evaluations"))
+            {
+                var storiesWithEval = ScalarLong("SELECT COUNT(DISTINCT story_id) FROM stories_evaluations;");
+                var approvedStories = ScalarLong(@"
+SELECT COUNT(*) FROM (
+    SELECT story_id, AVG(total_score) AS media
+    FROM stories_evaluations
+    GROUP BY story_id
+    HAVING media > 60
+);");
+                var approvalPct = storiesWithEval > 0 ? (approvedStories * 100.0 / storiesWithEval) : 0.0;
+                var avgScore = ScalarDoubleNullable("SELECT AVG(total_score) FROM stories_evaluations;") ?? 0.0;
+                var avgLast20 = ScalarDoubleNullable(@"
+SELECT AVG(media) FROM (
+    SELECT story_id, AVG(total_score) AS media
+    FROM stories_evaluations
+    GROUP BY story_id
+    ORDER BY MAX(ts) DESC
+    LIMIT 20
+);") ?? 0.0;
+                var avgPenalty = ScalarDoubleNullable("SELECT AVG(lenght_penality_percentage_applyed) FROM stories_evaluations;") ?? 0.0;
+                var defectsCoherence = ScalarLong("SELECT COUNT(*) FROM stories_evaluations WHERE narrative_coherence_score < 60;");
+                var defectsOriginality = ScalarLong("SELECT COUNT(*) FROM stories_evaluations WHERE originality_score < 60;");
+                var defectsEmotion = ScalarLong("SELECT COUNT(*) FROM stories_evaluations WHERE emotional_impact_score < 60;");
+                var defectsAction = ScalarLong("SELECT COUNT(*) FROM stories_evaluations WHERE action_score < 60;");
+
+                cards.Add(new KpiCard { Code = "KPI_03", Label = "Storie con Valutazione", Value = storiesWithEval.ToString("N0") });
+                cards.Add(new KpiCard { Code = "KPI_04", Label = "Storie Approvate (>60)", Value = approvedStories.ToString("N0") });
+                cards.Add(new KpiCard { Code = "KPI_05", Label = "Percentuale Approvazione", Value = $"{approvalPct:F1}%" });
+                cards.Add(new KpiCard { Code = "KPI_06", Label = "Score Medio Globale", Value = $"{avgScore:F1}" });
+                cards.Add(new KpiCard { Code = "KPI_07", Label = "Score Medio Ultime 20", Value = $"{avgLast20:F1}" });
+                cards.Add(new KpiCard { Code = "KPI_09", Label = "Penalità Lunghezza Media", Value = $"{avgPenalty:F2}" });
+                cards.Add(new KpiCard { Code = "KPI_10", Label = "Difetti Coerenza (<60)", Value = defectsCoherence.ToString("N0") });
+                cards.Add(new KpiCard { Code = "KPI_11", Label = "Difetti Originalità (<60)", Value = defectsOriginality.ToString("N0") });
+                cards.Add(new KpiCard { Code = "KPI_12", Label = "Difetti Impatto Emotivo (<60)", Value = defectsEmotion.ToString("N0") });
+                cards.Add(new KpiCard { Code = "KPI_13", Label = "Difetti Azione (<60)", Value = defectsAction.ToString("N0") });
+            }
+
+            if (HasRows("stats_models"))
+            {
+                var weightedSuccess = ScalarDoubleNullable(@"
+SELECT CASE WHEN SUM(count_used) > 0
+    THEN SUM(count_successed) * 100.0 / SUM(count_used)
+    ELSE NULL END
+FROM stats_models;
+") ?? 0.0;
+                var avgGenTime = ScalarDoubleNullable(@"
+SELECT CASE WHEN SUM(duration_total_count) > 0
+    THEN SUM(duration_total_time) * 1.0 / SUM(duration_total_count)
+    ELSE NULL END
+FROM stats_models;
+") ?? 0.0;
+                cards.Add(new KpiCard { Code = "KPI_14", Label = "Success Rate Modelli", Value = $"{weightedSuccess:F1}%" });
+                cards.Add(new KpiCard { Code = "KPI_15", Label = "Tempo Medio Generazione", Value = $"{avgGenTime:F2}s" });
+            }
+
+            if (HasRows("model_roles"))
+            {
+                var writerPrimarySuccess = ScalarDoubleNullable(@"
+SELECT CASE WHEN SUM(mr.use_count) > 0
+    THEN SUM(mr.use_successed) * 100.0 / SUM(mr.use_count)
+    ELSE NULL END
+FROM model_roles mr
+JOIN roles r ON mr.role_id = r.id
+WHERE lower(r.ruolo) = 'writer'
+  AND mr.is_primary = 1;
+") ?? 0.0;
+                cards.Add(new KpiCard { Code = "KPI_16", Label = "Writer Primario Success", Value = $"{writerPrimarySuccess:F1}%" });
+            }
+
+            if (HasRows("model_roles_errors"))
+            {
+                var totalErrors = ScalarLong("SELECT COALESCE(SUM(error_count), 0) FROM model_roles_errors;");
+                cards.Add(new KpiCard { Code = "KPI_17", Label = "Errori Totali Modelli", Value = totalErrors.ToString("N0") });
+            }
+
+            if (HasRows("sounds"))
+            {
+                var avgSoundUsage = ScalarDoubleNullable("SELECT AVG(usage_count) FROM sounds WHERE enabled = 1;") ?? 0.0;
+                cards.Add(new KpiCard { Code = "KPI_26", Label = "Utilizzo Medio Suoni", Value = $"{avgSoundUsage:F2}" });
+            }
+
+            if (HasRows("series"))
+            {
+                var totalSeries = ScalarLong("SELECT COUNT(*) FROM series;");
+                cards.Add(new KpiCard { Code = "KPI_27", Label = "Serie Totali", Value = totalSeries.ToString("N0") });
+            }
+
+            if (HasRows("series_episodes"))
+            {
+                var avgEpisodesPerSeries = ScalarDoubleNullable(@"
+SELECT AVG(cnt) FROM (
+    SELECT serie_id, COUNT(*) AS cnt
+    FROM series_episodes
+    GROUP BY serie_id
+);") ?? 0.0;
+                cards.Add(new KpiCard { Code = "KPI_28", Label = "Episodi Medi per Serie", Value = $"{avgEpisodesPerSeries:F2}" });
+            }
+
+            if (HasRows("series_characters"))
+            {
+                var avgCharactersPerSeries = ScalarDoubleNullable(@"
+SELECT AVG(cnt) FROM (
+    SELECT serie_id, COUNT(*) AS cnt
+    FROM series_characters
+    GROUP BY serie_id
+);") ?? 0.0;
+                cards.Add(new KpiCard { Code = "KPI_29", Label = "Personaggi Medi per Serie", Value = $"{avgCharactersPerSeries:F2}" });
+            }
+
+            if (HasRows("model_test_runs"))
+            {
+                var passRate = ScalarDoubleNullable("SELECT SUM(COALESCE(passed,0)) * 100.0 / COUNT(*) FROM model_test_runs;") ?? 0.0;
+                var avgTestDuration = ScalarDoubleNullable("SELECT AVG(duration_ms) FROM model_test_runs;") ?? 0.0;
+                cards.Add(new KpiCard { Code = "KPI_30", Label = "Test Run Pass Rate", Value = $"{passRate:F1}%" });
+                cards.Add(new KpiCard { Code = "KPI_31", Label = "Durata Media Test", Value = $"{avgTestDuration:F0} ms" });
+            }
+
+            if (HasRows("stories"))
+            {
+                var activeStories = ScalarLong("SELECT COUNT(*) FROM stories WHERE deleted = 0;");
+                var withTtsPct = activeStories > 0
+                    ? (ScalarLong("SELECT COUNT(*) FROM stories WHERE generated_tts = 1 AND deleted = 0;") * 100.0 / activeStories)
+                    : 0.0;
+                var fullAudioPct = activeStories > 0
+                    ? (ScalarLong(@"
+SELECT COUNT(*) FROM stories
+WHERE generated_tts = 1
+  AND generated_music = 1
+  AND generated_ambient = 1
+  AND generated_effects = 1
+  AND generated_mixed_audio = 1
+  AND deleted = 0;") * 100.0 / activeStories)
+                    : 0.0;
+
+                cards.Add(new KpiCard { Code = "KPI_23", Label = "% Storie con TTS", Value = $"{withTtsPct:F1}%" });
+                cards.Add(new KpiCard { Code = "KPI_24", Label = "% Storie Audio Completo", Value = $"{fullAudioPct:F1}%" });
+            }
+
+            if (HasRows("sounds_missing"))
+            {
+                var openMissingSounds = ScalarLong("SELECT COUNT(*) FROM sounds_missing WHERE lower(status) = 'open';");
+                cards.Add(new KpiCard { Code = "KPI_25", Label = "Suoni Mancanti Aperti", Value = openMissingSounds.ToString("N0") });
+            }
+
+            // NOTE: KPI_02, KPI_18, KPI_19, KPI_20 non vengono aggiunti:
+            // tabella story_runtime_states assente nel DB corrente.
+            // KPI_21, KPI_22 non vengono aggiunti se narrative_story_blocks è vuota.
+            if (HasRows("narrative_story_blocks"))
+            {
+                var avgBlocksByStory = ScalarDoubleNullable(@"
+SELECT AVG(cnt) FROM (
+    SELECT story_id, COUNT(*) AS cnt
+    FROM narrative_story_blocks
+    GROUP BY story_id
+);") ?? 0.0;
+                var avgBlocksQuality = ScalarDoubleNullable("SELECT AVG(quality_score) FROM narrative_story_blocks;") ?? 0.0;
+                cards.Add(new KpiCard { Code = "KPI_21", Label = "Blocchi Medi per Storia", Value = $"{avgBlocksByStory:F2}" });
+                cards.Add(new KpiCard { Code = "KPI_22", Label = "Qualità Media Blocchi", Value = $"{avgBlocksQuality:F2}" });
+            }
+
+            return cards;
+        });
     }
 }

@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "delta",
+    "open_threads",
+    "last_major_event"
+  ],
+  "properties": {
+    "delta": {
+      "type": "object"
+    },
+    "open_threads": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "last_major_event": { "type": "string" }
+  }
+}

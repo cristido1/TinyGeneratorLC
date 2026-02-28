@@ -1,5 +1,6 @@
 namespace TinyGenerator.Services;
 
+[Obsolete("Check non affidabile per valutazione semantica in italiano. Obsoleto per NRE: usare IAgentChecker (nre_evaluator).")]
 public sealed class CheckCliffhangerEnding : CheckBase
 {
     public override string Rule => "Il chunk deve terminare in tensione aperta (cliffhanger).";
@@ -55,11 +56,11 @@ public sealed class CheckCliffhangerEnding : CheckBase
             return true;
         }
 
-        if (t.EndsWith("."))
-        {
-            reason = "Il chunk termina con un punto fermo (serve tensione aperta).";
-            return false;
-        }
+        //if (t.EndsWith("."))
+        //{
+        //    reason = "Il chunk termina con un punto fermo (serve tensione aperta).";
+        //    return false;
+        //}
 
         var lastLine = t.Split('\n').LastOrDefault()?.Trim() ?? t;
         if (lastLine.EndsWith("...") || lastLine.EndsWith("?") || lastLine.EndsWith("!") || lastLine.EndsWith("-") || lastLine.EndsWith(":"))
@@ -67,7 +68,7 @@ public sealed class CheckCliffhangerEnding : CheckBase
             return true;
         }
 
-        reason = "Il chunk non termina in tensione aperta (usa ? / ... / ! / -).";
-        return false;
+        //reason = "Il chunk non termina in tensione aperta (usa ? / ... / ! / -).";
+        return true;
     }
 }

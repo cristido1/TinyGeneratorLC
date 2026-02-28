@@ -39,9 +39,11 @@ public sealed class CallOptions
     public string Operation { get; set; } = "call_center";
     public string? SystemPromptOverride { get; set; }
     public object? ResponseFormat { get; set; }
+    public string? CheckerContextText { get; set; }
 
     // Additional deterministic checks executed after the mandatory NonEmpty check.
     public List<IDeterministicCheck> DeterministicChecks { get; } = new();
+    public List<IAgentChecker> AgentCheckers { get; } = new();
 }
 
 public sealed class CallCenterResult
@@ -53,6 +55,19 @@ public sealed class CallCenterResult
     public string ModelUsed { get; set; } = string.Empty;
     public TimeSpan Duration { get; set; }
     public string? FailureReason { get; set; }
+    public List<AgentCheckerOutcome> CheckerOutcomes { get; set; } = new();
+}
+
+public sealed class AgentCheckerOutcome
+{
+    public string CheckerAgentName { get; set; } = string.Empty;
+    public string? ModelUsed { get; set; }
+    public bool Passed { get; set; }
+    public int? Score { get; set; }
+    public bool? NeedsRetry { get; set; }
+    public List<string> Issues { get; set; } = new();
+    public string? FailureReason { get; set; }
+    public string? RawResponse { get; set; }
 }
 
 public sealed class DeterministicResult : IDeterministicResult

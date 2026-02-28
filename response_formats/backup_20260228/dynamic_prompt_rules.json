@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rules"
+  ],
+  "properties": {
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "repeat_count"
+        ],
+        "properties": {
+          "text": { "type": "string" },
+          "repeat_count": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

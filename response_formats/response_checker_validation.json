@@ -2,18 +2,23 @@
   "type": "object",
   "properties": {
     "is_valid": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Indica se la risposta è valida rispetto alle regole correnti."
     },
     "needs_retry": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Indica se è necessario riprovare la generazione."
     },
     "reason": {
-      "type": "string"
+      "type": "string",
+      "description": "Motivazione sintetica dell'esito del controllo."
     },
     "violated_rules": {
       "type": "array",
+      "description": "Elenco ID regole violate.",
       "items": {
-        "type": "integer"
+        "type": "integer",
+        "description": "ID numerico di una regola violata."
       }
     }
   },

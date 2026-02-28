@@ -77,6 +77,10 @@ namespace TinyGenerator.Services
                 return;
 
             var scope = ResolveOperationScope(LogScope.Current, category, message);
+            if (IsExcludedOperation(scope))
+            {
+                return;
+            }
             var effectiveAgentName = ResolveAgentName(agentNameOverride, scope, category);
             var currentAgentRole = LogScope.CurrentAgentRole;
 
@@ -215,6 +219,17 @@ namespace TinyGenerator.Services
             }
 
             return "operation";
+        }
+
+        private static bool IsExcludedOperation(string? scope)
+        {
+            var runtimeOperation = CommandExecutionRuntime.CurrentOperationName;
+            if (string.Equals(runtimeOperation, "memory_embedding_worker", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return string.Equals(scope, "memory_embedding_worker", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string ResolveAgentName(string? agentNameOverride, string operationScope, string? category)

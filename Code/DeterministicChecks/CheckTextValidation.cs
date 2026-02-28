@@ -1,5 +1,6 @@
 namespace TinyGenerator.Services;
 
+[Obsolete("Check non affidabile per valutazioni semantiche/lessicali in italiano. Obsoleto per NRE: usare IAgentChecker (nre_evaluator).")]
 public sealed class CheckTextValidation : CheckBase
 {
     public override string Rule => "Validazione testuale narrativa.";

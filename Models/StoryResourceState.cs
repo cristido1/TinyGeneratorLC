@@ -10,15 +10,31 @@ public class StoryResourceState
     [Column("id")]
     public long Id { get; set; }
 
-    [Column("story_runtime_state_id")]
-    public long StoryRuntimeStateId { get; set; }
+    [Column("story_id")]
+    public long StoryId { get; set; }
 
-    [MaxLength(200)]
-    [Column("resource_name")]
-    public string ResourceName { get; set; } = string.Empty;
+    [Column("series_id")]
+    public int? SeriesId { get; set; }
 
-    [Column("current_value")]
-    public int CurrentValue { get; set; }
+    [Column("episode_number")]
+    public int? EpisodeNumber { get; set; }
 
-    public StoryRuntimeState? StoryRuntimeState { get; set; }
+    [Column("chunk_index")]
+    public int ChunkIndex { get; set; }
+
+    [Column("is_initial")]
+    public bool IsInitial { get; set; }
+
+    [Column("is_final")]
+    public bool IsFinal { get; set; }
+
+    [MaxLength(50)]
+    [Column("source_engine")]
+    public string SourceEngine { get; set; } = "state_driven";
+
+    [Column("canon_state_json")]
+    public string CanonStateJson { get; set; } = "{}";
+
+    [Column("created_at")]
+    public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
 }

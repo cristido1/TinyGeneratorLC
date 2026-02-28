@@ -163,6 +163,7 @@ public sealed class DatabaseService
         int FailureCount,
         string LastContext,
         bool IsActive,
+        string CanonStateJson,
         string? ProfileBaseSystemPrompt,
         string? ProfileStylePrompt,
         string? ProfilePovListJson,
@@ -215,6 +216,51 @@ public sealed class DatabaseService
         string PlanningJson,
         string CreatedAt);
 
+    public sealed record StoryResourceStateSnapshotDto(
+        long Id,
+        long StoryId,
+        int? SeriesId,
+        int? EpisodeNumber,
+        int ChunkIndex,
+        bool IsInitial,
+        bool IsFinal,
+        string SourceEngine,
+        string CanonStateJson,
+        string CreatedAt);
+
+    private sealed class CanonStateDto
+    {
+        public long StoryId { get; set; }
+        public int? SeriesId { get; set; }
+        public int? EpisodeNumber { get; set; }
+        public int ChunkIndex { get; set; }
+        public string? CurrentPhase { get; set; }
+        public string? CurrentPov { get; set; }
+        public int FailureCount { get; set; }
+        public string? LastContext { get; set; }
+        public bool IsActive { get; set; } = true;
+        public List<CanonResourceDto> Resources { get; set; } = new();
+    }
+
+    private sealed class CanonResourceDto
+    {
+        public string ResourceId { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Type { get; set; } = "generic";
+        public string StatusFlag { get; set; } = "active";
+        public string? StatusText { get; set; }
+        public int Quantity { get; set; }
+        public int? IntegrityPercent { get; set; }
+        public string? Location { get; set; }
+        public int LastUpdateChunk { get; set; }
+        public int? MoraleLevel { get; set; }
+        public int? StressLevel { get; set; }
+        public int? FatigueLevel { get; set; }
+        public string? MentalStateFlag { get; set; }
+        public string? PsychNotes { get; set; }
+        public JsonElement? NotesJson { get; set; }
+    }
+
     public long StartStateDrivenStory(
         string prompt,
         string title,
@@ -226,9 +272,6 @@ public sealed class DatabaseService
         using var wrapper = CreateDbContextWrapper();
         var ctx = wrapper.Context;
         using var tx = ctx.Database.BeginTransaction();
-
-        // Single active story: deactivate all previous runtime states.
-        ctx.Database.ExecuteSqlRaw("UPDATE story_runtime_states SET is_active = 0 WHERE is_active = 1");
 
         // Create story record (empty story body; chunks will be stored in chapters).
         var story = new StoryRecord
@@ -256,42 +299,37 @@ public sealed class DatabaseService
         ctx.Stories.Add(story);
         ctx.SaveChanges();
 
-        var runtime = new StoryRuntimeState
+        // Initialize canonical resource state (single persistence table).
+        var profileResources = ctx.NarrativeResources
+            .AsNoTracking()
+            .Where(r => r.NarrativeProfileId == narrativeProfileId)
+            .OrderBy(r => r.Id)
+            .ToList();
+        var initialCanon = BuildDefaultCanonState(
+            story.Id,
+            serieId,
+            serieEpisode,
+            chunkIndex: 0,
+            currentPhase: null,
+            currentPov: null,
+            failureCount: 0,
+            lastContext: string.Empty,
+            isActive: true,
+            profileResources);
+
+        ctx.StoryResourceStates.Add(new StoryResourceState
         {
             StoryId = story.Id,
-            NarrativeProfileId = narrativeProfileId,
-            CurrentChunkIndex = 0,
-            CurrentPhase = null,
-            CurrentPOV = null,
-            FailureCount = 0,
-            LastContext = string.Empty,
-            IsActive = true
-        };
-        ctx.StoryRuntimeStates.Add(runtime);
+            SeriesId = serieId,
+            EpisodeNumber = serieEpisode,
+            ChunkIndex = 0,
+            IsInitial = true,
+            IsFinal = false,
+            SourceEngine = "state_driven",
+            CanonStateJson = SerializeCanonState(initialCanon),
+            CreatedAt = DateTime.UtcNow.ToString("o")
+        });
         ctx.SaveChanges();
-
-        story.RuntimeStateId = runtime.Id;
-        ctx.SaveChanges();
-
-        // Initialize resources from the profile.
-        var profile = ctx.NarrativeProfiles
-            .Include(p => p.Resources)
-            .FirstOrDefault(p => p.Id == narrativeProfileId);
-
-        if (profile != null)
-        {
-            foreach (var resource in profile.Resources)
-            {
-                var clamped = Math.Min(resource.MaxValue, Math.Max(resource.MinValue, resource.InitialValue));
-                ctx.StoryResourceStates.Add(new StoryResourceState
-                {
-                    StoryRuntimeStateId = runtime.Id,
-                    ResourceName = resource.Name,
-                    CurrentValue = clamped
-                });
-            }
-            ctx.SaveChanges();
-        }
 
         tx.Commit();
         return story.Id;
@@ -304,20 +342,34 @@ public sealed class DatabaseService
 
         var story = ctx.Stories.AsNoTracking().FirstOrDefault(s => s.Id == storyId);
         if (story == null) return null;
+        var narrativeProfileId = story.NarrativeProfileId.GetValueOrDefault(0);
+        if (narrativeProfileId <= 0) return null;
 
-        var runtimeStateId = story.RuntimeStateId;
-        if (!runtimeStateId.HasValue)
-        {
-            // Fallback: locate by story_id if link is missing
-            runtimeStateId = ctx.StoryRuntimeStates.AsNoTracking().Where(r => r.StoryId == storyId).Select(r => (long?)r.Id).FirstOrDefault();
-        }
-        if (!runtimeStateId.HasValue) return null;
-
-        var runtime = ctx.StoryRuntimeStates.AsNoTracking().FirstOrDefault(r => r.Id == runtimeStateId.Value);
-        if (runtime == null) return null;
-
-        var profile = ctx.NarrativeProfiles.AsNoTracking().FirstOrDefault(p => p.Id == runtime.NarrativeProfileId);
+        var profile = ctx.NarrativeProfiles.AsNoTracking().FirstOrDefault(p => p.Id == narrativeProfileId);
         if (profile == null) return null;
+
+        var latestState = ctx.StoryResourceStates.AsNoTracking()
+            .Where(s => s.StoryId == storyId)
+            .OrderByDescending(s => s.ChunkIndex)
+            .ThenByDescending(s => s.Id)
+            .FirstOrDefault();
+
+        var canon = TryDeserializeCanonState(latestState?.CanonStateJson)
+            ?? BuildDefaultCanonState(
+                story.Id,
+                story.SerieId,
+                story.SerieEpisode,
+                chunkIndex: 0,
+                currentPhase: null,
+                currentPov: null,
+                failureCount: 0,
+                lastContext: string.Empty,
+                isActive: true,
+                ctx.NarrativeResources
+                    .AsNoTracking()
+                    .Where(r => r.NarrativeProfileId == profile.Id)
+                    .OrderBy(r => r.Id)
+                    .ToList());
 
         var profileResources = ctx.NarrativeResources.AsNoTracking()
             .Where(r => r.NarrativeProfileId == profile.Id)
@@ -325,11 +377,7 @@ public sealed class DatabaseService
             .Select(r => new StateDrivenNarrativeResourceDto(r.Name, r.InitialValue, r.MinValue, r.MaxValue))
             .ToList();
 
-        var resourceValues = ctx.StoryResourceStates.AsNoTracking()
-            .Where(r => r.StoryRuntimeStateId == runtime.Id)
-            .ToList()
-            .GroupBy(r => r.ResourceName, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().CurrentValue, StringComparer.OrdinalIgnoreCase);
+        var resourceValues = ExtractResourceValues(canon, profileResources);
 
         var consequenceRules = ctx.ConsequenceRules.AsNoTracking()
             .Where(r => r.NarrativeProfileId == profile.Id)
@@ -373,18 +421,19 @@ public sealed class DatabaseService
             Prompt: story.Prompt ?? string.Empty,
             Title: story.Title,
             MemoryKey: story.MemoryKey ?? string.Empty,
-            NarrativeProfileId: runtime.NarrativeProfileId,
+            NarrativeProfileId: narrativeProfileId,
             PlannerMode: story.PlannerMode,
             EffectiveTipoPlanningId: effectiveTipoPlanningId,
             EffectiveTipoPlanningSuccessioneStati: effectiveSuccessioneStati,
             EpisodeInitialPhase: episodeInitialPhase,
-            RuntimeStateId: runtime.Id,
-            CurrentChunkIndex: runtime.CurrentChunkIndex,
-            CurrentPhase: runtime.CurrentPhase,
-            CurrentPOV: runtime.CurrentPOV,
-            FailureCount: runtime.FailureCount,
-            LastContext: runtime.LastContext ?? string.Empty,
-            IsActive: runtime.IsActive,
+            RuntimeStateId: latestState?.Id ?? 0,
+            CurrentChunkIndex: Math.Max(0, canon.ChunkIndex),
+            CurrentPhase: canon.CurrentPhase,
+            CurrentPOV: canon.CurrentPov,
+            FailureCount: Math.Max(0, canon.FailureCount),
+            LastContext: canon.LastContext ?? string.Empty,
+            IsActive: canon.IsActive,
+            CanonStateJson: latestState?.CanonStateJson ?? SerializeCanonState(canon),
             ProfileBaseSystemPrompt: profile.BaseSystemPrompt,
             ProfileStylePrompt: profile.StylePrompt,
             ProfilePovListJson: profile.PovListJson,
@@ -402,6 +451,7 @@ public sealed class DatabaseService
         int failureCountDelta,
         IReadOnlyDictionary<string, int> newResourceValues,
         string newLastContextTail,
+        string? canonStateJson,
         string? narrativeContinuityStateJson,
         double? narrativeQualityScore,
         double? narrativeCoherenceScore,
@@ -419,28 +469,34 @@ public sealed class DatabaseService
             return false;
         }
 
-        StoryRuntimeState? runtime = null;
-        if (story.RuntimeStateId.HasValue)
-        {
-            runtime = ctx.StoryRuntimeStates.FirstOrDefault(r => r.Id == story.RuntimeStateId.Value);
-        }
-        runtime ??= ctx.StoryRuntimeStates.FirstOrDefault(r => r.StoryId == storyId);
+        var latestState = ctx.StoryResourceStates
+            .Where(s => s.StoryId == storyId)
+            .OrderByDescending(s => s.ChunkIndex)
+            .ThenByDescending(s => s.Id)
+            .FirstOrDefault();
 
-        if (runtime == null)
+        if (latestState == null)
         {
-            error = $"Runtime state for story {storyId} not found";
+            error = $"Resource state for story {storyId} not found";
             return false;
         }
 
-        if (!runtime.IsActive)
+        var previousCanon = TryDeserializeCanonState(latestState.CanonStateJson);
+        if (previousCanon == null)
+        {
+            error = "Canonical resource state is invalid JSON";
+            return false;
+        }
+
+        if (!previousCanon.IsActive)
         {
             error = "Story runtime is not active";
             return false;
         }
 
-        if (runtime.CurrentChunkIndex != expectedChunkIndex)
+        if (previousCanon.ChunkIndex != expectedChunkIndex)
         {
-            error = $"Chunk index mismatch (db={runtime.CurrentChunkIndex}, expected={expectedChunkIndex})";
+            error = $"Chunk index mismatch (db={previousCanon.ChunkIndex}, expected={expectedChunkIndex})";
             return false;
         }
 
@@ -453,24 +509,60 @@ public sealed class DatabaseService
             Ts = DateTime.UtcNow.ToString("o")
         };
         ctx.Chapters.Add(chapter);
+        ctx.SaveChanges();
 
-        // Update runtime.
-        runtime.CurrentPhase = phase;
-        runtime.CurrentPOV = pov;
-        runtime.LastContext = newLastContextTail;
-        runtime.FailureCount = Math.Max(0, runtime.FailureCount + failureCountDelta);
-        runtime.CurrentChunkIndex = runtime.CurrentChunkIndex + 1;
+        var nextCanon = TryDeserializeCanonState(canonStateJson)
+            ?? CloneCanonState(previousCanon);
+        nextCanon.StoryId = story.Id;
+        nextCanon.SeriesId = story.SerieId;
+        nextCanon.EpisodeNumber = story.SerieEpisode;
+        nextCanon.ChunkIndex = expectedChunkIndex + 1;
+        nextCanon.CurrentPhase = string.IsNullOrWhiteSpace(phase) ? nextCanon.CurrentPhase : phase;
+        nextCanon.CurrentPov = string.IsNullOrWhiteSpace(pov) ? nextCanon.CurrentPov : pov;
+        nextCanon.FailureCount = Math.Max(0, previousCanon.FailureCount + Math.Max(0, failureCountDelta));
+        nextCanon.LastContext = newLastContextTail ?? string.Empty;
+        nextCanon.IsActive = true;
 
-        // Update resources.
-        var states = ctx.StoryResourceStates.Where(r => r.StoryRuntimeStateId == runtime.Id).ToList();
-        foreach (var state in states)
+        // Ensure numeric projection stays aligned even when caller provided only partial canon state.
+        if (newResourceValues.Count > 0)
         {
-            if (newResourceValues.TryGetValue(state.ResourceName, out var val))
+            foreach (var kv in newResourceValues)
             {
-                state.CurrentValue = val;
+                var existing = nextCanon.Resources.FirstOrDefault(r =>
+                    string.Equals(r.Name, kv.Key, StringComparison.OrdinalIgnoreCase));
+                if (existing != null)
+                {
+                    existing.Quantity = kv.Value;
+                    existing.LastUpdateChunk = nextCanon.ChunkIndex;
+                    continue;
+                }
+
+                nextCanon.Resources.Add(new CanonResourceDto
+                {
+                    ResourceId = SlugifyResourceId(kv.Key),
+                    Name = kv.Key,
+                    Type = "generic",
+                    StatusFlag = "active",
+                    StatusText = "allineamento automatico",
+                    Quantity = kv.Value,
+                    IntegrityPercent = ClampPercent(kv.Value),
+                    LastUpdateChunk = nextCanon.ChunkIndex
+                });
             }
         }
 
+        ctx.StoryResourceStates.Add(new StoryResourceState
+        {
+            StoryId = story.Id,
+            SeriesId = story.SerieId,
+            EpisodeNumber = story.SerieEpisode,
+            ChunkIndex = nextCanon.ChunkIndex,
+            IsInitial = false,
+            IsFinal = false,
+            SourceEngine = "state_driven",
+            CanonStateJson = SerializeCanonState(nextCanon),
+            CreatedAt = DateTime.UtcNow.ToString("o")
+        });
         ctx.SaveChanges();
 
         // Phase 1 narrative pipeline persistence: store a generic continuity snapshot and the generated block.
@@ -512,8 +604,8 @@ public sealed class DatabaseService
                 tone_current = phase,
                 custom_flags = new Dictionary<string, object?>
                 {
-                    ["runtime_state_id"] = runtime.Id,
-                    ["failure_count"] = runtime.FailureCount,
+                    ["runtime_state_id"] = latestState.Id,
+                    ["failure_count"] = nextCanon.FailureCount,
                     ["resources"] = newResourceValues
                 }
             })
@@ -879,20 +971,235 @@ VALUES
         story.CharCount = (story.StoryRaw ?? string.Empty).Length;
         story.NarrativeEngineStatus = "completed";
 
-        StoryRuntimeState? runtime = null;
-        if (story.RuntimeStateId.HasValue)
+        var latestState = ctx.StoryResourceStates
+            .Where(s => s.StoryId == storyId)
+            .OrderByDescending(s => s.ChunkIndex)
+            .ThenByDescending(s => s.Id)
+            .FirstOrDefault();
+        if (latestState != null)
         {
-            runtime = ctx.StoryRuntimeStates.FirstOrDefault(r => r.Id == story.RuntimeStateId.Value);
+            latestState.IsFinal = true;
+            var canon = TryDeserializeCanonState(latestState.CanonStateJson);
+            if (canon != null)
+            {
+                canon.IsActive = false;
+                latestState.CanonStateJson = SerializeCanonState(canon);
+            }
         }
-        runtime ??= ctx.StoryRuntimeStates.FirstOrDefault(r => r.StoryId == storyId);
-        if (runtime != null)
-        {
-            runtime.IsActive = false;
-        }
-
         ctx.SaveChanges();
         tx.Commit();
         return true;
+    }
+
+    public StoryResourceStateSnapshotDto? GetLatestStoryResourceStateSnapshot(long storyId)
+    {
+        if (storyId <= 0) return null;
+        using var wrapper = CreateDbContextWrapper();
+        var ctx = wrapper.Context;
+
+        var row = ctx.StoryResourceStates.AsNoTracking()
+            .Where(s => s.StoryId == storyId)
+            .OrderByDescending(s => s.ChunkIndex)
+            .ThenByDescending(s => s.Id)
+            .FirstOrDefault();
+        if (row == null) return null;
+
+        return new StoryResourceStateSnapshotDto(
+            row.Id,
+            row.StoryId,
+            row.SeriesId,
+            row.EpisodeNumber,
+            row.ChunkIndex,
+            row.IsInitial,
+            row.IsFinal,
+            row.SourceEngine,
+            row.CanonStateJson,
+            row.CreatedAt);
+    }
+
+    public bool ReplaceInitialStoryResourceState(
+        long storyId,
+        int? seriesId,
+        int? episodeNumber,
+        string canonicalStateJson,
+        string sourceEngine = "state_driven")
+    {
+        if (storyId <= 0 || string.IsNullOrWhiteSpace(canonicalStateJson))
+        {
+            return false;
+        }
+
+        using var wrapper = CreateDbContextWrapper();
+        var ctx = wrapper.Context;
+        using var tx = ctx.Database.BeginTransaction();
+
+        var existingInitial = ctx.StoryResourceStates
+            .Where(s => s.StoryId == storyId && s.IsInitial)
+            .ToList();
+        if (existingInitial.Count > 0)
+        {
+            ctx.StoryResourceStates.RemoveRange(existingInitial);
+            ctx.SaveChanges();
+        }
+
+        ctx.StoryResourceStates.Add(new StoryResourceState
+        {
+            StoryId = storyId,
+            SeriesId = seriesId,
+            EpisodeNumber = episodeNumber,
+            ChunkIndex = 0,
+            IsInitial = true,
+            IsFinal = false,
+            SourceEngine = string.IsNullOrWhiteSpace(sourceEngine) ? "state_driven" : sourceEngine.Trim(),
+            CanonStateJson = canonicalStateJson,
+            CreatedAt = DateTime.UtcNow.ToString("o")
+        });
+        ctx.SaveChanges();
+        tx.Commit();
+        return true;
+    }
+
+    private static CanonStateDto BuildDefaultCanonState(
+        long storyId,
+        int? seriesId,
+        int? episodeNumber,
+        int chunkIndex,
+        string? currentPhase,
+        string? currentPov,
+        int failureCount,
+        string? lastContext,
+        bool isActive,
+        IReadOnlyCollection<NarrativeResource> profileResources)
+    {
+        var resources = new List<CanonResourceDto>();
+        foreach (var resource in profileResources)
+        {
+            var quantity = Math.Min(resource.MaxValue, Math.Max(resource.MinValue, resource.InitialValue));
+            resources.Add(new CanonResourceDto
+            {
+                ResourceId = SlugifyResourceId(resource.Name),
+                Name = resource.Name,
+                Type = "generic",
+                StatusFlag = "active",
+                StatusText = "iniziale",
+                Quantity = quantity,
+                IntegrityPercent = ClampPercent(quantity),
+                LastUpdateChunk = chunkIndex
+            });
+        }
+
+        return new CanonStateDto
+        {
+            StoryId = storyId,
+            SeriesId = seriesId,
+            EpisodeNumber = episodeNumber,
+            ChunkIndex = Math.Max(0, chunkIndex),
+            CurrentPhase = currentPhase,
+            CurrentPov = currentPov,
+            FailureCount = Math.Max(0, failureCount),
+            LastContext = lastContext ?? string.Empty,
+            IsActive = isActive,
+            Resources = resources
+        };
+    }
+
+    private static IReadOnlyDictionary<string, int> ExtractResourceValues(
+        CanonStateDto canon,
+        IReadOnlyCollection<StateDrivenNarrativeResourceDto> profileResources)
+    {
+        var values = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var def in profileResources)
+        {
+            var existing = canon.Resources.FirstOrDefault(r => string.Equals(r.Name, def.Name, StringComparison.OrdinalIgnoreCase));
+            var raw = existing?.Quantity ?? def.InitialValue;
+            values[def.Name] = Math.Min(def.MaxValue, Math.Max(def.MinValue, raw));
+        }
+
+        // Keep additional resources dynamically introduced by the story.
+        foreach (var extra in canon.Resources)
+        {
+            if (!values.ContainsKey(extra.Name))
+            {
+                values[extra.Name] = Math.Max(0, extra.Quantity);
+            }
+        }
+
+        return values;
+    }
+
+    private static CanonStateDto CloneCanonState(CanonStateDto value)
+    {
+        return new CanonStateDto
+        {
+            StoryId = value.StoryId,
+            SeriesId = value.SeriesId,
+            EpisodeNumber = value.EpisodeNumber,
+            ChunkIndex = value.ChunkIndex,
+            CurrentPhase = value.CurrentPhase,
+            CurrentPov = value.CurrentPov,
+            FailureCount = value.FailureCount,
+            LastContext = value.LastContext,
+            IsActive = value.IsActive,
+            Resources = value.Resources.Select(r => new CanonResourceDto
+            {
+                ResourceId = r.ResourceId,
+                Name = r.Name,
+                Type = r.Type,
+                StatusFlag = r.StatusFlag,
+                StatusText = r.StatusText,
+                Quantity = r.Quantity,
+                IntegrityPercent = r.IntegrityPercent,
+                Location = r.Location,
+                LastUpdateChunk = r.LastUpdateChunk,
+                MoraleLevel = r.MoraleLevel,
+                StressLevel = r.StressLevel,
+                FatigueLevel = r.FatigueLevel,
+                MentalStateFlag = r.MentalStateFlag,
+                PsychNotes = r.PsychNotes,
+                NotesJson = r.NotesJson
+            }).ToList()
+        };
+    }
+
+    private static CanonStateDto? TryDeserializeCanonState(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<CanonStateDto>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string SerializeCanonState(CanonStateDto canon)
+    {
+        return JsonSerializer.Serialize(canon, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+        });
+    }
+
+    private static string SlugifyResourceId(string? name)
+    {
+        var raw = string.IsNullOrWhiteSpace(name) ? "resource" : name.Trim().ToLowerInvariant();
+        raw = Regex.Replace(raw, @"\s+", "_");
+        raw = Regex.Replace(raw, @"[^a-z0-9_]", string.Empty);
+        return string.IsNullOrWhiteSpace(raw) ? "resource" : raw;
+    }
+
+    private static int ClampPercent(int value)
+    {
+        return Math.Max(0, Math.Min(100, value));
     }
 
     // Dapper-only helpers for embedding management
@@ -6309,6 +6616,24 @@ WHERE id = @id;",
         return conn.Execute("DELETE FROM sounds_missing WHERE id IN @ids", new { ids = idList });
     }
 
+    public int DeleteMissingSoundsByStoryAndStatus(long storyId, string status)
+    {
+        if (storyId <= 0) return 0;
+        var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "resolved" : status.Trim().ToLowerInvariant();
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        return conn.Execute(@"
+DELETE FROM sounds_missing
+WHERE story_id = @storyId
+  AND lower(coalesce(status, '')) = lower(@status);",
+            new
+            {
+                storyId,
+                status = normalizedStatus
+            });
+    }
+
     public long UpsertMissingSound(
         string type,
         string prompt,
@@ -9073,6 +9398,31 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
                 deleted_at = @now,
                 deleted_by = @by",
             new { now, by = deletedBy ?? "system" });
+    }
+
+    public int DeleteSystemReportsByOperationType(string operationType, string? deletedBy = null)
+    {
+        if (string.IsNullOrWhiteSpace(operationType))
+        {
+            return 0;
+        }
+
+        var now = DateTime.UtcNow.ToString("o");
+        using var conn = CreateConnection();
+        conn.Open();
+        return conn.Execute(@"
+            UPDATE system_reports
+            SET deleted = 1,
+                deleted_at = @now,
+                deleted_by = @by
+            WHERE deleted = 0
+              AND lower(coalesce(operation_type, '')) = lower(@operationType)",
+            new
+            {
+                now,
+                by = deletedBy ?? "system",
+                operationType = operationType.Trim()
+            });
     }
 
     public SystemReport InsertSystemReport(SystemReport report)

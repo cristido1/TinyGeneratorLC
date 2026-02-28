@@ -1,0 +1,53 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["canon_state"],
+  "properties": {
+    "canon_state": {
+      "type": "object",
+      "description": "Stato canonico corrente delle risorse narrative.",
+      "additionalProperties": true,
+      "required": ["resources"],
+      "properties": {
+        "resources": {
+          "type": "array",
+          "description": "Elenco risorse con il loro stato corrente.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["name", "quantity"],
+            "properties": {
+              "resource_id": { "type": "string", "description": "Identificatore tecnico stabile della risorsa." },
+              "name": { "type": "string", "description": "Nome leggibile della risorsa." },
+              "type": {
+                "type": "string",
+                "description": "Categoria della risorsa.",
+                "enum": ["person", "ship", "vehicle", "weapon", "system", "asset", "unit", "location", "intel", "supply", "energy", "generic"]
+              },
+              "status_flag": {
+                "type": "string",
+                "description": "Stato sintetico della risorsa.",
+                "enum": ["active", "damaged", "critical", "destroyed", "missing", "inactive", "depleted", "captured", "lost", "unavailable"]
+              },
+              "status_text": { "type": ["string", "null"], "description": "Nota breve opzionale sullo stato." },
+              "quantity": { "type": "integer", "minimum": 0, "description": "Valore quantitativo principale della risorsa." },
+              "integrity_percent": { "type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "Integrità percentuale della risorsa, se applicabile." },
+              "location": { "type": ["string", "null"], "description": "Posizione corrente della risorsa, se nota." },
+              "last_update_chunk": { "type": "integer", "minimum": 0, "description": "Chunk in cui la risorsa è stata aggiornata l'ultima volta." },
+              "morale_level": { "type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "Morale stimato (0-100) per risorse/personaggi." },
+              "stress_level": { "type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "Stress stimato (0-100) per risorse/personaggi." },
+              "fatigue_level": { "type": ["integer", "null"], "minimum": 0, "maximum": 100, "description": "Fatica stimata (0-100) per risorse/personaggi." },
+              "mental_state_flag": {
+                "type": ["string", "null"],
+                "description": "Stato mentale sintetico, se applicabile.",
+                "enum": ["stable", "focused", "stressed", "anxious", "panicked", "fearful", "angry", "confused", "traumatized", "exhausted", "numb", "motivated", null]
+              },
+              "psych_notes": { "type": ["string", "null"], "description": "Nota psicologica breve opzionale." },
+              "notes_json": { "type": ["object", "null"], "description": "Metadati aggiuntivi opzionali in forma strutturata." }
+            }
+          }
+        }
+      }
+    }
+  }
+}

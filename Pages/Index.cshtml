@@ -33,6 +33,21 @@
         font-size: 2rem;
         color: #6c757d;
     }
+    .kpi-card.kpi-compact {
+        padding: 0.85rem 1rem;
+        border-width: 1px;
+        min-height: 108px;
+    }
+    .kpi-card.kpi-compact .kpi-value {
+        font-size: 1.35rem;
+    }
+    .kpi-card.kpi-compact .kpi-label {
+        font-size: 0.74rem;
+    }
+    .kpi-card.kpi-compact .kpi-icon {
+        font-size: 1.2rem;
+        opacity: 0.8;
+    }
     .ranking-table {
         background: #f8f9fa;
         border: 2px solid #343a40;
@@ -147,19 +162,41 @@
                     <label class="form-check-label mb-0" for="enableAutoAdv" style="cursor:pointer;">
                         <strong>Avanzamento Automatico Storie</strong>
                         <div class="text-muted small mt-1">
-                            Dopo 10 minuti di inattività del sistema (escludendo attività di embedding e summary), 
-                            viene automaticamente processata e fatta avanzare la storia con punteggio di valutazione più alto.
+                            Dopo 10 minuti di inattività del sistema (escludendo attività di embedding e summary),
+                            viene eseguita la modalità selezionata.
                         </div>
                     </label>
+                </div>
+                <div class="mt-3">
+                    <label for="autoAdvMode" class="form-label mb-1"><strong>Modalità avanzamento automatico</strong></label>
+                    <select id="autoAdvMode" name="mode" class="form-select form-select-sm" style="max-width: 380px;" onchange="this.form.submit();">
+                        @if (Model.AutoAdvancementMode == "series")
+                        {
+                            <option value="series" selected>Avanza serie (state-driven)</option>
+                        }
+                        else
+                        {
+                            <option value="series">Avanza serie (state-driven)</option>
+                        }
+
+                        @if (Model.AutoAdvancementMode == "nre")
+                        {
+                            <option value="nre" selected>Genera nuova storia NRE casuale (15 step)</option>
+                        }
+                        else
+                        {
+                            <option value="nre">Genera nuova storia NRE casuale (15 step)</option>
+                        }
+                    </select>
                 </div>
             </form>
         </div>
     </div>
 
     <!-- KPI Cards Row -->
-    <div class="row g-3 mb-4">
-        <div class="col-md-3">
-            <div class="kpi-card">
+    <div class="row g-2 mb-2">
+        <div class="col-6 col-md-3 col-xl-2">
+            <div class="kpi-card kpi-compact">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.TotalStories</div>
@@ -169,8 +206,8 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
-            <div class="kpi-card medium">
+        <div class="col-6 col-md-3 col-xl-2">
+            <div class="kpi-card kpi-compact">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.EnabledModels<span style="font-size: 1.2rem; opacity: 0.6;">/@(Model.EnabledModels + Model.DisabledModels)</span></div>
@@ -180,8 +217,8 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
-            <div class="kpi-card light">
+        <div class="col-6 col-md-3 col-xl-2">
+            <div class="kpi-card kpi-compact">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.DisabledModels</div>
@@ -191,8 +228,8 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-3">
-            <div class="kpi-card">
+        <div class="col-6 col-md-3 col-xl-2">
+            <div class="kpi-card kpi-compact">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.AudioMasterGeneratedCount</div>
@@ -203,6 +240,26 @@
             </div>
         </div>
     </div>
+    @if (Model.AdditionalKpis.Any())
+    {
+        <div class="row g-2 mb-4">
+            @foreach (var kpi in Model.AdditionalKpis)
+            {
+                <div class="col-6 col-md-3 col-xl-2">
+                    <div class="kpi-card kpi-compact">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <div class="kpi-value">@kpi.Value</div>
+                                <div class="kpi-label mt-1">@kpi.Label</div>
+                                <small class="text-muted">@kpi.Code</small>
+                            </div>
+                            <i class="bi bi-graph-up-arrow kpi-icon"></i>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
 
     <!-- Rankings Row -->
     <div class="row g-4">
@@ -276,7 +333,7 @@
                                             <td>
                                                 @if (story.GeneratedMixedAudio)
                                                 {
-                                                    <button type="button" class="btn btn-sm btn-link p-0 me-2 play-final-mix-btn" data-story-id="@story.Id" title="Play final mix"><i class="bi bi-play-circle-fill" style="color:#0d6efd;font-size:1.25rem;"></i></button>
+                                                    <button type="button" class="btn btn-sm btn-link p-0 me-2 play-final-mix-btn" data-story-id="@story.Id" data-story-title="@story.Title" title="Play final mix"><i class="bi bi-play-circle-fill" style="color:#0d6efd;font-size:1.25rem;"></i></button>
                                                 }
                                                 <a href="/Stories/Details/@story.Id" class="text-decoration-none" style="color: #9cf;">
                                                     @story.Title
@@ -357,13 +414,14 @@
 
 <!-- Modal per riprodurre final mix dalla home -->
 <div class="modal fade" id="finalMixModal" tabindex="-1" aria-labelledby="finalMixModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-dialog modal-lg modal-dialog-centered" id="finalMixModalDialog">
         <div class="modal-content">
-            <div class="modal-header">
+            <div class="modal-header" id="finalMixModalHeader" style="cursor: move;">
                 <h5 class="modal-title" id="finalMixModalLabel">Riproduci Final Mix</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body text-center">
+                <div id="finalMixStoryTitle" class="fw-semibold mb-2"></div>
                 <audio id="homeFinalMixAudio" controls preload="none" style="width:100%;">
                     Il tuo browser non supporta l'audio.
                 </audio>
@@ -382,10 +440,13 @@
             var btn = e.target.closest && e.target.closest('.play-final-mix-btn');
             if (!btn) return;
             var storyId = btn.getAttribute('data-story-id');
+            var storyTitle = btn.getAttribute('data-story-title') || ('Storia #' + storyId);
             if (!storyId) return;
             e.preventDefault();
             var audio = document.getElementById('homeFinalMixAudio');
             var info = document.getElementById('finalMixInfo');
+            var titleEl = document.getElementById('finalMixStoryTitle');
+            if (titleEl) titleEl.textContent = storyTitle;
             audio.pause();
             audio.src = '/Stories/Index?handler=FinalMixAudio&id=' + encodeURIComponent(storyId);
             audio.load();
@@ -398,7 +459,44 @@
                 audio.play().catch(()=>{});
             };
             audio.onerror = function(){ info.textContent = 'Impossibile caricare l\'audio.'; };
-            modalEl.addEventListener('hidden.bs.modal', function(){ audio.pause(); audio.removeAttribute('src'); audio.load(); info.textContent=''; }, { once: true });
+            modalEl.addEventListener('hidden.bs.modal', function(){
+                audio.pause();
+                audio.removeAttribute('src');
+                audio.load();
+                info.textContent = '';
+                if (titleEl) titleEl.textContent = '';
+                var dialog = document.getElementById('finalMixModalDialog');
+                if (dialog) {
+                    dialog.style.margin = '';
+                    dialog.style.position = '';
+                    dialog.style.left = '';
+                    dialog.style.top = '';
+                    dialog.style.transform = '';
+                }
+            }, { once: true });
         });
+
+        var dragState = null;
+        var header = document.getElementById('finalMixModalHeader');
+        var dialog = document.getElementById('finalMixModalDialog');
+        if (header && dialog) {
+            header.addEventListener('mousedown', function(evt){
+                if (evt.button !== 0) return;
+                var rect = dialog.getBoundingClientRect();
+                dialog.style.margin = '0';
+                dialog.style.position = 'fixed';
+                dialog.style.left = rect.left + 'px';
+                dialog.style.top = rect.top + 'px';
+                dialog.style.transform = 'none';
+                dragState = { dx: evt.clientX - rect.left, dy: evt.clientY - rect.top };
+                evt.preventDefault();
+            });
+            document.addEventListener('mousemove', function(evt){
+                if (!dragState) return;
+                dialog.style.left = Math.max(0, evt.clientX - dragState.dx) + 'px';
+                dialog.style.top = Math.max(0, evt.clientY - dragState.dy) + 'px';
+            });
+            document.addEventListener('mouseup', function(){ dragState = null; });
+        }
     })();
 </script>

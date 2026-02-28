@@ -3,6 +3,8 @@
   "properties": {
     "narrative_coherence_score": {
       "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
       "description": "Score for narrative coherence (1-10)"
     },
     "narrative_coherence_defects": {
@@ -11,6 +13,8 @@
     },
     "originality_score": {
       "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
       "description": "Score for originality (1-10)"
     },
     "originality_defects": {
@@ -19,6 +23,8 @@
     },
     "emotional_impact_score": {
       "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
       "description": "Score for emotional impact (1-10)"
     },
     "emotional_impact_defects": {
@@ -27,6 +33,8 @@
     },
     "action_score": {
       "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
       "description": "Score for action/pacing intensity (1-10)"
     },
     "action_defects": {

@@ -1,0 +1,164 @@
+===============================================================================
+NRE – Introduzione parametro CombatIntensity (Military Combat Mode)
+Istruzioni per Codex
+===============================================================================
+
+OBIETTIVO
+-------------------------------------------------------------------------------
+Introdurre un parametro CombatIntensity per aumentare
+la scala dei combattimenti, delle distruzioni e delle perdite,
+sia umane che aliene.
+
+Non sostituisce CostSeverity.
+Lo affianca.
+
+===============================================================================
+1) MODELLO DATI
+===============================================================================
+
+Aggiungere proprietà a NreRequest:
+
+public string CombatIntensity { get; set; } = "normal";
+
+Valori ammessi:
+- "low"
+- "normal"
+- "high"
+- "total_war"
+
+Validare lato server.
+
+===============================================================================
+2) INTERFACCIA
+===============================================================================
+
+Aggiungere combo UI:
+
+Label: "Intensità combattimento"
+
+Opzioni:
+- Bassa
+- Normale
+- Alta
+- Guerra totale
+
+Binding su NreRequest.CombatIntensity.
+Default: "normal".
+
+===============================================================================
+3) MODIFICA SYSTEM PROMPT MILITARY_STRICT
+===============================================================================
+
+Nel BuildMilitaryPlannerPrompt aggiungere:
+
+------------------------------------------------------------------------------
+PARAMETRO COMBATINTENSITY
+------------------------------------------------------------------------------
+
+Il parametro CombatIntensity definisce la scala del conflitto.
+
+LOW:
+- Minacce isolate.
+- Scontri limitati.
+- Nessuna distruzione massiva.
+- Perdite minime.
+
+NORMAL:
+- Scambi di fuoco.
+- Danneggiamento significativo.
+- Possibili perdite umane o aliene.
+- Battaglia circoscritta.
+
+HIGH:
+- Distruzione di almeno un'unità (umana o aliena).
+- Perdite multiple.
+- Uso di armamenti pesanti.
+- Possibile abbordaggio tattico.
+- Ritirata forzata o sfondamento difensivo.
+
+TOTAL_WAR:
+- Distruzione su larga scala.
+- Navi esplose o rese irrecuperabili.
+- Perdite elevate su entrambi i fronti.
+- Almeno un abbordaggio violento o tentato abbordaggio.
+- Uso di armi strategiche.
+- Conseguenze permanenti sull’equilibrio del teatro operativo.
+
+Le perdite devono essere bilanciate:
+Non solo italiane.
+Non solo aliene.
+Il conflitto deve essere credibile e reciproco.
+
+Ogni distruzione deve avere causa operativa chiara.
+No esplosioni decorative.
+
+Gli abbordaggi devono:
+- avere obiettivo preciso
+- generare vittime o catture
+- produrre conseguenze concrete
+
+------------------------------------------------------------------------------
+
+Il planner deve integrare CombatIntensity nella struttura delle fasi.
+
+===============================================================================
+4) MODIFICA CHECK IRREVERSIBLE CONSEQUENCE
+===============================================================================
+
+Aggiornare CheckIrreversibleConsequence:
+
+Se CombatIntensity == "high"
+    → deve essere presente almeno una distruzione o morte multipla.
+
+Se CombatIntensity == "total_war"
+    → devono essere presenti:
+        - almeno una nave distrutta o resa irrecuperabile
+        - più di una perdita umana o aliena
+        - un evento di abbordaggio o scontro ravvicinato
+
+Ricerca parole chiave indicative:
+
+"distrutto"
+"esploso"
+"frantumato"
+"perdita totale"
+"irreparabile"
+"morti"
+"cadaveri"
+"abbordaggio"
+"incursione"
+"sfondamento"
+"breccia nello scafo"
+
+Non usare conteggi perfetti.
+Basta rilevare presenza coerente.
+
+===============================================================================
+5) COERENZA OPERATIVA
+===============================================================================
+
+Regola obbligatoria nel planner:
+
+Ogni distruzione deve derivare da:
+- manovra
+- errore tattico
+- superiorità tecnologica
+- sacrificio strategico
+
+Vietato:
+- esplosioni casuali
+- morte gratuita
+- distruzione senza causa
+
+===============================================================================
+6) RISULTATO ATTESO
+===============================================================================
+
+Low → Tensione militare contenuta.
+Normal → Scontro realistico.
+High → Battaglia con perdite reali.
+Total_War → Guerra spaziale brutale, abbordaggi, distruzioni multiple.
+
+===============================================================================
+FINE
+===============================================================================

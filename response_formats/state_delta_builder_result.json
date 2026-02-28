@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "delta",
+    "open_threads",
+    "last_major_event"
+  ],
+  "properties": {
+    "delta": {
+      "type": "object",
+      "description": "Differenze di stato rispetto al blocco precedente."
+    },
+    "open_threads": {
+      "type": "array",
+      "description": "Thread narrativi ancora aperti.",
+      "items": { "type": "string", "description": "Descrizione sintetica di un thread aperto." }
+    },
+    "last_major_event": {
+      "type": "string",
+      "description": "Ultimo evento maggiore emerso nel blocco."
+    }
+  }
+}

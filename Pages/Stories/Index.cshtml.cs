@@ -614,7 +614,9 @@ namespace TinyGenerator.Pages.Stories
                     var message = success ? "Generazione audio ambientale completata." : error;
                     return new CommandResult(success, message);
                 },
-                "Generazione audio ambientale avviata in background.");
+                "Generazione audio ambientale avviata in background.",
+                metadata: new Dictionary<string, string> { ["folder"] = folderName ?? string.Empty },
+                batch: true);
 
             TempData["StatusMessage"] = $"Generazione audio ambientale avviata (run {runId}).";
             return RedirectToPage();
@@ -631,7 +633,9 @@ namespace TinyGenerator.Pages.Stories
                     var message = success ? "Generazione effetti sonori completata." : error;
                     return new CommandResult(success, message);
                 },
-                "Generazione effetti sonori avviata in background.");
+                "Generazione effetti sonori avviata in background.",
+                metadata: new Dictionary<string, string> { ["folder"] = folderName ?? string.Empty },
+                batch: true);
 
             TempData["StatusMessage"] = $"Generazione effetti sonori avviata (run {runId}).";
             return RedirectToPage();
@@ -648,7 +652,9 @@ namespace TinyGenerator.Pages.Stories
                     var message = success ? "Generazione musica completata." : error;
                     return new CommandResult(success, message);
                 },
-                "Generazione musica avviata in background.");
+                "Generazione musica avviata in background.",
+                metadata: new Dictionary<string, string> { ["folder"] = folderName ?? string.Empty },
+                batch: true);
 
             TempData["StatusMessage"] = $"Generazione musica avviata (run {runId}).";
             return RedirectToPage();
@@ -683,6 +689,22 @@ namespace TinyGenerator.Pages.Stories
                 },
                 "Generazione JSON TTS avviata in background.");
             TempData["StatusMessage"] = $"Generazione JSON TTS avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostRepairTtsAudioMetadata(long id)
+        {
+            var runId = QueueStoryCommand(
+                id,
+                "repair_tts_audio_metadata",
+                async ctx =>
+                {
+                    var (success, message) = await _stories.RepairTtsAudioMetadataAsync(id);
+                    return new CommandResult(success, message);
+                },
+                "Riparazione metadati audio in tts_schema avviata in background.");
+
+            TempData["StatusMessage"] = $"Riparazione metadati audio avviata (run {runId}).";
             return RedirectToPage();
         }
 
@@ -1433,7 +1455,7 @@ namespace TinyGenerator.Pages.Stories
             ActiveCommands = _commandDispatcher.GetActiveCommands();
         }
 
-        private string QueueStoryCommand(long storyId, string operationCode, Func<CommandContext, Task<CommandResult>> operation, string? startMessage = null, string? threadScopeOverride = null, IReadOnlyDictionary<string, string>? metadata = null)
+        private string QueueStoryCommand(long storyId, string operationCode, Func<CommandContext, Task<CommandResult>> operation, string? startMessage = null, string? threadScopeOverride = null, IReadOnlyDictionary<string, string>? metadata = null, bool batch = false)
         {
             var safeCode = string.IsNullOrWhiteSpace(operationCode)
                 ? "operation"
@@ -1498,7 +1520,8 @@ namespace TinyGenerator.Pages.Stories
                 },
                 runId: runId,
                 threadScope: threadScope,
-                metadata: MergeMetadata(storyId, operationCode, metadata));
+                metadata: MergeMetadata(storyId, operationCode, metadata),
+                batch: batch);
 
             return runId;
         }
@@ -1634,6 +1657,7 @@ namespace TinyGenerator.Pages.Stories
                 actions.Add(new { id = "regen_ambient_tags", title = "Rigenera TAG RUMORI (add_ambient_tags_to_story)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenAmbientTags", id = s.Id }, Request.Scheme), confirm = true });
                 actions.Add(new { id = "regen_fx_tags", title = "Rigenera TAG FX (add_fx_tags_to_story)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenFxTags", id = s.Id }, Request.Scheme), confirm = true });
                 actions.Add(new { id = "regen_music_tags", title = "Rigenera TAG MUSICA (add_music_tags_to_story)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RegenMusicTags", id = s.Id }, Request.Scheme), confirm = true });
+                actions.Add(new { id = "repair_tts_audio_metadata", title = "Ripara metadati audio TTS (no dialoghi/timing)", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "RepairTtsAudioMetadata", id = s.Id }, Request.Scheme), confirm = true });
                 // Combined operation to prepare TTS schema: generate schema, normalize characters, assign voices, normalize sentiments
                 actions.Add(new { id = "prepare_tts_schema", title = "Prepara TTS schema da TAGs", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "PrepareTtsSchema", id = s.Id }, Request.Scheme) });
 
@@ -1700,7 +1724,7 @@ namespace TinyGenerator.Pages.Stories
                 });
             }
 
-            var ensureOrder = new[] { "revise", "cino_optimize", "add_tags", "regen_ambient_tags", "regen_fx_tags", "regen_music_tags" };
+            var ensureOrder = new[] { "revise", "cino_optimize", "add_tags", "regen_ambient_tags", "regen_fx_tags", "regen_music_tags", "repair_tts_audio_metadata" };
             var currentIndex = insertAfterIndex >= 0 ? insertAfterIndex + 1 : 0;
             foreach (var desiredId in ensureOrder)
             {

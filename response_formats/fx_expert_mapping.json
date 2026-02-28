@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entries"
+  ],
+  "properties": {
+    "entries": {
+      "type": "array",
+      "description": "Mappature degli effetti sonori per riga.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "line",
+          "duration_seconds",
+          "tags"
+        ],
+        "properties": {
+          "line": { "type": "integer", "description": "Numero riga (1-based) del segmento nel testo taggato." },
+          "duration_seconds": { "type": "integer", "description": "Durata stimata dell'effetto in secondi." },
+          "tags": {
+            "type": "array",
+            "description": "Tag FX da usare per la ricerca suoni.",
+            "items": { "type": "string", "description": "Singolo tag effetto sonoro." }
+          }
+        }
+      }
+    }
+  }
+}

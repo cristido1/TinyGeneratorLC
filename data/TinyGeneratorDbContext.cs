@@ -56,7 +56,6 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<FailureRule> FailureRules => Set<FailureRule>();
     public DbSet<ConsequenceRule> ConsequenceRules => Set<ConsequenceRule>();
     public DbSet<ConsequenceImpact> ConsequenceImpacts => Set<ConsequenceImpact>();
-    public DbSet<StoryRuntimeState> StoryRuntimeStates => Set<StoryRuntimeState>();
     public DbSet<StoryResourceState> StoryResourceStates => Set<StoryResourceState>();
     public DbSet<NarrativeContinuityState> NarrativeContinuityStates => Set<NarrativeContinuityState>();
     public DbSet<NarrativeStoryBlock> NarrativeStoryBlocks => Set<NarrativeStoryBlock>();
@@ -132,20 +131,11 @@ public class TinyGeneratorDbContext : DbContext
             .WithMany(r => r.Impacts)
             .HasForeignKey(i => i.ConsequenceRuleId);
 
-        modelBuilder.Entity<StoryRuntimeState>()
-            .HasOne(s => s.NarrativeProfile)
-            .WithMany()
-            .HasForeignKey(s => s.NarrativeProfileId);
-
-        modelBuilder.Entity<StoryRuntimeState>()
-            .HasOne(s => s.Story)
-            .WithMany()
-            .HasForeignKey(s => s.StoryId);
+        modelBuilder.Entity<StoryResourceState>()
+            .HasIndex(s => new { s.StoryId, s.ChunkIndex });
 
         modelBuilder.Entity<StoryResourceState>()
-            .HasOne(s => s.StoryRuntimeState)
-            .WithMany()
-            .HasForeignKey(s => s.StoryRuntimeStateId);
+            .HasIndex(s => s.SeriesId);
 
         // Narrative Engine seed data (from usage_narrative_engine.txt)
         modelBuilder.Entity<NarrativeProfile>().HasData(

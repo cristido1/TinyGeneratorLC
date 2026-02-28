@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "world_state",
+    "open_threads",
+    "last_major_event"
+  ],
+  "properties": {
+    "world_state": {
+      "type": "object",
+      "description": "Stato del mondo aggiornato dopo l'applicazione del delta."
+    },
+    "open_threads": {
+      "type": "array",
+      "description": "Thread narrativi ancora aperti.",
+      "items": { "type": "string", "description": "Descrizione sintetica di un thread aperto." }
+    },
+    "last_major_event": {
+      "type": "string",
+      "description": "Ultimo evento maggiore registrato nello stato."
+    }
+  }
+}

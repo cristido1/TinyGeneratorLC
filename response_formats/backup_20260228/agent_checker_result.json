@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "needs_retry": { "type": "boolean" },
+    "issues": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["score", "needs_retry", "issues"],
+  "additionalProperties": false
+}

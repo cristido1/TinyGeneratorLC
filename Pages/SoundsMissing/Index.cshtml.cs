@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TinyGenerator.Models;
@@ -238,6 +239,73 @@ public class IndexModel : PageModel
         }
 
         return RedirectToPage("/SoundsMissing/Index", new { typeFilter = TypeFilter, statusFilter = StatusFilter });
+    }
+
+    public IActionResult OnPostDeleteResolved(string? typeFilter, string? statusFilter)
+    {
+        TypeFilter = NormalizeOrNull(typeFilter, AllowedTypes);
+        StatusFilter = NormalizeOrNull(statusFilter, AllowedStatuses);
+
+        try
+        {
+            var resolved = _database.ListMissingSounds(status: "resolved", type: TypeFilter);
+            var ids = resolved.Select(r => r.Id).Where(id => id > 0).Distinct().ToList();
+            var deleted = _database.DeleteMissingSoundsByIds(ids);
+
+            ActionMessageType = deleted > 0 ? "success" : "info";
+            ActionMessage = deleted > 0
+                ? $"Cancellati {deleted} record sounds_missing con stato resolved."
+                : "Nessun record resolved da cancellare.";
+        }
+        catch (Exception ex)
+        {
+            ActionMessageType = "danger";
+            ActionMessage = $"Errore cancellando i record resolved: {ex.Message}";
+        }
+
+        return RedirectToPage("/SoundsMissing/Index", new { typeFilter = TypeFilter, statusFilter = StatusFilter });
+    }
+
+    public IActionResult OnPostToggleStatus(long id, string? currentStatus)
+    {
+        if (id <= 0)
+        {
+            Response.StatusCode = StatusCodes.Status400BadRequest;
+            return new JsonResult(new { success = false, message = "Id sounds_missing non valido." });
+        }
+
+        try
+        {
+            var row = _database.GetMissingSoundById(id);
+            if (row == null)
+            {
+                Response.StatusCode = StatusCodes.Status404NotFound;
+                return new JsonResult(new { success = false, message = $"Record sounds_missing #{id} non trovato." });
+            }
+
+            var normalizedCurrent =
+                NormalizeOrNull(currentStatus, AllowedStatuses)
+                ?? NormalizeOrNull(row.Status, AllowedStatuses)
+                ?? "open";
+
+            var nextStatus = string.Equals(normalizedCurrent, "open", StringComparison.OrdinalIgnoreCase)
+                ? "resolved"
+                : "open";
+
+            var updated = _database.UpdateMissingSoundStatus(id, nextStatus);
+            if (updated <= 0)
+            {
+                Response.StatusCode = StatusCodes.Status500InternalServerError;
+                return new JsonResult(new { success = false, message = "Nessun aggiornamento applicato." });
+            }
+
+            return new JsonResult(new { success = true, id, status = nextStatus });
+        }
+        catch (Exception ex)
+        {
+            Response.StatusCode = StatusCodes.Status500InternalServerError;
+            return new JsonResult(new { success = false, message = ex.Message });
+        }
     }
 
     private static string? NormalizeOrNull(string? value, string[] allowed)

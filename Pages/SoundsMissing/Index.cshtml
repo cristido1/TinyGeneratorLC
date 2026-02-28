@@ -13,6 +13,7 @@
         .cell-wrap { max-width: 420px; white-space: normal; word-break: break-word; }
         .cell-small { white-space: nowrap; }
         .prompt-cell { min-width: 260px; }
+        .status-toggle { cursor: pointer; }
     </style>
 }
 
@@ -46,6 +47,14 @@
         <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
         <input type="hidden" name="statusFilter" value="@Model.StatusFilter" />
     </form>
+    <form id="deleteResolvedForm" method="post" asp-page-handler="DeleteResolved" class="d-none">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+        <input type="hidden" name="statusFilter" value="@Model.StatusFilter" />
+    </form>
+    <form id="toggleStatusForm" method="post" asp-page-handler="ToggleStatus" class="d-none">
+        @Html.AntiForgeryToken()
+    </form>
 
     <div class="card shadow-sm">
         <div class="card-body">
@@ -73,9 +82,14 @@
                         <tr>
                             <td data-col="id" class="cell-small">@item.Id</td>
                             <td data-col="status">
-                                <span class="badge @(item.Status == "resolved" ? "bg-success" : "bg-warning text-dark")">
-                                    @item.Status
-                                </span>
+                                <button type="button"
+                                        class="btn btn-sm p-0 border-0 bg-transparent status-toggle js-toggle-status"
+                                        data-id="@item.Id"
+                                        data-status="@item.Status">
+                                    <span class="badge @(item.Status == "resolved" ? "bg-success" : "bg-warning text-dark")">
+                                        @item.Status
+                                    </span>
+                                </button>
                             </td>
                             <td data-col="type">
                                 <span class="badge @(item.Type == "amb" ? "bg-success" : item.Type == "music" ? "bg-primary" : "bg-secondary")">@item.Type</span>
@@ -189,6 +203,17 @@
                         }
                     },
                     {
+                        text: '<i class="bi bi-trash me-1"></i>Cancella Resolved',
+                        className: 'btn btn-sm btn-light border text-danger',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            if (confirm('Cancellare tutti i record sounds_missing con stato resolved?')) {
+                                var form = document.getElementById('deleteResolvedForm');
+                                if (form) form.submit();
+                            }
+                        }
+                    },
+                    {
                         text: '<i class="bi bi-search me-1"></i>Verifica Mancanti',
                         className: 'btn btn-sm btn-light border text-primary',
                         attr: { style: 'width: auto; flex: 0 0 auto;' },
@@ -212,6 +237,62 @@
                         action: function() { location.reload(); }
                     }
                 ]
+            });
+
+            var toggleForm = document.getElementById('toggleStatusForm');
+            var tokenInput = toggleForm ? toggleForm.querySelector('input[name="__RequestVerificationToken"]') : null;
+            var antiForgeryToken = tokenInput ? tokenInput.value : '';
+
+            $('#soundsMissingTable').on('click', '.js-toggle-status', function() {
+                var $button = $(this);
+                if ($button.data('busy') === true) {
+                    return;
+                }
+
+                var id = Number($button.data('id'));
+                var currentStatus = String($button.data('status') || '').toLowerCase();
+                if (!id) {
+                    return;
+                }
+
+                $button.data('busy', true);
+                fetch('?handler=ToggleStatus', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                        'RequestVerificationToken': antiForgeryToken
+                    },
+                    body: 'id=' + encodeURIComponent(id) + '&currentStatus=' + encodeURIComponent(currentStatus)
+                })
+                .then(function(response) {
+                    if (!response.ok) {
+                        throw new Error('HTTP ' + response.status);
+                    }
+                    return response.json();
+                })
+                .then(function(data) {
+                    if (!data || data.success !== true) {
+                        throw new Error(data && data.message ? data.message : 'Errore aggiornando lo stato');
+                    }
+
+                    var nextStatus = String(data.status || 'open').toLowerCase();
+                    $button.data('status', nextStatus);
+
+                    var $badge = $button.find('.badge');
+                    $badge.text(nextStatus);
+                    $badge.removeClass('bg-success bg-warning text-dark');
+                    if (nextStatus === 'resolved') {
+                        $badge.addClass('bg-success');
+                    } else {
+                        $badge.addClass('bg-warning text-dark');
+                    }
+                })
+                .catch(function(error) {
+                    alert('Impossibile aggiornare lo stato: ' + (error && error.message ? error.message : 'errore sconosciuto'));
+                })
+                .finally(function() {
+                    $button.data('busy', false);
+                });
             });
         });
     }

@@ -1,0 +1,178 @@
+NRE (Narrative Runtime Engine) – VERSIONE ULTRA-PRAGMATICA
+Obiettivo: engine in-memory, nessuna nuova tabella DB, snapshot SOLO su failure.
+Vincoli: invocazione tramite ICommand (Command Dispatcher), tutte le chiamate agenti passano dal CallCenter.
+
+===============================================================================
+1) OGGETTI / INTERFACCE DA CREARE (MINIMO)
+===============================================================================
+
+[1] EngineRequest (POCO)
+Scopo: parametri della run (NON contiene StoryId).
+Campi minimi:
+- string EngineName            // "NRE"
+- string Method                // es: "state_driven", "single_pass", ecc.
+- int MaxSteps                 // limite loop (es 10)
+- bool SnapshotOnFailure       // true
+- string RunId                 // guid/string
+- string? UserPrompt           // prompt/tema/trama input principale (opzionale)
+- long? SeriesId               // opzionale
+- int? SeriesEpisodeNumber     // opzionale
+
+Note:
+- EngineRequest deve essere serializzabile (JSON) per snapshot.
+
+-------------------------------------------------------------------------------
+
+[2] EngineContext (POCO)
+Scopo: contesto runtime generico, creato dal Command dopo aver inserito la story.
+Campi minimi:
+- EngineRequest Request
+- long StoryId                 // assegnato dal Command (nuova story creata)
+- string StoryFolder           // folder story (già usato dal tuo sistema)
+- string SnapshotsFolder       // StoryFolder + "/snapshots"
+- CancellationToken CancellationToken
+- Action<CommandProgressEventArgs>? ReportProgress   // delegate opzionale
+- EngineTelemetry Telemetry    // contatori (vedi sotto)
+- List<EngineEvent> Trace      // buffer eventi (max N consigliato, es 50)
+
+Note:
+- EngineContext NON dipende da DB.
+- ReportProgress serve solo a inoltrare verso ICommand.Progress senza accoppiamento.
+
+-------------------------------------------------------------------------------
+
+[3] EngineResult (POCO)
+Scopo: output standard dell’engine, usato dal Command per salvare DB e log.
+Campi minimi:
+- long StoryId
+- bool Succeeded
+- string StopReason            // es: "Completed", "ValidationFailed", "Exception", "Cancelled", "MaxSteps"
+- string? ErrorSummary
+- EngineTelemetry Telemetry
+- string? FinalText            // testo finale (se successo) oppure null
+- string? SnapshotFilePath     // valorizzato solo se creato snapshot (su failure)
+
+-------------------------------------------------------------------------------
+
+[4] IEngine (INTERFACCIA)
+Scopo: contratto unico per motori futuri.
+- string EngineName { get; }   // "NRE"
+- Task<EngineResult> RunAsync(EngineContext ctx);
+
+-------------------------------------------------------------------------------
+
+[5] NreEngine (IMPLEMENTAZIONE DI IEngine)
+Scopo: orchestration in-memory.
+Responsabilità:
+- loop fino a MaxSteps
+- per ogni step: costruisce input, chiama CallCenter, valida, accumula blocchi
+- su successo: produce FinalText concatenando i blocchi
+- su failure: chiede a SnapshotWriter di scrivere snapshot (se SnapshotOnFailure)
+
+NreEngine NON deve parlare con DB.
+
+===============================================================================
+2) OGGETTI MINIMI DI SUPPORTO (LEGGERI)
+===============================================================================
+
+[6] EngineTelemetry (POCO)
+Scopo: metriche minime senza DB nuovo (il Command può salvarle in Log/system_reports/stats).
+Campi minimi:
+- int StepCount
+- int RetryCount
+- long TotalLatencyMs
+- int? TotalPromptTokens
+- int? TotalOutputTokens
+- string? LastModelName
+- string? LastAgentName
+
+-------------------------------------------------------------------------------
+
+[7] EngineEvent (POCO)
+Scopo: trace in memoria + snapshot debug.
+Campi minimi:
+- DateTime Ts
+- string Type                  // "StepStart", "AgentCall", "CheckFail", "Retry", "StepOk", "Stop"
+- string? Message
+- string? DataJson             // opzionale (piccolo), evita roba enorme
+
+-------------------------------------------------------------------------------
+
+[8] NarrativeState (POCO)  [MINIMO NARRATIVO]
+Scopo: stato narrativo minimale, riusabile per altri engine narrativi.
+Campi minimi:
+- int CurrentStepIndex
+- string? CurrentPhase
+- string? CurrentPov
+- int FailureCount
+
+-------------------------------------------------------------------------------
+
+[9] NarrativeBlock (POCO)  [MINIMO NARRATIVO]
+Scopo: unità di testo generata.
+Campi minimi:
+- int Index
+- string Text
+- string? Phase
+- string? Pov
+
+-------------------------------------------------------------------------------
+
+[10] SnapshotWriter (CLASSE)
+Scopo: scrive snapshot JSON su failure.
+Metodo minimo:
+- Task<string> WriteFailureSnapshotAsync(EngineContext ctx, object snapshotPayload);
+
+Convenzione nome file:
+snapshots/nre_<method>__<storyId>__<yyyyMMdd_HHmmss>__step<NN>__fail.json
+
+Payload consigliato (minimo):
+- EngineRequest
+- StoryId
+- NarrativeState
+- List<NarrativeBlock> (ultimi N, es 10)
+- EngineTelemetry
+- Trace (ultimi N, es 50)
+- Ultimo errore (message/exception string)
+- Ultima interazione agente (se disponibile e non enorme)
+
+===============================================================================
+3) COME SI USA DAL COMANDO (ICommand) – LINEA GUIDA
+===============================================================================
+
+Creare un comando tipo: RunNreCommand : ICommand
+
+Nel suo Execute:
+1) Crea una nuova riga in stories (status "running", folder, prompt, serie se serve) => ottieni StoryId
+2) Crea cartelle: StoryFolder e StoryFolder/snapshots
+3) Crea EngineRequest (EngineName="NRE", Method=..., MaxSteps=..., SnapshotOnFailure=true, RunId=...)
+4) Crea EngineContext:
+   - StoryId
+   - folders
+   - CancellationToken
+   - ReportProgress = args => Progress?.Invoke(this, args);
+   - Telemetry, Trace
+5) Invoca NreEngine.RunAsync(ctx)
+6) Se successo:
+   - salva stories.story_raw = EngineResult.FinalText
+   - aggiorna status "done"
+7) Se fallito:
+   - crea system_reports (errore strutturato)
+   - lascia status "failed" o equivalente
+   - EngineResult.SnapshotFilePath deve puntare al file snapshot creato
+
+Nota: NreEngine deve chiamare agenti SOLO tramite CallCenter.
+
+===============================================================================
+4) UNICO PUNTO “AGENT CALL” (REGOLA)
+===============================================================================
+
+Dentro NreEngine, ogni volta che serve un LLM:
+- costruisci la richiesta
+- chiama CallCenter
+- registra in Telemetry + Trace
+- mai chiamare provider direttamente
+
+===============================================================================
+FINE
+===============================================================================

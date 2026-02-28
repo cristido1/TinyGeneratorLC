@@ -87,6 +87,7 @@ namespace TinyGenerator.Services
     {
         public bool? EnableChecker { get; set; }
         public bool? EnableAgentFallback { get; set; }
+        public bool? UseConversationalFailureContext { get; set; }
 
         /// <summary>
         /// Overrides ResponseValidationOptions.MaxRetries for this operation.

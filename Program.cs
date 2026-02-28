@@ -244,6 +244,7 @@ else
     builder.Services.Configure<CommandPoliciesOptions>(builder.Configuration.GetSection("CommandPolicies"));
 }
 builder.Services.Configure<StateDrivenStoryGenerationOptions>(builder.Configuration.GetSection("StateDrivenStoryGeneration"));
+builder.Services.Configure<NarrativeRuntimeEngineOptions>(builder.Configuration.GetSection("NarrativeRuntimeEngine"));
 builder.Services.AddSingleton<TextValidationService>();
 // TTS schema generation options (pause/gap between phrases)
 builder.Services.Configure<TtsSchemaGenerationOptions>(builder.Configuration.GetSection("TtsSchemaGeneration"));
@@ -331,6 +332,9 @@ builder.Services.AddSingleton<LogAnalysisService>();
 builder.Services.AddSingleton<SystemReportService>();
 builder.Services.AddSingleton<CommandModelExecutionService>();
 builder.Services.AddSingleton<IAgentCallService>(sp => sp.GetRequiredService<CommandModelExecutionService>());
+builder.Services.AddSingleton<SnapshotWriter>();
+builder.Services.AddTransient<NreEngine>();
+builder.Services.AddTransient<IEngine>(sp => sp.GetRequiredService<NreEngine>());
 builder.Services.AddSingleton<IAgentExecutor, DefaultAgentExecutor>();
 builder.Services.AddSingleton<IDeterministicValidator, DefaultDeterministicValidator>();
 builder.Services.AddSingleton<IResponseValidator, DefaultResponseValidator>();
@@ -454,6 +458,21 @@ Console.WriteLine($"[Startup] builder.Build() completed at {DateTime.UtcNow:o}")
 
 // Get logger early for startup operations
 var logger = app.Services.GetService<ILoggerFactory>()?.CreateLogger("Startup");
+
+// Batch worker mode: execute one background command in a dedicated process and exit.
+if (BatchStoryCommandWorker.TryParse(args, out var batchRequest, out var batchParseError))
+{
+    if (!string.IsNullOrWhiteSpace(batchParseError) || batchRequest == null)
+    {
+        Console.Error.WriteLine(batchParseError ?? "Parametri batch worker non validi.");
+        Environment.ExitCode = 2;
+        return;
+    }
+
+    var workerExitCode = await BatchStoryCommandWorker.ExecuteAsync(app.Services, batchRequest, logger);
+    Environment.ExitCode = workerExitCode;
+    return;
+}
 
 // Ensure llama.cpp server is terminated at startup so we start from a clean slate.
 StartupTasks.ResetLlamaServer(builder.Configuration, logger);

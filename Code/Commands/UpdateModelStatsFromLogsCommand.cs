@@ -39,6 +39,14 @@ public sealed class UpdateModelStatsFromLogsCommand : ICommand
         var message = processedTotal > 0
             ? $"Model stats aggiornate da log: {processedTotal} record (batch={_batchSize}, cicli={Math.Max(1, loops)})"
             : "Nessun log modello da elaborare";
+
+        if (processedTotal <= 0)
+        {
+            // Pulizia report storici no-op/falliti di questa operazione:
+            // se non c'è nulla da elaborare, il report non è informativo.
+            _database.DeleteSystemReportsByOperationType(CommandName, deletedBy: "auto_cleanup_no_logs");
+        }
+
         return Task.FromResult(new CommandResult(true, message));
     }
 }

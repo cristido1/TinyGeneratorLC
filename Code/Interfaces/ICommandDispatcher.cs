@@ -42,6 +42,7 @@ namespace TinyGenerator.Services
         void UpdateStep(string runId, int current, int max, string? stepDescription = null);
         void UpdateRetry(string runId, int retryCount);
         void UpdateOperationName(string runId, string newOperationName);
+        void UpdateAgentModel(string runId, string? agentName = null, string? modelName = null);
         bool CancelCommand(string runId);
         int ClearCompletedCommands();
 

@@ -369,7 +369,7 @@
                     ? ` (Retry ${retryCount}/${maxRetry})`
                     : '';
                 const metadata = c.metadata || c.Metadata || {};
-                const op = metadata.operation || metadata.Operation || c.operationName || c.OperationName || c.threadScope || c.ThreadScope || 'N/A';
+                const op = c.operationName || c.OperationName || metadata.operation || metadata.Operation || c.threadScope || c.ThreadScope || 'N/A';
                 const opLower = (op || '').toString().toLowerCase();
                 const isScoreCommand = opLower.includes('instruction_score')
                     || opLower.includes('json_score')

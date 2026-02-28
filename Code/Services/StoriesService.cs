@@ -850,6 +850,9 @@ public sealed partial class StoriesService
             ["statusCode"] = next.Code ?? string.Empty
         };
         TryPopulateAgentMetadata(next, metadata);
+        var batchStatusCommand = string.Equals(next.FunctionName, "generate_ambience_audio", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(next.FunctionName, "generate_fx_audio", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(next.FunctionName, "generate_music", StringComparison.OrdinalIgnoreCase);
 
         _commandDispatcher.Enqueue(
             next.FunctionName ?? next.Code ?? "status",
@@ -879,7 +882,8 @@ public sealed partial class StoriesService
             runId: runId,
             threadScope: $"story/status_chain/{story.Id}",
             metadata: metadata,
-            priority: 2);
+            priority: 2,
+            batch: batchStatusCommand);
 
         state.LastEnqueuedStatusId = next.Id;
         return true;
@@ -2305,7 +2309,7 @@ public sealed partial class StoriesService
 
             var basePriority = Math.Max(1, priority);
 
-            void EnqueueIfNotQueued(string operationName, string runPrefix, Func<CommandContext, Task<CommandResult>> handler, int opPriority)
+            void EnqueueIfNotQueued(string operationName, string runPrefix, Func<CommandContext, Task<CommandResult>> handler, int opPriority, bool batch = false)
             {
                 try
                 {
@@ -2336,7 +2340,8 @@ public sealed partial class StoriesService
                         ["trigger"] = trigger,
                         ["folder"] = folderName
                     },
-                    priority: Math.Max(1, opPriority));
+                    priority: Math.Max(1, opPriority),
+                    batch: batch);
             }
 
             EnqueueIfNotQueued(
@@ -2390,7 +2395,8 @@ public sealed partial class StoriesService
                     var (ok, err) = await GenerateMusicForStoryAsync(storyId, folderName, ctx.RunId);
                     return new CommandResult(ok, ok ? "Generazione musica completata." : err);
                 },
-                basePriority + 5);
+                basePriority + 5,
+                batch: true);
 
             if (IsAmbienceGenerationEnabled())
             {
@@ -2402,7 +2408,8 @@ public sealed partial class StoriesService
                         var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
                         return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
                     },
-                    basePriority + 6);
+                    basePriority + 6,
+                    batch: true);
             }
 
             EnqueueIfNotQueued(
@@ -2413,7 +2420,8 @@ public sealed partial class StoriesService
                     var (ok, err) = await GenerateFxForStoryAsync(storyId, folderName, ctx.RunId);
                     return new CommandResult(ok, ok ? "Generazione effetti sonori completata." : err);
                 },
-                basePriority + 7);
+                basePriority + 7,
+                batch: true);
 
             EnqueueIfNotQueued(
                 "mix_final_audio",
@@ -2546,7 +2554,7 @@ public sealed partial class StoriesService
                 ? story.Folder
                 : new DirectoryInfo(EnsureStoryFolder(story)).Name;
 
-            void EnqueueIfNotQueued(string operationName, string runPrefix, Func<CommandContext, Task<CommandResult>> handler)
+            void EnqueueIfNotQueued(string operationName, string runPrefix, Func<CommandContext, Task<CommandResult>> handler, bool batch = false)
             {
                 try
                 {
@@ -2577,7 +2585,8 @@ public sealed partial class StoriesService
                         ["trigger"] = trigger,
                         ["folder"] = folderName
                     },
-                    priority: priority);
+                    priority: priority,
+                    batch: batch);
             }
 
             EnqueueIfNotQueued(
@@ -2587,7 +2596,8 @@ public sealed partial class StoriesService
                 {
                     var (ok, err) = await GenerateMusicForStoryAsync(storyId, folderName, ctx.RunId);
                     return new CommandResult(ok, ok ? "Generazione musica completata." : err);
-                });
+                },
+                batch: true);
 
             var autoAmbience = IsAmbienceGenerationEnabled()
                 && (_audioGenerationOptions?.CurrentValue?.Ambience?.AutolaunchNextCommand ?? true);
@@ -2600,7 +2610,8 @@ public sealed partial class StoriesService
                     {
                         var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
                         return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
-                    });
+                    },
+                    batch: true);
             }
 
             var autoFx = _audioGenerationOptions?.CurrentValue?.Fx?.AutolaunchNextCommand ?? true;
@@ -2613,7 +2624,8 @@ public sealed partial class StoriesService
                     {
                         var (ok, err) = await GenerateFxForStoryAsync(storyId, folderName, ctx.RunId);
                         return new CommandResult(ok, ok ? "Generazione effetti sonori completata." : err);
-                    });
+                    },
+                    batch: true);
             }
         }
         catch (Exception ex)
@@ -2842,7 +2854,7 @@ public sealed partial class StoriesService
 
                                     if (criticResult.Success && !string.IsNullOrWhiteSpace(criticResult.ResponseText))
                                     {
-                                        extractedCriticIssues = criticResult.ResponseText.Trim();
+                                        extractedCriticIssues = NormalizeCriticExtractorIssues(criticResult.ResponseText);
                                         _customLogger?.Append(runId, $"[story {storyId}] Critic extractor completed.");
                                     }
                                     else
@@ -3264,6 +3276,53 @@ public sealed partial class StoriesService
         return sb.ToString();
     }
 
+    private static string? NormalizeCriticExtractorIssues(string? raw)
+    {
+        var text = (raw ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        if (!text.StartsWith("{", StringComparison.Ordinal))
+        {
+            return text;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("issues", out var issuesNode) ||
+                issuesNode.ValueKind != JsonValueKind.Array)
+            {
+                return text;
+            }
+
+            var lines = new List<string>();
+            foreach (var item in issuesNode.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var value = item.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    lines.Add("- " + value.Trim());
+                }
+            }
+
+            return lines.Count == 0 ? string.Empty : string.Join(Environment.NewLine, lines);
+        }
+        catch
+        {
+            return text;
+        }
+    }
+
     private static List<RevisionChunk> SplitIntoRevisionChunks(string text, int approxChunkChars)
     {
         var result = new List<RevisionChunk>();
@@ -3445,6 +3504,13 @@ public sealed partial class StoriesService
         return ExecuteStoryCommandAsync(
             storyId,
             new GenerateTtsSchemaCommand(this));
+    }
+
+    public Task<(bool success, string? message)> RepairTtsAudioMetadataAsync(long storyId)
+    {
+        return ExecuteStoryCommandAsync(
+            storyId,
+            new RepairTtsSchemaAudioMetadataCommand(this));
     }
 
     public Task<(bool success, string? message)> AssignVoicesAsync(long storyId)
@@ -6746,6 +6812,74 @@ public sealed partial class StoriesService
                ReadString(entry, "MusicTags");
     }
 
+    private static int? ReadMusicPreferredDurationSeconds(JsonObject entry)
+    {
+        if (TryReadNumber(entry, "musicDurationSecs", out var secs) ||
+            TryReadNumber(entry, "music_duration_secs", out secs) ||
+            TryReadNumber(entry, "MusicDurationSecs", out secs) ||
+            TryReadNumber(entry, "musicDuration", out secs) ||
+            TryReadNumber(entry, "music_duration", out secs) ||
+            TryReadNumber(entry, "MusicDuration", out secs))
+        {
+            var s = (int)Math.Ceiling(secs);
+            if (s > 0) return s;
+        }
+
+        if (TryReadNumber(entry, "musicDurationMs", out var ms) ||
+            TryReadNumber(entry, "music_duration_ms", out ms) ||
+            TryReadNumber(entry, "MusicDurationMs", out ms))
+        {
+            var s = (int)Math.Ceiling(ms / 1000.0);
+            if (s > 0) return s;
+        }
+
+        return null;
+    }
+
+    private static string NormalizeMusicPromptForSearch(string? raw)
+    {
+        var text = (raw ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        // Esempio da ripulire: "18 s | exploration, journey, travel"
+        text = Regex.Replace(text, @"^\s*\d+\s*s(ec)?\s*[\|\-:]\s*", string.Empty, RegexOptions.IgnoreCase);
+        var pipeIndex = text.IndexOf('|');
+        if (pipeIndex >= 0 && pipeIndex < text.Length - 1)
+        {
+            text = text[(pipeIndex + 1)..].Trim();
+        }
+
+        text = Regex.Replace(text, @"\s+", " ").Trim();
+        return text;
+    }
+
+    private static string? ExtractMusicTagsFromDescription(string? raw)
+    {
+        var text = (raw ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var pipeIndex = text.IndexOf('|');
+        if (pipeIndex < 0 || pipeIndex >= text.Length - 1)
+        {
+            return null;
+        }
+
+        var candidate = text[(pipeIndex + 1)..].Trim();
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return null;
+        }
+
+        // Deve sembrare una lista tag CSV, non una frase lunga.
+        return candidate.Contains(',') ? candidate : null;
+    }
+
     private static bool HasAmbientSoundRequest(JsonObject entry)
     {
         return !string.IsNullOrWhiteSpace(ReadAmbientSoundsDescription(entry)) ||
@@ -7232,7 +7366,7 @@ public sealed partial class StoriesService
             return selection;
         }
 
-        if (normalizedType is not ("fx" or "amb"))
+        if (normalizedType is not ("fx" or "amb" or "music"))
         {
             return null;
         }
@@ -7411,6 +7545,7 @@ public sealed partial class StoriesService
             if (string.IsNullOrWhiteSpace(musicDesc)) continue;
 
             var musicTags = ReadMusicTags(entry);
+            var musicDuration = ReadMusicPreferredDurationSeconds(entry);
             var selection = TrySelectCatalogSoundForSchema(
                 story,
                 runId,
@@ -7418,7 +7553,7 @@ public sealed partial class StoriesService
                 prompt: musicDesc,
                 tags: musicTags,
                 source: "tts_schema.music_description",
-                preferredDurationSeconds: null,
+                preferredDurationSeconds: musicDuration,
                 out _);
 
             if (selection == null) continue;
@@ -8232,6 +8367,8 @@ public sealed partial class StoriesService
             var entry = phraseEntries[i];
             var musicDesc = ReadString(entry, "music_description") ?? ReadString(entry, "musicDescription") ?? ReadString(entry, "MusicDescription");
             if (string.IsNullOrWhiteSpace(musicDesc))
+                musicDesc = ReadString(entry, "music_tags") ?? ReadString(entry, "musicTags") ?? ReadString(entry, "MusicTags");
+            if (string.IsNullOrWhiteSpace(musicDesc))
                 continue;
 
             if (string.Equals(musicDesc.Trim(), "silence", StringComparison.OrdinalIgnoreCase))
@@ -8246,25 +8383,31 @@ public sealed partial class StoriesService
             if ((!string.IsNullOrWhiteSpace(currentMusicFile) && File.Exists(Path.Combine(folderPath, currentMusicFile))) ||
                 (!string.IsNullOrWhiteSpace(currentMusicSourcePath) && File.Exists(currentMusicSourcePath)))
                 continue; // already assigned and present
+            var normalizedMusicPrompt = NormalizeMusicPromptForSearch(musicDesc);
             var musicTags = ReadMusicTags(entry);
+            if (string.IsNullOrWhiteSpace(musicTags))
+            {
+                musicTags = ExtractMusicTagsFromDescription(musicDesc);
+            }
+            var musicDuration = ReadMusicPreferredDurationSeconds(entry);
 
-            var selection = TrySelectCatalogSoundForSchema(
+            var selection = await TrySelectCatalogSoundForSchemaWithAutoSearchAsync(
                 story,
                 runId,
                 soundType: "music",
-                prompt: musicDesc,
+                prompt: normalizedMusicPrompt,
                 tags: musicTags,
                 source: "tts_schema.music_description",
-                preferredDurationSeconds: null,
-                out _);
+                preferredDurationSeconds: musicDuration,
+                cancellationToken: context.CancellationToken).ConfigureAwait(false);
 
             if (selection == null)
             {
                 missing++;
-                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Nessuna musica trovata per '{musicDesc}'. Continuo.");
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Nessuna musica trovata per '{normalizedMusicPrompt}'. Continuo.");
                 if (missing > maxMissingTolerated)
                 {
-                    return (false, $"Nessuna musica trovata per '{musicDesc}'. Superata soglia mancanti tollerati (mancanti={missing}, tollerati={maxMissingTolerated}).");
+                    return (false, $"Nessuna musica trovata per '{normalizedMusicPrompt}'. Superata soglia mancanti tollerati (mancanti={missing}, tollerati={maxMissingTolerated}).");
                 }
                 continue;
             }
@@ -8991,12 +9134,17 @@ private static string? SelectMusicFileDeterministic(
             _customLogger?.Append(runId, $"[{story.Id}] [WARN] Opening intro fallito: {ex.Message}");
         }
 
+        var mixGapOptions = _audioMixOptions?.CurrentValue ?? new AudioMixOptions();
+        var defaultPhraseGapMs = Math.Max(0, mixGapOptions.DefaultPhraseGapMs);
+        var commaAttributionGapMs = Math.Clamp(mixGapOptions.CommaAttributionGapMs, 0, Math.Max(0, defaultPhraseGapMs));
+
         // Accoda il resto della storia in sequenza reale:
-        // start di ogni frase = fine frase precedente + 2000ms
+        // start di ogni frase = fine frase precedente + gap dinamico.
         int currentTimeMs = introShiftMs;
         int wavDurationUsedCount = 0;
-        foreach (var entry in phraseEntries)
+        for (int entryIndex = 0; entryIndex < phraseEntries.Count; entryIndex++)
         {
+            var entry = phraseEntries[entryIndex];
             // TTS file
             var ttsFileName = ReadString(entry, "fileName") ?? ReadString(entry, "FileName") ?? ReadString(entry, "file_name");
             if (!string.IsNullOrWhiteSpace(ttsFileName))
@@ -9031,14 +9179,16 @@ private static string? SelectMusicFileDeterministic(
                         durationMs = 2000; // fallback gap if duration is unavailable
 
                     ttsTrackFiles.Add((ttsFilePath, startMs));
-                    currentTimeMs = startMs + durationMs + 2000;
+                    var nextEntry = entryIndex + 1 < phraseEntries.Count ? phraseEntries[entryIndex + 1] : null;
+                    var gapAfterMs = ComputePhraseGapMs(entry, nextEntry, defaultPhraseGapMs, commaAttributionGapMs);
+                    currentTimeMs = startMs + durationMs + gapAfterMs;
                 }
             }
 
             // Ambient sounds are handled as continuous segments (from one [RUMORI] tag until the next)
 
             // FX file - starts at middle of phrase duration
-            var fxFile = ReadString(entry, "fxFile") ?? ReadString(entry, "FxFile");
+            var fxFile = ReadString(entry, "fxFile") ?? ReadString(entry, "fx_file") ?? ReadString(entry, "FxFile");
             var fxSourcePath = ReadString(entry, "fx_source_path") ?? ReadString(entry, "fxSourcePath") ?? ReadString(entry, "FxSourcePath");
             var fxFilePath = ResolveSchemaAudioReferencePath(folderPath, fxFile, fxSourcePath);
             if (!string.IsNullOrWhiteSpace(fxFilePath))
@@ -9084,7 +9234,7 @@ private static string? SelectMusicFileDeterministic(
         {
             _customLogger?.Append(
                 runId,
-                $"[{story.Id}] Timeline TTS sequenziale applicata: durate reali file={wavDurationUsedCount}, gap=2000ms");
+                $"[{story.Id}] Timeline TTS sequenziale applicata: durate reali file={wavDurationUsedCount}, gapDefault={defaultPhraseGapMs}ms, gapCommaAttribution={commaAttributionGapMs}ms");
         }
 
         // Build ambience segments based on ambient_sound_file definitions and ambientSoundsDuration
@@ -10340,6 +10490,69 @@ private static string? SelectMusicFileDeterministic(
         return node.ToString();
     }
 
+    private static int ComputePhraseGapMs(
+        JsonObject currentEntry,
+        JsonObject? nextEntry,
+        int defaultPhraseGapMs,
+        int commaAttributionGapMs)
+    {
+        if (nextEntry == null)
+        {
+            return defaultPhraseGapMs;
+        }
+
+        if (commaAttributionGapMs < defaultPhraseGapMs &&
+            LooksLikeCommaAttributionTransition(currentEntry, nextEntry))
+        {
+            return commaAttributionGapMs;
+        }
+
+        return defaultPhraseGapMs;
+    }
+
+    private static bool LooksLikeCommaAttributionTransition(JsonObject currentEntry, JsonObject nextEntry)
+    {
+        var currentText = (ReadString(currentEntry, "text") ?? ReadString(currentEntry, "Text") ?? string.Empty).TrimEnd();
+        if (string.IsNullOrWhiteSpace(currentText) || !currentText.EndsWith(",", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var nextTextRaw = (ReadString(nextEntry, "text") ?? ReadString(nextEntry, "Text") ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(nextTextRaw))
+        {
+            return false;
+        }
+
+        var nextText = Regex.Replace(nextTextRaw, @"^\p{P}+", string.Empty).TrimStart().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(nextText))
+        {
+            return false;
+        }
+
+        var isAttributionStart =
+            nextText.StartsWith("disse ", StringComparison.Ordinal) ||
+            nextText.StartsWith("chiese ", StringComparison.Ordinal) ||
+            nextText.StartsWith("rispose ", StringComparison.Ordinal) ||
+            nextText.StartsWith("replicò ", StringComparison.Ordinal) ||
+            nextText.StartsWith("mormorò ", StringComparison.Ordinal) ||
+            nextText.StartsWith("sussurrò ", StringComparison.Ordinal) ||
+            nextText.StartsWith("urlò ", StringComparison.Ordinal) ||
+            nextText.StartsWith("ordinò ", StringComparison.Ordinal) ||
+            nextText.StartsWith("aggiunse ", StringComparison.Ordinal) ||
+            nextText.StartsWith("commentò ", StringComparison.Ordinal) ||
+            nextText.StartsWith("proseguì ", StringComparison.Ordinal);
+
+        if (!isAttributionStart)
+        {
+            return false;
+        }
+
+        var nextCharacter = (ReadString(nextEntry, "character") ?? ReadString(nextEntry, "Character") ?? string.Empty).Trim();
+        var isNarrator = string.Equals(nextCharacter, "Narratore", StringComparison.OrdinalIgnoreCase);
+        return isNarrator || nextText.Length <= 120;
+    }
+
     private sealed record CharacterVoiceInfo(string Name, string? VoiceId, string? Gender);
 
     // TODO: Implement auto-advancement feature with idle detection
@@ -10383,6 +10596,55 @@ private static string? SelectMusicFileDeterministic(
         {
             // best-effort
         }
+    }
+
+    public string GetAutoAdvancementMode()
+    {
+        try
+        {
+            var mode = _idleAutoOptions?.CurrentValue?.AutoAdvancementMode;
+            return NormalizeAutoAdvancementMode(mode);
+        }
+        catch
+        {
+            return "series";
+        }
+    }
+
+    public void SetAutoAdvancementMode(string? mode)
+    {
+        try
+        {
+            var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+            if (!File.Exists(appSettingsPath))
+            {
+                return;
+            }
+
+            var json = File.ReadAllText(appSettingsPath);
+            var root = JsonNode.Parse(json) as JsonObject;
+            if (root == null)
+            {
+                return;
+            }
+
+            var autoNode = root["AutomaticOperations"] as JsonObject ?? new JsonObject();
+            autoNode["AutoAdvancementMode"] = NormalizeAutoAdvancementMode(mode);
+            root["AutomaticOperations"] = autoNode;
+
+            var updated = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(appSettingsPath, updated);
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
+    private static string NormalizeAutoAdvancementMode(string? mode)
+    {
+        var normalized = (mode ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized == "nre" ? "nre" : "series";
     }
 
     internal static class StoriesServiceDefaults

@@ -1,0 +1,169 @@
+@page
+@model TinyGenerator.Pages.Logs.LogChatModel
+@{
+    ViewData["Title"] = "LogChat";
+    ViewData["PageDescription"] = "Vista conversazionale operativa dei log";
+}
+
+<div class="logchat-wrap">
+    <div class="logchat-topbar">
+        <form method="get" class="compact-filters">
+            <div class="row g-2">
+                <div class="col-lg-3 col-md-6">
+                    <label class="form-label">Correlation</label>
+                    <input name="CorrelationId" class="form-control form-control-sm" list="correlationList" value="@Model.CorrelationId" placeholder="scope:..., thread:..., story:..." />
+                    <datalist id="correlationList">
+                        @foreach (var c in Model.AvailableCorrelations)
+                        {
+                            <option value="@c"></option>
+                        }
+                    </datalist>
+                </div>
+                <div class="col-lg-1 col-md-3">
+                    <label class="form-label">Thread</label>
+                    <input name="ThreadId" type="number" class="form-control form-control-sm" value="@(Model.ThreadId?.ToString() ?? "")" />
+                </div>
+                <div class="col-lg-1 col-md-3">
+                    <label class="form-label">Story</label>
+                    <input name="StoryId" type="number" class="form-control form-control-sm" value="@(Model.StoryId?.ToString() ?? "")" />
+                </div>
+                <div class="col-lg-1 col-md-3">
+                    <label class="form-label">Durata &gt;</label>
+                    <input name="MinDurationSecs" type="number" min="1" class="form-control form-control-sm" value="@(Model.MinDurationSecs?.ToString() ?? "")" />
+                </div>
+                <div class="col-lg-2 col-md-4">
+                    <label class="form-label">Modello</label>
+                    <input name="Model" class="form-control form-control-sm" value="@Model.Model" placeholder="qwen, llama..." />
+                </div>
+                <div class="col-lg-2 col-md-5">
+                    <label class="form-label">Actor</label>
+                    <input name="Actor" class="form-control form-control-sm" value="@Model.Actor" placeholder="nome agente/attore" />
+                </div>
+                <div class="col-lg-2 col-md-12 d-flex align-items-end gap-2">
+                    <input type="hidden" name="ViewMode" value="@Model.ViewMode" />
+                    <button class="btn btn-sm btn-primary w-100" type="submit">Applica</button>
+                    <a class="btn btn-sm btn-outline-secondary w-100" asp-page="/Logs/LogChat">Reset</a>
+                </div>
+            </div>
+            <div class="flags mt-2">
+                <label><input type="checkbox" name="OnlyErrors" value="true" @(Model.OnlyErrors ? "checked" : null) /> Errori</label>
+                <label><input type="checkbox" name="OnlyWarnings" value="true" @(Model.OnlyWarnings ? "checked" : null) /> Warning</label>
+                <label><input type="checkbox" name="OnlyAgent" value="true" @(Model.OnlyAgent ? "checked" : null) /> Agent</label>
+                <label><input type="checkbox" name="OnlyCommand" value="true" @(Model.OnlyCommand ? "checked" : null) /> Comandi</label>
+                <label><input type="checkbox" name="OnlyValidator" value="true" @(Model.OnlyValidator ? "checked" : null) /> Validator</label>
+                <label><input type="checkbox" name="OnlyApi" value="true" @(Model.OnlyApi ? "checked" : null) /> API</label>
+                <label><input type="checkbox" name="OnlyDb" value="true" @(Model.OnlyDb ? "checked" : null) /> DB</label>
+            </div>
+        </form>
+    </div>
+
+    <div class="conversation-grid">
+            <div class="timeline-col">
+                @if (Model.Groups.Count == 0)
+                {
+                    <div class="empty-state">Nessun evento con i filtri correnti.</div>
+                }
+                else
+                {
+                    @foreach (var g in Model.Groups)
+                    {
+                        var hasErrors = g.ErrorCount > 0;
+                        <details class="group-box @(hasErrors ? "has-error" : null)" open>
+                            <summary>
+                                <span class="group-title">Operazione: @g.CorrelationLabel</span>
+                                <span class="group-meta">@g.EventCount eventi</span>
+                                @if (g.CorrelationCount > 0)
+                                {
+                                    <span class="group-meta">scope/thread: @g.CorrelationCount</span>
+                                }
+                                @if (g.ErrorCount > 0)
+                                {
+                                    <span class="status-badge failed">@g.ErrorCount errori</span>
+                                }
+                                @if (g.WarningCount > 0)
+                                {
+                                    <span class="status-badge warning">@g.WarningCount warning</span>
+                                }
+                                <span class="group-meta">@g.TotalDurationSeconds s</span>
+                            </summary>
+
+                            <div class="timeline">
+                                @foreach (var e in g.Events)
+                                {
+                                    var safeId = $"evt_{e.Id}";
+                                    <article id="@safeId" class="msg @e.AccentClass @(e.Result == "FAILED" ? "is-failed" : null)"
+                                             data-event-id="@safeId">
+                                        <header>
+                                            <div class="left">
+                                                <span class="icon">@e.Icon</span>
+                                                <span class="name">@e.ActorDisplayName</span>
+                                                @if (!string.IsNullOrWhiteSpace(e.ActorSubtitle))
+                                                {
+                                                    <span class="sub">@e.ActorSubtitle</span>
+                                                }
+                                            </div>
+                                            <time>@e.Timestamp.ToString("HH:mm:ss")</time>
+                                        </header>
+                                        <div class="content">@e.Message</div>
+                                        @if (e.Result == "FAILED")
+                                        {
+                                            <div class="content text-danger small">✖ Problema rilevato</div>
+                                        }
+                                    </article>
+                                }
+                            </div>
+                        </details>
+                    }
+                }
+            </div>
+        </div>
+</div>
+
+@section Styles {
+<style>
+    .logchat-wrap { font-size: 12px; }
+    .logchat-topbar { background: #f7f8fa; border: 1px solid #e4e6eb; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+    .compact-filters .form-label { margin-bottom: 2px; font-size: 11px; color: #516072; }
+    .flags { display: flex; flex-wrap: wrap; gap: 10px; }
+    .flags label { font-size: 11px; color: #48566a; display: inline-flex; gap: 4px; align-items: center; }
+    .conversation-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
+    .timeline-col { min-width: 0; }
+    .group-box { border: 1px solid #f5f5f5; border-radius: 0; margin-bottom: 10px; background: #0b0d11; color: #f7f7f7; }
+    .group-box.has-error { border-color: #ff9aa2; }
+    .group-box > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #f0f0f0; font-size: 12px; background: #0b0d11; }
+    .group-box > summary::-webkit-details-marker { display: none; }
+    .group-title { font-weight: 700; color: #f7f7f7; margin-right: auto; font-family: Consolas, 'Courier New', monospace; }
+    .group-meta { color: #c9c9c9; font-family: Consolas, 'Courier New', monospace; }
+    .timeline { padding: 10px 12px; background: #0b0d11; }
+    .msg { border: 1px solid #f0f0f0; border-left-width: 3px; border-radius: 0; padding: 8px 10px; margin-bottom: 10px; background: #0b0d11; cursor: pointer; color: #f7f7f7; font-family: Consolas, 'Courier New', monospace; }
+    .msg header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 2px; }
+    .msg .left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .msg .icon { width: 16px; text-align: center; }
+    .msg .name { font-weight: 700; color: #ffffff; }
+    .msg .sub { color: #c9c9c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+    .msg time { font-size: 11px; color: #c9c9c9; white-space: nowrap; }
+    .msg .content { font-size: 14px; color: #ffffff; margin-bottom: 6px; white-space: pre-wrap; }
+    .line-clamp-2 { display: block; overflow: visible; }
+    .status-badge { display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+    .status-badge.success { background: #def7e6; color: #135f2d; }
+    .status-badge.failed { background: #fde4e4; color: #8b1c1c; }
+    .status-badge.warning { background: #fff0d4; color: #8a5b00; }
+    .status-badge.info { background: #eceff3; color: #4b5563; }
+    .actor-agent { border-left-color: #88c8ff; }
+    .actor-command { border-left-color: #c4a8ff; }
+    .actor-orchestrator { border-left-color: #c4c4c4; }
+    .actor-validator { border-left-color: #ffe08a; }
+    .actor-db { border-left-color: #d2b48c; }
+    .actor-api { border-left-color: #a4e7f5; }
+    .actor-system { border-left-color: #b8c2d6; }
+    .msg.is-failed { box-shadow: inset 0 0 0 1px #ff9aa2; }
+    .msg.selected { outline: 1px dashed #ffffff; }
+    .empty-state { border: 1px dashed #d8dee8; border-radius: 8px; padding: 18px; color: #6b7280; background: #fafbfc; }
+    @@media (max-width: 1200px) {
+        .conversation-grid { grid-template-columns: 1fr; }
+    }
+    @@media (max-width: 768px) {
+        .flags { gap: 8px; }
+    }
+</style>
+}

@@ -1,0 +1,183 @@
+===============================================================================
+NRE – AGGIUNTA MODALITÀ STRUTTURA NARRATIVA (STANDARD / MILITARY_STRICT)
+Istruzioni per Codex
+===============================================================================
+
+OBIETTIVO
+-------------------------------------------------------------------------------
+Aggiungere in interfaccia una combo per selezionare la struttura narrativa
+dell’NRE:
+
+- "standard"
+- "military_strict"
+
+La scelta deve influenzare ESCLUSIVAMENTE il prompt del nre_planner.
+Non modificare engine, CallCenter, deterministic checks o writer.
+
+===============================================================================
+1) MODELLO DATI
+===============================================================================
+
+Aggiungere proprietà al modello request NRE:
+
+public string StructureMode { get; set; } = "standard";
+
+Valori ammessi:
+- "standard"
+- "military_strict"
+
+Validare lato server che il valore sia uno dei due.
+
+===============================================================================
+2) INTERFACCIA
+===============================================================================
+
+Aggiungere combo nella UI di lancio NRE:
+
+Label: "Struttura narrativa"
+
+Select:
+- Standard
+- Militare rigorosa
+
+Binding su NreRequest.StructureMode.
+
+Default: "standard"
+
+===============================================================================
+3) LOGICA NEL COMANDO NRE
+===============================================================================
+
+Nel comando che orchestri NRE:
+
+Pseudo-codice:
+
+if (request.StructureMode == "military_strict")
+    plannerPrompt = BuildMilitaryPlannerPrompt(request);
+else
+    plannerPrompt = BuildStandardPlannerPrompt(request);
+
+Passare plannerPrompt al CallCenter per l’agente "nre_planner".
+
+Non modificare:
+- lista deterministic checks
+- CallCenter
+- retry logic
+- evaluator
+
+===============================================================================
+4) PROMPT NRE_PLANNER – VERSIONE STANDARD
+===============================================================================
+
+System prompt standard (BuildStandardPlannerPrompt):
+
+Sei un narrative planner.
+
+Genera una struttura narrativa in JSON con il seguente schema:
+
+{
+  "phases": [
+    {
+      "index": 1,
+      "name": "...",
+      "objective": "...",
+      "conflict": "...",
+      "tension_level": 1-5
+    }
+  ]
+}
+
+Regole:
+- 5 o 6 fasi.
+- Progressione logica e causale.
+- Ogni fase deve introdurre un cambiamento reale.
+- Non scrivere testo narrativo.
+- Output solo JSON valido.
+
+===============================================================================
+5) PROMPT NRE_PLANNER – VERSIONE MILITARY_STRICT
+===============================================================================
+
+System prompt military_strict (BuildMilitaryPlannerPrompt):
+
+Sei un narrative planner specializzato in narrativa militare rigorosa.
+
+Genera una struttura narrativa in JSON con il seguente schema:
+
+{
+  "phases": [
+    {
+      "index": 1,
+      "name": "...",
+      "objective": "...",
+      "conflict": "...",
+      "tension_level": 1-5
+    }
+  ]
+}
+
+REGOLE OBBLIGATORIE:
+
+1) Devono esserci esattamente 6 fasi.
+2) Ogni fase deve rispettare questa progressione:
+
+   Fase 1 – Situazione operativa chiara
+     - Catena di comando esplicita
+     - Obiettivo militare definito
+
+   Fase 2 – Informazione incompleta o errore tattico
+     - Introduzione di rischio reale
+
+   Fase 3 – Perdita concreta
+     - Distruzione asset o morte di personale
+     - Conseguenza irreversibile
+
+   Fase 4 – Decisione disciplinare o morale
+     - Scelta che comporta costo strategico
+
+   Fase 5 – Escalation
+     - Minaccia superiore o rivelazione strategica
+
+   Fase 6 – Nuovo equilibrio instabile
+     - Nessuna vittoria pulita
+     - Minaccia non completamente risolta
+
+3) Ogni fase deve:
+   - avere obiettivo militare esplicito
+   - avere conflitto operativo concreto
+   - aumentare la tensione rispetto alla precedente
+
+4) Non è permessa una risoluzione completa del conflitto.
+5) Output solo JSON valido, nessun testo aggiuntivo.
+
+===============================================================================
+6) DETERMINISTIC CHECKS
+===============================================================================
+
+Non modificare i check esistenti.
+
+Per nre_planner devono essere applicati:
+- CheckEmpty
+- CheckNrePlannerJsonValidity
+
+===============================================================================
+7) NON FARE
+===============================================================================
+
+- Non creare nuovi agenti.
+- Non duplicare writer.
+- Non modificare CallCenter.
+- Non inserire logica militare nel writer.
+- Non aggiungere nuovi retry engine.
+
+===============================================================================
+8) RISULTATO ATTESO
+===============================================================================
+
+- Con modalità "standard": struttura narrativa generica.
+- Con modalità "military_strict": escalation militare rigida con perdita reale e conseguenze irreversibili.
+- Resto della pipeline invariato.
+
+===============================================================================
+FINE
+===============================================================================

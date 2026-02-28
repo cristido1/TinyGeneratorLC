@@ -1,0 +1,284 @@
+============================================================
+RESOURCE MANAGER AGENT – SPECIFICA TECNICA UNIFICATA
+(NRE + SERIE STATE-DRIVEN)
+============================================================
+
+Data: 2026-02-27
+Progetto: TinyGeneratorLC
+Scopo: unificare la gestione dello stato delle risorse
+(personaggi, navi, oggetti, energia, munizioni, ecc.)
+in tutti gli engine (NRE e serie state-driven).
+
+============================================================
+1) DEFINIZIONE AGENTE RESOURCE_MANAGER
+============================================================
+
+Nome agente:
+ResourceManagerAgent
+
+Responsabilità:
+- generare lo stato iniziale delle risorse (INIT)
+- aggiornare lo stato dopo ogni chunk (UPDATE)
+- garantire coerenza narrativa e semantica delle risorse
+- produrre uno stato CanonState consistente per Writer ed Evaluator
+
+------------------------------------------------------------
+1.1 MODELLO CONSIGLIATO
+------------------------------------------------------------
+Modello:
+- Primario: Qwen3 14B Instruct (locale)
+- Fallback: Qwen3 8B Instruct
+
+Temperatura: 0.2
+TopP: 0.9
+MaxTokens: adeguato allo schema JSON (es. 1200–2000)
+
+Formato output: JSON valido (validato dal CallCenter)
+
+------------------------------------------------------------
+1.2 MODALITÀ OPERATIVE
+------------------------------------------------------------
+Mode = INIT
+Mode = UPDATE
+
+------------------------------------------------------------
+1.3 STRUTTURA DATI (CANON STATE)
+------------------------------------------------------------
+
+Oggetto: CanonState
+
+Campi principali:
+- story_id
+- episode_number (opzionale)
+- chunk_index
+- resources: List<CanonResource>
+
+Oggetto: CanonResource
+
+Campi fissi minimi:
+- resource_id
+- name
+- type (character | ship | weapon | energy | ammo | object | generic)
+- status_flag (vedi tabella stati sotto)
+- status_text
+- quantity
+- integrity_percent
+- location
+- last_update_chunk
+
+Campi psicologici (solo per type=character):
+- morale_level (0–100)
+- stress_level (0–100)
+- fatigue_level (0–100)
+- mental_state_flag (enum)
+- psych_notes
+
+Campo JSON esteso:
+- notes_json (oggetto JSON libero per estensioni)
+
+------------------------------------------------------------
+1.4 ENUM STATI FISSI (OBBLIGATORI)
+------------------------------------------------------------
+
+STATUS_FLAG (per tutte le risorse):
+- active
+- damaged
+- destroyed
+- disabled
+- depleted
+- missing
+- dead (solo character)
+
+MENTAL_STATE_FLAG (per personaggi):
+- calm
+- tense
+- stressed
+- exhausted
+- angry
+- desperate
+- motivated
+
+------------------------------------------------------------
+1.5 INPUT AGENTE
+------------------------------------------------------------
+
+MODE INIT:
+
+{
+  "mode": "INIT",
+  "story_id": ...,
+  "episode_number": ...,
+  "story_title": "...",
+  "story_outline": "...",
+  "tone": "...",
+  "initial_entities": [...]  // opzionale
+}
+
+MODE UPDATE:
+
+{
+  "mode": "UPDATE",
+  "story_id": ...,
+  "episode_number": ...,
+  "chunk_index": ...,
+  "previous_canon_state": { ... },
+  "new_chunk_text": "..."
+}
+
+------------------------------------------------------------
+1.6 OUTPUT AGENTE
+------------------------------------------------------------
+
+Per INIT:
+{
+  "canon_state": CanonState
+}
+
+Per UPDATE:
+{
+  "canon_state": CanonState,
+  "delta": {
+    "updated_resources": [...],
+    "events": [...]
+  }
+}
+
+------------------------------------------------------------
+1.7 PROMPT SYSTEM
+------------------------------------------------------------
+
+Sei un agente di gestione dello stato delle risorse narrative.
+
+Devi mantenere uno stato coerente, persistente e realistico delle risorse.
+
+Regole fondamentali:
+- Non inventare risorse non presenti
+- Risorse distrutte o morte NON possono tornare attive
+- Le quantità non aumentano senza causa esplicita nel testo
+- Mantieni coerenza temporale e spaziale
+- Aggiorna solo in base agli eventi del testo
+
+Output SOLO JSON valido conforme allo schema.
+
+------------------------------------------------------------
+1.8 PROMPT USER (INIT)
+------------------------------------------------------------
+
+Genera lo stato iniziale delle risorse coerente con:
+- titolo
+- trama
+- tono
+
+Inizializza:
+- personaggi principali
+- navi e mezzi
+- risorse principali (energia, munizioni)
+
+------------------------------------------------------------
+1.9 PROMPT USER (UPDATE)
+------------------------------------------------------------
+
+Aggiorna lo stato delle risorse in base al nuovo chunk.
+
+Per ogni risorsa:
+- aggiorna stato
+- aggiorna quantità/integrità
+- aggiorna stato psicologico se umano
+
+Restituisci lo stato aggiornato e le modifiche.
+
+============================================================
+2) INTEGRAZIONE NEL FLUSSO SERIE STATE-DRIVEN
+============================================================
+
+Flusso attuale:
+GenerateNextChunkCommand
+→ calcolo risorse manuale
+→ TryApplyStateDrivenChunk
+
+Nuovo flusso:
+
+StartStateDrivenStory:
+→ ResourceManagerAgent (INIT)
+→ salva stato iniziale in story_resource_states
+
+Per ogni chunk:
+
+GenerateNextChunkCommand:
+1) carica CanonState corrente (snapshot DB)
+2) Writer genera chunk
+3) ResourceManagerAgent (UPDATE)
+4) salva nuovo CanonState in DB (story_resource_states)
+5) Evaluator verifica coerenza
+
+Persistenza DB:
+
+Tabella: story_resource_states
+Campi aggiuntivi:
+- resource_payload_json
+- story_id
+- episode_number
+- chunk_index
+- is_initial
+- is_final
+
+Fine episodio:
+→ salva snapshot finale (is_final = 1)
+
+============================================================
+3) INTEGRAZIONE NEL FLUSSO NRE
+============================================================
+
+Flusso NRE aggiornato:
+
+1) Planner
+2) ResourceManager (INIT)
+3) LOOP chunk:
+   - Writer riceve CanonState
+   - Writer genera chunk
+   - ResourceManager (UPDATE)
+   - Evaluator
+   - ResponseChecker
+4) output finale
+
+NRE usa CanonState SOLO in memoria.
+
+============================================================
+4) CONTROLLI DA AGGIUNGERE
+============================================================
+
+Deterministici (hard rules):
+- status_flag destroyed → non può tornare active
+- status_flag dead → non può tornare alive
+- quantity non può aumentare senza evento
+- integrity_percent non può aumentare senza riparazione
+
+Non deterministici (LLM evaluator):
+- coerenza narrativa
+- evoluzione psicologica plausibile
+- continuità location
+- plausibilità tattica militare
+
+============================================================
+5) VANTAGGI ARCHITETTURALI
+============================================================
+
+- modello unico per tutti gli engine
+- eliminazione duplicazione logica
+- coerenza narrativa elevata
+- estensibilità futura (AI più avanzate)
+- debug e replay tramite snapshot DB
+
+============================================================
+6) NOTE FINALI
+============================================================
+
+Il ResourceManager diventa il punto centrale
+per la verità dello stato delle risorse.
+
+Writer ed Evaluator NON devono modificare lo stato,
+ma solo leggerlo.
+
+============================================================
+FINE DOCUMENTO
+============================================================

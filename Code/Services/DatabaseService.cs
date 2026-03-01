@@ -2256,6 +2256,45 @@ LIMIT @limitRows;";
         }
     }
 
+    public List<ModelRoleErrorGridRow> ListModelRoleErrorsGrid(string? modelName = null, string? roleCode = null, int maxRows = 5000)
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            const string sql = @"
+SELECT m.Name AS ModelName,
+       r.ruolo AS RoleCode,
+       r.comando_collegato AS Operation,
+       mre.id AS Id,
+       mre.parent_id AS ParentId,
+       mre.error_text AS ErrorText,
+       mre.error_type AS ErrorType,
+       mre.error_count AS ErrorCount,
+       mre.date_insert AS DateInsert,
+       mre.date_last AS DateLast
+FROM model_roles_errors mre
+JOIN model_roles mr ON mr.id = mre.parent_id
+JOIN models m ON m.Id = mr.model_id
+JOIN roles r ON r.id = mr.role_id
+WHERE (@modelName IS NULL OR @modelName = '' OR lower(trim(m.Name)) = lower(trim(@modelName)))
+  AND (@roleCode IS NULL OR @roleCode = '' OR lower(trim(r.ruolo)) = lower(trim(@roleCode)))
+ORDER BY mre.error_count DESC, mre.date_last DESC, mre.id DESC
+LIMIT @limitRows;";
+
+            return conn.Query<ModelRoleErrorGridRow>(sql, new
+            {
+                modelName,
+                roleCode,
+                limitRows = Math.Max(1, maxRows)
+            }).ToList();
+        }
+        catch
+        {
+            return new List<ModelRoleErrorGridRow>();
+        }
+    }
+
     public bool DeleteModelRoleError(long errorId)
     {
         if (errorId <= 0)
@@ -6879,6 +6918,212 @@ SELECT last_insert_rowid();",
         return conn.Execute("DELETE FROM name_gender WHERE id = @id;", new { id }) > 0;
     }
 
+    // Generic lookup table (Type, Code, Value, metadata)
+    public List<GenericLookupEntry> ListGenericLookupEntries(string? search = null, string? type = null)
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+SELECT
+    Id,
+    Type,
+    Code,
+    Value,
+    Description,
+    SortOrder,
+    COALESCE(IsActive, 0) AS IsActive,
+    COALESCE(Weight, 1) AS Weight,
+    COALESCE(CreatedAt, '') AS CreatedAt,
+    COALESCE(UpdatedAt, '') AS UpdatedAt
+FROM GenericLookup
+WHERE (@type IS NULL OR @type = '' OR lower(Type) = lower(@type))
+  AND (
+        @search IS NULL OR @search = ''
+        OR lower(Type) LIKE '%' || lower(@search) || '%'
+        OR lower(Code) LIKE '%' || lower(@search) || '%'
+        OR lower(Value) LIKE '%' || lower(@search) || '%'
+        OR lower(COALESCE(Description, '')) LIKE '%' || lower(@search) || '%'
+      )
+ORDER BY lower(Type) ASC, SortOrder ASC, lower(Value) ASC, Id ASC;";
+
+        return conn.Query<GenericLookupEntry>(sql, new { search, type }).ToList();
+    }
+
+    public GenericLookupEntry? GetGenericLookupById(long id)
+    {
+        if (id <= 0) return null;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+SELECT
+    Id,
+    Type,
+    Code,
+    Value,
+    Description,
+    SortOrder,
+    COALESCE(IsActive, 0) AS IsActive,
+    COALESCE(Weight, 1) AS Weight,
+    COALESCE(CreatedAt, '') AS CreatedAt,
+    COALESCE(UpdatedAt, '') AS UpdatedAt
+FROM GenericLookup
+WHERE Id = @id
+LIMIT 1;";
+
+        return conn.QueryFirstOrDefault<GenericLookupEntry>(sql, new { id });
+    }
+
+    public List<string> ListGenericLookupTypes()
+    {
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        return conn.Query<string>(@"
+SELECT DISTINCT trim(Type)
+FROM GenericLookup
+WHERE Type IS NOT NULL AND trim(Type) <> ''
+ORDER BY lower(trim(Type));").ToList();
+    }
+
+    public string? PickRandomGenericLookupValueByTypeWeighted(string? type)
+    {
+        var normalizedType = (type ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedType))
+        {
+            return null;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        var rows = conn.Query<(string Value, int Weight)>(@"
+SELECT
+    Value AS Value,
+    COALESCE(Weight, 1) AS Weight
+FROM GenericLookup
+WHERE IsActive = 1
+  AND lower(Type) = lower(@type)
+  AND Value IS NOT NULL
+  AND trim(Value) <> '';", new { type = normalizedType }).ToList();
+
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
+        long totalWeight = 0;
+        foreach (var row in rows)
+        {
+            totalWeight += Math.Max(1, row.Weight);
+        }
+
+        if (totalWeight <= 0)
+        {
+            return rows[Random.Shared.Next(rows.Count)].Value;
+        }
+
+        var threshold = Random.Shared.NextInt64(totalWeight);
+        long cumulative = 0;
+        foreach (var row in rows)
+        {
+            cumulative += Math.Max(1, row.Weight);
+            if (threshold < cumulative)
+            {
+                return row.Value;
+            }
+        }
+
+        return rows[^1].Value;
+    }
+
+    public long UpsertGenericLookup(GenericLookupEntry entry)
+    {
+        if (entry == null) throw new ArgumentNullException(nameof(entry));
+
+        var normalizedType = (entry.Type ?? string.Empty).Trim();
+        var normalizedCode = (entry.Code ?? string.Empty).Trim();
+        var normalizedValue = (entry.Value ?? string.Empty).Trim();
+        var normalizedDescription = string.IsNullOrWhiteSpace(entry.Description) ? null : entry.Description.Trim();
+
+        if (string.IsNullOrWhiteSpace(normalizedType))
+            throw new ArgumentException("Type obbligatorio", nameof(entry.Type));
+        if (string.IsNullOrWhiteSpace(normalizedCode))
+            throw new ArgumentException("Code obbligatorio", nameof(entry.Code));
+        if (string.IsNullOrWhiteSpace(normalizedValue))
+            throw new ArgumentException("Value obbligatorio", nameof(entry.Value));
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        if (entry.Id > 0)
+        {
+            ExecuteWriteChecked(
+                conn,
+                @"
+UPDATE GenericLookup
+SET
+    Type = @type,
+    Code = @code,
+    Value = @value,
+    Description = @description,
+    SortOrder = @sortOrder,
+    IsActive = @isActive,
+    Weight = @weight,
+    UpdatedAt = datetime('now')
+WHERE Id = @id;",
+                new
+                {
+                    id = entry.Id,
+                    type = normalizedType,
+                    code = normalizedCode,
+                    value = normalizedValue,
+                    description = normalizedDescription,
+                    sortOrder = entry.SortOrder,
+                    isActive = entry.IsActive ? 1 : 0,
+                    weight = entry.Weight
+                },
+                tx,
+                operation: $"UpsertGenericLookup(update id={entry.Id})",
+                minAffectedRows: 1);
+
+            tx.Commit();
+            return entry.Id;
+        }
+
+        var id = conn.ExecuteScalar<long>(
+            @"
+INSERT INTO GenericLookup (
+    Type, Code, Value, Description, SortOrder, IsActive, Weight, CreatedAt, UpdatedAt
+)
+VALUES (
+    @type, @code, @value, @description, @sortOrder, @isActive, @weight, datetime('now'), datetime('now')
+);
+SELECT last_insert_rowid();",
+            new
+            {
+                type = normalizedType,
+                code = normalizedCode,
+                value = normalizedValue,
+                description = normalizedDescription,
+                sortOrder = entry.SortOrder,
+                isActive = entry.IsActive ? 1 : 0,
+                weight = entry.Weight
+            },
+            tx);
+
+        tx.Commit();
+        return id;
+    }
+
+    public bool DeleteGenericLookupById(long id)
+    {
+        if (id <= 0) return false;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        return conn.Execute("DELETE FROM GenericLookup WHERE Id = @id;", new { id }) > 0;
+    }
+
     private static string NormalizeNameGenderLookupName(string? name)
     {
         return string.IsNullOrWhiteSpace(name)
@@ -8914,7 +9159,9 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             "JsonScore",
             "InstructionScore",
             "intelliScore as IntelliScore",
-            "intelliTime as IntelliTime"
+            "intelliTime as IntelliTime",
+            "promotions as Promotions",
+            "demotions as Demotions"
         });
     }
 
@@ -8932,6 +9179,83 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         var logs = query.OrderByDescending(l => l.Id).Skip(offset).Take(limit).ToList();
         EnrichLogsForDisplay(logs);
         return logs;
+    }
+
+    public (List<LogEntry> Items, int TotalRecords, int FilteredRecords) GetPagedLogsForGrid(
+        int start = 0,
+        int length = 25,
+        string? search = null,
+        string? sortBy = null,
+        bool sortDesc = true,
+        bool onlyResult = false,
+        bool onlyModel = false)
+    {
+        if (start < 0) start = 0;
+        if (length <= 0) length = 25;
+
+        using var context = CreateDbContext();
+        var query = context.Logs.AsNoTracking().AsQueryable();
+        var totalRecords = query.Count();
+
+        if (onlyResult)
+        {
+            query = query.Where(l => l.Result != null && l.Result != "");
+        }
+
+        if (onlyModel)
+        {
+            query = query.Where(l =>
+                l.Category == "ModelResponse" ||
+                l.Category == "ModelRequest" ||
+                l.Category == "ModelCompletion" ||
+                l.Category == "ModelPrompt");
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            var sLower = s.ToLower();
+            var hasThreadId = int.TryParse(s, out var threadIdSearch);
+            var hasStoryId = long.TryParse(s, out var storyIdSearch);
+
+            query = query.Where(l =>
+                (l.Level != null && l.Level.ToLower().Contains(sLower)) ||
+                (l.Category != null && l.Category.ToLower().Contains(sLower)) ||
+                (l.Message != null && l.Message.ToLower().Contains(sLower)) ||
+                (l.Result != null && l.Result.ToLower().Contains(sLower)) ||
+                (l.ResultFailReason != null && l.ResultFailReason.ToLower().Contains(sLower)) ||
+                (l.ThreadScope != null && l.ThreadScope.ToLower().Contains(sLower)) ||
+                (l.AgentName != null && l.AgentName.ToLower().Contains(sLower)) ||
+                (l.ModelName != null && l.ModelName.ToLower().Contains(sLower)) ||
+                (l.Context != null && l.Context.ToLower().Contains(sLower)) ||
+                (l.State != null && l.State.ToLower().Contains(sLower)) ||
+                (l.Exception != null && l.Exception.ToLower().Contains(sLower)) ||
+                (hasThreadId && l.ThreadId.HasValue && l.ThreadId.Value == threadIdSearch) ||
+                (hasStoryId && l.StoryId.HasValue && l.StoryId.Value == storyIdSearch));
+        }
+
+        var filteredRecords = query.Count();
+
+        var sort = (sortBy ?? "timestamp").Trim().ToLowerInvariant();
+        query = sort switch
+        {
+            "timestamp" => sortDesc ? query.OrderByDescending(l => l.Ts) : query.OrderBy(l => l.Ts),
+            "level" => sortDesc ? query.OrderByDescending(l => l.Level) : query.OrderBy(l => l.Level),
+            "source" => sortDesc ? query.OrderByDescending(l => l.Category) : query.OrderBy(l => l.Category),
+            "result" => sortDesc ? query.OrderByDescending(l => l.Result) : query.OrderBy(l => l.Result),
+            "failreason" => sortDesc ? query.OrderByDescending(l => l.ResultFailReason) : query.OrderBy(l => l.ResultFailReason),
+            "operation" => sortDesc ? query.OrderByDescending(l => l.ThreadScope) : query.OrderBy(l => l.ThreadScope),
+            "duration" => sortDesc ? query.OrderByDescending(l => l.DurationSecs) : query.OrderBy(l => l.DurationSecs),
+            "threadid" => sortDesc ? query.OrderByDescending(l => l.ThreadId) : query.OrderBy(l => l.ThreadId),
+            "storyid" => sortDesc ? query.OrderByDescending(l => l.StoryId) : query.OrderBy(l => l.StoryId),
+            "agent" => sortDesc ? query.OrderByDescending(l => l.AgentName) : query.OrderBy(l => l.AgentName),
+            "model" => sortDesc ? query.OrderByDescending(l => l.ModelName) : query.OrderBy(l => l.ModelName),
+            _ => sortDesc ? query.OrderByDescending(l => l.Id) : query.OrderBy(l => l.Id)
+        };
+
+        var items = query.Skip(start).Take(length).ToList();
+        EnrichLogsForDisplay(items);
+        return (items, totalRecords, filteredRecords);
     }
 
     public IReadOnlyDictionary<string, AppEventDefinition> GetAppEventDefinitions()

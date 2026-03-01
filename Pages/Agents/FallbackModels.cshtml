@@ -37,6 +37,14 @@
         background-color: transparent;
     }
 
+    #fallbackTable tbody tr.fallback-disabled-row > td {
+        background-color: #e9ecef !important;
+    }
+
+    #fallbackTable tbody tr.fallback-disabled-row:hover > td {
+        background-color: #dde2e6 !important;
+    }
+
     .dt-buttons .btn {
         font-size: 0.875rem;
         padding: 0.375rem 0.75rem;
@@ -75,6 +83,12 @@
 </div>
 
 <div id="fallbackMessage" class="alert d-none" role="alert"></div>
+
+<div class="mb-3 d-flex justify-content-end">
+    <button type="button" class="btn btn-sm btn-outline-primary" id="btnPromoteAllModels">
+        Promuovi migliori modelli (tutti i ruoli)
+    </button>
+</div>
 
 <form id="fallbackAddForm" class="mb-3 border p-3 rounded bg-light">
     @Html.AntiForgeryToken()
@@ -171,7 +185,7 @@
                     ? "bg-success"
                     : (level == "mid" ? "bg-warning text-dark" : (level == "bad" ? "bg-danger" : "bg-secondary"));
                 var toggleLabel = mr.Enabled ? "Disabilita" : "Abilita";
-                <tr data-id="@mr.Id" data-enabled="@(mr.Enabled ? "true" : "false")">
+                <tr data-id="@mr.Id" data-enabled="@(mr.Enabled ? "true" : "false")" class="@(mr.Enabled ? string.Empty : "fallback-disabled-row")">
                     <td class="dt-control"></td>
                     <td data-col="model"><strong class="@textClass">@mr.Model?.Name</strong></td>
                     <td data-col="role"><span class="badge @roleBadgeClass">@mr.Role?.Ruolo</span></td>
@@ -317,7 +331,7 @@
             }
 
             var table = $('#fallbackTable').DataTable({
-                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                dom: "<'row mb-2'<'col-sm-4'B><'col-sm-4'l><'col-sm-4 text-end'f>>" +
                      "rt" +
                      "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
                 stateSave: true,
@@ -405,6 +419,34 @@
                 messageBox.textContent = '';
                 }
 
+            var promoteAllBtn = document.getElementById('btnPromoteAllModels');
+            if (promoteAllBtn) {
+                promoteAllBtn.addEventListener('click', async function () {
+                    clearMessage();
+                    if (!confirm('Confermi la promozione del modello migliore su tutti i ruoli attivi?')) return;
+                    promoteAllBtn.disabled = true;
+                    try {
+                        var resp = await fetch('?handler=PromoteAll', {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            credentials: 'same-origin'
+                        });
+                        if (!resp.ok) {
+                            var errText = await resp.text();
+                            throw new Error(errText || 'Errore promozione');
+                        }
+                        var result = await resp.json();
+                        if (!result.ok) throw new Error(result.error || 'Errore promozione');
+                        showMessage('success', 'Promozione completata. Modelli aggiornati: ' + (result.promoted || 0) + ' su ' + (result.examined || 0) + ' agenti valutati.');
+                        window.location.reload();
+                    } catch (err) {
+                        showMessage('danger', err.message || 'Errore promozione');
+                    } finally {
+                        promoteAllBtn.disabled = false;
+                    }
+                });
+            }
+
                 function parseNullableBool(value) {
                     if (value === null || value === undefined) return null;
                     var v = String(value).trim().toLowerCase();
@@ -440,7 +482,8 @@
                     ? ''
                     : '<li><button type="button" class="dropdown-item" data-action="delete">Elimina</button></li>';
 
-                return '<tr data-id="' + row.id + '" data-enabled="' + (row.enabled ? 'true' : 'false') + '">' +
+                var rowClass = row.enabled ? '' : ' class="fallback-disabled-row"';
+                return '<tr data-id="' + row.id + '" data-enabled="' + (row.enabled ? 'true' : 'false') + '"' + rowClass + '>' +
                     '<td class="dt-control"></td>' +
                     '<td data-col="model"><strong class="' + escapeHtml(textClass) + '">' + escapeHtml(row.modelName) + '</strong></td>' +
                     '<td data-col="role"><span class="badge ' + escapeHtml(roleBadgeClass) + '">' + escapeHtml(row.roleName) + '</span></td>' +
@@ -574,6 +617,7 @@
 
                             var effectiveEnabled = !!resultToggle.enabled;
                             rowEl.setAttribute('data-enabled', effectiveEnabled ? 'true' : 'false');
+                            rowEl.classList.toggle('fallback-disabled-row', !effectiveEnabled);
 
                             var enabledCell = rowEl.querySelector('td[data-col="enabled"]');
                             if (enabledCell) enabledCell.textContent = effectiveEnabled ? 'Yes' : 'No';

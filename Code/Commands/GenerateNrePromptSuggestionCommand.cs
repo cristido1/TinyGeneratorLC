@@ -17,6 +17,18 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
     private readonly string? _genreHint;
     private readonly string? _toneHint;
     private readonly string? _constraintsHint;
+    private readonly IReadOnlyList<string> _lookupHintTypes;
+
+    private static readonly string[] DefaultLookupHintTypes =
+    {
+        "THEME_CORE",
+        "GENRE",
+        "SETTING",
+        "CONFLICT",
+        "ANTAGONIST",
+        "PROTAGONIST",
+        "TWIST"
+    };
 
     public GenerateNrePromptSuggestionCommand(
         DatabaseService database,
@@ -27,7 +39,8 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         string? settingHint = null,
         string? genreHint = null,
         string? toneHint = null,
-        string? constraintsHint = null)
+        string? constraintsHint = null,
+        IEnumerable<string>? lookupHintTypes = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
@@ -38,6 +51,7 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         _genreHint = genreHint;
         _toneHint = toneHint;
         _constraintsHint = constraintsHint;
+        _lookupHintTypes = NormalizeLookupHintTypes(lookupHintTypes);
     }
 
     public bool Batch => true;
@@ -114,6 +128,26 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
     private Agent? ResolveWriterAgent()
     {
         var agents = _database.ListAgents().Where(a => a.IsActive).ToList();
+        var modelsById = _database.ListModels()
+            .Where(m => m.Id.HasValue && m.Id.Value > 0)
+            .ToDictionary(m => m.Id!.Value, m => m);
+
+        var randomOllamaWriters = agents
+            .Where(a =>
+                a.ModelId.HasValue &&
+                modelsById.TryGetValue(a.ModelId.Value, out var model) &&
+                string.Equals(model.Provider?.Trim(), "ollama", StringComparison.OrdinalIgnoreCase) &&
+                model.Enabled &&
+                (string.Equals(a.Role, "writer", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(a.Role, "writer_nre", StringComparison.OrdinalIgnoreCase) ||
+                 a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (randomOllamaWriters.Count > 0)
+        {
+            return randomOllamaWriters[Random.Shared.Next(randomOllamaWriters.Count)];
+        }
+
         var preferred = _options.WriterAgentName;
 
         return agents.FirstOrDefault(a => string.Equals(a.Name, preferred, StringComparison.OrdinalIgnoreCase))
@@ -137,9 +171,94 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         sb.AppendLine($"Genere: {NormalizeHint(_genreHint)}");
         sb.AppendLine($"Tono desiderato: {NormalizeHint(_toneHint)}");
         sb.AppendLine($"Vincoli: {NormalizeHint(_constraintsHint)}");
+        AppendLookupSuggestions(sb);
+        AppendForbiddenThemes(sb);
         sb.AppendLine();
         sb.AppendLine("Se un hint è vuoto, inventa tu.");
         return sb.ToString().Trim();
+    }
+
+    private void AppendLookupSuggestions(StringBuilder sb)
+    {
+        var suggestions = new List<(string Type, string Value)>();
+        foreach (var type in _lookupHintTypes)
+        {
+            var picked = _database.PickRandomGenericLookupValueByTypeWeighted(type);
+            if (string.IsNullOrWhiteSpace(picked))
+            {
+                continue;
+            }
+
+            suggestions.Add((type, picked.Trim()));
+        }
+
+        if (suggestions.Count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Suggerimenti variabilita da libreria (vincolanti):");
+        sb.AppendLine("Usa obbligatoriamente THEME CORE se presente e integra in modo coerente anche gli altri consigli disponibili.");
+        foreach (var (type, value) in suggestions)
+        {
+            sb.AppendLine($"- {MapLookupTypeLabel(type)}: {value}");
+        }
+    }
+
+    private void AppendForbiddenThemes(StringBuilder sb)
+    {
+        var forbiddenThemes = _database
+            .ListGenericLookupEntries(type: "forbidden_theme")
+            .Where(x => x.IsActive && !string.IsNullOrWhiteSpace(x.Value))
+            .Select(x => x.Value!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (forbiddenThemes.Count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Temi vietati (vincolo hard): NON proporre storie basate su questi temi.");
+        foreach (var forbidden in forbiddenThemes)
+        {
+            sb.AppendLine($"- {forbidden}");
+        }
+    }
+
+    private static IReadOnlyList<string> NormalizeLookupHintTypes(IEnumerable<string>? hintTypes)
+    {
+        var source = hintTypes ?? DefaultLookupHintTypes;
+        var normalized = source
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim().ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (normalized.Count == 0)
+        {
+            normalized.AddRange(DefaultLookupHintTypes);
+        }
+
+        return normalized;
+    }
+
+    private static string MapLookupTypeLabel(string type)
+    {
+        return type.ToUpperInvariant() switch
+        {
+            "THEME_CORE" => "Theme Core",
+            "GENRE" => "Genere",
+            "SETTING" => "Ambientazione",
+            "CONFLICT" => "Conflitto",
+            "ANTAGONIST" => "Antagonista",
+            "PROTAGONIST" => "Protagonista",
+            "TWIST" => "Twist",
+            _ => type
+        };
     }
 
     private static string BuildSystemPromptOverride()
@@ -158,6 +277,10 @@ Preferisci situazioni realistiche e credibili nel proprio genere.
 Evita elementi gratuiti, casuali o assurdi non giustificati dal tema.
 Se il genere è comico/fantasy/fantascienza/horror, mantieni comunque coerenza interna e motivazioni chiare.
 Compila SEMPRE anche le risorse iniziali coerenti con l'idea.
+Se sono presenti suggerimenti da libreria, sono vincolanti: devi usarli nella proposta.
+Se e' presente THEME CORE, usalo come asse principale del concept.
+Non ignorare i suggerimenti salvo conflitto esplicito con vincoli hard.
+Se nell'input sono presenti ""Temi vietati"", trattali come divieto assoluto: non proporli e non usarli come focus principale.
 
 Rispondi SOLO in JSON valido con questa struttura:
 {

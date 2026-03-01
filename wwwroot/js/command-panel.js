@@ -304,6 +304,13 @@
             console.log('[CommandPanel] Rendering commands:', cmds);
             if (!Array.isArray(cmds)) cmds = [];
 
+            const hiddenOperations = new Set([
+                'update_model_stats_from_logs',
+                'always_on_story_summaries',
+                'analyze_pending_log_errors',
+                'memory_embedding_worker'
+            ]);
+
             // Filter active commands (queued/running) or recently completed (< 5 min)
             const now = new Date();
             const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
@@ -312,6 +319,18 @@
                 // Support both camelCase (SignalR default) and PascalCase
                 const status = (c.status || c.Status || '').toLowerCase();
                 const meta = c.metadata || c.Metadata || {};
+                const operationName = (
+                    c.operationName ||
+                    c.OperationName ||
+                    meta.operation ||
+                    meta.Operation ||
+                    c.threadScope ||
+                    c.ThreadScope ||
+                    ''
+                ).toString().trim().toLowerCase();
+                if (hiddenOperations.has(operationName)) {
+                    return false;
+                }
                 const isTransparent = (meta.transparent || meta.Transparent) === '1';
                 if (isTransparent && status !== 'failed') {
                     return false;

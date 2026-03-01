@@ -10,6 +10,8 @@ using System.Collections.Concurrent;
 using System.Linq;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using TinyGenerator.Services.Commands;
 
 namespace TinyGenerator.Services
@@ -457,12 +459,15 @@ namespace TinyGenerator.Services
                 return (false, "Avvio processo worker non riuscito.");
             }
 
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdout = new StringBuilder();
+            var stderr = new StringBuilder();
+            var stdoutTask = ConsumeWorkerStreamAsync(process.StandardOutput, request.runId, stdout, cancellationToken);
+            var stderrTask = ConsumeWorkerStreamAsync(process.StandardError, request.runId, stderr, cancellationToken);
 
             try
             {
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -480,20 +485,83 @@ namespace TinyGenerator.Services
                 throw;
             }
 
-            var stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
-            var stderr = (await stderrTask.ConfigureAwait(false)).Trim();
+            var stdoutText = stdout.ToString().Trim();
+            var stderrText = stderr.ToString().Trim();
             if (process.ExitCode == 0)
             {
-                var message = string.IsNullOrWhiteSpace(stdout) ? $"Worker batch {request.operation} completato." : stdout;
+                var message = string.IsNullOrWhiteSpace(stdoutText) ? $"Worker batch {request.operation} completato." : stdoutText;
                 return (true, message);
             }
 
-            var error = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+            var error = string.IsNullOrWhiteSpace(stderrText) ? stdoutText : stderrText;
             if (string.IsNullOrWhiteSpace(error))
             {
                 error = $"Worker batch terminato con exit code {process.ExitCode}.";
             }
             return (false, error);
+        }
+
+        private async Task ConsumeWorkerStreamAsync(
+            StreamReader reader,
+            string runId,
+            StringBuilder sink,
+            CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var line = await reader.ReadLineAsync().ConfigureAwait(false);
+                if (line == null)
+                {
+                    break;
+                }
+
+                if (TryHandleBatchProgressLine(line, runId))
+                {
+                    continue;
+                }
+
+                if (sink.Length > 0)
+                {
+                    sink.AppendLine();
+                }
+                sink.Append(line);
+            }
+        }
+
+        private bool TryHandleBatchProgressLine(string line, string runId)
+        {
+            const string Prefix = "__BATCH_PROGRESS__|";
+            if (string.IsNullOrWhiteSpace(line) || !line.StartsWith(Prefix, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var payload = line[Prefix.Length..];
+            var parts = payload.Split('|', 4, StringSplitOptions.None);
+            if (parts.Length < 4)
+            {
+                return false;
+            }
+
+            var progressRunId = parts[0].Trim();
+            if (!string.Equals(progressRunId, runId, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!int.TryParse(parts[1], out var current))
+            {
+                return false;
+            }
+            if (!int.TryParse(parts[2], out var max))
+            {
+                return false;
+            }
+
+            var description = parts[3].Trim();
+            UpdateStep(runId, current, max, string.IsNullOrWhiteSpace(description) ? null : description);
+            return true;
         }
 
         private static string EscapeCliValue(string value) => value.Replace("\"", "\\\"");
@@ -678,6 +746,12 @@ namespace TinyGenerator.Services
                     state.Status = "running";
                     state.StartedAt = DateTimeOffset.UtcNow;
                     state.TimeoutSec = timeoutSec;
+                    if (!state.CurrentStep.HasValue || !state.MaxStep.HasValue || state.MaxStep.Value <= 0)
+                    {
+                        state.CurrentStep = 0;
+                        state.MaxStep = 1;
+                        state.StepDescription ??= "In esecuzione";
+                    }
                 }
                 var maxAttempts = Math.Max(1, policy.MaxAttempts);
                 if (_active.TryGetValue(workItem.RunId, out var runningState))
@@ -769,6 +843,26 @@ Completed:
                         completedState.Status = result.Success ? "completed" : "failed";
                         completedState.CompletedAt = DateTimeOffset.UtcNow;
                         completedState.ErrorMessage = result.Success ? null : result.Message;
+                        if (!completedState.MaxStep.HasValue || completedState.MaxStep.Value <= 0)
+                        {
+                            completedState.MaxStep = 1;
+                        }
+                        if (!completedState.CurrentStep.HasValue)
+                        {
+                            completedState.CurrentStep = result.Success ? completedState.MaxStep : 0;
+                        }
+                        if (result.Success)
+                        {
+                            completedState.CurrentStep = completedState.MaxStep;
+                            if (string.IsNullOrWhiteSpace(completedState.StepDescription))
+                            {
+                                completedState.StepDescription = "Completato";
+                            }
+                        }
+                        else if (string.IsNullOrWhiteSpace(completedState.StepDescription))
+                        {
+                            completedState.StepDescription = "Terminato con errore";
+                        }
                     }
                 }
                 
@@ -799,6 +893,9 @@ Completed:
                     cancelledState.Status = "cancelled";
                     cancelledState.CompletedAt = DateTimeOffset.UtcNow;
                     cancelledState.ErrorMessage = "Operazione annullata";
+                    cancelledState.CurrentStep ??= 0;
+                    cancelledState.MaxStep ??= 1;
+                    cancelledState.StepDescription ??= "Annullato";
                 }
                 
                 RaiseCompleted(workItem.RunId, workItem.OperationName, result, workItem.Metadata);
@@ -816,12 +913,17 @@ Completed:
                     errorState.Status = "failed";
                     errorState.CompletedAt = DateTimeOffset.UtcNow;
                     errorState.ErrorMessage = ex.Message;
+                    errorState.CurrentStep ??= 0;
+                    errorState.MaxStep ??= 1;
+                    errorState.StepDescription ??= "Terminato con errore";
                 }
                 
                 RaiseCompleted(workItem.RunId, workItem.OperationName, result, workItem.Metadata);
             }
             finally
             {
+                await TryAutoPromoteModelsForRunAsync(workItem, stoppingToken).ConfigureAwait(false);
+
                 // Sposta da _active a _completed per mostrare per 5 minuti
                 if (_active.TryRemove(workItem.RunId, out var finalState))
                 {
@@ -841,6 +943,73 @@ Completed:
                 }
                 await BroadcastCommandsAsync().ConfigureAwait(false);
             }
+        }
+
+        private async Task TryAutoPromoteModelsForRunAsync(CommandWorkItem workItem, CancellationToken stoppingToken)
+        {
+            try
+            {
+                if (stoppingToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (!ShouldRunPromotionOnCompletion(workItem))
+                {
+                    return;
+                }
+
+                if (_logger != null)
+                {
+                    await _logger.FlushAsync().ConfigureAwait(false);
+                }
+
+                using var scope = _services.CreateScope();
+                var promoter = scope.ServiceProvider.GetService<ModelPromotionService>();
+                if (promoter == null)
+                {
+                    return;
+                }
+
+                var promoted = await promoter
+                    .PromoteBestModelsForRunAsync(workItem.RunId, source: $"dispatcher:{workItem.OperationName}", ct: CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                var changed = promoted.Count(x => x.Changed);
+                if (changed > 0)
+                {
+                    _logger?.Log(
+                        "Information",
+                        "PROMOTION",
+                        $"PROMOTION summary: run_id={workItem.RunId}; operation={workItem.OperationName}; promoted={changed}/{promoted.Count}",
+                        result: "SUCCESS");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Log(
+                    "Warning",
+                    "PROMOTION",
+                    $"PROMOTION failed: run_id={workItem.RunId}; operation={workItem.OperationName}; error={ex.Message}",
+                    ex.ToString(),
+                    result: "FAILED");
+            }
+        }
+
+        private static bool ShouldRunPromotionOnCompletion(CommandWorkItem workItem)
+        {
+            if (workItem.Metadata != null &&
+                workItem.Metadata.TryGetValue("promotionOnCompletion", out var explicitFlag) &&
+                bool.TryParse(explicitFlag, out var enabledByMetadata))
+            {
+                return enabledByMetadata;
+            }
+
+            // Default: run only at end of root story-generation commands,
+            // not for every intermediate command.
+            return string.Equals(workItem.OperationName, "run_nre", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(workItem.OperationName, "generate_state_driven_single_story", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(workItem.OperationName, "generate_state_driven_episode_to_duration", StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task TryReportFailureAsync(CommandWorkItem workItem, string? message, string? exception, int threadId)

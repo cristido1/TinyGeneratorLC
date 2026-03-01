@@ -21,6 +21,7 @@ namespace TinyGenerator.Services.Commands
         private readonly INextStatusEnqueuer _nextStatusEnqueuer;
         private readonly ICustomLogger? _logger;
         private readonly ICallCenter _callCenter;
+        private readonly ICommandDispatcher? _dispatcher;
         private readonly Func<string?>? _currentDispatcherRunIdProvider;
 
         public string CommandName => "add_music_tags_to_story";
@@ -33,6 +34,7 @@ namespace TinyGenerator.Services.Commands
             IStoryTaggingPipelineService storyTaggingPipelineService,
             INextStatusEnqueuer nextStatusEnqueuer,
             ICallCenter callCenter,
+            ICommandDispatcher? dispatcher = null,
             ICustomLogger? logger = null,
             CommandTuningOptions? tuning = null,
             Func<string?>? currentDispatcherRunIdProvider = null)
@@ -42,6 +44,7 @@ namespace TinyGenerator.Services.Commands
             _storyTaggingPipelineService = storyTaggingPipelineService ?? throw new ArgumentNullException(nameof(storyTaggingPipelineService));
             _nextStatusEnqueuer = nextStatusEnqueuer ?? throw new ArgumentNullException(nameof(nextStatusEnqueuer));
             _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
+            _dispatcher = dispatcher;
             _logger = logger;
             _tuning = tuning ?? new CommandTuningOptions();
             _currentDispatcherRunIdProvider = currentDispatcherRunIdProvider;
@@ -61,6 +64,7 @@ namespace TinyGenerator.Services.Commands
                 new StoryTaggingPipelineService(database),
                 new NextStatusEnqueuer(storiesService, logger),
                 ResolveOrCreateCallCenter(database, storiesService, logger),
+                storiesService?.CommandDispatcher,
                 logger,
                 tuning,
                 () => storiesService?.CurrentDispatcherRunId)
@@ -74,8 +78,21 @@ namespace TinyGenerator.Services.Commands
                 ? (_currentDispatcherRunIdProvider?.Invoke() ?? $"add_music_tags_to_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}")
                 : runId;
 
-            _logger?.Start(effectiveRunId);
-            _logger?.Append(effectiveRunId, $"[story {_storyId}] Starting add_music_tags_to_story pipeline");
+            var telemetry = new CommandTelemetry(_logger, args =>
+            {
+                try
+                {
+                    _dispatcher?.UpdateStep(effectiveRunId, args.Current, args.Max, args.Description);
+                }
+                catch
+                {
+                    // best-effort
+                }
+
+                Progress?.Invoke(this, args);
+            });
+            telemetry.Start(effectiveRunId);
+            telemetry.Append(effectiveRunId, $"[story {_storyId}] Starting add_music_tags_to_story pipeline");
 
             try
             {
@@ -93,9 +110,8 @@ namespace TinyGenerator.Services.Commands
                     _tuning.MusicExpert.TargetTokensPerChunk);
                 _storyTaggingPipelineService.PersistInitialRows(preparation);
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
-                ReportProgress(
-                    effectiveRunId,
+                telemetry.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
+                telemetry.ReportProgress(
                     0,
                     Math.Max(1, preparation.Chunks.Count),
                     preparation.Chunks.Count > 0
@@ -112,8 +128,7 @@ namespace TinyGenerator.Services.Commands
                     var chunkCount = preparation.Chunks.Count;
                     var percent = chunkCount <= 0 ? 0 : (int)Math.Round(((chunkIndex - 1) * 100.0) / chunkCount);
 
-                    ReportProgress(
-                        effectiveRunId,
+                    telemetry.ReportProgress(
                         Math.Max(0, chunkIndex - 1),
                         chunkCount,
                         $"Music tags chunk {chunkIndex}/{chunkCount} ({percent}%) - richiesta agente");
@@ -156,7 +171,7 @@ namespace TinyGenerator.Services.Commands
                     if (!callResult.Success)
                     {
                         var reason = callResult.FailureReason ?? $"Music expert returned empty text for chunk {chunkIndex}/{chunkCount}";
-                        return Fail(effectiveRunId, reason);
+                        return Fail(telemetry, effectiveRunId, reason);
                     }
 
                     if (!string.IsNullOrWhiteSpace(callResult.ModelUsed))
@@ -167,11 +182,10 @@ namespace TinyGenerator.Services.Commands
                     var parsed = _storyTaggingPipelineService.ParseMusicMapping(callResult.ResponseText.Trim());
                     parsed = StoryTaggingService.FilterMusicTagsByProximity(parsed, minLineDistance: 20);
 
-                    _logger?.Append(effectiveRunId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalMusic={parsed.Count}; model={currentModelName}");
+                    telemetry.Append(effectiveRunId, $"[chunk {chunkIndex}/{chunkCount}] Validated mapping: totalMusic={parsed.Count}; model={currentModelName}");
                     musicTags.AddRange(parsed);
                     var percentDone = chunkCount <= 0 ? 100 : (int)Math.Round((chunkIndex * 100.0) / chunkCount);
-                    ReportProgress(
-                        effectiveRunId,
+                    telemetry.ReportProgress(
                         chunkIndex,
                         chunkCount,
                         $"Music tags chunk {chunkIndex}/{chunkCount} completato ({percentDone}%)");
@@ -179,10 +193,10 @@ namespace TinyGenerator.Services.Commands
 
                 if (!_storyTaggingPipelineService.SaveTaggingResult(preparation, musicTags, StoryTaggingService.TagTypeMusic, out var saveError))
                 {
-                    return Fail(effectiveRunId, saveError ?? $"Failed to persist tagged story for {_storyId}");
+                    return Fail(telemetry, effectiveRunId, saveError ?? $"Failed to persist tagged story for {_storyId}");
                 }
 
-                _logger?.Append(effectiveRunId, $"[story {_storyId}] Music tags rebuilt from story_tags");
+                telemetry.Append(effectiveRunId, $"[story {_storyId}] Music tags rebuilt from story_tags");
 
                 var enqueued = _nextStatusEnqueuer.TryAdvanceAndEnqueueMusic(
                     preparation.Story,
@@ -190,9 +204,8 @@ namespace TinyGenerator.Services.Commands
                     _storyId,
                     _tuning.MusicExpert.AutolaunchNextCommand);
 
-                _logger?.MarkCompleted(effectiveRunId, "ok");
-                ReportProgress(
-                    effectiveRunId,
+                telemetry.MarkCompleted(effectiveRunId, "ok");
+                telemetry.ReportProgress(
                     Math.Max(1, preparation.Chunks.Count),
                     Math.Max(1, preparation.Chunks.Count),
                     "Music tags completati (100%)");
@@ -204,11 +217,11 @@ namespace TinyGenerator.Services.Commands
             }
             catch (OperationCanceledException)
             {
-                return Fail(effectiveRunId, "Operation cancelled");
+                return Fail(telemetry, effectiveRunId, "Operation cancelled");
             }
             catch (Exception ex)
             {
-                return Fail(effectiveRunId, ex.Message);
+                return Fail(telemetry, effectiveRunId, ex.Message);
             }
         }
 
@@ -238,24 +251,11 @@ namespace TinyGenerator.Services.Commands
             return required;
         }
 
-        private CommandResult Fail(string runId, string message)
+        private static CommandResult Fail(ICommandTelemetry telemetry, string runId, string message)
         {
-            _logger?.Append(runId, message, "error");
-            _logger?.MarkCompleted(runId, "failed");
+            telemetry.Append(runId, message, "error");
+            telemetry.MarkCompleted(runId, "failed");
             return new CommandResult(false, message);
-        }
-
-        private void ReportProgress(string runId, int current, int max, string description)
-        {
-            _ = runId;
-            try
-            {
-                Progress?.Invoke(this, new CommandProgressEventArgs(current, max, description));
-            }
-            catch
-            {
-                // best-effort
-            }
         }
 
         private static ICallCenter ResolveOrCreateCallCenter(DatabaseService database, StoriesService? storiesService, ICustomLogger? logger)

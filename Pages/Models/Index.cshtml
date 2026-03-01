@@ -90,6 +90,9 @@
                     <th data-col="intelligencescore">Intel</th>
                     <th data-col="intelligencetime">IntelTime(s)</th>
                     <th data-col="notools">NoTools</th>
+                    <th data-col="promotions">Promotions</th>
+                    <th data-col="demotions">Demotions</th>
+                    <th data-col="rankgain">Rank Gain</th>
                     <th data-col="duration">Duration</th>
                     <th data-col="costin">Cost In</th>
                     <th data-col="costout">Cost Out</th>
@@ -101,6 +104,7 @@
                 @foreach (var m in Model.Items)
                 {
                     var hasResults = m.TestDurationSeconds > 0;
+                    var rankGain = m.Promotions - m.Demotions;
                     <tr data-model-id="@(m.Id?.ToString() ?? string.Empty)" data-model-name="@m.Name">
                         <td class="dt-control"></td>
                         <td data-col="name">@m.Name</td>
@@ -136,6 +140,9 @@
                         <td data-col="intelligencescore">@(m.IntelliScore.HasValue ? m.IntelliScore.Value.ToString() : "-")</td>
                         <td data-col="intelligencetime">@(m.IntelliTime.HasValue ? m.IntelliTime.Value.ToString() : "-")</td>
                         <td data-col="notools">@(m.NoTools ? "âœ“" : "")</td>
+                        <td data-col="promotions">@m.Promotions</td>
+                        <td data-col="demotions">@m.Demotions</td>
+                        <td data-col="rankgain">@rankGain</td>
                         <td data-col="duration">@((m.TestDurationSeconds.HasValue) ? m.TestDurationSeconds.Value.ToString("0.00") : "-")</td>
                         <td data-col="costin">@m.CostInPerToken.ToString("0.00000")</td>
                         <td data-col="costout">@m.CostOutPerToken.ToString("0.00000")</td>

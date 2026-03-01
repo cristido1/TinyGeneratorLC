@@ -987,7 +987,8 @@ public class GeneraModel : PageModel
             settingHint: MergeHints(NreSetting, baseSetting),
             genreHint: MergeHints(NreGenre, baseGenre),
             toneHint: MergeHints(NreTone, baseTone),
-            constraintsHint: MergeHints(NreConstraints, baseConstraints));
+            constraintsHint: MergeHints(NreConstraints, baseConstraints),
+            lookupHintTypes: new[] { "THEME_CORE", "CONFLICT", "ANTAGONIST", "TWIST" });
 
         _dispatcher.Enqueue(
             cmd,

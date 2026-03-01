@@ -21,6 +21,7 @@ namespace TinyGenerator.Services.Commands
         private readonly IStoryTaggingPipelineService _storyTaggingPipelineService;
         private readonly INextStatusEnqueuer _nextStatusEnqueuer;
         private readonly ICustomLogger? _logger;
+        private readonly ICommandDispatcher? _dispatcher;
         private readonly Func<string?>? _currentDispatcherRunIdProvider;
 
         public string CommandName => "add_ambient_tags_to_story";
@@ -33,6 +34,7 @@ namespace TinyGenerator.Services.Commands
             ICallCenter callCenter,
             IStoryTaggingPipelineService storyTaggingPipelineService,
             INextStatusEnqueuer nextStatusEnqueuer,
+            ICommandDispatcher? dispatcher = null,
             ICustomLogger? logger = null,
             CommandTuningOptions? tuning = null,
             Func<string?>? currentDispatcherRunIdProvider = null)
@@ -42,6 +44,7 @@ namespace TinyGenerator.Services.Commands
             _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
             _storyTaggingPipelineService = storyTaggingPipelineService ?? throw new ArgumentNullException(nameof(storyTaggingPipelineService));
             _nextStatusEnqueuer = nextStatusEnqueuer ?? throw new ArgumentNullException(nameof(nextStatusEnqueuer));
+            _dispatcher = dispatcher;
             _logger = logger;
             _tuning = tuning ?? new CommandTuningOptions();
             _currentDispatcherRunIdProvider = currentDispatcherRunIdProvider;
@@ -61,6 +64,7 @@ namespace TinyGenerator.Services.Commands
                 ResolveOrCreateCallCenter(database, storiesService, logger),
                 new StoryTaggingPipelineService(database),
                 new NextStatusEnqueuer(storiesService, logger),
+                storiesService?.CommandDispatcher,
                 logger,
                 tuning,
                 () => storiesService?.CurrentDispatcherRunId)
@@ -74,7 +78,19 @@ namespace TinyGenerator.Services.Commands
                 ? (_currentDispatcherRunIdProvider?.Invoke() ?? $"add_ambient_tags_to_story_{_storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}")
                 : runId;
 
-            var telemetry = new CommandTelemetry(_logger, args => Progress?.Invoke(this, args));
+            var telemetry = new CommandTelemetry(_logger, args =>
+            {
+                try
+                {
+                    _dispatcher?.UpdateStep(effectiveRunId, args.Current, args.Max, args.Description);
+                }
+                catch
+                {
+                    // best-effort
+                }
+
+                Progress?.Invoke(this, args);
+            });
             telemetry.Start(effectiveRunId);
             telemetry.Append(effectiveRunId, $"[story {_storyId}] Starting add_ambient_tags_to_story pipeline");
 

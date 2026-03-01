@@ -34,9 +34,9 @@
         color: #6c757d;
     }
     .kpi-card.kpi-compact {
-        padding: 0.85rem 1rem;
+        padding: 0.7rem 0.9rem;
         border-width: 1px;
-        min-height: 108px;
+        min-height: 92px;
     }
     .kpi-card.kpi-compact .kpi-value {
         font-size: 1.35rem;
@@ -131,6 +131,54 @@
     .report-badge.sev-warning { background: #fff4e6; border-color: #ffd8a8; color: #e67700; }
     .report-badge.sev-critical { background: #fff5f5; border-color: #ffc9c9; color: #a61e4d; }
     .report-badge.sev-info { background: #e7f5ff; border-color: #a5d8ff; color: #1c7ed6; }
+    .chart-card {
+        background: #f8f9fa;
+        border: 2px solid #343a40;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        min-height: 360px;
+    }
+    .chart-wrap {
+        height: 260px;
+        position: relative;
+    }
+    .chart-legend-list {
+        list-style: none;
+        padding: 0;
+        margin: 0.75rem 0 0;
+        columns: 1;
+    }
+    .chart-legend-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-size: 0.86rem;
+        padding: 0.2rem 0;
+    }
+    .chart-legend-left {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        min-width: 0;
+    }
+    .chart-legend-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex: 0 0 10px;
+    }
+    .chart-legend-label {
+        color: #495057;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .chart-legend-value {
+        color: #212529;
+        font-weight: 600;
+        white-space: nowrap;
+    }
 </style>
 
 <div class="container-fluid px-4">
@@ -186,6 +234,15 @@
                         else
                         {
                             <option value="nre">Genera nuova storia NRE casuale (15 step)</option>
+                        }
+
+                        @if (Model.AutoAdvancementMode == "nre_manual")
+                        {
+                            <option value="nre_manual" selected>Genera nuova storia NRE manuale (fino a valutazione)</option>
+                        }
+                        else
+                        {
+                            <option value="nre_manual">Genera nuova storia NRE manuale (fino a valutazione)</option>
                         }
                     </select>
                 </div>
@@ -260,6 +317,67 @@
             }
         </div>
     }
+
+    <div class="row g-4 mb-4">
+        <div class="col-12 col-xl-6">
+            <div class="chart-card">
+                <div class="section-title mb-2">
+                    <i class="bi bi-pie-chart me-2"></i>Storie per Stato (incluse soft deleted)
+                </div>
+                <div class="chart-wrap">
+                    <canvas id="storiesByStatusChart"></canvas>
+                </div>
+                <ul class="chart-legend-list">
+                    @if (Model.StoriesByStatusSlices.Any())
+                    {
+                        foreach (var slice in Model.StoriesByStatusSlices)
+                        {
+                            <li class="chart-legend-item">
+                                <span class="chart-legend-left">
+                                    <span class="chart-legend-dot" style="background:@slice.Color;"></span>
+                                    <span class="chart-legend-label">@slice.Label</span>
+                                </span>
+                                <span class="chart-legend-value">@slice.Count (@slice.Percentage.ToString("F1")%)</span>
+                            </li>
+                        }
+                    }
+                    else
+                    {
+                        <li class="text-muted small">Nessun dato disponibile.</li>
+                    }
+                </ul>
+            </div>
+        </div>
+        <div class="col-12 col-xl-6">
+            <div class="chart-card">
+                <div class="section-title mb-2">
+                    <i class="bi bi-pie-chart-fill me-2"></i>Fasce Valutazione (storie ≥ 1000 caratteri, incluse soft deleted)
+                </div>
+                <div class="chart-wrap">
+                    <canvas id="scoreBandsChart"></canvas>
+                </div>
+                <ul class="chart-legend-list">
+                    @if (Model.ScoreBandSlices.Any())
+                    {
+                        foreach (var slice in Model.ScoreBandSlices)
+                        {
+                            <li class="chart-legend-item">
+                                <span class="chart-legend-left">
+                                    <span class="chart-legend-dot" style="background:@slice.Color;"></span>
+                                    <span class="chart-legend-label">@slice.Label</span>
+                                </span>
+                                <span class="chart-legend-value">@slice.Count (@slice.Percentage.ToString("F1")%)</span>
+                            </li>
+                        }
+                    }
+                    else
+                    {
+                        <li class="text-muted small">Nessun dato disponibile.</li>
+                    }
+                </ul>
+            </div>
+        </div>
+    </div>
 
     <!-- Rankings Row -->
     <div class="row g-4">
@@ -436,6 +554,56 @@
 
 <script>
     (function(){
+        var statusSlices = @Html.Raw(Model.StoriesByStatusJson);
+        var scoreSlices = @Html.Raw(Model.ScoreBandJson);
+
+        function ensureChartJs(ready){
+            if (window.Chart) {
+                ready();
+                return;
+            }
+            var script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js';
+            script.onload = ready;
+            script.onerror = ready;
+            document.head.appendChild(script);
+        }
+
+        function renderPie(canvasId, slices){
+            if (!window.Chart) return;
+            var canvas = document.getElementById(canvasId);
+            if (!canvas || !Array.isArray(slices) || slices.length === 0) return;
+            var normalized = slices
+                .map(function(s){
+                    return {
+                        label: (s && (s.label ?? s.Label)) || '',
+                        count: Number((s && (s.count ?? s.Count)) || 0),
+                        color: (s && (s.color ?? s.Color)) || '#6c757d'
+                    };
+                })
+                .filter(function(s){ return s.count > 0; });
+            if (normalized.length === 0) return;
+            var labels = normalized.map(function(s){ return s.label; });
+            var values = normalized.map(function(s){ return s.count; });
+            var colors = normalized.map(function(s){ return s.color; });
+            new Chart(canvas, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{ data: values, backgroundColor: colors, borderColor: '#f8f9fa', borderWidth: 2 }]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        ensureChartJs(function(){
+            renderPie('storiesByStatusChart', statusSlices);
+            renderPie('scoreBandsChart', scoreSlices);
+        });
+
         document.addEventListener('click', function(e){
             var btn = e.target.closest && e.target.closest('.play-final-mix-btn');
             if (!btn) return;

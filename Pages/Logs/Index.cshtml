@@ -48,83 +48,7 @@
             <th>Azioni</th>
         </tr>
     </thead>
-    <tbody>
-    @foreach (var log in Model.LogEntries)
-    {
-            var src = (log.Source ?? string.Empty).ToLowerInvariant();
-            var msg = (log.Message ?? string.Empty).ToLowerInvariant();
-            var chat = (log.ChatText ?? string.Empty).ToLowerInvariant();
-            bool isModelSource = src.Contains("ollama") || src.Contains("openai") || src.Contains("model") || src.Contains("llm") || src.Contains("ai") || src.Contains("llama");
-            bool isRequest = false;
-            bool isResponse = false;
-            if (isModelSource)
-            {
-                if (msg.Contains("request") || msg.Contains("prompt") || msg.Contains("sending") || msg.Contains("calling") || chat.Contains("prompt") ) isRequest = true;
-                if (msg.Contains("response") || msg.Contains("result") || msg.Contains("choices") || msg.Contains("output") || chat.Contains("response") || chat.Contains("output")) isResponse = true;
-            }
-
-            var rowClass = "";
-            if (isRequest) rowClass = "log-model-request";
-            else if (isResponse) rowClass = "log-model-response";
-            if (src.Contains("responsechecker"))
-            {
-                rowClass = string.IsNullOrWhiteSpace(rowClass)
-                    ? "log-response-checker"
-                    : rowClass + " log-response-checker";
-            }
-
-        <tr class="@rowClass" data-id="@log.Id"
-            data-source="@log.Source"
-            data-ts="@log.Ts" 
-            data-threadid="@(log.ThreadId ?? 0)" 
-            data-storyid="@(log.StoryId.HasValue ? log.StoryId.Value.ToString() : string.Empty)"
-            data-threadscope="@log.ThreadScope"
-            data-analized="@log.Analized"
-            data-agent="@log.AgentName" 
-            data-state="@log.State" 
-            data-context="@log.Context" 
-            data-exception="@log.Exception">
-            <td class="details-control text-center" title="Mostra dettagli"><button class="btn btn-sm btn-outline-secondary" type="button">+</button></td>
-            <td class="timestamp">@log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")</td>
-            <td class="level">@log.Level</td>
-            <td class="source">
-                @if(log.Source == "ModelResponse" || log.Source == "ModelCompletion"){
-                    <span class="badge bg-warning"><i class="bi bi-chevron-left"></i> Response</span>
-                } else if(log.Source == "ModelRequest" || log.Source == "ModelPrompt"){
-                    <span class="badge bg-success">Request <i class="bi bi-chevron-right"></i></span>
-                } else{
-                    <span>@log.Source</span>
-                }
-            </td>
-            <td class="result">
-                @if (!string.IsNullOrWhiteSpace(log.Result))
-                {
-                    var resUpper = log.Result.Trim().ToUpperInvariant();
-                    var badgeClass = resUpper == "SUCCESS" ? "bg-success" : (resUpper == "FAILED" ? "bg-warning text-dark" : "bg-secondary");
-                    <span class="badge @badgeClass">@resUpper</span>
-                }
-                else
-                {
-                    <span class="text-muted">-</span>
-                }
-            </td>
-            <td class="failreason">@(!string.IsNullOrWhiteSpace(log.ResultFailReason) ? log.ResultFailReason : "-")</td>
-            <td class="operation">@LogsModel.GetOperationDisplay(log)</td>
-            <td class="duration">@(log.DurationSecs.HasValue && log.DurationSecs.Value > 0 ? log.DurationSecs.Value.ToString() : "1")</td>
-            <td class="threadid">@(log.ThreadId.HasValue && log.ThreadId.Value > 0 ? log.ThreadId.Value.ToString() : "-")</td>
-            <td class="storyid">@(log.StoryId.HasValue && log.StoryId.Value > 0 ? log.StoryId.Value.ToString() : "-")</td>
-            <td class="agent">@(!string.IsNullOrWhiteSpace(log.AgentName) ? log.AgentName : "-")</td>
-            <td class="model">@(!string.IsNullOrWhiteSpace(log.ModelName) ? log.ModelName : "-")</td>
-            <td class="actions" style="white-space:nowrap;">
-                <button type="button" class="btn btn-sm btn-outline-secondary btn-analyze me-1">Analizza</button>
-                @if (log.Analized)
-                {
-                    <a class="btn btn-sm btn-outline-primary" asp-page="/Logs/Analysis" asp-route-threadId="@(log.ThreadId ?? 0)">Vedi analisi</a>
-                }
-            </td>
-        </tr>
-    }
-    </tbody>
+    <tbody></tbody>
 </table>
 
 <form id="analyzeForm" method="post" asp-page-handler="Analyze" class="d-none">
@@ -208,10 +132,80 @@
         $(function () {
             var selectedThreadId = null;
             var onlyModelCheckbox = $('#onlyModelCheckbox');
+            var onlyResultCheckbox = $('#onlyResultCheckbox');
             var table = $('#logsTable').DataTable({
+                processing: true,
+                serverSide: true,
                 order: [[1, 'desc']], // timestamp column is now index 1 (0 = details control)
                 pageLength: 25,
                 responsive: false, // using explicit row().child for details
+                ajax: {
+                    url: '?handler=Data',
+                    type: 'GET',
+                    data: function (d) {
+                        d.onlyModel = !!onlyModelCheckbox.prop('checked');
+                        d.onlyResult = !!onlyResultCheckbox.prop('checked');
+                    }
+                },
+                columns: [
+                    {
+                        data: null,
+                        name: 'details',
+                        orderable: false,
+                        searchable: false,
+                        className: 'details-control text-center',
+                        render: function () {
+                            return '<button class="btn btn-sm btn-outline-secondary" type="button">+</button>';
+                        }
+                    },
+                    { data: 'timestamp', name: 'timestamp' },
+                    { data: 'level', name: 'level' },
+                    {
+                        data: 'source',
+                        name: 'source',
+                        render: function (v) {
+                            var source = String(v || '');
+                            if (source === 'ModelResponse' || source === 'ModelCompletion') {
+                                return '<span class="badge bg-warning"><i class="bi bi-chevron-left"></i> Response</span>';
+                            }
+                            if (source === 'ModelRequest' || source === 'ModelPrompt') {
+                                return '<span class="badge bg-success">Request <i class="bi bi-chevron-right"></i></span>';
+                            }
+                            return source || '-';
+                        }
+                    },
+                    {
+                        data: 'result',
+                        name: 'result',
+                        render: function (v) {
+                            var res = String(v || '').trim().toUpperCase();
+                            if (!res) return '<span class="text-muted">-</span>';
+                            var badge = res === 'SUCCESS' ? 'bg-success' : (res === 'FAILED' ? 'bg-warning text-dark' : 'bg-secondary');
+                            return '<span class="badge ' + badge + '">' + res + '</span>';
+                        }
+                    },
+                    { data: 'failReason', name: 'failreason', render: function (v) { return String(v || '-') || '-'; } },
+                    { data: 'operation', name: 'operation' },
+                    { data: 'duration', name: 'duration' },
+                    { data: 'threadId', name: 'threadid' },
+                    { data: 'storyId', name: 'storyid' },
+                    { data: 'agent', name: 'agent' },
+                    { data: 'model', name: 'model' },
+                    {
+                        data: null,
+                        name: 'actions',
+                        orderable: false,
+                        searchable: false,
+                        render: function (row) {
+                            var analyze = '<button type="button" class="btn btn-sm btn-outline-secondary btn-analyze me-1">Analizza</button>';
+                            var view = '';
+                            if (row && row.analized && row.threadIdRaw && row.threadIdRaw > 0) {
+                                view = '<a class="btn btn-sm btn-outline-primary" href="/Logs/Analysis?threadId=' + encodeURIComponent(row.threadIdRaw) + '">Vedi analisi</a>';
+                            }
+                            return analyze + view;
+                        }
+                    }
+                ],
                 columnDefs: [
                     { orderable: false, targets: 0 }, // details control column not sortable
                     { responsivePriority: 1, targets: 1 }, // Timestamp always visible
@@ -277,20 +271,28 @@
                 ],
                 stateSave: true,
                 stateSaveName: 'DataTables_logs',
-                stateDuration: -1
-            });
+                stateDuration: -1,
+                createdRow: function (row, data) {
+                    var source = String((data && data.source) || '');
+                    var rowClass = '';
+                    if (source === 'ModelRequest' || source === 'ModelPrompt') rowClass = 'log-model-request';
+                    else if (source === 'ModelResponse' || source === 'ModelCompletion') rowClass = 'log-model-response';
+                    if (source.toLowerCase().indexOf('responsechecker') >= 0) {
+                        rowClass = rowClass ? (rowClass + ' log-response-checker') : 'log-response-checker';
+                    }
 
-            $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
-                if (!onlyModelCheckbox.prop('checked')) return true;
-                var row = table.row(dataIndex).node();
-                if (!row) return true;
-                var source = row.getAttribute('data-source');
-                return source === 'ModelResponse'
-                    || source === 'ModelRequest'
-                    || source === 'ModelCompletion'
-                    || source === 'ModelPrompt';
+                    $(row)
+                        .addClass('log-row-selectable')
+                        .attr('data-id', data.id || 0)
+                        .attr('data-source', source)
+                        .attr('data-threadid', data.threadIdRaw || 0)
+                        .attr('data-threadscope', (data.threadScope || ''));
+
+                    if (rowClass) {
+                        $(row).addClass(rowClass);
+                    }
+                }
             });
-            table.draw();
 
             // Build details HTML for a row - message is fetched lazily from server
             function decodeEscapes(s) {
@@ -368,17 +370,12 @@
                 form.trigger('submit');
             });
 
-            // Filter by presence of Result badge
+            // Server-side filters
             $('#onlyResultCheckbox').on('change', function() {
-                if (this.checked) {
-                    table.column('.result').search('.+', true, false).draw();
-                } else {
-                    table.column('.result').search('').draw();
-                }
+                table.ajax.reload();
             });
-            // Filter by model request/response sources
             onlyModelCheckbox.on('change', function() {
-                table.draw();
+                table.ajax.reload();
             });
 
 
@@ -427,8 +424,6 @@
                 }
             });
 
-            // Add selectable class to rows
-            $('#logsTable tbody tr').addClass('log-row-selectable');
         });
     </script>
 }

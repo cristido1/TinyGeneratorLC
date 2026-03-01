@@ -7,7 +7,7 @@
     <NoWarn>$(NoWarn);CS7022</NoWarn>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
-    <GenerateRazorAssemblyInfo>true</GenerateRazorAssemblyInfo>
+    <GenerateRazorAssemblyInfo>false</GenerateRazorAssemblyInfo>
   </PropertyGroup>
 
   <!-- Migrations are intentionally not compiled/used. Schema updates are handled explicitly (manual SQL). -->

@@ -105,6 +105,7 @@ builder.Services.AddScoped<TinyGenerator.Data.Repositories.IStoryRepository, Tin
 
 // Model fallback service for agent resilience
 builder.Services.AddScoped<ModelFallbackService>();
+builder.Services.AddScoped<ModelPromotionService>();
 builder.Services.AddTransient<IAgentResolutionService, AgentResolutionService>();
 builder.Services.AddTransient<IChunkProcessingService, ChunkProcessingService>();
 builder.Services.AddTransient<IStoryTaggingPipelineService, StoryTaggingPipelineService>();

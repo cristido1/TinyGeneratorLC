@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -16,15 +17,17 @@ namespace TinyGenerator.Pages.Agents
     {
         private readonly DatabaseService _database;
         private readonly TinyGeneratorDbContext _context;
+        private readonly ModelPromotionService _promotionService;
 
         public List<ModelInfo> Models { get; set; } = new();
         public List<RoleModel> AllRoles { get; set; } = new();
         public List<ModelRole> ModelRoles { get; set; } = new();
 
-        public FallbackModelsModel(DatabaseService database, TinyGeneratorDbContext context)
+        public FallbackModelsModel(DatabaseService database, TinyGeneratorDbContext context, ModelPromotionService promotionService)
         {
             _database = database;
             _context = context;
+            _promotionService = promotionService;
         }
 
         public IActionResult OnGet()
@@ -272,6 +275,18 @@ namespace TinyGenerator.Pages.Agents
             _context.SaveChanges();
 
             return new JsonResult(new { ok = true });
+        }
+
+        public async Task<IActionResult> OnPostPromoteAll()
+        {
+            var results = await _promotionService.PromoteBestModelsForAllRolesAsync(source: "manual_fallback_models");
+            var changed = results.Count(r => r.Changed);
+            return new JsonResult(new
+            {
+                ok = true,
+                promoted = changed,
+                examined = results.Count
+            });
         }
 
         public string FormatLastUse(string? lastUse)

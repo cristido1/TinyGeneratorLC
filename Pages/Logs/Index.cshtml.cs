@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Logging;
@@ -37,7 +38,80 @@ namespace TinyGenerator.Pages.Logs
 
         public void OnGet()
         {
-            LogEntries = _db.GetRecentLogs(limit: 1000);
+            LogEntries = new List<LogEntry>();
+        }
+
+        public IActionResult OnGetData(
+            int draw = 1,
+            int start = 0,
+            int length = 25,
+            bool onlyResult = false,
+            bool onlyModel = true)
+        {
+            try
+            {
+                var search = Request.Query["search[value]"].ToString();
+                var orderColRaw = Request.Query["order[0][column]"].ToString();
+                var orderDir = Request.Query["order[0][dir]"].ToString();
+
+                var sortBy = "timestamp";
+                if (int.TryParse(orderColRaw, out var orderCol) && orderCol >= 0)
+                {
+                    var colName = Request.Query[$"columns[{orderCol}][data]"].ToString();
+                    if (!string.IsNullOrWhiteSpace(colName))
+                    {
+                        sortBy = colName.Trim().ToLowerInvariant();
+                    }
+                }
+
+                var sortDesc = !string.Equals(orderDir, "asc", StringComparison.OrdinalIgnoreCase);
+                var page = _db.GetPagedLogsForGrid(
+                    start: start,
+                    length: length,
+                    search: search,
+                    sortBy: sortBy,
+                    sortDesc: sortDesc,
+                    onlyResult: onlyResult,
+                    onlyModel: onlyModel);
+
+                var data = page.Items.Select(log => new
+                {
+                    id = log.Id ?? 0,
+                    timestamp = log.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                    level = log.Level ?? string.Empty,
+                    source = log.Source ?? string.Empty,
+                    result = log.Result ?? string.Empty,
+                    failReason = log.ResultFailReason ?? string.Empty,
+                    operation = GetOperationDisplay(log),
+                    duration = log.DurationSecs.HasValue && log.DurationSecs.Value > 0 ? log.DurationSecs.Value : 1,
+                    threadId = log.ThreadId.HasValue && log.ThreadId.Value > 0 ? log.ThreadId.Value.ToString() : "-",
+                    storyId = log.StoryId.HasValue && log.StoryId.Value > 0 ? log.StoryId.Value.ToString() : "-",
+                    agent = string.IsNullOrWhiteSpace(log.AgentName) ? "-" : log.AgentName,
+                    model = string.IsNullOrWhiteSpace(log.ModelName) ? "-" : log.ModelName,
+                    threadIdRaw = log.ThreadId ?? 0,
+                    threadScope = log.ThreadScope ?? string.Empty,
+                    analized = log.Analized
+                });
+
+                return new JsonResult(new
+                {
+                    draw,
+                    recordsTotal = page.TotalRecords,
+                    recordsFiltered = page.FilteredRecords,
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Errore caricamento paginato logs");
+                return new JsonResult(new
+                {
+                    draw,
+                    recordsTotal = 0,
+                    recordsFiltered = 0,
+                    data = Array.Empty<object>()
+                });
+            }
         }
 
         public static string GetOperationDisplay(LogEntry log)

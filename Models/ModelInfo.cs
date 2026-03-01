@@ -56,6 +56,8 @@ public class ModelInfo
     public string? LastMusicTestFile { get; set; }
     public string? LastSoundTestFile { get; set; }
     public string? LastTtsTestFile { get; set; }
+    public int Promotions { get; set; }
+    public int Demotions { get; set; }
 
     // Narrative Engine compatibility fields
     public bool IsNarrativeCompatible { get; set; } = false;

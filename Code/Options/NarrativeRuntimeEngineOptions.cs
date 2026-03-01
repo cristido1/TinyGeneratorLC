@@ -13,7 +13,8 @@ public sealed class NarrativeRuntimeEngineOptions
     public int PreviousBlocksWindow { get; set; } = 3;
     public int DuplicateSentenceHistoryBlocksWindow { get; set; } = 5;
     public int DialogueTargetPercent { get; set; } = 40;
-    public int DialogueTolerancePercent { get; set; } = 5;
+    public int DialogueTolerancePercentPlus { get; set; } = 5;
+    public int DialogueTolerancePercentMinus { get; set; } = 5;
     public string BannedPhrasesCsv { get; set; } = "Sottotitoli e revisione a cura di QTSS, Grazie per aver guardato il video";
     public int EvaluatorMinScore { get; set; } = 60;
     public bool UseResponseChecker { get; set; } = true;

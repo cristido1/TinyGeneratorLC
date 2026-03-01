@@ -232,7 +232,13 @@ namespace TinyGenerator.Services
             var mode = NormalizeAutoAdvancementMode(opts.AutoAdvancementMode);
             if (mode == "nre")
             {
-                TryRunAutoNreStoryGeneration(opts);
+                TryRunAutoNreStoryGeneration(opts, useManualMethod: false);
+                return;
+            }
+
+            if (mode == "nre_manual")
+            {
+                TryRunAutoNreStoryGeneration(opts, useManualMethod: true);
                 return;
             }
 
@@ -276,7 +282,7 @@ namespace TinyGenerator.Services
             }
         }
 
-        private void TryRunAutoNreStoryGeneration(AutomaticOperationsOptions opts)
+        private void TryRunAutoNreStoryGeneration(AutomaticOperationsOptions opts, bool useManualMethod)
         {
             try
             {
@@ -304,7 +310,7 @@ namespace TinyGenerator.Services
                     return;
                 }
 
-                TryEnqueueAutoNreStoryGeneration(auto);
+                TryEnqueueAutoNreStoryGeneration(auto, useManualMethod);
                 _lastAutoNreStoryAttemptUtc = nowUtc;
             }
             catch (Exception ex)
@@ -1073,7 +1079,7 @@ namespace TinyGenerator.Services
             }
         }
 
-        private bool TryEnqueueAutoNreStoryGeneration(AutoNreStoryGenerationOptions auto)
+        private bool TryEnqueueAutoNreStoryGeneration(AutoNreStoryGenerationOptions auto, bool useManualMethod)
         {
             try
             {
@@ -1117,7 +1123,9 @@ namespace TinyGenerator.Services
                         var request = new EngineRequest
                         {
                             EngineName = nreOptions.EngineName,
-                            Method = string.IsNullOrWhiteSpace(nreOptions.DefaultMethod) ? "state_driven" : nreOptions.DefaultMethod.Trim(),
+                            Method = useManualMethod
+                                ? "manual"
+                                : (string.IsNullOrWhiteSpace(nreOptions.DefaultMethod) ? "state_driven" : nreOptions.DefaultMethod.Trim()),
                             StructureMode = structureMode,
                             CostSeverity = costSeverity,
                             CombatIntensity = combatIntensity,
@@ -1141,15 +1149,36 @@ namespace TinyGenerator.Services
                             storiesService: _stories,
                             callCenter: _callCenter);
 
-                        return await runNre.ExecuteAsync(ctx.CancellationToken, ctx.RunId).ConfigureAwait(false);
+                        var runResult = await runNre.ExecuteAsync(ctx.CancellationToken, ctx.RunId).ConfigureAwait(false);
+                        if (useManualMethod && runResult.Success)
+                        {
+                            if (TryParseRunNreResult(runResult.Message, out var storyId, out var reviseQueued) &&
+                                storyId > 0 &&
+                                !reviseQueued)
+                            {
+                                var reviseRunId = _stories.EnqueueReviseStoryCommand(
+                                    storyId,
+                                    trigger: "auto_nre_manual_fallback",
+                                    priority: Math.Max(priority + 1, 2),
+                                    force: true);
+                                if (string.IsNullOrWhiteSpace(reviseRunId))
+                                {
+                                    return new CommandResult(
+                                        false,
+                                        $"Auto NRE manual: impossibile accodare revisione per storyId={storyId}; non posso garantire valutazione effettuata.");
+                                }
+                            }
+                        }
+
+                        return runResult;
                     },
                     runId: runId,
                     metadata: new Dictionary<string, string>
                     {
                         ["operation"] = "auto_nre_story_generation",
-                        ["mode"] = "nre",
+                        ["mode"] = useManualMethod ? "nre_manual" : "nre",
                         ["engine"] = nreOptions.EngineName,
-                        ["method"] = nreOptions.DefaultMethod,
+                        ["method"] = useManualMethod ? "manual" : nreOptions.DefaultMethod,
                         ["maxSteps"] = maxSteps.ToString(),
                         ["stepCurrent"] = "0",
                         ["stepMax"] = maxSteps.ToString(),
@@ -1418,7 +1447,62 @@ namespace TinyGenerator.Services
 
         private static string NormalizeAutoAdvancementMode(string? mode)
         {
-            return string.Equals(mode, "nre", StringComparison.OrdinalIgnoreCase) ? "nre" : "series";
+            if (string.Equals(mode, "nre", StringComparison.OrdinalIgnoreCase))
+            {
+                return "nre";
+            }
+
+            if (string.Equals(mode, "nre_manual", StringComparison.OrdinalIgnoreCase))
+            {
+                return "nre_manual";
+            }
+
+            return "series";
+        }
+
+        private static bool TryParseRunNreResult(string? message, out long storyId, out bool reviseQueued)
+        {
+            storyId = 0;
+            reviseQueued = false;
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return false;
+            }
+
+            var text = message.Trim();
+            var storyToken = "storyId=";
+            var storyIdx = text.IndexOf(storyToken, StringComparison.OrdinalIgnoreCase);
+            if (storyIdx < 0)
+            {
+                return false;
+            }
+
+            var storyStart = storyIdx + storyToken.Length;
+            var storyEnd = text.IndexOfAny(new[] { ',', ')', ' ' }, storyStart);
+            if (storyEnd < 0)
+            {
+                storyEnd = text.Length;
+            }
+
+            if (!long.TryParse(text[storyStart..storyEnd], out storyId) || storyId <= 0)
+            {
+                return false;
+            }
+
+            var reviseToken = "reviseQueued=";
+            var reviseIdx = text.IndexOf(reviseToken, StringComparison.OrdinalIgnoreCase);
+            if (reviseIdx >= 0)
+            {
+                var reviseStart = reviseIdx + reviseToken.Length;
+                var reviseEnd = text.IndexOfAny(new[] { ',', ')', ' ' }, reviseStart);
+                if (reviseEnd < 0)
+                {
+                    reviseEnd = text.Length;
+                }
+                _ = bool.TryParse(text[reviseStart..reviseEnd], out reviseQueued);
+            }
+
+            return true;
         }
 
         private static (string StructureMode, string CostSeverity, string CombatIntensity) PickRandomNreParameters()

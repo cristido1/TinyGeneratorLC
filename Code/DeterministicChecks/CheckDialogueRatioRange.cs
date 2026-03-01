@@ -17,9 +17,11 @@ public sealed class CheckDialogueRatioRange : CheckBase
 
         var minChars = Math.Max(80, GetOption("MinChars", 120));
         var targetPercent = Math.Clamp(GetOption("TargetPercent", 40), 0, 100);
-        var tolerancePercent = Math.Clamp(GetOption("TolerancePercent", 5), 0, 50);
-        var minPercent = Math.Max(0, targetPercent - tolerancePercent);
-        var maxPercent = Math.Min(100, targetPercent + tolerancePercent);
+        var legacyTolerance = Math.Clamp(GetOption("TolerancePercent", 5), 0, 50);
+        var toleranceMinusPercent = Math.Clamp(GetOption("TolerancePercentMinus", legacyTolerance), 0, 50);
+        var tolerancePlusPercent = Math.Clamp(GetOption("TolerancePercentPlus", legacyTolerance), 0, 50);
+        var minPercent = Math.Max(0, targetPercent - toleranceMinusPercent);
+        var maxPercent = Math.Min(100, targetPercent + tolerancePlusPercent);
 
         var totalChars = CountMeaningfulChars(text);
         if (totalChars < minChars)
@@ -34,7 +36,7 @@ public sealed class CheckDialogueRatioRange : CheckBase
 
         var ok = dialoguePercent >= minPercent && dialoguePercent <= maxPercent;
         var msg = ok
-            ? $"ok: dialoghi={dialoguePercent:F1}% (target={targetPercent}% ±{tolerancePercent}%)"
+            ? $"ok: dialoghi={dialoguePercent:F1}% (target={targetPercent}% -{toleranceMinusPercent}%/+{tolerancePlusPercent}%)"
             : $"dialoghi fuori range: {dialoguePercent:F1}% (atteso {minPercent}%..{maxPercent}%)";
 
         return Build(ok, msg, started);

@@ -140,3 +140,30 @@ logging 7. verificare aggiornamento stats
 
 ======================================================== FINE
 DOCUMENTAZIONE ========================================================
+
+======================================================== 8. CICLO OPERATIVO
+NRE WRITER + FALLBACK + PROMOTION
+========================================================
+
+Flusso richiesto per la generazione storia NRE:
+
+1. Viene lanciato il comando iniziale di generazione storia.
+
+2. Ogni richiesta a `nre_writer` passa al CallCenter e segue il ciclo standard:
+   - deterministic checks
+   - response checker
+   - retry
+   Nota: ad ogni nuova chiamata al CallCenter il contatore retry riparte dal valore configurato in `appsettings`.
+
+3. Se i retry si esauriscono e l'opzione di spiegazione è attiva:
+   - il CallCenter chiede spiegazione al modello (fail explanation).
+
+4. Dopo il fail explanation:
+   - il CallCenter cerca ed usa il modello di fallback secondo le regole correnti.
+
+5. La promozione dei modelli NON avviene durante la singola response:
+   - viene lanciata dal CommandDispatcher solo al termine del comando iniziale di generazione storia.
+   - in automatico è limitata ai comandi radice di generazione storia (es. `run_nre` e comandi root state-driven), non ai comandi intermedi/chunk.
+   - opzionalmente può essere forzata via metadata comando (`promotionOnCompletion=true`).
+   - la promozione valuta i ruoli/operazioni usati nel run.
+   - ogni promozione deve essere scritta a log con categoria filtrabile `PROMOTION`.

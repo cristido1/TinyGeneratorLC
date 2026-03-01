@@ -323,7 +323,8 @@ public class NreEngine : IEngine
                         currentCanonStateJson,
                         nreOptions.PreviousBlocksWindow,
                         nreOptions.DialogueTargetPercent,
-                        nreOptions.DialogueTolerancePercent);
+                        nreOptions.DialogueTolerancePercentPlus,
+                        nreOptions.DialogueTolerancePercentMinus);
                     var evaluatorCheckerContext = BuildEvaluatorCheckerContextInput(
                         ctx.Request.UserPrompt!,
                         phase,
@@ -698,14 +699,13 @@ public class NreEngine : IEngine
             "Mode=INIT." + Environment.NewLine +
             "Sono consentite risorse dedotte da prompt e vincoli utente." + Environment.NewLine +
             "In assenza di indicazioni psicologiche esplicite, deduci stato plausibile dal contesto." + Environment.NewLine + Environment.NewLine +
+            "Campi tecnici gestiti dal sistema (NON restituirli nel JSON): story_id, series_id, episode_number, chunk_index, last_update_chunk." + Environment.NewLine +
+            "Non restituire la sezione delta." + Environment.NewLine + Environment.NewLine +
             "Regole di output anti-troncamento:" + Environment.NewLine +
             "- restituisci JSON compatto (una sola riga, senza markdown);" + Environment.NewLine +
             "- per ogni risorsa usa solo i campi necessari allo schema; evita campi opzionali se non utili;" + Environment.NewLine +
             "- psych_notes deve essere molto breve (max 12 parole);" + Environment.NewLine +
             "- notes_json deve essere sempre un object (usa {} quando non necessario)." + Environment.NewLine + Environment.NewLine +
-            $"story_id: {ctx.StoryId}{Environment.NewLine}" +
-            $"series_id: {(ctx.Request.SeriesId.HasValue ? ctx.Request.SeriesId.Value.ToString() : "null")}{Environment.NewLine}" +
-            $"episode_number: {(ctx.Request.SeriesEpisodeNumber.HasValue ? ctx.Request.SeriesEpisodeNumber.Value.ToString() : "null")}{Environment.NewLine}" +
             $"structure_mode: {ctx.Request.StructureMode}{Environment.NewLine}" +
             $"cost_severity: {ctx.Request.CostSeverity}{Environment.NewLine}" +
             $"combat_intensity: {ctx.Request.CombatIntensity}{Environment.NewLine}" +
@@ -733,23 +733,21 @@ public class NreEngine : IEngine
             "Mode=UPDATE." + Environment.NewLine +
             "Puoi aggiungere risorse nuove solo se il blocco le giustifica in modo esplicito." + Environment.NewLine +
             "Se il testo comporta resurrezioni o recuperi inattesi ma coerenti e accettati dal flusso, applica lo stato conseguente." + Environment.NewLine + Environment.NewLine +
+            "Campi tecnici gestiti dal sistema (NON restituirli nel JSON): story_id, series_id, episode_number, chunk_index, last_update_chunk." + Environment.NewLine +
+            "Non restituire la sezione delta." + Environment.NewLine + Environment.NewLine +
             "Regole di output anti-troncamento:" + Environment.NewLine +
             "- restituisci JSON compatto (una sola riga, senza markdown);" + Environment.NewLine +
             "- aggiorna e restituisci solo dati strettamente necessari alla continuita';" + Environment.NewLine +
             "- per ogni risorsa usa solo i campi necessari allo schema; evita campi opzionali verbosi;" + Environment.NewLine +
             "- psych_notes deve essere molto breve (max 12 parole);" + Environment.NewLine +
             "- notes_json deve essere sempre un object (usa {} quando non necessario)." + Environment.NewLine + Environment.NewLine +
-            $"story_id: {ctx.StoryId}{Environment.NewLine}" +
-            $"series_id: {(ctx.Request.SeriesId.HasValue ? ctx.Request.SeriesId.Value.ToString() : "null")}{Environment.NewLine}" +
-            $"episode_number: {(ctx.Request.SeriesEpisodeNumber.HasValue ? ctx.Request.SeriesEpisodeNumber.Value.ToString() : "null")}{Environment.NewLine}" +
-            $"chunk_index: {acceptedBlocks.Count + 1}{Environment.NewLine}" +
             $"phase_name: {phase.Name}{Environment.NewLine}" +
             $"phase_objective: {phase.Objective}{Environment.NewLine}" +
             $"phase_conflict: {phase.Conflict}{Environment.NewLine}{Environment.NewLine}" +
             $"current_canon_state_json:{Environment.NewLine}{(string.IsNullOrWhiteSpace(currentCanonStateJson) ? "{}" : currentCanonStateJson)}{Environment.NewLine}{Environment.NewLine}" +
             $"previous_blocks:{Environment.NewLine}{previousBlocks}{Environment.NewLine}{Environment.NewLine}" +
             $"new_block:{Environment.NewLine}{newBlock.Trim()}{Environment.NewLine}{Environment.NewLine}" +
-            "Output atteso: { \"canon_state\": { ... }, \"delta\": { \"updated_resources\": [...], \"events\": [...] } }";
+            "Output atteso: { \"canon_state\": { ... } }";
     }
 
     private static bool TryExtractCanonStateJson(string? rawJson, out string canonStateJson, out string? error)
@@ -829,7 +827,8 @@ public class NreEngine : IEngine
             Options = Options.Create<object>(new Dictionary<string, object>
             {
                 ["TargetPercent"] = nreOptions.DialogueTargetPercent,
-                ["TolerancePercent"] = nreOptions.DialogueTolerancePercent,
+                ["TolerancePercentPlus"] = nreOptions.DialogueTolerancePercentPlus,
+                ["TolerancePercentMinus"] = nreOptions.DialogueTolerancePercentMinus,
                 ["MinChars"] = 120
             })
         });
@@ -971,7 +970,8 @@ public class NreEngine : IEngine
         string? currentCanonStateJson,
         int previousBlocksWindow,
         int dialogueTargetPercent,
-        int dialogueTolerancePercent)
+        int dialogueTolerancePercentPlus,
+        int dialogueTolerancePercentMinus)
     {
         var tail = blocks
             .TakeLast(Math.Max(1, previousBlocksWindow))
@@ -983,7 +983,7 @@ public class NreEngine : IEngine
             $"Prompt iniziale:{Environment.NewLine}{prompt.Trim()}{Environment.NewLine}{Environment.NewLine}" +
             $"Fase narrativa corrente:{Environment.NewLine}{phase.Objective}{Environment.NewLine}" +
             $"Conflitto:{Environment.NewLine}{phase.Conflict}{Environment.NewLine}{Environment.NewLine}" +
-            $"Vincolo dialoghi:{Environment.NewLine}- target dialogo: {dialogueTargetPercent}%{Environment.NewLine}- tolleranza: ±{dialogueTolerancePercent}%{Environment.NewLine}- mantieni il blocco nel range [{Math.Max(0, dialogueTargetPercent - dialogueTolerancePercent)}%, {Math.Min(100, dialogueTargetPercent + dialogueTolerancePercent)}%] di testo dialogato.{Environment.NewLine}{Environment.NewLine}" +
+            $"Vincolo dialoghi:{Environment.NewLine}- target dialogo: {dialogueTargetPercent}%{Environment.NewLine}- tolleranza inferiore: -{dialogueTolerancePercentMinus}%{Environment.NewLine}- tolleranza superiore: +{dialogueTolerancePercentPlus}%{Environment.NewLine}- mantieni il blocco nel range [{Math.Max(0, dialogueTargetPercent - dialogueTolerancePercentMinus)}%, {Math.Min(100, dialogueTargetPercent + dialogueTolerancePercentPlus)}%] di testo dialogato.{Environment.NewLine}{Environment.NewLine}" +
             $"Canon state risorse corrente (JSON):{Environment.NewLine}{(string.IsNullOrWhiteSpace(currentCanonStateJson) ? "{}" : currentCanonStateJson)}{Environment.NewLine}{Environment.NewLine}" +
             $"Blocchi precedenti:{Environment.NewLine}{previousBlocks}";
     }

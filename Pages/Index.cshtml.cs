@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TinyGenerator.Services;
 using TinyGenerator.Models;
+using System.Text.Json;
 
 namespace TinyGenerator.Pages;
 
@@ -20,6 +21,8 @@ public class IndexModel : PageModel
     public List<TopStory> TopStories { get; set; } = new();
     public List<SystemReportSummary> RecentReports { get; set; } = new();
     public List<KpiCard> AdditionalKpis { get; set; } = new();
+    public List<PieSlice> StoriesByStatusSlices { get; set; } = new();
+    public List<PieSlice> ScoreBandSlices { get; set; } = new();
     
     // Auto-advancement property
     public bool EnableAutoAdvancement { get; set; }
@@ -62,6 +65,17 @@ public class IndexModel : PageModel
         public string Label { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
     }
+
+    public class PieSlice
+    {
+        public string Label { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public double Percentage { get; set; }
+        public string Color { get; set; } = "#6c757d";
+    }
+
+    public string StoriesByStatusJson => JsonSerializer.Serialize(StoriesByStatusSlices);
+    public string ScoreBandJson => JsonSerializer.Serialize(ScoreBandSlices);
 
     public IndexModel(ILogger<IndexModel> logger, DatabaseService database, StoriesService stories)
     {
@@ -134,6 +148,8 @@ public class IndexModel : PageModel
             }).ToList();
 
             AdditionalKpis = LoadAdditionalKpis();
+            StoriesByStatusSlices = LoadStoriesByStatusSlices();
+            ScoreBandSlices = LoadScoreBandSlices();
         }
         catch (Exception ex)
         {
@@ -147,11 +163,15 @@ public class IndexModel : PageModel
         {
             _stories.SetAutoAdvancementEnabled(enabled);
             _stories.SetAutoAdvancementMode(mode);
-            var selectedMode = string.Equals(mode, "nre", StringComparison.OrdinalIgnoreCase) ? "nre" : "series";
-            TempData["Message"] = enabled 
+            var selectedMode = string.Equals(mode, "nre", StringComparison.OrdinalIgnoreCase)
+                ? "nre"
+                : (string.Equals(mode, "nre_manual", StringComparison.OrdinalIgnoreCase) ? "nre_manual" : "series");
+            TempData["Message"] = enabled
                 ? selectedMode == "nre"
-                    ? "✓ Avanzamento automatico abilitato in modalità NRE: in inattività verrà accodata una nuova storia NRE con parametri casuali (15 step)."
-                    : "✓ Avanzamento automatico abilitato in modalità Serie: in inattività verrà avanzata una serie."
+                    ? "Avanzamento automatico abilitato in modalita NRE casuale: in inattivita verra accodata una nuova storia NRE (15 step)."
+                    : selectedMode == "nre_manual"
+                        ? "Avanzamento automatico abilitato in modalita NRE manuale: le storie generate verranno portate fino a valutazione effettuata."
+                        : "Avanzamento automatico abilitato in modalita Serie: in inattivita verra avanzata una serie."
                 : "Avanzamento automatico disabilitato.";
         }
         catch (Exception ex)
@@ -228,9 +248,9 @@ SELECT AVG(media) FROM (
                 cards.Add(new KpiCard { Code = "KPI_05", Label = "Percentuale Approvazione", Value = $"{approvalPct:F1}%" });
                 cards.Add(new KpiCard { Code = "KPI_06", Label = "Score Medio Globale", Value = $"{avgScore:F1}" });
                 cards.Add(new KpiCard { Code = "KPI_07", Label = "Score Medio Ultime 20", Value = $"{avgLast20:F1}" });
-                cards.Add(new KpiCard { Code = "KPI_09", Label = "Penalità Lunghezza Media", Value = $"{avgPenalty:F2}" });
+                cards.Add(new KpiCard { Code = "KPI_09", Label = "PenalitÃ  Lunghezza Media", Value = $"{avgPenalty:F2}" });
                 cards.Add(new KpiCard { Code = "KPI_10", Label = "Difetti Coerenza (<60)", Value = defectsCoherence.ToString("N0") });
-                cards.Add(new KpiCard { Code = "KPI_11", Label = "Difetti Originalità (<60)", Value = defectsOriginality.ToString("N0") });
+                cards.Add(new KpiCard { Code = "KPI_11", Label = "Difetti OriginalitÃ  (<60)", Value = defectsOriginality.ToString("N0") });
                 cards.Add(new KpiCard { Code = "KPI_12", Label = "Difetti Impatto Emotivo (<60)", Value = defectsEmotion.ToString("N0") });
                 cards.Add(new KpiCard { Code = "KPI_13", Label = "Difetti Azione (<60)", Value = defectsAction.ToString("N0") });
             }
@@ -312,7 +332,7 @@ SELECT AVG(cnt) FROM (
                 var passRate = ScalarDoubleNullable("SELECT SUM(COALESCE(passed,0)) * 100.0 / COUNT(*) FROM model_test_runs;") ?? 0.0;
                 var avgTestDuration = ScalarDoubleNullable("SELECT AVG(duration_ms) FROM model_test_runs;") ?? 0.0;
                 cards.Add(new KpiCard { Code = "KPI_30", Label = "Test Run Pass Rate", Value = $"{passRate:F1}%" });
-                cards.Add(new KpiCard { Code = "KPI_31", Label = "Durata Media Test", Value = $"{avgTestDuration:F0} ms" });
+                cards.Add(new KpiCard { Code = "KPI_31", Label = "Durata Media Test", Value = FormatDurationFromMilliseconds(avgTestDuration) });
             }
 
             if (HasRows("stories"))
@@ -344,7 +364,7 @@ WHERE generated_tts = 1
 
             // NOTE: KPI_02, KPI_18, KPI_19, KPI_20 non vengono aggiunti:
             // tabella story_runtime_states assente nel DB corrente.
-            // KPI_21, KPI_22 non vengono aggiunti se narrative_story_blocks è vuota.
+            // KPI_21, KPI_22 non vengono aggiunti se narrative_story_blocks Ã¨ vuota.
             if (HasRows("narrative_story_blocks"))
             {
                 var avgBlocksByStory = ScalarDoubleNullable(@"
@@ -355,10 +375,141 @@ SELECT AVG(cnt) FROM (
 );") ?? 0.0;
                 var avgBlocksQuality = ScalarDoubleNullable("SELECT AVG(quality_score) FROM narrative_story_blocks;") ?? 0.0;
                 cards.Add(new KpiCard { Code = "KPI_21", Label = "Blocchi Medi per Storia", Value = $"{avgBlocksByStory:F2}" });
-                cards.Add(new KpiCard { Code = "KPI_22", Label = "Qualità Media Blocchi", Value = $"{avgBlocksQuality:F2}" });
+                cards.Add(new KpiCard { Code = "KPI_22", Label = "QualitÃ  Media Blocchi", Value = $"{avgBlocksQuality:F2}" });
             }
 
             return cards;
         });
+    }
+
+    private List<PieSlice> LoadStoriesByStatusSlices()
+    {
+        try
+        {
+            var statuses = _database.ListAllStoryStatuses()
+                .Where(s => s != null && s.Id > 0)
+                .ToDictionary(
+                    s => s.Id,
+                    s => !string.IsNullOrWhiteSpace(s.Description) ? s.Description!.Trim()
+                        : (!string.IsNullOrWhiteSpace(s.Code) ? s.Code!.Trim() : "Sconosciuto"));
+
+            var grouped = _stories.GetAllStories()
+                .GroupBy(story =>
+                {
+                    if (story.StatusId.HasValue && statuses.TryGetValue(story.StatusId.Value, out var label) && !string.IsNullOrWhiteSpace(label))
+                    {
+                        return label;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(story.StatusDescription))
+                    {
+                        return story.StatusDescription.Trim();
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(story.Status))
+                    {
+                        return story.Status.Trim();
+                    }
+
+                    return "Sconosciuto";
+                })
+                .Select(g => (label: g.Key, count: g.Count()))
+                .OrderByDescending(x => x.count)
+                .ToList();
+
+            return BuildPieSlices(grouped);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Errore caricando KPI 'Storie per Stato'");
+            return new List<PieSlice>();
+        }
+    }
+
+    private List<PieSlice> LoadScoreBandSlices()
+    {
+        try
+        {
+            var b90 = 0;
+            var b80 = 0;
+            var b70 = 0;
+            var b60 = 0;
+            var blow = 0;
+
+            var stories = _stories.GetAllStories();
+            foreach (var story in stories)
+            {
+                var textLength = !string.IsNullOrWhiteSpace(story.StoryRevised)
+                    ? story.StoryRevised!.Length
+                    : (story.StoryRaw?.Length ?? 0);
+                var effectiveLength = Math.Max(story.CharCount, textLength);
+                if (effectiveLength < 1000)
+                {
+                    continue;
+                }
+
+                var evals = _database.GetStoryEvaluations(story.Id) ?? new List<StoryEvaluation>();
+                if (evals.Count == 0)
+                {
+                    continue;
+                }
+
+                var avgRaw = evals.Average(e => e.TotalScore);
+                var avg = DatabaseService.NormalizeEvaluationScoreTo100(avgRaw);
+
+                if (avg >= 90) b90++;
+                else if (avg >= 80) b80++;
+                else if (avg >= 70) b70++;
+                else if (avg >= 60) b60++;
+                else blow++;
+            }
+
+            var rows = new List<(string label, int count)>
+            {
+                ("90/100 - 100/100", b90),
+                ("80/100 - 89/100", b80),
+                ("70/100 - 79/100", b70),
+                ("60/100 - 69/100", b60),
+                ("< 60/100", blow)
+            };
+
+            return BuildPieSlices(rows);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Errore caricando KPI 'Fasce Valutazione'");
+            return new List<PieSlice>();
+        }
+    }
+
+    private static List<PieSlice> BuildPieSlices(List<(string label, int count)> rows)
+    {
+        var palette = new[]
+        {
+            "#198754", "#0d6efd", "#fd7e14", "#6f42c1", "#dc3545",
+            "#20c997", "#6610f2", "#adb5bd", "#e67700", "#495057"
+        };
+        var total = rows.Sum(r => r.count);
+        var result = new List<PieSlice>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (row.count <= 0) continue;
+            result.Add(new PieSlice
+            {
+                Label = row.label,
+                Count = row.count,
+                Percentage = total > 0 ? row.count * 100.0 / total : 0.0,
+                Color = palette[i % palette.Length]
+            });
+        }
+        return result;
+    }
+
+    private static string FormatDurationFromMilliseconds(double milliseconds)
+    {
+        var safeMs = Math.Max(0, (long)Math.Round(milliseconds));
+        var ts = TimeSpan.FromMilliseconds(safeMs);
+        return $"{(int)ts.TotalHours}h {ts.Minutes:D2}m {ts.Seconds:D2}s";
     }
 }

@@ -515,7 +515,8 @@ namespace TinyGenerator
         }
 
         /// <summary>
-        /// Append an example evaluate_full_story call to evaluator agents' instructions if missing.
+        /// Append an example evaluate_full_story call only to story_evaluator agents if missing.
+        /// Must never touch evaluators with strict JSON response schemas (e.g. nre_evaluator).
         /// </summary>
         public static void EnsureEvaluatorInstructions(DatabaseService? db, ILogger? logger = null)
         {
@@ -535,16 +536,19 @@ evaluate_full_story({
             try
             {
                 var agents = db.ListAgents()?.Where(a =>
-                    !string.IsNullOrWhiteSpace(a.Role)
-                    && a.Role.Contains("evaluat", StringComparison.OrdinalIgnoreCase)
-                    && !a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase))
+                        !string.IsNullOrWhiteSpace(a.Role)
+                        && a.Role.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase)
+                        && string.IsNullOrWhiteSpace(a.JsonResponseFormat))
                     .ToList() ?? new List<Models.Agent>();
+
                 foreach (var agent in agents)
                 {
                     var instr = agent.Instructions ?? string.Empty;
                     if (instr.IndexOf("evaluate_full_story", StringComparison.OrdinalIgnoreCase) >= 0 &&
                         instr.IndexOf("action_score", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
                         continue; // already has an example or detailed guidance
+                    }
 
                     agent.Instructions = string.IsNullOrWhiteSpace(instr)
                         ? snippet

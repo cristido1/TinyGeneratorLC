@@ -41,6 +41,7 @@
                 </div>
                 <div class="col-lg-2 col-md-12 d-flex align-items-end gap-2">
                     <input type="hidden" name="ViewMode" value="@Model.ViewMode" />
+                    <input type="hidden" name="Page" value="1" />
                     <button class="btn btn-sm btn-primary w-100" type="submit">Applica</button>
                     <a class="btn btn-sm btn-outline-secondary w-100" asp-page="/Logs/LogChat">Reset</a>
                 </div>
@@ -55,6 +56,24 @@
                 <label><input type="checkbox" name="OnlyDb" value="true" @(Model.OnlyDb ? "checked" : null) /> DB</label>
             </div>
         </form>
+    </div>
+
+    <div class="pager-wrap mb-2">
+        <div class="pager-meta">
+            Record: <strong>@Model.TotalFilteredRecords</strong> |
+            Pagina <strong>@Model.Page</strong> di <strong>@Model.TotalPages</strong> |
+            Mostrati <strong>@Model.PageSize</strong> per pagina
+        </div>
+        <div class="pager-actions">
+            @if (Model.Page > 1)
+            {
+                <a class="btn btn-sm btn-outline-secondary" asp-page="/Logs/LogChat" asp-all-route-data="@(Model.BuildPageRouteValues(Model.Page - 1))">Precedente</a>
+            }
+            @if (Model.Page < Model.TotalPages)
+            {
+                <a class="btn btn-sm btn-outline-secondary" asp-page="/Logs/LogChat" asp-all-route-data="@(Model.BuildPageRouteValues(Model.Page + 1))">Successiva</a>
+            }
+        </div>
     </div>
 
     <div class="conversation-grid">
@@ -97,14 +116,66 @@
                                             <div class="left">
                                                 <span class="icon">@e.Icon</span>
                                                 <span class="name">@e.ActorDisplayName</span>
-                                                @if (!string.IsNullOrWhiteSpace(e.ActorSubtitle))
+                                                @if (!string.IsNullOrWhiteSpace(e.ModelName))
+                                                {
+                                                    <span class="sub">@e.ModelName</span>
+                                                }
+                                                else if (!string.IsNullOrWhiteSpace(e.ActorSubtitle))
                                                 {
                                                     <span class="sub">@e.ActorSubtitle</span>
                                                 }
+                                                @if (e.DurationSeconds.HasValue && e.DurationSeconds.Value > 0)
+                                                {
+                                                    <span class="status-badge info">@e.DurationSeconds.Value s</span>
+                                                }
+                                                @if (e.IsRequest)
+                                                {
+                                                    <span class="status-badge info">REQUEST</span>
+                                                }
+                                                @if (e.IsResponse)
+                                                {
+                                                    <span class="status-badge info">RESPONSE</span>
+                                                }
+                                                @{
+                                                    var statusClass = e.Result == "SUCCESS" ? "success" : (e.Result == "FAILED" ? "failed" : (e.Result == "WARNING" ? "warning" : "info"));
+                                                }
+                                                <span class="status-badge @statusClass">@e.Result</span>
                                             </div>
                                             <time>@e.Timestamp.ToString("HH:mm:ss")</time>
                                         </header>
-                                        <div class="content">@e.Message</div>
+                                        @if (e.IsResourceManager)
+                                        {
+                                            @if (e.ResourceStates.Count > 0)
+                                            {
+                                                <div class="resource-table-wrap">
+                                                    <table class="table table-sm table-bordered resource-state-table mb-2">
+                                                        <thead>
+                                                            <tr>
+                                                                <th>Risorsa</th>
+                                                                <th>Stato</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            @foreach (var rs in e.ResourceStates)
+                                                            {
+                                                                <tr>
+                                                                    <td>@rs.Resource</td>
+                                                                    <td>@rs.Status</td>
+                                                                </tr>
+                                                            }
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <div class="content">Nessuna risorsa/stato leggibile nel payload.</div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <div class="content">@e.Message</div>
+                                        }
                                         @if (e.Result == "FAILED")
                                         {
                                             <div class="content text-danger small">✖ Problema rilevato</div>
@@ -117,6 +188,22 @@
                 }
             </div>
         </div>
+
+    <div class="pager-wrap mt-2">
+        <div class="pager-meta">
+            Pagina <strong>@Model.Page</strong> di <strong>@Model.TotalPages</strong>
+        </div>
+        <div class="pager-actions">
+            @if (Model.Page > 1)
+            {
+                <a class="btn btn-sm btn-outline-secondary" asp-page="/Logs/LogChat" asp-all-route-data="@(Model.BuildPageRouteValues(Model.Page - 1))">Precedente</a>
+            }
+            @if (Model.Page < Model.TotalPages)
+            {
+                <a class="btn btn-sm btn-outline-secondary" asp-page="/Logs/LogChat" asp-all-route-data="@(Model.BuildPageRouteValues(Model.Page + 1))">Successiva</a>
+            }
+        </div>
+    </div>
 </div>
 
 @section Styles {
@@ -128,22 +215,29 @@
     .flags label { font-size: 11px; color: #48566a; display: inline-flex; gap: 4px; align-items: center; }
     .conversation-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
     .timeline-col { min-width: 0; }
-    .group-box { border: 1px solid #f5f5f5; border-radius: 0; margin-bottom: 10px; background: #0b0d11; color: #f7f7f7; }
+    .pager-wrap { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .pager-meta { font-size: 12px; color: #4b5563; }
+    .pager-actions { display: flex; gap: 6px; }
+    .group-box { border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 10px; background: #ffffff; color: #111827; }
     .group-box.has-error { border-color: #ff9aa2; }
-    .group-box > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #f0f0f0; font-size: 12px; background: #0b0d11; }
+    .group-box > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #f0f0f0; font-size: 12px; background: #ffffff; }
     .group-box > summary::-webkit-details-marker { display: none; }
-    .group-title { font-weight: 700; color: #f7f7f7; margin-right: auto; font-family: Consolas, 'Courier New', monospace; }
-    .group-meta { color: #c9c9c9; font-family: Consolas, 'Courier New', monospace; }
-    .timeline { padding: 10px 12px; background: #0b0d11; }
-    .msg { border: 1px solid #f0f0f0; border-left-width: 3px; border-radius: 0; padding: 8px 10px; margin-bottom: 10px; background: #0b0d11; cursor: pointer; color: #f7f7f7; font-family: Consolas, 'Courier New', monospace; }
+    .group-title { font-weight: 700; color: #111827; margin-right: auto; font-family: Consolas, 'Courier New', monospace; }
+    .group-meta { color: #6b7280; font-family: Consolas, 'Courier New', monospace; }
+    .timeline { padding: 10px 12px; background: #ffffff; }
+    .msg { border: 1px solid #e5e7eb; border-left-width: 3px; border-radius: 4px; padding: 8px 10px; margin-bottom: 10px; background: #ffffff; cursor: pointer; color: #111827; font-family: Consolas, 'Courier New', monospace; }
     .msg header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 2px; }
     .msg .left { display: flex; align-items: center; gap: 6px; min-width: 0; }
     .msg .icon { width: 16px; text-align: center; }
-    .msg .name { font-weight: 700; color: #ffffff; }
-    .msg .sub { color: #c9c9c9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
-    .msg time { font-size: 11px; color: #c9c9c9; white-space: nowrap; }
-    .msg .content { font-size: 14px; color: #ffffff; margin-bottom: 6px; white-space: pre-wrap; }
+    .msg .name { font-weight: 700; color: #111827; }
+    .msg .sub { color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+    .msg time { font-size: 11px; color: #6b7280; white-space: nowrap; }
+    .msg .content { font-size: 13px; color: #111827; margin-bottom: 6px; white-space: pre-wrap; }
     .line-clamp-2 { display: block; overflow: visible; }
+    .resource-table-wrap { margin-top: 6px; }
+    .resource-state-table { font-size: 12px; background: #fff; }
+    .resource-state-table th { background: #f3f4f6; color: #374151; }
+    .resource-state-table td, .resource-state-table th { vertical-align: middle; white-space: pre-wrap; }
     .status-badge { display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 600; }
     .status-badge.success { background: #def7e6; color: #135f2d; }
     .status-badge.failed { background: #fde4e4; color: #8b1c1c; }
@@ -157,7 +251,7 @@
     .actor-api { border-left-color: #a4e7f5; }
     .actor-system { border-left-color: #b8c2d6; }
     .msg.is-failed { box-shadow: inset 0 0 0 1px #ff9aa2; }
-    .msg.selected { outline: 1px dashed #ffffff; }
+    .msg.selected { outline: 1px dashed #6b7280; }
     .empty-state { border: 1px dashed #d8dee8; border-radius: 8px; padding: 18px; color: #6b7280; background: #fafbfc; }
     @@media (max-width: 1200px) {
         .conversation-grid { grid-template-columns: 1fr; }

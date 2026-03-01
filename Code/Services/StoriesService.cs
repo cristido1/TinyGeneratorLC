@@ -3493,7 +3493,14 @@ public sealed partial class StoriesService
         
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
-            return await GenerateAmbienceAudioInternalAsync(context, dispatcherRunId);
+            var (dispatcherSuccess, dispatcherMessage) = await GenerateAmbienceAudioInternalAsync(context, dispatcherRunId);
+            if (dispatcherSuccess)
+            {
+                // In batch-worker mode the status command wrapper may not run in-process:
+                // advance status here as well to keep the chain coherent.
+                TryChangeStatus(story.Id, "generate_ambience_audio", dispatcherRunId);
+            }
+            return (dispatcherSuccess, dispatcherMessage);
         }
         var (success, message) = await StartAmbienceAudioGenerationAsync(context);
         return (success, message);
@@ -6490,6 +6497,32 @@ public sealed partial class StoriesService
         return null;
     }
 
+    private static bool IsBatchWorkerProcess()
+        => Environment.GetCommandLineArgs().Any(a => string.Equals(a, "--batch-worker", StringComparison.OrdinalIgnoreCase));
+
+    private void ReportCommandProgress(string runId, int current, int max, string? description, bool emitBatchProgress)
+    {
+        var safeMax = Math.Max(1, max);
+        var safeCurrent = Math.Clamp(current, 0, safeMax);
+        var safeDescription = string.IsNullOrWhiteSpace(description)
+            ? $"step {safeCurrent}/{safeMax}"
+            : description.Replace('\r', ' ').Replace('\n', ' ');
+
+        try
+        {
+            _commandDispatcher?.UpdateStep(runId, safeCurrent, safeMax, safeDescription);
+        }
+        catch
+        {
+            // best-effort
+        }
+
+        if (emitBatchProgress)
+        {
+            Console.WriteLine($"__BATCH_PROGRESS__|{runId}|{safeCurrent}|{safeMax}|{safeDescription}");
+        }
+    }
+
 // =====================================================================
 // Generate Ambience Audio Command
 // =====================================================================
@@ -6619,6 +6652,8 @@ public sealed partial class StoriesService
         {
             var msg = "Nessun segmento ambient sounds trovato nella timeline (nessuna propriet� 'ambientSounds' presente)";
             _customLogger?.Append(runId, $"[{story.Id}] {msg}");
+            // No segments is a valid completion for this step: persist generated flag.
+            try { _database.UpdateStoryGeneratedAmbient(story.Id, true); } catch { }
             return (true, msg);
         }
 
@@ -6629,6 +6664,13 @@ public sealed partial class StoriesService
         int segmentCounter = 0;
         int assignedCount = 0;
         int missingCount = 0;
+        var emitBatchProgress = IsBatchWorkerProcess();
+        ReportCommandProgress(
+            runId,
+            0,
+            ambienceSegments.Count,
+            $"chunk 0/{Math.Max(1, ambienceSegments.Count)}",
+            emitBatchProgress);
         foreach (var segment in ambienceSegments)
         {
             segmentCounter++;
@@ -6636,11 +6678,12 @@ public sealed partial class StoriesService
             if (durationSeconds < 1) durationSeconds = 1;
             _customLogger?.Append(runId, $"[{story.Id}] Ricerca ambient {segmentCounter}/{ambienceSegments.Count}: '{segment.AmbiencePrompt}' ({durationSeconds}s)");
 
-            // Update dispatcher progress if available
-            if (_commandDispatcher != null)
-            {
-                _commandDispatcher.UpdateStep(runId, segmentCounter, ambienceSegments.Count);
-            }
+            ReportCommandProgress(
+                runId,
+                segmentCounter,
+                ambienceSegments.Count,
+                $"chunk {segmentCounter}/{ambienceSegments.Count}",
+                emitBatchProgress);
 
             try
             {
@@ -6724,6 +6767,12 @@ public sealed partial class StoriesService
         {
             successMsg += $", mancanti={missingCount}, assegnati={assignedCount}";
         }
+        ReportCommandProgress(
+            runId,
+            ambienceSegments.Count,
+            ambienceSegments.Count,
+            $"chunk {ambienceSegments.Count}/{ambienceSegments.Count}",
+            emitBatchProgress);
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
     }
@@ -7226,6 +7275,8 @@ public sealed partial class StoriesService
         {
             var msg = "Nessun effetto sonoro da generare (nessuna propriet� 'fxDescription' presente)";
             _customLogger?.Append(runId, $"[{story.Id}] {msg}");
+            // No FX entries is a valid completion for this step: persist generated flag.
+            try { _database.UpdateStoryGeneratedEffects(story.Id, true); } catch { }
             return (true, msg);
         }
 
@@ -7236,6 +7287,13 @@ public sealed partial class StoriesService
         int fxCounter = 0;
         int assignedCount = 0;
         int missingCount = 0;
+        var emitBatchProgress = IsBatchWorkerProcess();
+        ReportCommandProgress(
+            runId,
+            0,
+            fxEntries.Count,
+            $"chunk 0/{Math.Max(1, fxEntries.Count)}",
+            emitBatchProgress);
         foreach (var (index, entry, description, tags, duration) in fxEntries)
         {
             fxCounter++;
@@ -7252,11 +7310,12 @@ public sealed partial class StoriesService
 
             _customLogger?.Append(runId, $"[{story.Id}] Ricerca FX {fxCounter}/{fxEntries.Count}: '{description}' ({durationSeconds}s)");
 
-            // Update dispatcher progress if available
-            if (_commandDispatcher != null)
-            {
-                _commandDispatcher.UpdateStep(runId, fxCounter, fxEntries.Count);
-            }
+            ReportCommandProgress(
+                runId,
+                fxCounter,
+                fxEntries.Count,
+                $"chunk {fxCounter}/{fxEntries.Count}",
+                emitBatchProgress);
 
             try
             {
@@ -7332,6 +7391,12 @@ public sealed partial class StoriesService
         }
 
         var successMsg = $"Generazione effetti sonori completata ({fxCounter} effetti, assegnati={assignedCount}, mancanti={missingCount})";
+        ReportCommandProgress(
+            runId,
+            fxEntries.Count,
+            fxEntries.Count,
+            $"chunk {fxEntries.Count}/{fxEntries.Count}",
+            emitBatchProgress);
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
     }
@@ -8256,7 +8321,14 @@ public sealed partial class StoriesService
         
         if (!string.IsNullOrWhiteSpace(dispatcherRunId))
         {
-            return await GenerateFxAudioInternalAsync(context, dispatcherRunId);
+            var (dispatcherSuccess, dispatcherMessage) = await GenerateFxAudioInternalAsync(context, dispatcherRunId);
+            if (dispatcherSuccess)
+            {
+                // In batch-worker mode the status command wrapper may not run in-process:
+                // advance status here as well to keep the chain coherent.
+                TryChangeStatus(story.Id, "generate_fx_audio", dispatcherRunId);
+            }
+            return (dispatcherSuccess, dispatcherMessage);
         }
         var (success, message) = await StartFxAudioGenerationAsync(context);
         return (success, message);
@@ -8362,6 +8434,7 @@ public sealed partial class StoriesService
         // Step 2: Assign music files from sounds catalog (no generative fallback)
         var assigned = 0;
         var missing = 0;
+        var musicRequests = new List<(JsonObject Entry, string Description)>();
         for (var i = 0; i < phraseEntries.Count; i++)
         {
             var entry = phraseEntries[i];
@@ -8377,6 +8450,28 @@ public sealed partial class StoriesService
                 entry["musicFile"] = null;
                 continue;
             }
+
+            musicRequests.Add((entry, musicDesc));
+        }
+
+        var emitBatchProgress = IsBatchWorkerProcess();
+        ReportCommandProgress(
+            runId,
+            0,
+            musicRequests.Count,
+            $"chunk 0/{Math.Max(1, musicRequests.Count)}",
+            emitBatchProgress);
+
+        var requestCounter = 0;
+        foreach (var (entry, musicDesc) in musicRequests)
+        {
+            requestCounter++;
+            ReportCommandProgress(
+                runId,
+                requestCounter,
+                musicRequests.Count,
+                $"chunk {requestCounter}/{musicRequests.Count}",
+                emitBatchProgress);
 
             var currentMusicFile = ReadString(entry, "music_file") ?? ReadString(entry, "musicFile") ?? ReadString(entry, "MusicFile");
             var currentMusicSourcePath = ReadString(entry, "music_source_path") ?? ReadString(entry, "musicSourcePath") ?? ReadString(entry, "MusicSourcePath");
@@ -8445,6 +8540,12 @@ public sealed partial class StoriesService
             : (missing > 0
                 ? $"Nessuna musica assegnata da sounds (mancanti={missing})"
                 : "Nessuna musica assegnata (nessuna richiesta)");
+        ReportCommandProgress(
+            runId,
+            musicRequests.Count,
+            musicRequests.Count,
+            $"chunk {musicRequests.Count}/{musicRequests.Count}",
+            emitBatchProgress);
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
     }
@@ -10644,7 +10745,17 @@ private static string? SelectMusicFileDeterministic(
     private static string NormalizeAutoAdvancementMode(string? mode)
     {
         var normalized = (mode ?? string.Empty).Trim().ToLowerInvariant();
-        return normalized == "nre" ? "nre" : "series";
+        if (normalized == "nre")
+        {
+            return "nre";
+        }
+
+        if (normalized == "nre_manual")
+        {
+            return "nre_manual";
+        }
+
+        return "series";
     }
 
     internal static class StoriesServiceDefaults

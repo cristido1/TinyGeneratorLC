@@ -1,0 +1,236 @@
+Esempi di output errati - nre_resource_manager_update
+Fonte: tabella Log (data/storage.db)
+
+==== ESEMPIO 1 ====
+LogId: 537721
+Ts: 2026-03-01T11:01:32.9384962Z
+Model: mistral:7b-instruct
+CategoriaErrore: campo_non_consentito
+ResultFailReason: JsonSchemaResponseFormatCheck: La risposta deve rispettare il JSON schema 'resource_manager_state.json'. | GENERIC_ERROR: Formato di risposta JSON non rispettato | DETAIL: json_response_format_check: non ha rispettato il formato di risposta JSON richiesto (resource_manager_state.json): primi 2 problemi: $: campo non consentito 'delta' | $.canon_state: manca campo obbligatorio 'resources'
+AssistantContent:
+{
+  "canon_state": {
+    "story_id": 669,
+    "series_id": null,
+    "episode_number": null,
+    "chunk_index": 3,
+    "phase_name": "Il passato rivelato",
+    "phase_objective": "Rivelare la scelta passata del protagonista che ha diviso la sua famiglia e le conseguenze su Eos-7.",
+    "phase_conflict": "Il protagonista accede al database familiare e trova prove che la sua decisione ha compromesso la sicurezza della colonia.",
+    "current_canon_state_json": {
+      "resources": [
+        {
+          "name": "Sistema di vita chiuso",
+          "quantity": 60,
+          "integrity_percent": 60,
+          "status_flag": "damaged",
+          "last_update_chunk": 2,
+          "notes_json": {
+            "degradation_rate": "rapid",
+            "cause": "interruzione della sequenza di controllo primario"
+          }
+        },
+        {
+          "name": "Database familiari",
+          "quantity": 1,
+          "integrity_percent": 100,
+          "status_flag": "active",
+          "last_update_chunk": 2,
+          "access_method": "biometric",
+          "notes_json": {}
+        },
+        {
+          "name": "Campioni di energia protettiva",
+          "quantity": 4,
+          "integrity_percent": 50,
+          "status_flag": "depleted",
+          "last_update_chunk": null,
+          "degradation_rate": "slow",
+          "notes_json": {}
+        },
+        {
+          "name": "Stazione di comunicazione",
+          "quantity": 1,
+          "integrity_percent": 70,
+          "status_flag": "damaged",
+          "last_update_chunk": null,
+          "transmission_type": "encoded only",
+          "notes_json": {}
+        },
+        {
+          "name": "Caverna sotterranea aliena",
+          "quantity": 1,
+          "integrity_percent": 100,
+          "status_flag": "active",
+          "last_update_chunk": 2,
+          "alien_significance": "unknown language and technology",
+          "notes_json": {
+            "revealed_truth": "The protagonist was responsible for disabling the alien control nucleus."
+          }
+        }
+      ],
+      "characters": [
+        {
+          "name": "Protagonista ibrido umano-alieno",
+          "morale_level": 45,
+          "stress_level": 90
+...[TRONCATO]
+
+==== ESEMPIO 2 ====
+LogId: 537589
+Ts: 2026-03-01T10:37:16.2503792Z
+Model: mistral:7b-instruct
+CategoriaErrore: json_non_valido
+ResultFailReason: JsonSchemaResponseFormatCheck: La risposta deve rispettare il JSON schema 'resource_manager_state.json'. | GENERIC_ERROR: Formato di risposta JSON non rispettato | DETAIL: json_response_format_check: non ha rispettato il formato di risposta JSON richiesto (resource_manager_state.json): Risposta non JSON valida: '.' is an invalid start of a value. LineNumber: 22 | BytePositionInLine: 8.
+AssistantContent:
+{
+  "canon_state": {
+    "story_id": 669,
+    "series_id": null,
+    "episode_number": null,
+    "chunk_index": 2,
+    "phase_name": "La crisi iniziale",
+    "phase_objective": "Introdurre la situazione di emergenza nella colonia Eos-7 e il ruolo del protagonista come ibrido umano-alieno.",
+    "phase_conflict": "Il sistema di vita si degrada rapidamente, e il protagonista scopre che la causa non è naturale, ma legata a una scelta passata della sua famiglia.",
+    "current_canon_state_json": {
+      "resources": [
+        {
+          "name": "Sistema di vita chiuso",
+          "quantity": 62,
+          "integrity_percent": 31,
+          "status_flag": "damaged",
+          "last_update_chunk": null,
+          "notes_json": {
+            "degradation_rate": "rapid",
+            "cause": "unknown sabotage"
+          }
+        },
+        ...
+      ],
+      "characters": [
+        {
+          "name": "Protagonista ibrido umano-alieno",
+          "morale_level": 50,
+          "stress_level": 85,
+          "fatigue_level": 60,
+          "mental_state_flag": "stressed",
+          "psych_notes": "Haunted by past decision.",
+          "last_update_chunk": null
+        },
+        ...
+      ],
+      "events": [],
+      "conflicts": [
+        {
+          "phase_number": 1,
+          "description": "Sistema di vita si degrada rapidamente e causa non naturale.",
+          "resolution_status": "unresolved"
+        },
+        ...
+      ]
+    }
+  },
+  "delta": {
+    "updated_resources": [
+      {
+        "name": "Sistema di vita chiuso",
+        "quantity": 62,
+        "integrity_percent": 31,
+        "status_flag": "damaged"
+      }
+    ],
+    "events": [
+      {
+        "phase_number": 1,
+        "description": "Sistema di vita si degrada rapidamente e causa non naturale.",
+        "resolution_status": "unresolved",
+        "notes_json": {
+          "cause": "unknown sabotage"
+        }
+      },
+      {
+        "phase_number": 2,
+        "description": "Scoperta che decisione del protagonista ha compromesso sicurezza colonia.",
+        "resolution_status": "unresolved",
+        "notes_json": {
+          "decision": "expulsion of alien systems"
+        }
+      },
+      {
+       
+...[TRONCATO]
+
+==== ESEMPIO 3 ====
+LogId: 536611
+Ts: 2026-03-01T06:45:45.0736612Z
+Model: qwen3:14b
+CategoriaErrore: enum_non_valido_mental_state
+ResultFailReason: JsonSchemaResponseFormatCheck: La risposta deve rispettare il JSON schema 'resource_manager_state.json'. | GENERIC_ERROR: Formato di risposta JSON non rispettato | DETAIL: json_response_format_check: non ha rispettato il formato di risposta JSON richiesto (resource_manager_state.json): primi 1 problemi: $.canon_state.resources[1].mental_state_flag: valore 'calm' non ammesso da enum
+AssistantContent:
+{"canon_state":{"resources":[{"name":"Presidente USA","quantity":1,"status_flag":"active","morale_level":60,"stress_level":80,"fatigue_level":50,"mental_state_flag":"traumatized","psych_notes":"Cold and unyielding in defense of his stance","last_update_chunk_id":1},{"name":"Presidente Canada","quantity":1,"status_flag":"active","morale_level":40,"stress_level":75,"fatigue_level":60,"mental_state_flag":"calm","psych_notes":"Calm and resolute in pursuit of peace","last_update_chunk_id":1},{"name":"Talk Show Audience","quantity":1000,"status_flag":"active","morale_level":50,"stress_level":45,"fatigue_level":30,"mental_state_flag":"traumatized","psych_notes":"Divided and tense, awaiting resolution","last_update_chunk_id":1}],"locations":[{"name":"Sala di registrazione talk show americano","status_flag":"active","integrity_percent":100,"notes_json":{}}],"items":[],"events":[{"event_type":"dialogue","description":"Presidente USA declares actions were necessary for national survival","timestamp":null},{"event_type":"dialogue","description":"Presidente Canada accuses USA of destroying relations and seeking peace","timestamp":null},{"event_type":"audience_reaction","description":"Audience question lingers as unresolved tension","timestamp":null}]}}
+
+==== ESEMPIO 4 ====
+LogId: 534971
+Ts: 2026-02-28T22:33:12.5164404Z
+Model: qwen3:14b
+CategoriaErrore: content_vuoto_o_non_parsabile
+ResultFailReason: Risposta vuota o non parsabile
+AssistantContent:
+[VUOTO]
+
+==== ESEMPIO 5 ====
+LogId: 534957
+Ts: 2026-02-28T22:21:29.8952666Z
+Model: qwen3:14b
+CategoriaErrore: campi_mancanti
+ResultFailReason: JsonSchemaResponseFormatCheck: La risposta deve rispettare il JSON schema 'resource_manager_state.json'. | GENERIC_ERROR: Formato di risposta JSON non rispettato | DETAIL: json_response_format_check: non ha rispettato il formato di risposta JSON richiesto (resource_manager_state.json): primi 4 problemi: $.canon_state.resources[0]: manca campo obbligatorio 'name' | $.canon_state.resources[0].last_update_chunk: tipo atteso 'integer', ricevuto 'String' | $.canon_state.resources[1]: manca campo obbligatorio 'name' | $.canon_state.resources[1].last_update_chunk: tipo atteso 'integer', ricevuto 'String'
+AssistantContent:
+{"canon_state": {"resources": [{"resource_id": "R001", "status_flag": "active", "integrity_percent": 100, "quantity": 1, "location": "Base Alpha", "last_update_chunk": "INIT", "notes": "Resource initialized in operational state."}, {"resource_id": "R002", "status_flag": "damaged", "integrity_percent": 30, "quantity": 1, "location": "Sector 7", "last_update_chunk": "INIT", "notes": "Resource partially damaged during initialization."}], "psychological_state": {"morale_level": 75, "stress_level": 20, "fatigue_level": 15, "mental_state_flag": "calm", "psych_notes": "Baseline psychological state established for all entities."}}}
+
+==== ESEMPIO 6 ====
+LogId: 534903
+Ts: 2026-02-28T22:07:39.8907368Z
+Model: qwen2.5:14b-instruct
+CategoriaErrore: schema_mismatch_generico
+ResultFailReason: JsonSchemaResponseFormatCheck: The response does not adhere to the required JSON schema 'resource_manager_state.json'.
+AssistantContent:
+{"canon_state": {"resources":[{"name":"Donald","quantity":2544444444444444}, {"name":"Donald","quantity":2544444444444444}]}}
+
+==== ESEMPIO 7 ====
+LogId: 537719
+Ts: 2026-03-01T11:01:18.9062407Z
+Model: qwen3:14b
+CategoriaErrore: campo_non_consentito
+ResultFailReason: JsonSchemaResponseFormatCheck: La risposta deve rispettare il JSON schema 'resource_manager_state.json'. | GENERIC_ERROR: Formato di risposta JSON non rispettato | DETAIL: json_response_format_check: non ha rispettato il formato di risposta JSON richiesto (resource_manager_state.json): primi 3 problemi: $: campo non consentito 'delta' | $.canon_state.resources[2].last_update_chunk: tipo atteso 'integer', ricevuto 'Null' | $.canon_state.resources[3].last_update_chunk: tipo atteso 'integer', ricevuto 'Null'
+AssistantContent:
+{"canon_state": {"resources": [{"name": "Sistema di vita chiuso", "quantity": 100, "integrity_percent": 60, "status_flag": "damaged", "last_update_chunk": 2, "notes_json": {"degradation_rate": "rapid", "cause": "sabotage by family decision", "interruption": "primary control sequence failure"}}, {"name": "Database familiari", "quantity": 1, "integrity_percent": 100, "status_flag": "active", "last_update_chunk": 1, "access_method": "biometric", "notes_json": {}}, {"name": "Campioni di energia protettiva", "quantity": 4, "integrity_percent": 50, "status_flag": "depleted", "last_update_chunk": null, "degradation_rate": "slow", "notes_json": {}}, {"name": "Stazione di comunicazione", "quantity": 1, "integrity_percent": 70, "status_flag": "damaged", "last_update_chunk": null, "transmission_type": "encoded only", "notes_json": {}}, {"name": "Caverna sotterranea aliena", "quantity": 1, "integrity_percent": 100, "status_flag": "active", "last_update_chunk": 2, "alien_significance": "activated ancient systems", "notes_json": {"light_emission": "blue"}}], "characters": [{"name": "Protagonista ibrido umano-alieno", "morale_level": 45, "stress_level": 90, "fatigue_level": 65, "mental_state_flag": "stressed", "psych_notes": "Realized his role as bridge. Activated ancient systems.", "last_update_chunk": 2}, {"name": "Ufficiale traditore", "morale_level": 25, "stress_level": 98, "fatigue_level": 70, "mental_state_flag": "desperate", "psych_notes": "Acknowledged Kaelen's sacrifice.", "last_update_chunk": 2}], "events": [{"description": "Sistema di vita degradata al 62% per causa di sabotaggio familiare.", "resolution_status": "unresolved"}, {"description": "Sistema di vita stabilizzato tramite attivazione del DNA ibrido.", "resolution_status": "in progress"}, {"description": "Caverna sotterranea aliena emette luce azzurra e attiva sistemi antichi.", "resolution_status": "unresolved"}]}, "delta": {"updated_resources": [{"name": "Sistema di vita chiuso", "changes": {"integrity_percent": 60, "notes_json": {"interruption": "primary control sequence failure"}}}, {"name": "Caverna sotterranea aliena", "changes": {"alien_significance": "activated ancient systems", "notes_json": {"light
+...[TRONCATO]
+
+==== ESEMPIO 8 ====
+LogId: 537717
+Ts: 2026-03-01T11:00:52.0657872Z
+Model: qwen3:30b-instruct
+CategoriaErrore: campo_non_consentito
+ResultFailReason: JsonSchemaResponseFormatCheck: La risposta deve rispettare il JSON schema 'resource_manager_state.json'. | GENERIC_ERROR: Formato di risposta JSON non rispettato | DETAIL: json_response_format_check: non ha rispettato il formato di risposta JSON richiesto (resource_manager_state.json): primi 3 problemi: $: campo non consentito 'delta' | $.canon_state.resources[2].last_update_chunk: tipo atteso 'integer', ricevuto 'Null' | $.canon_state.resources[3].last_update_chunk: tipo atteso 'integer', ricevuto 'Null'
+AssistantContent:
+{"canon_state":{"resources":[{"name":"Sistema di vita chiuso","quantity":100,"integrity_percent":60,"status_flag":"damaged","last_update_chunk":2,"notes_json":{"degradation_rate":"rapid","cause":"interruzione sequenza di controllo primario"}},{"name":"Database familiari","quantity":1,"integrity_percent":100,"status_flag":"active","last_update_chunk":1,"access_method":"biometric","notes_json":{}},{"name":"Campioni di energia protettiva","quantity":4,"integrity_percent":50,"status_flag":"depleted","last_update_chunk":null,"degradation_rate":"slow","notes_json":{}},{"name":"Stazione di comunicazione","quantity":1,"integrity_percent":70,"status_flag":"damaged","last_update_chunk":null,"transmission_type":"encoded only","notes_json":{}},{"name":"Caverna sotterranea aliena","quantity":1,"integrity_percent":100,"status_flag":"active","last_update_chunk":1,"alien_significance":"unknown language and technology","notes_json":{}}],"characters":[{"name":"Protagonista ibrido umano-alieno","morale_level":55,"stress_level":85,"fatigue_level":75,"mental_state_flag":"stressed","psych_notes":"Riconoscimento del proprio ruolo","last_update_chunk":2},{"name":"Ufficiale traditore","morale_level":30,"stress_level":95,"fatigue_level":75,"mental_state_flag":"desperate","psych_notes":"Sconvolto dal riconoscimento","last_update_chunk":2}],"events":[{"description":"Sistema di vita sceso al 60% per interruzione sequenza di controllo primario","resolution_status":"unresolved"},{"description":"Riattivazione nucleo di controllo alieno tramite DNA ibrido","resolution_status":"active"}]},"delta":{"updated_resources":[{"name":"Sistema di vita chiuso","integrity_percent":60,"status_flag":"damaged","last_update_chunk":2,"notes_json":{"degradation_rate":"rapid","cause":"interruzione sequenza di controllo primario"}},{"name":"Caverna sotterranea aliena","status_flag":"active","notes_json":{}}],"events":[{"description":"Riattivazione nucleo di controllo alieno tramite DNA ibrido","resolution_status":"active"}]}}
+
+==== ESEMPIO 9 ====
+LogId: 537587
+Ts: 2026-03-01T10:36:48.5236449Z
+Model: qwen3:14b
+CategoriaErrore: campo_non_consentito
+ResultFailReason: JsonSchemaResponseFormatCheck: La risposta deve rispettare il JSON schema 'resource_manager_state.json'. | GENERIC_ERROR: Formato di risposta JSON non rispettato | DETAIL: json_response_format_check: non ha rispettato il formato di risposta JSON richiesto (resource_manager_state.json): primi 4 problemi: $: campo non consentito 'delta' | $.canon_state.resources[0]: manca campo obbligatorio 'quantity' | $.canon_state.resources[1]: manca campo obbligatorio 'quantity' | $.canon_state.resources[2]: manca campo obbligatorio 'quantity'
+AssistantContent:
+{"canon_state": {"resources": [{"name": "Sistema di vita chiuso", "integrity_percent": 62, "status_flag": "damaged", "last_update_chunk": 1, "notes_json": {"degradation_rate": "rapid", "cause": "family sabotage"}}, {"name": "Database familiari", "integrity_percent": 100, "status_flag": "active", "last_update_chunk": 1, "notes_json": {"discovery": "family sabotage confirmed"}}, {"name": "Caverna sotterranea aliena", "integrity_percent": 100, "status_flag": "active", "last_update_chunk": 1, "notes_json": {"alien_significance": "language of builders"}}], "characters": [{"name": "Protagonista ibrido umano-alieno", "morale_level": 40, "stress_level": 95, "fatigue_level": 70, "mental_state_flag": "desperate", "psych_notes": "Guilt over family sabotage", "last_update_chunk": 1}, {"name": "Ufficiale traditore", "morale_level": 30, "stress_level": 95, "fatigue_level": 70, "mental_state_flag": "desperate", "psych_notes": "Survivalist ethics justify extreme actions", "last_update_chunk": 1}], "events": [{"description": "Protagonista scopre sabotaggio familiare al sistema di vita", "resolution_status": "unresolved"}, {"description": "Revelazione che Eos-7 è costruita da entità aliene", "resolution_status": "unresolved"}], "conflicts": [{"phase_number": 1, "description": "Sistema di vita si degrada rapidamente e causa non naturale.", "resolution_status": "resolved"}, {"phase_number": 2, "description": "Scoperta che decisione del protagonista ha compromesso sicurezza colonia.", "resolution_status": "resolved"}, {"phase_number": 4, "description": "Scoperta aliena che indica colonia non umana ma ibrida.", "resolution_status": "resolved"}]}, "delta": {"updated_resources": [{"name": "Sistema di vita chiuso", "integrity_percent": 62, "status_flag": "damaged", "notes_json": {"degradation_rate": "rapid", "cause": "family sabotage"}}, {"name": "Database familiari", "notes_json": {"discovery": "family sabotage confirmed"}}, {"name": "Caverna sotterranea aliena", "notes_json": {"alien_significance": "language of builders"}}], "events": [{"description": "Protagonista scopre sabotaggio familiare al sistema di vita", "resolution_status": "unresolved"}, {"description": "Revelazione che Eos
+...[TRONCATO]
+
+==== ESEMPIO 10 ====
+LogId: 537582
+Ts: 2026-03-01T10:36:18.5736401Z
+Model: qwen3:30b-instruct
+CategoriaErrore: campo_non_consentito
+ResultFailReason: JsonSchemaResponseFormatCheck: La risposta deve rispettare il JSON schema 'resource_manager_state.json'. | GENERIC_ERROR: Formato di risposta JSON non rispettato | DETAIL: json_response_format_check: non ha rispettato il formato di risposta JSON richiesto (resource_manager_state.json): primi 1 problemi: $: campo non consentito 'delta'
+AssistantContent:
+{"canon_state":{"resources":[{"name":"Sistema di vita chiuso","quantity":100,"integrity_percent":62,"status_flag":"damaged","last_update_chunk":1,"notes_json":{"degradation_rate":"rapid","cause":"deliberate sabotage via oxygen vent override"}},{"name":"Database familiari","quantity":1,"integrity_percent":100,"status_flag":"active","last_update_chunk":1,"access_method":"biometric","notes_json":{}},{"name":"Campioni di energia protettiva","quantity":4,"integrity_percent":50,"status_flag":"depleted","last_update_chunk":1,"degradation_rate":"slow","notes_json":{}},{"name":"Stazione di comunicazione","quantity":1,"integrity_percent":70,"status_flag":"damaged","last_update_chunk":1,"transmission_type":"encoded only","notes_json":{}},{"name":"Caverna sotterranea aliena","quantity":1,"integrity_percent":100,"status_flag":"active","last_update_chunk":1,"alien_significance":"unknown language, active control nexus","notes_json":{}}],"characters":[{"name":"Protagonista ibrido umano-alieno","morale_level":35,"stress_level":95,"fatigue_level":75,"mental_state_flag":"desperate","psych_notes":"Identity collapse, guilt overload","last_update_chunk":1},{"name":"Ufficiale traditore","morale_level":25,"stress_level":90,"fatigue_level":70,"mental_state_flag":"tense","psych_notes":"Shocked by revelation","last_update_chunk":1}],"events":[{"id":1,"description":"Sistema di vita ridotto al 62% per sabotaggio mirato","timestamp":1,"trigger":"protagonista scopre sabotaggio","impact":"critico"},{"id":2,"description":"Database familiari accesso biometrico attivato","timestamp":1,"trigger":"bracciale attivato","impact":"rivelazione identità"},{"id":3,"description":"Protagonista riconosce responsabilità nella decisione di espulsione aliena","timestamp":1,"trigger":"ricordo del voto","impact":"psicologica"},{"id":4,"description":"Caverna sotterranea identificata come centro di controllo alieno","timestamp":1,"trigger":"mappa attivata","impact":"narrativa"}],"conflicts":[{"phase_number":1,"description":"Sistema di vita si degrada rapidamente e causa non naturale.","resolution_status":"unresolved"},{"phase_number":2,"description":"Scoperta che decisione del protagonista ha compromesso sicurezza 
+...[TRONCATO]

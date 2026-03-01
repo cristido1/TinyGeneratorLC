@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TinyGenerator.Models;
@@ -59,9 +61,15 @@ public sealed class LogChatModel : PageModel
     [BindProperty(SupportsGet = true)]
     public string ViewMode { get; set; } = "conversation";
 
+    [BindProperty(SupportsGet = true)]
+    public new int Page { get; set; } = 1;
+
     public List<ConversationGroupVm> Groups { get; private set; } = new();
     public List<ConversationEntryVm> FilteredEntries { get; private set; } = new();
     public List<string> AvailableCorrelations { get; private set; } = new();
+    public int PageSize { get; } = 50;
+    public int TotalFilteredRecords { get; private set; }
+    public int TotalPages { get; private set; }
     public int TotalEvents { get; private set; }
     public int TotalErrors { get; private set; }
     public int TotalWarnings { get; private set; }
@@ -77,9 +85,10 @@ public sealed class LogChatModel : PageModel
 
         var logs = _db.GetRecentLogs(limit: 3000);
         var mapped = logs
-            .OrderBy(l => l.Timestamp)
-            .ThenBy(l => l.Id ?? 0)
+            .OrderByDescending(l => l.Timestamp)
+            .ThenByDescending(l => l.Id ?? 0)
             .Select(MapEntry)
+            .Where(e => e.IsAgentRequestOrResponse)
             .ToList();
 
         AvailableCorrelations = mapped
@@ -92,15 +101,19 @@ public sealed class LogChatModel : PageModel
             .ToList();
 
         var filtered = mapped.Where(PassesFilter).ToList();
-        FilteredEntries = filtered;
+        TotalFilteredRecords = filtered.Count;
+        TotalPages = Math.Max(1, (int)Math.Ceiling(TotalFilteredRecords / (double)PageSize));
+        Page = Math.Max(1, Math.Min(Page <= 0 ? 1 : Page, TotalPages));
+        var paged = filtered.Skip((Page - 1) * PageSize).Take(PageSize).ToList();
+        FilteredEntries = paged;
 
-        Groups = filtered
+        Groups = paged
             .GroupBy(e => string.IsNullOrWhiteSpace(e.Operation) ? "unknown" : e.Operation.Trim())
             .Select(g =>
             {
-                var events = g.OrderBy(e => e.Timestamp).ThenBy(e => e.Id).ToList();
-                var first = events.FirstOrDefault();
-                var last = events.LastOrDefault();
+                var events = g.OrderByDescending(e => e.Timestamp).ThenByDescending(e => e.Id).ToList();
+                var newest = events.FirstOrDefault();
+                var oldest = events.LastOrDefault();
                 var correlations = events
                     .Select(e => e.CorrelationId)
                     .Where(c => !string.IsNullOrWhiteSpace(c))
@@ -117,14 +130,14 @@ public sealed class LogChatModel : PageModel
                     ErrorCount = events.Count(e => e.Result == "FAILED"),
                     WarningCount = events.Count(e => e.Result == "WARNING"),
                     TotalDurationSeconds = events.Sum(e => e.DurationSeconds ?? 0),
-                    FirstTimestamp = first?.Timestamp ?? DateTime.MinValue,
-                    LastTimestamp = last?.Timestamp ?? DateTime.MinValue
+                    FirstTimestamp = oldest?.Timestamp ?? DateTime.MinValue,
+                    LastTimestamp = newest?.Timestamp ?? DateTime.MinValue
                 };
             })
             .OrderByDescending(g => g.LastTimestamp)
             .ToList();
 
-        TotalEvents = filtered.Count;
+        TotalEvents = TotalFilteredRecords;
         TotalErrors = filtered.Count(e => e.Result == "FAILED");
         TotalWarnings = filtered.Count(e => e.Result == "WARNING");
         TotalDurationSeconds = filtered.Sum(e => e.DurationSeconds ?? 0);
@@ -228,8 +241,15 @@ public sealed class LogChatModel : PageModel
         var result = ResolveResult(log);
         var actorName = ResolveActorName(log, actorType, operationDisplay);
         var actorSubtitle = ResolveActorSubtitle(log, operationDisplay);
-        var message = ResolveMessage(log, actorType, result, operationDisplay);
+        var isRequest = IsAgentRequest(log);
+        var isResponse = IsAgentResponse(log);
+        var isChecker = IsResponseChecker(log);
+        var isCheckerRequest = isChecker && isRequest;
+        var message = ResolveMessage(log, actorType, result, operationDisplay, isChecker);
         var correlation = ResolveCorrelationId(log);
+        var resourceStates = IsResourceManager(log)
+            ? TryExtractResourceStates(log, message)
+            : new List<ResourceStateVm>();
 
         return new ConversationEntryVm
         {
@@ -255,7 +275,12 @@ public sealed class LogChatModel : PageModel
             Exception = log.Exception,
             ChatText = log.ChatText,
             Icon = GetActorIcon(actorType),
-            AccentClass = GetActorAccentClass(actorType)
+            AccentClass = GetActorAccentClass(actorType),
+            IsRequest = isRequest,
+            IsResponse = isResponse,
+            IsAgentRequestOrResponse = (isRequest || isResponse || isChecker) && !isCheckerRequest,
+            IsResourceManager = IsResourceManager(log),
+            ResourceStates = resourceStates
         };
     }
 
@@ -402,16 +427,30 @@ public sealed class LogChatModel : PageModel
         return "INFO";
     }
 
-    private static string ResolveMessage(LogEntry log, ActorType actorType, string result, string operationDisplay)
+    private static string ResolveMessage(LogEntry log, ActorType actorType, string result, string operationDisplay, bool isResponseChecker)
     {
-        if (!string.IsNullOrWhiteSpace(log.ResultFailReason))
+        if (isResponseChecker)
         {
-            return log.ResultFailReason!.Trim();
+            if (string.Equals(result, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+            {
+                return "check passes";
+            }
+
+            var reason = ExtractFailureReason(log);
+            return string.IsNullOrWhiteSpace(reason)
+                ? "FAILED: check non passato"
+                : $"FAILED: {reason}";
         }
 
-        if (!string.IsNullOrWhiteSpace(log.Message))
+        var raw = ExtractLastConversationMessage(log);
+        if (!string.IsNullOrWhiteSpace(raw))
         {
-            return log.Message!.Trim();
+            return DecodeEscapedText(raw.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(log.ResultFailReason))
+        {
+            return DecodeEscapedText(log.ResultFailReason!.Trim());
         }
 
         return actorType switch
@@ -428,6 +467,275 @@ public sealed class LogChatModel : PageModel
             _ when result == "WARNING" => "Attenzione: condizione non ottimale",
             _ => "Operazione completata"
         };
+    }
+
+    private static bool IsAgentRequest(LogEntry log)
+    {
+        var source = (log.Source ?? string.Empty).ToLowerInvariant();
+        var msg = (log.Message ?? string.Empty).ToLowerInvariant();
+        return ContainsAny(source, "modelrequest", "modelprompt", "prompt", "request")
+               || (ContainsAny(source, "ollama", "openai", "llm", "model") && ContainsAny(msg, "request", "prompt", "invio"));
+    }
+
+    private static bool IsAgentResponse(LogEntry log)
+    {
+        var source = (log.Source ?? string.Empty).ToLowerInvariant();
+        var msg = (log.Message ?? string.Empty).ToLowerInvariant();
+        return ContainsAny(source, "modelresponse", "modelcompletion", "completion", "response")
+               || (ContainsAny(source, "ollama", "openai", "llm", "model") && ContainsAny(msg, "response", "output", "result"));
+    }
+
+    private static bool IsResponseChecker(LogEntry log)
+    {
+        var source = (log.Source ?? string.Empty).ToLowerInvariant();
+        var operation = (log.ThreadScope ?? string.Empty).ToLowerInvariant();
+        var actor = (log.AgentName ?? string.Empty).ToLowerInvariant();
+        return ContainsAny(source, "responsechecker", "response_checker")
+               || ContainsAny(operation, "response_checker")
+               || ContainsAny(actor, "response_checker", "responsechecker", "response checker");
+    }
+
+    private static bool IsResourceManager(LogEntry log)
+    {
+        var operation = (log.ThreadScope ?? string.Empty).ToLowerInvariant();
+        var actor = (log.AgentName ?? string.Empty).ToLowerInvariant();
+        return ContainsAny(operation, "resource_manager")
+               || ContainsAny(actor, "resource_manager");
+    }
+
+    private static List<ResourceStateVm> TryExtractResourceStates(LogEntry log, string resolvedMessage)
+    {
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(log.ChatText)) candidates.Add(log.ChatText!);
+        if (!string.IsNullOrWhiteSpace(log.Message)) candidates.Add(log.Message!);
+        if (!string.IsNullOrWhiteSpace(resolvedMessage)) candidates.Add(resolvedMessage);
+
+        foreach (var candidate in candidates)
+        {
+            var rows = TryParseResourceStateRows(candidate);
+            if (rows.Count > 0)
+            {
+                return rows;
+            }
+        }
+
+        return new List<ResourceStateVm>();
+    }
+
+    private static List<ResourceStateVm> TryParseResourceStateRows(string rawText)
+    {
+        var normalized = DecodeEscapedText(rawText ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return new List<ResourceStateVm>();
+        }
+
+        var jsonPayload = ExtractJsonObject(normalized);
+        if (string.IsNullOrWhiteSpace(jsonPayload))
+        {
+            return new List<ResourceStateVm>();
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonPayload);
+            var resources = FindResourcesArray(doc.RootElement);
+            if (resources is null || resources.Value.ValueKind != JsonValueKind.Array)
+            {
+                return new List<ResourceStateVm>();
+            }
+
+            var result = new List<ResourceStateVm>();
+            foreach (var item in resources.Value.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var name =
+                    ReadString(item, "name")
+                    ?? ReadString(item, "resource_id")
+                    ?? ReadString(item, "id")
+                    ?? ReadString(item, "title")
+                    ?? "-";
+
+                var status =
+                    ReadString(item, "status_flag")
+                    ?? ReadString(item, "status")
+                    ?? ReadString(item, "state")
+                    ?? ReadString(item, "availability")
+                    ?? ReadString(item, "mental_state_flag")
+                    ?? "-";
+
+                result.Add(new ResourceStateVm
+                {
+                    Resource = name,
+                    Status = status
+                });
+            }
+
+            return result.Take(200).ToList();
+        }
+        catch
+        {
+            return new List<ResourceStateVm>();
+        }
+    }
+
+    private static JsonElement? FindResourcesArray(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (root.TryGetProperty("resources", out var directResources) && directResources.ValueKind == JsonValueKind.Array)
+        {
+            return directResources;
+        }
+
+        if (root.TryGetProperty("canon_state", out var canonState) && canonState.ValueKind == JsonValueKind.Object)
+        {
+            if (canonState.TryGetProperty("resources", out var canonResources) && canonResources.ValueKind == JsonValueKind.Array)
+            {
+                return canonResources;
+            }
+
+            if (canonState.TryGetProperty("current_canon_state", out var currentCanon)
+                && currentCanon.ValueKind == JsonValueKind.Object
+                && currentCanon.TryGetProperty("resources", out var nestedResources)
+                && nestedResources.ValueKind == JsonValueKind.Array)
+            {
+                return nestedResources;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ExtractJsonObject(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith("{") && trimmed.EndsWith("}"))
+        {
+            return trimmed;
+        }
+
+        var first = trimmed.IndexOf('{');
+        var last = trimmed.LastIndexOf('}');
+        if (first >= 0 && last > first)
+        {
+            return trimmed.Substring(first, last - first + 1);
+        }
+
+        return null;
+    }
+
+    private static string? ReadString(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var prop))
+        {
+            return null;
+        }
+
+        return prop.ValueKind switch
+        {
+            JsonValueKind.String => prop.GetString(),
+            JsonValueKind.Number => prop.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null
+        };
+    }
+
+    private static string ExtractFailureReason(LogEntry log)
+    {
+        if (!string.IsNullOrWhiteSpace(log.ResultFailReason))
+        {
+            return DecodeEscapedText(log.ResultFailReason!.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(log.Message))
+        {
+            return DecodeEscapedText(log.Message!.Trim());
+        }
+
+        return string.Empty;
+    }
+
+    private static string ExtractLastConversationMessage(LogEntry log)
+    {
+        var text = !string.IsNullOrWhiteSpace(log.ChatText)
+            ? log.ChatText!
+            : (!string.IsNullOrWhiteSpace(log.Message) ? log.Message! : string.Empty);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var decoded = DecodeEscapedText(text);
+
+        var matches = Regex.Matches(decoded, @"\[(system|user|assistant|tool)\]", RegexOptions.IgnoreCase);
+        if (matches.Count > 0)
+        {
+            var last = matches[matches.Count - 1];
+            var start = last.Index + last.Length;
+            if (start < decoded.Length)
+            {
+                return decoded[start..].Trim();
+            }
+        }
+
+        var blocks = decoded
+            .Replace("\r\n", "\n")
+            .Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (blocks.Length > 0)
+        {
+            return blocks[^1].Trim();
+        }
+
+        return decoded.Trim();
+    }
+
+    private static string DecodeEscapedText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var raw = text.Trim();
+        try
+        {
+            var regexDecoded = Regex.Unescape(raw);
+            if (!string.IsNullOrWhiteSpace(regexDecoded))
+            {
+                return regexDecoded;
+            }
+        }
+        catch { }
+
+        try
+        {
+            var wrapped = $"\"{raw.Replace("\"", "\\\"")}\"";
+            var parsed = JsonSerializer.Deserialize<string>(wrapped);
+            if (!string.IsNullOrWhiteSpace(parsed))
+            {
+                return parsed;
+            }
+        }
+        catch { }
+
+        return raw
+            .Replace("\\r\\n", "\n", StringComparison.Ordinal)
+            .Replace("\\n", "\n", StringComparison.Ordinal)
+            .Replace("\\t", "\t", StringComparison.Ordinal);
     }
 
     private static bool ContainsAny(string text, params string[] parts)
@@ -473,6 +781,28 @@ public sealed class LogChatModel : PageModel
             ActorType.Database => "actor-db",
             ActorType.ExternalApi => "actor-api",
             _ => "actor-system"
+        };
+    }
+
+    public Dictionary<string, string?> BuildPageRouteValues(int targetPage)
+    {
+        return new Dictionary<string, string?>
+        {
+            ["CorrelationId"] = CorrelationId,
+            ["ThreadId"] = ThreadId?.ToString(),
+            ["StoryId"] = StoryId?.ToString(),
+            ["OnlyErrors"] = OnlyErrors ? "true" : null,
+            ["OnlyWarnings"] = OnlyWarnings ? "true" : null,
+            ["OnlyAgent"] = OnlyAgent ? "true" : null,
+            ["OnlyCommand"] = OnlyCommand ? "true" : null,
+            ["OnlyValidator"] = OnlyValidator ? "true" : null,
+            ["OnlyApi"] = OnlyApi ? "true" : null,
+            ["OnlyDb"] = OnlyDb ? "true" : null,
+            ["MinDurationSecs"] = MinDurationSecs?.ToString(),
+            ["Model"] = Model,
+            ["Actor"] = Actor,
+            ["ViewMode"] = ViewMode,
+            ["Page"] = targetPage.ToString()
         };
     }
 
@@ -527,5 +857,16 @@ public sealed class LogChatModel : PageModel
         public string? ChatText { get; set; }
         public string Icon { get; set; } = "💻";
         public string AccentClass { get; set; } = "actor-system";
+        public bool IsRequest { get; set; }
+        public bool IsResponse { get; set; }
+        public bool IsAgentRequestOrResponse { get; set; }
+        public bool IsResourceManager { get; set; }
+        public List<ResourceStateVm> ResourceStates { get; set; } = new();
+    }
+
+    public sealed class ResourceStateVm
+    {
+        public string Resource { get; set; } = "-";
+        public string Status { get; set; } = "-";
     }
 }

@@ -53,6 +53,7 @@ public class BaseCrudController : ControllerBase
         var pageSize = Math.Clamp(request.PageSize <= 0 ? DefaultPageSize : request.PageSize, 1, MaxPageSize);
         IQueryable query = CreateEntityQuery(entityType.ClrType);
         query = ApplySoftDeleteFilterIfNeeded(query, entityType.ClrType);
+        var foreignKeys = BuildForeignKeyMetadata(entityType);
 
         foreach (var filter in request.Filters ?? Enumerable.Empty<CrudFilter>())
         {
@@ -132,6 +133,7 @@ public class BaseCrudController : ControllerBase
                 success = true,
                 table = entityType.GetTableName(),
                 entity = entityType.ClrType.Name,
+                foreignKeys,
                 grouped = true,
                 groupBy = keyName,
                 page,
@@ -156,6 +158,7 @@ public class BaseCrudController : ControllerBase
             success = true,
             table = entityType.GetTableName(),
             entity = entityType.ClrType.Name,
+            foreignKeys,
             grouped = false,
             page,
             pageSize,
@@ -743,6 +746,14 @@ public class BaseCrudController : ControllerBase
     private void EnrichRowsWithRelatedData(Type clrType, List<Dictionary<string, object?>> rows)
     {
         if (rows.Count == 0) return;
+
+        var entityType = _db.Model.FindEntityType(clrType);
+        if (entityType != null)
+        {
+            EnrichRowsWithForeignKeyDescriptions(entityType, rows);
+        }
+
+        // Backward compatibility for existing Agent views that expect these fields.
         if (clrType != typeof(Agent)) return;
 
         var modelIds = rows
@@ -772,6 +783,168 @@ public class BaseCrudController : ControllerBase
             row["ModelName"] = data.Name;
             row["ModelDisplay"] = data.Display;
         }
+    }
+
+    private void EnrichRowsWithForeignKeyDescriptions(IEntityType entityType, List<Dictionary<string, object?>> rows)
+    {
+        foreach (var fk in entityType.GetForeignKeys())
+        {
+            if (fk.Properties.Count != 1 || fk.PrincipalKey.Properties.Count != 1) continue;
+
+            var dependentPropertyName = fk.Properties[0].Name;
+            var principalKeyName = fk.PrincipalKey.Properties[0].Name;
+            var principalClrType = fk.PrincipalEntityType.ClrType;
+            var descriptionFieldName = BuildFkDescriptionFieldName(dependentPropertyName, fk.DependentToPrincipal?.Name);
+
+            var rawValues = rows
+                .Where(r => r.TryGetValue(dependentPropertyName, out var value) && value != null)
+                .Select(r => r[dependentPropertyName]!)
+                .ToList();
+
+            if (rawValues.Count == 0) continue;
+
+            if (!TryBuildPrincipalDescriptionMap(principalClrType, principalKeyName, rawValues, out var descriptionMap))
+            {
+                continue;
+            }
+
+            foreach (var row in rows)
+            {
+                if (!row.TryGetValue(dependentPropertyName, out var raw) || raw == null) continue;
+                var keyToken = ToKeyToken(raw);
+                if (string.IsNullOrWhiteSpace(keyToken)) continue;
+                if (!descriptionMap.TryGetValue(keyToken, out var description)) continue;
+                row[descriptionFieldName] = description;
+            }
+        }
+    }
+
+    private bool TryBuildPrincipalDescriptionMap(
+        Type principalClrType,
+        string principalKeyName,
+        List<object> dependentRawValues,
+        out Dictionary<string, string> descriptionMap)
+    {
+        descriptionMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var keySet = dependentRawValues
+            .Select(ToKeyToken)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (keySet.Count == 0) return false;
+
+        var principalRows = CreateEntityQuery(principalClrType)
+            .Cast<object>()
+            .ToList()
+            .Select(ToDictionary);
+
+        foreach (var principalRow in principalRows)
+        {
+            if (!principalRow.TryGetValue(principalKeyName, out var keyRaw) || keyRaw == null) continue;
+            var keyToken = ToKeyToken(keyRaw);
+            if (!keySet.Contains(keyToken)) continue;
+
+            var description = BuildDescriptionFromPrincipalRow(principalRow, principalKeyName);
+            if (string.IsNullOrWhiteSpace(description)) continue;
+
+            descriptionMap[keyToken] = description;
+        }
+
+        return descriptionMap.Count > 0;
+    }
+
+    private static string BuildFkDescriptionFieldName(string dependentPropertyName, string? navigationName)
+    {
+        if (!string.IsNullOrWhiteSpace(navigationName))
+        {
+            return $"{navigationName}Description";
+        }
+
+        return dependentPropertyName.EndsWith("Id", StringComparison.OrdinalIgnoreCase)
+            ? $"{dependentPropertyName[..^2]}Description"
+            : $"{dependentPropertyName}Description";
+    }
+
+    private static string BuildDescriptionFromPrincipalRow(Dictionary<string, object?> row, string principalKeyName)
+    {
+        var name = GetStringValue(row, "Name");
+        var provider = GetStringValue(row, "Provider");
+        if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(provider))
+        {
+            return $"{name} ({provider})";
+        }
+
+        foreach (var field in new[] { "Description", "Name", "Title", "Code", "Label" })
+        {
+            var value = GetStringValue(row, field);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return TrimForGrid(value);
+            }
+        }
+
+        foreach (var kvp in row)
+        {
+            if (string.Equals(kvp.Key, principalKeyName, StringComparison.OrdinalIgnoreCase)) continue;
+            if (kvp.Value == null) continue;
+            if (!IsSimpleType(kvp.Value.GetType())) continue;
+
+            var value = Convert.ToString(kvp.Value, CultureInfo.InvariantCulture)?.Trim();
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return TrimForGrid(value);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string GetStringValue(Dictionary<string, object?> row, string key)
+    {
+        if (!row.TryGetValue(key, out var value) || value == null) return string.Empty;
+        return Convert.ToString(value, CultureInfo.InvariantCulture)?.Trim() ?? string.Empty;
+    }
+
+    private static string ToKeyToken(object value)
+    {
+        return value switch
+        {
+            DateTime dt => dt.ToString("o", CultureInfo.InvariantCulture),
+            _ => Convert.ToString(value, CultureInfo.InvariantCulture)?.Trim() ?? string.Empty
+        };
+    }
+
+    private static string TrimForGrid(string value)
+    {
+        const int max = 180;
+        return value.Length <= max ? value : $"{value[..max]}…";
+    }
+
+    private static List<CrudForeignKeyMeta> BuildForeignKeyMetadata(IEntityType entityType)
+    {
+        var list = new List<CrudForeignKeyMeta>();
+        foreach (var fk in entityType.GetForeignKeys())
+        {
+            if (fk.Properties.Count != 1 || fk.PrincipalKey.Properties.Count != 1) continue;
+
+            var dependentPropertyName = fk.Properties[0].Name;
+            var principalKeyName = fk.PrincipalKey.Properties[0].Name;
+            var principalEntity = fk.PrincipalEntityType.ClrType.Name;
+            var principalTable = fk.PrincipalEntityType.GetTableName() ?? principalEntity;
+            var descriptionField = BuildFkDescriptionFieldName(dependentPropertyName, fk.DependentToPrincipal?.Name);
+
+            list.Add(new CrudForeignKeyMeta
+            {
+                DependentField = dependentPropertyName,
+                DescriptionField = descriptionField,
+                PrincipalEntity = principalEntity,
+                PrincipalTable = principalTable,
+                PrincipalKeyField = principalKeyName
+            });
+        }
+
+        return list;
     }
 
     private void EnrichRowWithRelatedData(Type clrType, Dictionary<string, object?> row)
@@ -817,4 +990,13 @@ public sealed class CrudFilter
     public string Field { get; set; } = string.Empty;
     public string Op { get; set; } = "eq";
     public JsonElement Value { get; set; }
+}
+
+public sealed class CrudForeignKeyMeta
+{
+    public string DependentField { get; set; } = string.Empty;
+    public string DescriptionField { get; set; } = string.Empty;
+    public string PrincipalEntity { get; set; } = string.Empty;
+    public string PrincipalTable { get; set; } = string.Empty;
+    public string PrincipalKeyField { get; set; } = string.Empty;
 }

@@ -1270,7 +1270,7 @@ public sealed partial class StoriesService
                         NumPredict = agent.NumPredict,
                         Thinking = thinkOverride ?? agent.Thinking,
                         MultiStepTemplateId = agent.MultiStepTemplateId,
-                        Priority = agent.Priority,
+                        SortOrder = agent.SortOrder,
                         AllowedProfiles = agent.AllowedProfiles
                     };
 

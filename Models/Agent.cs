@@ -86,10 +86,6 @@ namespace TinyGenerator.Models
         [Column("multi_step_template_id")]
         public int? MultiStepTemplateId { get; set; }
 
-        // Narrative Engine extensions
-        [Column("priority")]
-        public int Priority { get; set; } = 0;
-
         // JSON array (or null) of allowed narrative profile names/ids
         [Column("allowed_profiles")]
         public string? AllowedProfiles { get; set; }

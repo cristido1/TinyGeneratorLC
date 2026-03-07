@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
-public partial class Agent : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class Agent : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -14,6 +14,12 @@ public partial class Agent : IActiveFlag, ICreateUpdateDate, IDescription, ISoft
 
     [Column("sort_order")]
     public int SortOrder { get; set; }
+
+    string? INote.Note
+    {
+        get => Notes;
+        set => Notes = value;
+    }
 
     DateTime? ICreateUpdateDate.CreatedAt
     {
@@ -196,7 +202,7 @@ public partial class FailureRule : IActiveFlag, ICreateUpdateDate, IDescription,
 
 }
 
-public partial class GlobalCoherence : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class GlobalCoherence : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -209,6 +215,12 @@ public partial class GlobalCoherence : IActiveFlag, ICreateUpdateDate, IDescript
 
     [Column("sort_order")]
     public int SortOrder { get; set; }
+
+    string? INote.Note
+    {
+        get => Notes;
+        set => Notes = value;
+    }
 
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }
@@ -303,7 +315,7 @@ public partial class MicroObjective : IActiveFlag, ICreateUpdateDate, IDescripti
 
 }
 
-public partial class ModelInfo : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ModelInfo : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -416,7 +428,7 @@ public partial class ModelTestAsset : IActiveFlag, ICreateUpdateDate, IDescripti
 
 }
 
-public partial class ModelTestRun : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ModelTestRun : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -426,6 +438,12 @@ public partial class ModelTestRun : IActiveFlag, ICreateUpdateDate, IDescription
 
     [Column("sort_order")]
     public int SortOrder { get; set; }
+
+    string? INote.Note
+    {
+        get => Notes;
+        set => Notes = value;
+    }
 
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }
@@ -567,13 +585,19 @@ public partial class NarrativeStoryBlock : IActiveFlag, ICreateUpdateDate, IDesc
 
 }
 
-public partial class PlannerMethod : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class PlannerMethod : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("is_deleted")]
     public bool IsDeleted { get; set; }
 
     [Column("sort_order")]
     public int SortOrder { get; set; }
+
+    string? INote.Note
+    {
+        get => Notes;
+        set => Notes = value;
+    }
 
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }
@@ -1022,7 +1046,7 @@ public partial class TipoPlanning : IActiveFlag, ICreateUpdateDate, IDescription
 
 }
 
-public partial class TtsVoice : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class TtsVoice : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -1035,6 +1059,12 @@ public partial class TtsVoice : IActiveFlag, ICreateUpdateDate, IDescription, IS
 
     [Column("sort_order")]
     public int SortOrder { get; set; }
+
+    string? INote.Note
+    {
+        get => Notes;
+        set => Notes = value;
+    }
 
     DateTime? ICreateUpdateDate.CreatedAt
     {

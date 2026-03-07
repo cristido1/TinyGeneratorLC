@@ -585,7 +585,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         NumPredict = request.Agent.NumPredict,
                         Thinking = modelRole.Thinking ?? _database.ResolveEffectiveThinking(request.Agent, modelRole.ModelId, fallbackName),
                         MultiStepTemplateId = request.Agent.MultiStepTemplateId,
-                        Priority = request.Agent.Priority,
+                        SortOrder = request.Agent.SortOrder,
                         AllowedProfiles = request.Agent.AllowedProfiles
                     };
 

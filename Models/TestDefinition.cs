@@ -48,9 +48,6 @@ public sealed partial class TestDefinition : ISoftDelete, IActiveFlag, IOrderabl
     [Column("timeout_secs")]
     public int TimeoutSecs { get; set; }
     
-    [Column("priority")]
-    public int Priority { get; set; }
-    
     [NotMapped]
     public string? Description { get; set; }
     

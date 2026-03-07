@@ -197,7 +197,7 @@ namespace TinyGenerator.Services
             // Real-time progress in the command panel (queued/running commands list)
             // The panel displays: modelName + currentStep/maxStep + stepDescription.
             var runIdText = runId.ToString();
-            var orderedTests = tests.OrderBy(t => t.Priority).ToList();
+            var orderedTests = tests.OrderBy(t => t.SortOrder).ToList();
             var totalTests = orderedTests.Count;
             _commandDispatcher.UpdateStep(runIdText, 0, totalTests, stepDescription: "score parziale 0/10");
 

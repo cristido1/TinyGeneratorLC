@@ -231,7 +231,7 @@ public sealed class DatabaseService
             NumPredict = source.NumPredict,
             Thinking = source.Thinking,
             MultiStepTemplateId = source.MultiStepTemplateId,
-            Priority = source.Priority,
+            SortOrder = source.SortOrder,
             AllowedProfiles = source.AllowedProfiles,
             MultiStepTemplateName = source.MultiStepTemplateName,
             RowVersion = source.RowVersion
@@ -324,7 +324,7 @@ public sealed class DatabaseService
         {
             using var conn = CreateDapperConnection();
             conn.Open();
-            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, name, role, model_id, voice_rowid, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, priority, allowed_profiles FROM agents").ToList();
+            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, name, role, model_id, voice_rowid, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, sort_order, allowed_profiles FROM agents").ToList();
             return rows.OrderBy(a => a.Name).ToList();
         }
     }
@@ -3673,12 +3673,12 @@ LIMIT @limitRows;";
     }
 
     /// <summary>
-    /// Retrieve test definitions for a given group name ordered by priority and id.
+    /// Retrieve test definitions for a given group name ordered by sort_order and id.
     /// </summary>
     public List<TestDefinition> GetTestsByGroup(string groupName)
     {
         using var context = CreateDbContext();
-        return context.TestDefinitions.Where(t => t.GroupName == groupName && t.Active).OrderBy(t => t.Priority).ThenBy(t => t.Id).ToList();
+        return context.TestDefinitions.Where(t => t.GroupName == groupName && t.Active).OrderBy(t => t.SortOrder).ThenBy(t => t.Id).ToList();
     }
 
     /// <summary>
@@ -3695,8 +3695,8 @@ LIMIT @limitRows;";
                 if (context.TestPrompts.Any())
                 {
                     return context.TestPrompts.Where(p => p.GroupName == groupName && p.Active)
-                        .OrderBy(p => p.Priority)
-                        .Select(p => new TestDefinition { Id = p.Id, GroupName = p.GroupName, Library = p.Library, Prompt = p.Prompt, Priority = p.Priority, Active = p.Active })
+                        .OrderBy(p => p.SortOrder)
+                        .Select(p => new TestDefinition { Id = p.Id, GroupName = p.GroupName, Library = p.Library, Prompt = p.Prompt, SortOrder = p.SortOrder, Active = p.Active })
                         .ToList();
                 }
             }
@@ -3736,7 +3736,7 @@ LIMIT @limitRows;";
             "group" or "groupname" => ascending ? query.OrderBy(t => t.GroupName) : query.OrderByDescending(t => t.GroupName),
             "library" => ascending ? query.OrderBy(t => t.Library) : query.OrderByDescending(t => t.Library),
             "function" or "functionname" => ascending ? query.OrderBy(t => t.FunctionName) : query.OrderByDescending(t => t.FunctionName),
-            "priority" => ascending ? query.OrderBy(t => t.Priority) : query.OrderByDescending(t => t.Priority),
+            "priority" or "sortorder" or "sort_order" => ascending ? query.OrderBy(t => t.SortOrder) : query.OrderByDescending(t => t.SortOrder),
             _ => ascending ? query.OrderBy(t => t.Id) : query.OrderByDescending(t => t.Id)
         };
 
@@ -3770,7 +3770,7 @@ LIMIT @limitRows;";
             "group" or "groupname" => ascending ? query.OrderBy(t => t.GroupName) : query.OrderByDescending(t => t.GroupName),
             "library" => ascending ? query.OrderBy(t => t.Library) : query.OrderByDescending(t => t.Library),
             "function" or "functionname" => ascending ? query.OrderBy(t => t.FunctionName) : query.OrderByDescending(t => t.FunctionName),
-            "priority" => ascending ? query.OrderBy(t => t.Priority) : query.OrderByDescending(t => t.Priority),
+            "priority" or "sortorder" or "sort_order" => ascending ? query.OrderBy(t => t.SortOrder) : query.OrderByDescending(t => t.SortOrder),
             _ => ascending ? query.OrderBy(t => t.Id) : query.OrderByDescending(t => t.Id)
         };
 

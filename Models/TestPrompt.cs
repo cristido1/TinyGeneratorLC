@@ -15,6 +15,4 @@ public partial class TestPrompt : ISoftDelete, IActiveFlag, IOrderable
     public string? Prompt { get; set; }
     [Column("active")]
     public bool Active { get; set; }
-    [Column("priority")]
-    public int Priority { get; set; }
 }

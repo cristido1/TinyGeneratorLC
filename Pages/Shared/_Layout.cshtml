@@ -6,6 +6,7 @@
     <title>@ViewData["Title"] - TinyGenerator</title>
     <link href="~/lib/bootstrap/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="~/lib/bootstrap-icons/bootstrap-icons.css" rel="stylesheet" />
+    <link rel="stylesheet" href="~/js/vue-roles/primeicons.css" asp-append-version="true" />
     <link href="~/lib/datatables/css/dataTables.bootstrap5.min.css" rel="stylesheet" />
     <link href="~/lib/datatables/css/buttons.bootstrap5.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="~/css/sidebar.css" asp-append-version="true" />
@@ -20,112 +21,7 @@
     @await RenderSectionAsync("Styles", required: false)
 </head>
 <body class="has-sidebar">
-    <!-- Mobile menu button -->
-    <button class="mobile-menu-btn d-md-none" aria-label="Apri menu">
-        <i class="bi bi-list"></i>
-    </button>
-    
-    <!-- Sidebar overlay for mobile -->
-    <div class="sidebar-overlay"></div>
-    
-    <!-- Collapsible sidebar navigation -->
-    <nav class="app-sidebar">
-        <div class="sidebar-header">
-            <a href="/" class="sidebar-brand">
-                <i class="bi bi-lightning-fill"></i>
-                <span class="sidebar-brand-text">TinyGenerator</span>
-            </a>
-            <button class="sidebar-toggle" aria-label="Riduci menu">
-                <i class="bi bi-chevron-left"></i>
-            </button>
-        </div>
-        
-        <div class="sidebar-nav">
-            <div class="sidebar-section" data-section-key="principale">
-                <button type="button" class="sidebar-section-toggle" aria-expanded="false">
-                    <span class="sidebar-section-title">Principale</span>
-                    <i class="bi bi-chevron-down sidebar-section-chevron" aria-hidden="true"></i>
-                </button>
-                <div class="sidebar-section-body">
-                    <a href="/" title="Home"><i class="bi bi-house"></i><span>Home</span></a>
-                    <a asp-page="/Genera" title="Genera storia"><i class="bi bi-pencil-square"></i><span>Genera storia</span></a>
-                    <a asp-page="/Stories/Index" title="Storie salvate"><i class="bi bi-journal-text"></i><span>Storie salvate</span></a>
-                    <a asp-page="/Chat" title="Chat"><i class="bi bi-chat-dots"></i><span>Chat</span></a>
-                </div>
-            </div>
-            <div class="sidebar-section" data-section-key="serie">
-                <button type="button" class="sidebar-section-toggle" aria-expanded="false">
-                    <span class="sidebar-section-title">Serie</span>
-                    <i class="bi bi-chevron-down sidebar-section-chevron" aria-hidden="true"></i>
-                </button>
-                <div class="sidebar-section-body">
-                    <a asp-page="/GeneraSerie/Index" title="Genera serie"><i class="bi bi-collection-play"></i><span>Genera serie</span></a>
-                    <a asp-page="/Series/Index" title="Serie"><i class="bi bi-collection"></i><span>Serie</span></a>
-                </div>
-            </div>
-            <div class="sidebar-section" data-section-key="monitoraggio">
-                <button type="button" class="sidebar-section-toggle" aria-expanded="false">
-                    <span class="sidebar-section-title">Monitoraggio</span>
-                    <i class="bi bi-chevron-down sidebar-section-chevron" aria-hidden="true"></i>
-                </button>
-                <div class="sidebar-section-body">
-                    <a asp-page="/Logs/Index" title="Logs"><i class="bi bi-list-check"></i><span>Logs</span></a>
-                    <a asp-page="/Logs/LogChat" title="Log Chat"><i class="bi bi-chat-square-text"></i><span>Log Chat</span></a>
-                    <a asp-page="/SystemReports/Index" title="System Reports"><i class="bi bi-exclamation-octagon"></i><span>System Reports</span></a>
-                    <a asp-page="/OllamaMonitor" title="Ollama Monitor"><i class="bi bi-cpu"></i><span>Ollama Monitor</span></a>
-                    <a asp-page="/StoriesStatus/Index" title="Stories Status"><i class="bi bi-flag"></i><span>Stories Status</span></a>
-                    <a asp-page="/ModelStats/Index" title="Model Stats"><i class="bi bi-bar-chart"></i><span>Model Stats</span></a>
-                    <a asp-page="/ModelRoleErrors/Index" title="Model Role Errors"><i class="bi bi-exclamation-diamond"></i><span>Model Role Errors</span></a>
-                    <a asp-page="/StoryLive" title="Story Live"><i class="bi bi-broadcast"></i><span>Story Live</span></a>
-                </div>
-            </div>
-            <div class="sidebar-section" data-section-key="configurazione">
-                <button type="button" class="sidebar-section-toggle" aria-expanded="false">
-                    <span class="sidebar-section-title">Configurazione</span>
-                    <i class="bi bi-chevron-down sidebar-section-chevron" aria-hidden="true"></i>
-                </button>
-                <div class="sidebar-section-body">
-                    <a asp-page="/Models/Index" title="Modelli"><i class="bi bi-diagram-3"></i><span>Modelli</span></a>
-                    <a asp-page="/Agents/Index" title="Agents"><i class="bi bi-people"></i><span>Agents</span></a>
-                    <a asp-page="/Agents/FallbackModels" title="Fallback models"><i class="bi bi-shuffle"></i><span>Fallback models</span></a>
-                    <a asp-page="/TaskTypes/Index" title="Task Types"><i class="bi bi-tags"></i><span>Task Types</span></a>
-                    <a asp-page="/GenericLookup/Index" title="Generic Lookup"><i class="bi bi-table"></i><span>Generic Lookup</span></a>
-                    <a asp-page="/StepTemplates/Index" title="Step Templates"><i class="bi bi-list-ol"></i><span>Step Templates</span></a>
-                    <a asp-page="/PlannerMethods" title="Metodi Pianificazione"><i class="bi bi-diagram-2"></i><span>Metodi Pianificazione</span></a>
-                    <a asp-page="/TipoPlanning" title="Tipi Planning"><i class="bi bi-signpost-2"></i><span>Tipi Planning</span></a>
-                    <a asp-page="/Roles/Index" title="Roles"><i class="bi bi-people"></i><span>Roles</span></a>
-                    <a asp-page="/StoriesStatus/Index" title="Stories Status"><i class="bi bi-flag"></i><span>Stories Status</span></a>
-                    <a asp-page="/Settings/Index" title="Settings"><i class="bi bi-gear"></i><span>Settings</span></a>
-                </div>
-            </div>
-
-            <div class="sidebar-section" data-section-key="narrative-engine">
-                <button type="button" class="sidebar-section-toggle" aria-expanded="false">
-                    <span class="sidebar-section-title">Narrative Engine</span>
-                    <i class="bi bi-chevron-down sidebar-section-chevron" aria-hidden="true"></i>
-                </button>
-                <div class="sidebar-section-body">
-                    <a asp-page="/NarrativeProfiles/Index" title="Unified Narrative Engine"><i class="bi bi-journal-bookmark"></i><span>Narrative Engine Profiles</span></a>
-                </div>
-            </div>
-            <div class="sidebar-section" data-section-key="admin">
-                <button type="button" class="sidebar-section-toggle" aria-expanded="false">
-                    <span class="sidebar-section-title">Admin</span>
-                    <i class="bi bi-chevron-down sidebar-section-chevron" aria-hidden="true"></i>
-                </button>
-                <div class="sidebar-section-body">
-                    <a asp-page="/Admin" title="Pannello Admin"><i class="bi bi-graph-up"></i><span>Admin</span></a>
-                    <a asp-page="/TestDefinitions/Index" title="Test Definitions"><i class="bi bi-list-ul"></i><span>Test Definitions</span></a>
-                    <a asp-page="/TtsVoices/Index" title="TTS Voices"><i class="bi bi-megaphone"></i><span>TTS Voices</span></a>
-                    <a asp-page="/Sounds/Index" title="Sounds"><i class="bi bi-music-note-beamed"></i><span>Sounds</span></a>
-                    <a asp-page="/SoundsMissing/Index" title="Sounds Missing"><i class="bi bi-exclamation-triangle"></i><span>Sounds Missing</span></a>
-                    <a asp-page="/Utilities/SQL/Index" title="SQL Utility"><i class="bi bi-database"></i><span>SQL Utility</span></a>
-                    <a asp-page="/Utilities/Narrative/Index" title="Narrative Debug"><i class="bi bi-diagram-3"></i><span>Narrative Debug</span></a>
-                    <a asp-page="/NameGender/Index" title="Name Gender"><i class="bi bi-person-lines-fill"></i><span>Name Gender</span></a>
-                </div>
-            </div>
-        </div>
-    </nav>
+    <div id="sidebar-vue-app"></div>
 
     <div class="main-content">
         @{
@@ -150,7 +46,7 @@
     <script src="~/lib/datatables/js/buttons.colVis.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/lib/signalr/signalr.min.js"></script>
-    <script src="~/js/sidebar.js" asp-append-version="true"></script>
+    <script type="module" src="~/js/vue-roles/sidebar.js" asp-append-version="true"></script>
     <!-- Command panel for active commands -->
     <script src="~/js/command-panel.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)

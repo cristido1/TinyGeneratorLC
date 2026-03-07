@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("model_roles")]
-public class ModelRole
+public partial class ModelRole : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]
@@ -17,6 +17,10 @@ public class ModelRole
     [Required]
     [Column("role_id")]
     public int RoleId { get; set; }
+
+    [Required]
+    [Column("agent_id")]
+    public int AgentId { get; set; }
 
     [Column("is_primary")]
     public bool IsPrimary { get; set; } = false;
@@ -80,6 +84,9 @@ public class ModelRole
 
     [ForeignKey("RoleId")]
     public Role? Role { get; set; }
+
+    [ForeignKey("AgentId")]
+    public Agent? Agent { get; set; }
 
     // Computed property for success rate
     [NotMapped]

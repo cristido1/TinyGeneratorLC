@@ -12,11 +12,18 @@ public sealed class NarrativeRuntimeEngineOptions
     public int MaxAgentFailuresBeforeStop { get; set; } = 1;
     public int PreviousBlocksWindow { get; set; } = 3;
     public int DuplicateSentenceHistoryBlocksWindow { get; set; } = 5;
+    public double StateDrivenPlannerStepsMultiplier { get; set; } = 0.5d;
+    public double SinglePassPlannerStepsMultiplier { get; set; } = 1.0d;
     public int DialogueTargetPercent { get; set; } = 40;
     public int DialogueTolerancePercentPlus { get; set; } = 5;
     public int DialogueTolerancePercentMinus { get; set; } = 5;
+    public int WriterMaxPromptChars { get; set; } = 6000;
+    public int WriterMaxCanonStateChars { get; set; } = 10000;
+    public int WriterMaxPreviousBlocksChars { get; set; } = 12000;
+    public int WriterMaxPlanChars { get; set; } = 8000;
     public string BannedPhrasesCsv { get; set; } = "Sottotitoli e revisione a cura di QTSS, Grazie per aver guardato il video";
     public int EvaluatorMinScore { get; set; } = 60;
+    public int PlanEvaluatorMinScore { get; set; } = 60;
     public bool UseResponseChecker { get; set; } = true;
     public bool AllowFallback { get; set; } = true;
     public int CallCenterMaxRetries { get; set; } = 2;
@@ -24,9 +31,15 @@ public sealed class NarrativeRuntimeEngineOptions
     public int WriterCallTimeoutSeconds { get; set; } = 180;
     public int EvaluatorCallTimeoutSeconds { get; set; } = 90;
     public string PlannerAgentName { get; set; } = "nre_planner";
+    public string PlanEvaluatorAgentName { get; set; } = "nre_plan_evaluator";
     public string WriterAgentName { get; set; } = "nre_writer";
     public string EvaluatorAgentName { get; set; } = "nre_evaluator";
+    public string ResourceInitializerAgentName { get; set; } = "resource_initializer";
     public string ResourceManagerAgentName { get; set; } = "resource_manager";
+    public string PromptSuggestionAgentRole { get; set; } = "nre_prompt_proposer";
+    public int PromptSuggestionTimeoutSeconds { get; set; } = 120;
+    public int PromptSuggestionMaxRetries { get; set; } = 2;
+    public bool PromptSuggestionAllowFallback { get; set; } = true;
 
     public NarrativeRuntimeEngineSnapshotOptions Snapshot { get; set; } = new();
     public NarrativeRuntimeEngineTraceOptions Trace { get; set; } = new();

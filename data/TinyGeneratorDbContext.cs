@@ -42,6 +42,8 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<TestPrompt> TestPrompts => Set<TestPrompt>();
     public DbSet<TaskExecution> TaskExecutions => Set<TaskExecution>();
     public DbSet<TaskExecutionStep> TaskExecutionSteps => Set<TaskExecutionStep>();
+    public DbSet<GenericLookupEntry> GenericLookupEntries => Set<GenericLookupEntry>();
+    public DbSet<NameGenderEntry> NameGenderEntries => Set<NameGenderEntry>();
     public DbSet<ChunkFacts> ChunkFacts => Set<ChunkFacts>();
     public DbSet<CoherenceScore> CoherenceScores => Set<CoherenceScore>();
     public DbSet<GlobalCoherence> GlobalCoherences => Set<GlobalCoherence>();
@@ -61,6 +63,7 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<NarrativeStoryBlock> NarrativeStoryBlocks => Set<NarrativeStoryBlock>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<ModelRole> ModelRoles => Set<ModelRole>();
+    public DbSet<ModelRoleError> ModelRoleErrors => Set<ModelRoleError>();
     // Note: Memory table excluded - using Dapper for embedding queries
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -188,8 +191,14 @@ public class TinyGeneratorDbContext : DbContext
             .HasForeignKey(mr => mr.RoleId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        modelBuilder.Entity<ModelRole>()
+            .HasOne(mr => mr.Agent)
+            .WithMany()
+            .HasForeignKey(mr => mr.AgentId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         modelBuilder.Entity<Role>()
-            .HasIndex(r => r.Ruolo)
+            .HasIndex(r => r.Name)
             .IsUnique();
 
         modelBuilder.Entity<ModelStatsRecord>()
@@ -198,20 +207,20 @@ public class TinyGeneratorDbContext : DbContext
         // Seed default roles
         var now = DateTime.UtcNow.ToString("o");
         modelBuilder.Entity<Role>().HasData(
-            new Role { Id = 1, Ruolo = "writer", ComandoCollegato = "FullStoryPipelineCommand", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 2, Ruolo = "formatter", ComandoCollegato = "AddVoiceTagsToStoryCommand", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 3, Ruolo = "evaluator", ComandoCollegato = "StoryEvaluation", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 4, Ruolo = "tts_expert", ComandoCollegato = "TtsGeneration", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 5, Ruolo = "music_expert", ComandoCollegato = "MusicGeneration", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 6, Ruolo = "fx_expert", ComandoCollegato = "FxGeneration", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 7, Ruolo = "summarizer", ComandoCollegato = "SummarizeStory", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 8, Ruolo = "canon_extractor", ComandoCollegato = "CanonExtractor", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 9, Ruolo = "state_delta_builder", ComandoCollegato = "StateDeltaBuilder", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 10, Ruolo = "continuity_validator", ComandoCollegato = "ContinuityValidator", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 11, Ruolo = "state_updater", ComandoCollegato = "StateUpdater", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 12, Ruolo = "state_compressor", ComandoCollegato = "StateCompressor", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 13, Ruolo = "recap_builder", ComandoCollegato = "RecapBuilder", CreatedAt = now, UpdatedAt = now },
-            new Role { Id = 14, Ruolo = "writer_cino", ComandoCollegato = "cino_optimize_story", CreatedAt = now, UpdatedAt = now }
+            new Role { Id = 1, Name = "writer", LinkedCommand = "FullStoryPipelineCommand", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 2, Name = "formatter", LinkedCommand = "AddVoiceTagsToStoryCommand", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 3, Name = "evaluator", LinkedCommand = "StoryEvaluation", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 4, Name = "tts_expert", LinkedCommand = "TtsGeneration", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 5, Name = "music_expert", LinkedCommand = "MusicGeneration", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 6, Name = "fx_expert", LinkedCommand = "FxGeneration", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 7, Name = "summarizer", LinkedCommand = "SummarizeStory", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 8, Name = "canon_extractor", LinkedCommand = "CanonExtractor", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 9, Name = "state_delta_builder", LinkedCommand = "StateDeltaBuilder", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 10, Name = "continuity_validator", LinkedCommand = "ContinuityValidator", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 11, Name = "state_updater", LinkedCommand = "StateUpdater", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 12, Name = "state_compressor", LinkedCommand = "StateCompressor", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 13, Name = "recap_builder", LinkedCommand = "RecapBuilder", CreatedAt = now, UpdatedAt = now },
+            new Role { Id = 14, Name = "writer_cino", LinkedCommand = "cino_optimize_story", CreatedAt = now, UpdatedAt = now }
         );
     }
 }

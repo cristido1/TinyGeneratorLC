@@ -40,25 +40,9 @@ namespace TinyGenerator.Pages.Agents
         [BindProperty(SupportsGet = true)]
         public string? RoleFilter { get; set; }
 
-        public void OnGet()
+        public IActionResult OnGet()
         {
-            // Load all data for client-side DataTables processing
-            PageSize = 10000; // Large number to get all records
-            PageIndex = 1;
-
-            try
-            {
-                Models = _database.ListModels() ?? new List<ModelInfo>();
-                Roles = _database.ListAgentRoles() ?? new List<string>();
-                var (items, total) = _database.GetPagedAgents(null, null, 1, 10000, null, null);
-                Items = items;
-                TotalCount = total;
-            }
-            catch
-            {
-                Items = Array.Empty<Agent>();
-                TotalCount = 0;
-            }
+            return RedirectToPage("/Shared/Index", new { entity = "agents", title = "Agents" });
         }
 
         public sealed class RowAction

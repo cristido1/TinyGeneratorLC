@@ -33,22 +33,42 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
             }
 
             using var schemaDoc = JsonDocument.Parse(_schemaJson);
-            using var responseDoc = JsonDocument.Parse(raw);
 
-            var errors = new List<string>(MaxReportedProblems);
-            ValidateAgainstSchema(responseDoc.RootElement, schemaDoc.RootElement, "$", errors, depth: 0);
-
-            if (errors.Count == 0)
+            if (TryValidateJson(raw, schemaDoc.RootElement, out var strictErrors))
             {
-                return new DeterministicResult
+                return new JsonSchemaDeterministicResult
                 {
                     Successed = true,
                     Message = "ok",
-                    CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds)
+                    CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds),
+                    CorrectedText = null
                 };
             }
 
-            return Fail($"primi {Math.Min(MaxReportedProblems, errors.Count)} problemi: {string.Join(" | ", errors)}");
+            if (JsonDeterministicAutoFixer.TryFix(raw, schemaDoc.RootElement, out var fixedJson, out var appliedFixes, out var fixError) &&
+                TryValidateJson(fixedJson, schemaDoc.RootElement, out var postFixErrors))
+            {
+                var changed = !string.Equals(raw, fixedJson, StringComparison.Ordinal);
+                var msg = changed
+                    ? $"ok (auto_fix: {string.Join(", ", appliedFixes.Distinct(StringComparer.OrdinalIgnoreCase))})"
+                    : "ok";
+
+                return new JsonSchemaDeterministicResult
+                {
+                    Successed = true,
+                    Message = msg,
+                    CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds),
+                    CorrectedText = changed ? fixedJson : null
+                };
+            }
+
+            var firstPhase = strictErrors.Count > 0
+                ? $"primi {Math.Min(MaxReportedProblems, strictErrors.Count)} problemi: {string.Join(" | ", strictErrors)}"
+                : "validazione strict fallita";
+            var secondPhase = string.IsNullOrWhiteSpace(fixError)
+                ? "auto_fix non riuscito"
+                : $"auto_fix non riuscito: {fixError}";
+            return Fail($"{firstPhase} || {secondPhase}");
         }
         catch (JsonException ex)
         {
@@ -65,6 +85,22 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
             Message = $"json_response_format_check: non ha rispettato il formato di risposta JSON richiesto ({_schemaName}): {message}",
             CheckDurationMs = Math.Max(0, (long)(DateTime.UtcNow - started).TotalMilliseconds)
         };
+    }
+
+    private static bool TryValidateJson(string json, JsonElement schemaRoot, out List<string> errors)
+    {
+        errors = new List<string>(MaxReportedProblems);
+        try
+        {
+            using var responseDoc = JsonDocument.Parse(json);
+            ValidateAgainstSchema(responseDoc.RootElement, schemaRoot, "$", errors, depth: 0);
+            return errors.Count == 0;
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"parse: {ex.Message}");
+            return false;
+        }
     }
 
     private static bool ValidateAgainstSchema(
@@ -418,4 +454,12 @@ public sealed class JsonSchemaResponseFormatCheck : IDeterministicCheck
         value = default;
         return false;
     }
+}
+
+public sealed class JsonSchemaDeterministicResult : IDeterministicResult
+{
+    public bool Successed { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public long CheckDurationMs { get; init; }
+    public string? CorrectedText { get; init; }
 }

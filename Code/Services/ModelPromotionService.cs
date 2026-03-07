@@ -42,7 +42,6 @@ public sealed class ModelPromotionService
         }
 
         var runToken = $"[{runId.Trim()}]";
-        // Use only logs that explicitly belong to this run-id to avoid cross-run contamination.
         var agentHints = await _context.Logs.AsNoTracking()
             .Where(l => l.Message != null
                         && l.Message.Contains(runToken)
@@ -53,25 +52,24 @@ public sealed class ModelPromotionService
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
-        var roles = await ResolveRolesFromHintsAsync(agentHints, ct).ConfigureAwait(false);
-        return await PromoteBestModelsForRolesAsync(roles, $"{source}:{runId}", ct).ConfigureAwait(false);
+        var agentIds = await ResolveAgentIdsFromHintsAsync(agentHints, ct).ConfigureAwait(false);
+        return await PromoteBestModelsForAgentsAsync(agentIds, $"{source}:{runId}", ct).ConfigureAwait(false);
     }
 
     public async Task<List<PromotionResult>> PromoteBestModelsForAllRolesAsync(
         string source = "manual",
         CancellationToken ct = default)
     {
-        var roles = await _context.Agents.AsNoTracking()
+        var agentIds = await _context.Agents.AsNoTracking()
             .Where(a => a.IsActive && a.Role != null && a.Role != string.Empty)
-            .Select(a => a.Role!)
-            .Distinct()
+            .Select(a => a.Id)
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
-        return await PromoteBestModelsForRolesAsync(roles, source, ct).ConfigureAwait(false);
+        return await PromoteBestModelsForAgentsAsync(agentIds, source, ct).ConfigureAwait(false);
     }
 
-    private async Task<List<string>> ResolveRolesFromHintsAsync(IEnumerable<string> hints, CancellationToken ct)
+    private async Task<List<int>> ResolveAgentIdsFromHintsAsync(IEnumerable<string> hints, CancellationToken ct)
     {
         var normalizedHints = hints
             .Select(Normalize)
@@ -81,62 +79,56 @@ public sealed class ModelPromotionService
 
         if (normalizedHints.Count == 0)
         {
-            return new List<string>();
+            return new List<int>();
         }
-
-        var roles = await _context.Roles.AsNoTracking()
-            .Where(r => r.Ruolo != null && r.Ruolo != string.Empty)
-            .Select(r => r.Ruolo)
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
 
         var agents = await _context.Agents.AsNoTracking()
             .Where(a => a.IsActive)
-            .Select(a => new { a.Name, a.Role })
+            .Select(a => new { a.Id, a.Name, a.Role })
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
-        var outRoles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var outAgents = new HashSet<int>();
         foreach (var hint in normalizedHints)
         {
-            var roleDirect = roles.FirstOrDefault(r => string.Equals(Normalize(r), hint, StringComparison.OrdinalIgnoreCase));
-            if (!string.IsNullOrWhiteSpace(roleDirect))
-            {
-                outRoles.Add(roleDirect!);
-            }
+            var agentsByRole = agents
+                .Where(a => !string.IsNullOrWhiteSpace(a.Role) &&
+                            string.Equals(Normalize(a.Role), hint, StringComparison.OrdinalIgnoreCase))
+                .Select(a => a.Id)
+                .Distinct()
+                .ToList();
 
             foreach (var a in agents)
             {
-                if (string.IsNullOrWhiteSpace(a.Role))
-                {
-                    continue;
-                }
-
                 var byName = !string.IsNullOrWhiteSpace(a.Name) &&
                              string.Equals(Normalize(a.Name), hint, StringComparison.OrdinalIgnoreCase);
-                var byRole = string.Equals(Normalize(a.Role), hint, StringComparison.OrdinalIgnoreCase);
-                if (byName || byRole)
+                if (byName)
                 {
-                    outRoles.Add(a.Role!);
+                    outAgents.Add(a.Id);
                 }
+            }
+
+            // Use role hint only when it identifies exactly one active agent.
+            if (agentsByRole.Count == 1)
+            {
+                outAgents.Add(agentsByRole[0]);
             }
         }
 
-        return outRoles.ToList();
+        return outAgents.ToList();
     }
 
-    private async Task<List<PromotionResult>> PromoteBestModelsForRolesAsync(
-        IEnumerable<string> roleCodes,
+    private async Task<List<PromotionResult>> PromoteBestModelsForAgentsAsync(
+        IEnumerable<int> agentIds,
         string source,
         CancellationToken ct)
     {
-        var normalizedRoles = roleCodes
-            .Select(Normalize)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        var normalizedAgentIds = agentIds
+            .Where(x => x > 0)
+            .Distinct()
             .ToList();
 
-        if (normalizedRoles.Count == 0)
+        if (normalizedAgentIds.Count == 0)
         {
             return new List<PromotionResult>();
         }
@@ -167,38 +159,37 @@ public sealed class ModelPromotionService
             return loaded;
         }
 
-        foreach (var roleNorm in normalizedRoles)
+        foreach (var agentId in normalizedAgentIds)
         {
             ct.ThrowIfCancellationRequested();
 
+            var agent = await _context.Agents
+                .FirstOrDefaultAsync(a => a.Id == agentId && a.IsActive, ct)
+                .ConfigureAwait(false);
+            if (agent == null || string.IsNullOrWhiteSpace(agent.Role))
+            {
+                continue;
+            }
+
+            var roleCode = agent.Role;
+            var roleNorm = Normalize(roleCode);
             var roleEntity = await _context.Roles
-                .FirstOrDefaultAsync(r => r.Ruolo != null && r.Ruolo.ToLower() == roleNorm, ct)
+                .FirstOrDefaultAsync(r => r.Name != null && r.Name.ToLower() == roleNorm, ct)
                 .ConfigureAwait(false);
             if (roleEntity == null)
             {
                 continue;
             }
 
-            var roleCode = roleEntity.Ruolo;
-            var best = await ResolveBestModelForRoleAsync(roleEntity.Id, ct).ConfigureAwait(false);
+            var best = await ResolveBestModelForAgentAsync(roleEntity.Id, agent.Id, ct).ConfigureAwait(false);
             if (best == null)
             {
                 continue;
             }
 
-            var agents = await _context.Agents
-                .Where(a => a.IsActive && a.Role != null && a.Role.ToLower() == roleNorm)
-                .ToListAsync(ct)
-                .ConfigureAwait(false);
-
-            if (agents.Count == 0)
-            {
-                continue;
-            }
-
-            // Keep model_roles primary aligned with promoted model for this role.
+            // Keep model_roles primary aligned with promoted model only for role+agent.
             var roleRows = await _context.ModelRoles
-                .Where(mr => mr.RoleId == roleEntity.Id)
+                .Where(mr => mr.RoleId == roleEntity.Id && mr.AgentId == agent.Id)
                 .OrderBy(mr => mr.Id)
                 .ToListAsync(ct)
                 .ConfigureAwait(false);
@@ -217,65 +208,62 @@ public sealed class ModelPromotionService
                 }
             }
 
-            foreach (var agent in agents)
+            var oldModelId = agent.ModelId;
+            string? oldModelName = null;
+            if (oldModelId.HasValue && oldModelId.Value > 0)
             {
-                var oldModelId = agent.ModelId;
-                string? oldModelName = null;
-                if (oldModelId.HasValue && oldModelId.Value > 0)
+                oldModelName = await _context.Models.AsNoTracking()
+                    .Where(m => m.Id == oldModelId.Value)
+                    .Select(m => m.Name)
+                    .FirstOrDefaultAsync(ct)
+                    .ConfigureAwait(false);
+            }
+
+            var changed = !oldModelId.HasValue || oldModelId.Value != best.Value.ModelId;
+            if (changed)
+            {
+                agent.ModelId = best.Value.ModelId;
+                agent.UpdatedAt = now;
+                anyChange = true;
+
+                var promotedModel = GetTrackedModel(best.Value.ModelId);
+                if (promotedModel != null)
                 {
-                    oldModelName = await _context.Models.AsNoTracking()
-                        .Where(m => m.Id == oldModelId.Value)
-                        .Select(m => m.Name)
-                        .FirstOrDefaultAsync(ct)
-                        .ConfigureAwait(false);
+                    promotedModel.Promotions += 1;
+                    promotedModel.UpdatedAt = now;
+                    anyChange = true;
                 }
 
-                var changed = !oldModelId.HasValue || oldModelId.Value != best.Value.ModelId;
-                if (changed)
+                if (oldModelId.HasValue && oldModelId.Value > 0 && oldModelId.Value != best.Value.ModelId)
                 {
-                    agent.ModelId = best.Value.ModelId;
-                    agent.UpdatedAt = now;
-                    anyChange = true;
-
-                    var promotedModel = GetTrackedModel(best.Value.ModelId);
-                    if (promotedModel != null)
+                    var demotedModel = GetTrackedModel(oldModelId.Value);
+                    if (demotedModel != null)
                     {
-                        promotedModel.Promotions += 1;
-                        promotedModel.UpdatedAt = now;
+                        demotedModel.Demotions += 1;
+                        demotedModel.UpdatedAt = now;
                         anyChange = true;
                     }
-
-                    if (oldModelId.HasValue && oldModelId.Value > 0 && oldModelId.Value != best.Value.ModelId)
-                    {
-                        var demotedModel = GetTrackedModel(oldModelId.Value);
-                        if (demotedModel != null)
-                        {
-                            demotedModel.Demotions += 1;
-                            demotedModel.UpdatedAt = now;
-                            anyChange = true;
-                        }
-                    }
                 }
+            }
 
-                results.Add(new PromotionResult(
-                    roleCode ?? string.Empty,
-                    agent.Id,
-                    agent.Name ?? $"agent_{agent.Id}",
-                    oldModelId,
-                    oldModelName,
-                    best.Value.ModelId,
-                    best.Value.ModelName,
-                    changed,
-                    changed ? "best_success_rate" : "already_best"));
+            results.Add(new PromotionResult(
+                roleCode ?? string.Empty,
+                agent.Id,
+                agent.Name ?? $"agent_{agent.Id}",
+                oldModelId,
+                oldModelName,
+                best.Value.ModelId,
+                best.Value.ModelName,
+                changed,
+                changed ? "best_success_rate" : "already_best"));
 
-                if (changed)
-                {
-                    _logger?.Log(
-                        "Information",
-                        "PROMOTION",
-                        $"PROMOTION source={source}; role={roleCode}; agent_id={agent.Id}; agent={agent.Name}; old_model={oldModelName ?? "(none)"}; new_model={best.Value.ModelName}",
-                        result: "SUCCESS");
-                }
+            if (changed)
+            {
+                _logger?.Log(
+                    "Information",
+                    "PROMOTION",
+                    $"PROMOTION source={source}; role={roleCode}; agent_id={agent.Id}; agent={agent.Name}; old_model={oldModelName ?? "(none)"}; new_model={best.Value.ModelName}",
+                    result: "SUCCESS");
             }
         }
 
@@ -293,11 +281,14 @@ public sealed class ModelPromotionService
         return results;
     }
 
-    private async Task<(int ModelId, string ModelName)?> ResolveBestModelForRoleAsync(int roleId, CancellationToken ct)
+    private async Task<(int ModelId, string ModelName)?> ResolveBestModelForAgentAsync(int roleId, int agentId, CancellationToken ct)
     {
         var candidates = await (from mr in _context.ModelRoles.AsNoTracking()
                                 join m in _context.Models.AsNoTracking() on mr.ModelId equals m.Id
-                                where mr.RoleId == roleId && mr.Enabled && m.Enabled
+                                where mr.RoleId == roleId
+                                      && mr.AgentId == agentId
+                                      && mr.Enabled
+                                      && m.Enabled
                                 select new
                                 {
                                     mr.Id,

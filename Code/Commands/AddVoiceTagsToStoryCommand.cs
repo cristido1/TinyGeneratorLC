@@ -23,6 +23,7 @@ namespace TinyGenerator.Services.Commands
         private readonly ICustomLogger? _logger;
         private readonly ICallCenter _callCenter;
         private readonly Func<string?>? _currentDispatcherRunIdProvider;
+        private readonly ICommandDispatcher? _dispatcher;
 
         public string CommandName => "add_voice_tags_to_story";
         public int Priority => 2;
@@ -36,7 +37,8 @@ namespace TinyGenerator.Services.Commands
             ICallCenter callCenter,
             ICustomLogger? logger = null,
             CommandTuningOptions? tuning = null,
-            Func<string?>? currentDispatcherRunIdProvider = null)
+            Func<string?>? currentDispatcherRunIdProvider = null,
+            ICommandDispatcher? dispatcher = null)
         {
             _storyId = storyId;
             _agentResolutionService = agentResolutionService ?? throw new ArgumentNullException(nameof(agentResolutionService));
@@ -46,6 +48,7 @@ namespace TinyGenerator.Services.Commands
             _logger = logger;
             _tuning = tuning ?? new CommandTuningOptions();
             _currentDispatcherRunIdProvider = currentDispatcherRunIdProvider;
+            _dispatcher = dispatcher;
         }
 
         // Legacy constructor kept for backward compatibility with existing call sites.
@@ -64,7 +67,8 @@ namespace TinyGenerator.Services.Commands
                 ResolveOrCreateCallCenter(database, storiesService, logger),
                 logger,
                 tuning,
-                () => storiesService?.CurrentDispatcherRunId)
+                () => storiesService?.CurrentDispatcherRunId,
+                storiesService?.CommandDispatcher ?? (ServiceLocator.Services?.GetService(typeof(ICommandDispatcher)) as ICommandDispatcher))
         {
             _ = kernelFactory;
         }
@@ -478,6 +482,7 @@ namespace TinyGenerator.Services.Commands
             try
             {
                 Progress?.Invoke(this, new CommandProgressEventArgs(current, max, description));
+                _dispatcher?.UpdateStep(runId, current, max, description);
             }
             catch
             {

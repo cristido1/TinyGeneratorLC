@@ -63,6 +63,7 @@ public sealed class DeterministicValidatorResult
 {
     public bool IsValid { get; init; }
     public string? FailureReason { get; init; }
+    public string? CorrectedText { get; init; }
     public List<string> Violations { get; init; } = new();
 }
 
@@ -97,4 +98,3 @@ public sealed class RetryDecision
     public Agent? FallbackAgent { get; init; }
     public bool ShouldAskFailureExplanation { get; init; }
 }
-

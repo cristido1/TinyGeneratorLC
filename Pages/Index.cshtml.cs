@@ -23,6 +23,7 @@ public class IndexModel : PageModel
     public List<KpiCard> AdditionalKpis { get; set; } = new();
     public List<PieSlice> StoriesByStatusSlices { get; set; } = new();
     public List<PieSlice> ScoreBandSlices { get; set; } = new();
+    public List<BestModelByRoleRow> BestModelsByRole { get; set; } = new();
     
     // Auto-advancement property
     public bool EnableAutoAdvancement { get; set; }
@@ -74,8 +75,53 @@ public class IndexModel : PageModel
         public string Color { get; set; } = "#6c757d";
     }
 
+    public class BestModelByRoleRow
+    {
+        public string RoleName { get; set; } = string.Empty;
+        public string ModelName { get; set; } = string.Empty;
+        public long UseCount { get; set; }
+        public double SuccessPct { get; set; }
+    }
+
     public string StoriesByStatusJson => JsonSerializer.Serialize(StoriesByStatusSlices);
     public string ScoreBandJson => JsonSerializer.Serialize(ScoreBandSlices);
+
+    public string GetKpiTooltip(string code, string label)
+    {
+        return code switch
+        {
+            "KPI_01" => "Conta quante storie esistono adesso in archivio, includendo sia quelle attive sia quelle segnate come eliminate, prendendo i dati dalla tabella stories.",
+            "KPI_02" => "Mostra quanti modelli sono oggi utilizzabili rispetto al totale censito: il numero grande è quanti hanno stato attivo, il totale dopo la barra è tutti i modelli presenti in tabella models.",
+            "KPI_08" => "Indica quanti modelli sono presenti ma disattivati, leggendo il campo di attivazione della tabella models.",
+            "KPI_18" => "Conta quante storie sono arrivate allo stato finale audio pronto, usando lo stato della storia e cercando i codici audio_master_generated o final_mix_ready.",
+            "KPI_03" => "Conta quante storie hanno almeno una valutazione registrata, quindi quante sono state effettivamente valutate usando i dati di stories_evaluations collegati a stories.",
+            "KPI_04" => "Conta quante storie valutate hanno una media punteggio sopra 60: per ogni storia si fa la media delle sue valutazioni, poi si contano quelle oltre la soglia.",
+            "KPI_05" => "È la percentuale di storie approvate: prende il numero di storie sopra 60 e lo divide per tutte le storie che hanno almeno una valutazione.",
+            "KPI_06" => "È la media generale di tutti i punteggi di valutazione salvati, usando l'insieme completo dei record in stories_evaluations.",
+            "KPI_07" => "È la media delle storie più recenti: si considera per ogni storia la sua media valutazioni e poi si fa la media sulle ultime 20 storie per data valutazione.",
+            "KPI_09" => "Mostra la penalità media applicata per lunghezza del testo nelle valutazioni: è la media del campo di penalità nei dati stories_evaluations.",
+            "KPI_10" => "Conta quante valutazioni sono sotto 60 nella voce coerenza narrativa, leggendo narrative_coherence_score.",
+            "KPI_11" => "Conta quante valutazioni sono sotto 60 nella voce originalità, leggendo originality_score.",
+            "KPI_12" => "Conta quante valutazioni sono sotto 60 nella voce impatto emotivo, leggendo emotional_impact_score.",
+            "KPI_13" => "Conta quante valutazioni sono sotto 60 nella voce azione, leggendo action_score.",
+            "KPI_14" => "Misura la riuscita complessiva dei modelli in uso: successi totali diviso utilizzi totali, pesato sui volumi reali della tabella stats_models.",
+            "KPI_15" => "Indica il tempo medio di generazione: somma tutti i tempi registrati e li divide per il numero di esecuzioni disponibili in stats_models.",
+            "KPI_16" => "Valuta quanto rende il modello primario di scrittura: successi su utilizzi per i soli record model_roles del ruolo writer marcati come primari.",
+            "KPI_17" => "Somma tutte le occorrenze errore registrate per combinazioni modello-ruolo, usando il totale di error_count in model_roles_errors.",
+            "KPI_21" => "Mostra quanti blocchi narrativi in media compongono una storia, calcolando il numero blocchi per storia su narrative_story_blocks e facendo la media.",
+            "KPI_22" => "È la qualità media dei blocchi narrativi, come media del campo quality_score della tabella narrative_story_blocks.",
+            "KPI_23" => "Percentuale di storie attive che hanno il TTS generato: conteggio storie con generated_tts rispetto al totale storie non eliminate.",
+            "KPI_24" => "Percentuale di storie attive con audio completo: richiede TTS, musica, ambient, effetti e mix finale tutti presenti insieme.",
+            "KPI_25" => "Conta quanti elementi di suoni mancanti risultano ancora aperti, leggendo sounds_missing con stato open.",
+            "KPI_26" => "Mostra quante volte in media vengono usati i suoni attivi, calcolando la media di usage_count nella tabella sounds.",
+            "KPI_27" => "Conta il numero totale di serie presenti in archivio, usando la tabella series.",
+            "KPI_28" => "Mostra quanti episodi ha in media una serie: si conta il numero episodi per ogni serie e poi si fa la media.",
+            "KPI_29" => "Mostra quanti personaggi ha in media una serie: si conta il numero personaggi per serie e poi si fa la media.",
+            "KPI_30" => "Percentuale di test passati sul totale test eseguiti, usando i risultati registrati in model_test_runs.",
+            "KPI_31" => "Durata media dei test: prende la media dei tempi registrati nei test e la mostra in ore, minuti e secondi.",
+            _ => $"Indicatore {label}: è calcolato sui dati disponibili nel database per misurare l'andamento operativo corrente."
+        };
+    }
 
     public IndexModel(ILogger<IndexModel> logger, DatabaseService database, StoriesService stories)
     {
@@ -150,6 +196,7 @@ public class IndexModel : PageModel
             AdditionalKpis = LoadAdditionalKpis();
             StoriesByStatusSlices = LoadStoriesByStatusSlices();
             ScoreBandSlices = LoadScoreBandSlices();
+            BestModelsByRole = LoadBestModelsByRole();
         }
         catch (Exception ex)
         {
@@ -219,12 +266,17 @@ public class IndexModel : PageModel
 
             if (HasRows("stories_evaluations"))
             {
-                var storiesWithEval = ScalarLong("SELECT COUNT(DISTINCT story_id) FROM stories_evaluations;");
+                var storiesWithEval = ScalarLong(@"
+SELECT COUNT(DISTINCT se.story_id)
+FROM stories_evaluations se
+JOIN stories s ON s.id = se.story_id;
+");
                 var approvedStories = ScalarLong(@"
 SELECT COUNT(*) FROM (
-    SELECT story_id, AVG(total_score) AS media
-    FROM stories_evaluations
-    GROUP BY story_id
+    SELECT se.story_id, AVG(se.total_score) AS media
+    FROM stories_evaluations se
+    JOIN stories s ON s.id = se.story_id
+    GROUP BY se.story_id
     HAVING media > 60
 );");
                 var approvalPct = storiesWithEval > 0 ? (approvedStories * 100.0 / storiesWithEval) : 0.0;
@@ -281,7 +333,7 @@ SELECT CASE WHEN SUM(mr.use_count) > 0
     ELSE NULL END
 FROM model_roles mr
 JOIN roles r ON mr.role_id = r.id
-WHERE lower(r.ruolo) = 'writer'
+WHERE lower(r.name) = 'writer'
   AND mr.is_primary = 1;
 ") ?? 0.0;
                 cards.Add(new KpiCard { Code = "KPI_16", Label = "Writer Primario Success", Value = $"{writerPrimarySuccess:F1}%" });
@@ -480,6 +532,60 @@ SELECT AVG(cnt) FROM (
             _logger.LogWarning(ex, "Errore caricando KPI 'Fasce Valutazione'");
             return new List<PieSlice>();
         }
+    }
+
+    private List<BestModelByRoleRow> LoadBestModelsByRole()
+    {
+        return _database.WithSqliteConnection(conn =>
+        {
+            var rows = new List<BestModelByRoleRow>();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+WITH ranked AS (
+    SELECT
+        r.name AS role_name,
+        m.name AS model_name,
+        COALESCE(mr.use_count, 0) AS use_count,
+        CASE
+            WHEN COALESCE(mr.use_count, 0) > 0
+                THEN (COALESCE(mr.use_successed, 0) * 100.0 / COALESCE(mr.use_count, 0))
+            ELSE 0.0
+        END AS success_pct,
+        ROW_NUMBER() OVER (
+            PARTITION BY mr.role_id
+            ORDER BY
+                CASE WHEN COALESCE(mr.use_count, 0) > 0 THEN 0 ELSE 1 END,
+                CASE
+                    WHEN COALESCE(mr.use_count, 0) > 0
+                        THEN (COALESCE(mr.use_successed, 0) * 100.0 / COALESCE(mr.use_count, 0))
+                    ELSE 0.0
+                END DESC,
+                COALESCE(mr.use_count, 0) DESC,
+                mr.id ASC
+        ) AS rn
+    FROM model_roles mr
+    JOIN roles r ON r.id = mr.role_id
+    JOIN models m ON m.id = mr.model_id
+)
+SELECT role_name, model_name, use_count, success_pct
+FROM ranked
+WHERE rn = 1
+ORDER BY success_pct DESC, use_count DESC, role_name ASC;";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                rows.Add(new BestModelByRoleRow
+                {
+                    RoleName = reader.IsDBNull(0) ? string.Empty : reader.GetString(0),
+                    ModelName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                    UseCount = reader.IsDBNull(2) ? 0L : reader.GetInt64(2),
+                    SuccessPct = reader.IsDBNull(3) ? 0.0 : reader.GetDouble(3)
+                });
+            }
+
+            return rows;
+        });
     }
 
     private static List<PieSlice> BuildPieSlices(List<(string label, int count)> rows)

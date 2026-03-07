@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("chapters")]
-public class Chapter
+public partial class Chapter : ISoftDelete, IActiveFlag, IOrderable
 {
     public int Id { get; set; }
     [Column("memory_key")]

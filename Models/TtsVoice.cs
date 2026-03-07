@@ -5,7 +5,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("tts_voices")]
-    public class TtsVoice
+    public partial class TtsVoice : ISoftDelete, IActiveFlag, IOrderable
     {
         [Column("id")]
         public int Id { get; set; }

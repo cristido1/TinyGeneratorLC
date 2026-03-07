@@ -128,23 +128,9 @@ public sealed partial class StoriesService
                     summaryBuilder.AppendLine($"{result.Name}: {messageText}");
                 }
 
-                // Dopo i comandi che riscrivono tts_schema.json (typed), risolviamo i riferimenti audio di libreria
-                // direttamente nello schema, così i campi *_source_path / *_sound_id non vengono persi.
-                try
-                {
-                    var assignRunId = _service.CurrentDispatcherRunId ?? $"generate_tts_schema_{story.Id}";
-                    await _service.AssignCatalogLibraryReferencesInTtsSchemaAsync(
-                        schemaPath,
-                        story,
-                        folderPath,
-                        assignRunId,
-                        context.CancellationToken);
-                }
-                catch (Exception exAssign)
-                {
-                    _service._logger?.LogWarning(exAssign, "Unable to assign catalog library references during tts_schema generation for story {Id}", story.Id);
-                    summaryBuilder.AppendLine($"AssignCatalogLibraryRefs: warning {exAssign.Message}");
-                }
+                // L'assegnazione/copia dei suoni da libreria viene gestita dai comandi separati
+                // generate_ambience_audio / generate_fx_audio / generate_music_audio.
+                // Qui non facciamo ricerca o download inline per mantenere il flusso accodato.
 
                 var summaryMessage = summaryBuilder.ToString().Trim();
 

@@ -31,6 +31,18 @@
             background-color: #6c757d !important;
             color: #fff !important;
         }
+        .model-name-cell {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+        }
+        .model-provider-icon {
+            width: 18px;
+            height: 18px;
+            object-fit: contain;
+            border-radius: 3px;
+            flex: 0 0 auto;
+        }
     </style>
 }
 
@@ -71,6 +83,7 @@
                 <tr>
                     <th></th>
                     <th data-col="name">Name</th>
+                    <th data-col="sizetext">Size</th>
                     <th data-col="provider">Provider</th>
                     <th data-col="note">Note</th>
                     <th data-col="enabled">Enabled</th>
@@ -107,7 +120,20 @@
                     var rankGain = m.Promotions - m.Demotions;
                     <tr data-model-id="@(m.Id?.ToString() ?? string.Empty)" data-model-name="@m.Name">
                         <td class="dt-control"></td>
-                        <td data-col="name">@m.Name</td>
+                        <td data-col="name">
+                            <span class="model-name-cell">
+                                @if (!string.IsNullOrWhiteSpace(m.Image))
+                                {
+                                    <img
+                                        class="model-provider-icon"
+                                        src="@Url.Content($"~/{m.Image}")"
+                                        alt="@($"{m.Provider} icon")"
+                                        loading="lazy" />
+                                }
+                                <span>@m.Name</span>
+                            </span>
+                        </td>
+                        <td data-col="sizetext">@(string.IsNullOrWhiteSpace(m.SizeText) ? "-" : m.SizeText)</td>
                         <td data-col="provider">
                             @if (m.Provider?.ToLower() == "ollama")
                             {
@@ -260,6 +286,7 @@
     var scripts = [
         '/lib/datatables/js/jquery.dataTables.min.js',
         '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.colReorder.min.js',
         '/lib/datatables/js/dataTables.buttons.min.js',
         '/lib/datatables/js/buttons.bootstrap5.min.js',
         '/lib/datatables/js/buttons.colVis.min.js'
@@ -281,6 +308,22 @@
                      "rt" +
                      "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
                 stateSave: true,
+                stateSaveCallback: function (settings, data) {
+                    try { localStorage.setItem('DataTables_modelsTable_state_v1', JSON.stringify(data)); } catch (e) { console.warn(e); }
+                },
+                stateLoadCallback: function (settings) {
+                    try {
+                        var raw = localStorage.getItem('DataTables_modelsTable_state_v1');
+                        return raw ? JSON.parse(raw) : null;
+                    } catch (e) {
+                        console.warn(e);
+                        return null;
+                    }
+                },
+                colReorder: {
+                    fixedColumnsLeft: 1,
+                    fixedColumnsRight: 1
+                },
                 paging: true,
                 pageLength: 25,
                 lengthChange: false,

@@ -17,6 +17,7 @@ public sealed class TestCallRequest
     public double? Temperature { get; set; }
     public double? TopP { get; set; }
     public int? NumPredict { get; set; }
+    public bool? Thinking { get; set; }
     public int ThreadId { get; set; }
     public long StoryId { get; set; }
     public ChatHistory? History { get; set; }
@@ -38,4 +39,3 @@ public interface ITestCallCenter
 {
     Task<TestCallResult> CallAsync(TestCallRequest request, CancellationToken cancellationToken = default);
 }
-

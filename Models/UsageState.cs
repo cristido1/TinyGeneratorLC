@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("usage_state")]
-public class UsageState
+public partial class UsageState : ISoftDelete, IActiveFlag, IOrderable
 {
     public int Id { get; set; }
     [Column("month")]

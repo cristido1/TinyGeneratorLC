@@ -32,6 +32,52 @@
         </div>
     }
 
+    <form method="get" class="row g-2 align-items-end mb-3">
+        <div class="col-auto">
+            <label class="form-label mb-1" for="typeFilter">Tipo</label>
+            <select class="form-select form-select-sm" id="typeFilter" name="typeFilter">
+                @if (string.IsNullOrWhiteSpace(Model.TypeFilter))
+                {
+                    <option value="" selected>Tutti</option>
+                }
+                else
+                {
+                    <option value="">Tutti</option>
+                }
+                @if (Model.TypeFilter == "fx")
+                {
+                    <option value="fx" selected>fx</option>
+                }
+                else
+                {
+                    <option value="fx">fx</option>
+                }
+                @if (Model.TypeFilter == "amb")
+                {
+                    <option value="amb" selected>amb</option>
+                }
+                else
+                {
+                    <option value="amb">amb</option>
+                }
+                @if (Model.TypeFilter == "music")
+                {
+                    <option value="music" selected>music</option>
+                }
+                else
+                {
+                    <option value="music">music</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-outline-primary">Applica filtro</button>
+        </div>
+        <div class="col-auto">
+            <a class="btn btn-sm btn-outline-secondary" href="/SoundsMissing/Index">Reset</a>
+        </div>
+    </form>
+
     <form id="recheckMissingForm" method="post" asp-page-handler="RecheckAgainstSounds" class="d-none">
         @Html.AntiForgeryToken()
         <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
@@ -51,6 +97,12 @@
         @Html.AntiForgeryToken()
         <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
         <input type="hidden" name="statusFilter" value="@Model.StatusFilter" />
+    </form>
+    <form id="deleteVisibleForm" method="post" asp-page-handler="DeleteVisible" class="d-none">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="typeFilter" value="@Model.TypeFilter" />
+        <input type="hidden" name="statusFilter" value="@Model.StatusFilter" />
+        <input type="hidden" name="visibleIds" id="visibleIdsInput" value="" />
     </form>
     <form id="toggleStatusForm" method="post" asp-page-handler="ToggleStatus" class="d-none">
         @Html.AntiForgeryToken()
@@ -170,7 +222,7 @@
         jQuery(function($) {
             if (typeof $.fn.DataTable === 'undefined') return;
 
-            $('#soundsMissingTable').DataTable({
+            var table = $('#soundsMissingTable').DataTable({
                 dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
                      "rt" +
                      "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
@@ -210,6 +262,40 @@
                             if (confirm('Cancellare tutti i record sounds_missing con stato resolved?')) {
                                 var form = document.getElementById('deleteResolvedForm');
                                 if (form) form.submit();
+                            }
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-trash3 me-1"></i>Cancella Visualizzati',
+                        className: 'btn btn-sm btn-light border text-danger',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function(e, dt) {
+                            var ids = [];
+                            dt.rows({ search: 'applied' }).every(function() {
+                                var rowNode = this.node();
+                                var idCell = rowNode ? rowNode.querySelector('td[data-col=\"id\"]') : null;
+                                var idText = idCell ? idCell.textContent.trim() : '';
+                                var id = Number.parseInt(idText, 10);
+                                if (Number.isFinite(id) && id > 0) {
+                                    ids.push(id);
+                                }
+                            });
+
+                            ids = Array.from(new Set(ids));
+                            if (ids.length === 0) {
+                                alert('Nessun record visualizzato da cancellare.');
+                                return;
+                            }
+
+                            if (!confirm('Cancellare tutti i missing sound attualmente visualizzati in griglia?')) {
+                                return;
+                            }
+
+                            var input = document.getElementById('visibleIdsInput');
+                            var form = document.getElementById('deleteVisibleForm');
+                            if (input && form) {
+                                input.value = ids.join(',');
+                                form.submit();
                             }
                         }
                     },

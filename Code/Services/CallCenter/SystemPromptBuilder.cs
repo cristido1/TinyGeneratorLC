@@ -25,7 +25,7 @@ public sealed class DefaultSystemPromptBuilder : ISystemPromptBuilder
                 : "Rispondi in modo utile e coerente con la richiesta.";
 
         var modelName = ResolveModelName(agent);
-        var errors = _database.ListTopModelRoleErrors(agent.ModelId, modelName, roleCode, 10);
+        var errors = _database.ListTopModelRoleErrors(agent.ModelId, modelName, roleCode, 10, agent.Id);
         if (errors.Count == 0)
         {
             return basePrompt;
@@ -45,21 +45,20 @@ public sealed class DefaultSystemPromptBuilder : ISystemPromptBuilder
 
     private string? ResolveModelName(Agent agent)
     {
-        if (!string.IsNullOrWhiteSpace(agent.ModelName))
-        {
-            return agent.ModelName.Trim();
-        }
-
         if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
         {
-            var byId = _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+            var byId = _database.ResolveModelCallNameById(agent.ModelId.Value);
             if (!string.IsNullOrWhiteSpace(byId))
             {
                 return byId.Trim();
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        {
+            return _database.ResolveModelCallName(agent.ModelName) ?? agent.ModelName.Trim();
+        }
+
         return null;
     }
 }
-

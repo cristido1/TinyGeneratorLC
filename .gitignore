@@ -79,3 +79,6 @@ stories_folder/
 series_folder/
  # Local dataset folder: keep out of repo
  data/datasets/
+
+# Frontend source workspace (local-only; keep generated assets under wwwroot tracked separately)
+frontend/

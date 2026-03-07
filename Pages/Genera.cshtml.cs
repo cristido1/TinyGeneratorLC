@@ -949,7 +949,7 @@ public class GeneraModel : PageModel
             metadata: new Dictionary<string, string>
             {
                 ["operation"] = "nre_prompt_suggestion",
-                ["agentName"] = _nreOptions.WriterAgentName,
+                ["agentName"] = _nreOptions.PromptSuggestionAgentRole,
                 ["mode"] = "batch",
                 ["transparent"] = "1"
             },
@@ -996,7 +996,7 @@ public class GeneraModel : PageModel
             metadata: new Dictionary<string, string>
             {
                 ["operation"] = "nre_prompt_suggestion_italian_space_fleet",
-                ["agentName"] = _nreOptions.WriterAgentName,
+                ["agentName"] = _nreOptions.PromptSuggestionAgentRole,
                 ["mode"] = "batch",
                 ["transparent"] = "1"
             },

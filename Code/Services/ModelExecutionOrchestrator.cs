@@ -52,7 +52,7 @@ public sealed class ModelExecutionOrchestrator
             request,
             request.InitialModelName,
             options,
-            request.Agent.Thinking,
+            ResolveEffectiveThinking(request.Agent, request.InitialModelName, request.InitialModelId),
             ct).ConfigureAwait(false);
 
         if (primary.Success && !string.IsNullOrWhiteSpace(primary.OutputText))
@@ -199,7 +199,9 @@ public sealed class ModelExecutionOrchestrator
             request.InitialModelId,
             async modelRole =>
             {
-                var fallbackModelName = modelRole.Model?.Name;
+                var fallbackModelName = string.IsNullOrWhiteSpace(modelRole.Model?.CallName)
+                    ? modelRole.Model?.Name
+                    : modelRole.Model!.CallName;
                 if (string.IsNullOrWhiteSpace(fallbackModelName))
                 {
                     throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
@@ -214,7 +216,7 @@ public sealed class ModelExecutionOrchestrator
                     request,
                     fallbackModelName,
                     options,
-                    modelRole.Thinking ?? request.Agent.Thinking,
+                    modelRole.Thinking ?? ResolveEffectiveThinking(request.Agent, fallbackModelName, modelRole.ModelId),
                     ct).ConfigureAwait(false);
 
                 if (!fallbackAttempt.Success || string.IsNullOrWhiteSpace(fallbackAttempt.OutputText))
@@ -232,9 +234,10 @@ public sealed class ModelExecutionOrchestrator
             validateResult: r => r != null && !string.IsNullOrWhiteSpace(r.OutputText),
             shouldTryModelRole: mr =>
             {
-                var name = mr.Model?.Name;
+                var name = string.IsNullOrWhiteSpace(mr.Model?.CallName) ? mr.Model?.Name : mr.Model!.CallName;
                 return !string.IsNullOrWhiteSpace(name) && request.TriedModelNames.Add(name);
-            }).ConfigureAwait(false);
+            },
+            agentId: request.Agent.Id).ConfigureAwait(false);
 
         if (result != null && successfulModelRole?.Model != null && !string.IsNullOrWhiteSpace(successfulModelRole.Model.Name))
         {
@@ -306,6 +309,7 @@ public sealed class ModelExecutionOrchestrator
 
     private LangChainChatBridge CreateBridge(string modelName, Agent agent, bool? thinkOverride = null)
     {
+        var effectiveThinking = thinkOverride ?? ResolveEffectiveThinking(agent, modelName, agent.ModelId);
         return _kernelFactory.CreateChatBridge(
             modelName,
             agent.Temperature,
@@ -314,7 +318,31 @@ public sealed class ModelExecutionOrchestrator
             agent.TopK,
             agent.RepeatLastN,
             agent.NumPredict,
-            thinkOverride ?? agent.Thinking);
+            effectiveThinking);
+    }
+
+    private bool? ResolveEffectiveThinking(Agent agent, string modelName, int? modelId = null)
+    {
+        if (agent.Thinking.HasValue)
+        {
+            return agent.Thinking.Value;
+        }
+
+        if (_scopeFactory == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var database = scope.ServiceProvider.GetService<DatabaseService>();
+            return database?.ResolveEffectiveThinking(agent, modelId, modelName);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static (ModelExecutionOptions Options, string? TimeoutSource) ResolveOptions(ModelExecutionOptions? options)

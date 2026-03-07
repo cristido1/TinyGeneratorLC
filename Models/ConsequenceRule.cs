@@ -5,7 +5,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("consequence_rules")]
-public class ConsequenceRule
+public partial class ConsequenceRule : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

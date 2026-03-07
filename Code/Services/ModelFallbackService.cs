@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using TinyGenerator.Data;
 using TinyGenerator.Models;
+using TinyGenerator.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace TinyGenerator.Services;
 
@@ -25,30 +27,45 @@ public class ModelFallbackService
 
     private readonly TinyGeneratorDbContext _context;
     private readonly ICustomLogger? _logger;
+    private readonly ModelFallbackOptions _options;
 
-    public ModelFallbackService(TinyGeneratorDbContext context, ICustomLogger? logger = null)
+    public ModelFallbackService(
+        TinyGeneratorDbContext context,
+        ICustomLogger? logger = null,
+        IOptions<ModelFallbackOptions>? options = null)
     {
         _context = context;
         _logger = logger;
+        _options = options?.Value ?? new ModelFallbackOptions();
     }
 
     /// <summary>
-    /// Get fallback models for a specific role, ordered by success rate (descending).
+    /// Get fallback models for a specific role, ordered by UCB-like score:
+    /// success_rate + C * sqrt(log(T + 1) / (trials + 1))
+    /// where trials = success + fail for the model, T = total trials in the role.
     /// Returns only enabled model_roles.
     /// </summary>
-    public List<ModelRole> GetFallbackModelsForRole(string roleCode, int? excludeModelId = null)
+    public List<ModelRole> GetFallbackModelsForRole(string roleCode, int? excludeModelId = null, int? agentId = null)
     {
-        var role = _context.Roles.FirstOrDefault(r => r.Ruolo == roleCode);
+        var role = _context.Roles.FirstOrDefault(r => r.Name == roleCode);
         if (role == null)
         {
             _logger?.Log("Warning", "ModelFallback", $"Role '{roleCode}' not found in database.");
             return new List<ModelRole>();
         }
 
+        var resolvedAgentId = ResolveAgentIdForRole(roleCode, agentId);
+        if (!resolvedAgentId.HasValue || resolvedAgentId.Value <= 0)
+        {
+            _logger?.Log("Warning", "ModelFallback", $"No agent found for role '{roleCode}'.");
+            return new List<ModelRole>();
+        }
+
         var query = _context.ModelRoles
             .Include(mr => mr.Model)
             .Include(mr => mr.Role)
-            .Where(mr => mr.RoleId == role.Id && mr.Enabled && !mr.IsPrimary);
+            .Include(mr => mr.Agent)
+            .Where(mr => mr.RoleId == role.Id && mr.AgentId == resolvedAgentId.Value && mr.Enabled && !mr.IsPrimary);
 
         // Exclude the currently failing model if provided
         if (excludeModelId.HasValue)
@@ -56,16 +73,33 @@ public class ModelFallbackService
             query = query.Where(mr => mr.ModelId != excludeModelId.Value);
         }
 
-        // Priority:
-        // 1) models never tried for this role (use_count == 0)
-        // 2) then best historical performers
-        var fallbacks = query.ToList()
-            .OrderByDescending(mr => mr.UseCount == 0)
-            .ThenByDescending(mr => mr.SuccessRate)
+        var candidates = query.ToList();
+        var roleTotalTrials = _context.ModelRoles
+            .Where(mr => mr.RoleId == role.Id && mr.AgentId == resolvedAgentId.Value)
+            .Sum(mr => (double?)(mr.UseSuccessed + mr.UseFailed)) ?? 0d;
+        var c = Math.Max(0d, _options.ExplorationConstant);
+        var logTerm = Math.Log(roleTotalTrials + 1d);
+
+        double Score(ModelRole mr)
+        {
+            var successes = Math.Max(0, mr.UseSuccessed);
+            var failures = Math.Max(0, mr.UseFailed);
+            var denom = successes + failures + 1d;
+            var successRate = successes / denom;
+            var explorationBonus = c * Math.Sqrt(logTerm / denom);
+            return successRate + explorationBonus;
+        }
+
+        var fallbacks = candidates
+            .OrderByDescending(Score)
+            .ThenByDescending(mr => Math.Max(0, mr.UseSuccessed) / (Math.Max(0, mr.UseSuccessed) + Math.Max(0, mr.UseFailed) + 1d))
             .ThenByDescending(mr => mr.UseCount)
             .ToList();
 
-        _logger?.Log("Info", "ModelFallback", $"Found {fallbacks.Count} fallback models for role '{roleCode}' (excluding model {excludeModelId}, neverTriedFirst=true)");
+        _logger?.Log(
+            "Info",
+            "ModelFallback",
+            $"Found {fallbacks.Count} fallback models for role '{roleCode}' (agent={resolvedAgentId.Value}, excluding model {excludeModelId}, C={c:0.###}, T={roleTotalTrials:0})");
         return fallbacks;
     }
 
@@ -73,22 +107,29 @@ public class ModelFallbackService
     /// Record usage for the primary model of a role. This auto-creates a ModelRole row with is_primary=1 if missing.
     /// Primary rows are excluded from fallback selection.
     /// </summary>
-    public void RecordPrimaryModelUsage(string roleCode, int modelId, bool success)
+    public void RecordPrimaryModelUsage(string roleCode, int modelId, bool success, int? agentId = null)
     {
         if (string.IsNullOrWhiteSpace(roleCode) || modelId <= 0)
         {
             return;
         }
 
-        var role = _context.Roles.FirstOrDefault(r => r.Ruolo == roleCode);
+        var role = _context.Roles.FirstOrDefault(r => r.Name == roleCode);
         if (role == null)
         {
             _logger?.Log("Warning", "ModelFallback", $"Role '{roleCode}' not found in database. Cannot record primary usage.");
             return;
         }
 
+        var resolvedAgentId = ResolveAgentIdForRole(roleCode, agentId);
+        if (!resolvedAgentId.HasValue || resolvedAgentId.Value <= 0)
+        {
+            _logger?.Log("Warning", "ModelFallback", $"No agent found for role '{roleCode}'. Cannot record primary usage.");
+            return;
+        }
+
         var mr = _context.ModelRoles
-            .Where(x => x.RoleId == role.Id && x.ModelId == modelId)
+            .Where(x => x.RoleId == role.Id && x.ModelId == modelId && x.AgentId == resolvedAgentId.Value)
             .OrderByDescending(x => x.IsPrimary)
             .ThenBy(x => x.Id)
             .FirstOrDefault();
@@ -99,6 +140,7 @@ public class ModelFallbackService
             {
                 ModelId = modelId,
                 RoleId = role.Id,
+                AgentId = resolvedAgentId.Value,
                 IsPrimary = true,
                 Enabled = true,
                 CreatedAt = now,
@@ -108,7 +150,7 @@ public class ModelFallbackService
             _context.SaveChanges();
         }
 
-        EnsureSinglePrimaryForRole(role.Id, modelId);
+        EnsureSinglePrimaryForRole(role.Id, resolvedAgentId.Value, modelId);
 
         RecordModelRoleUsage(mr.Id, success);
     }
@@ -147,7 +189,7 @@ public class ModelFallbackService
     /// Aggregate model performance counters (tokens/durations) on model_roles for a specific role+model pair.
     /// If the row does not exist, it is auto-created as primary+enabled.
     /// </summary>
-    public void RecordPrimaryModelPerformance(string roleCode, int modelId, ModelRolePerformanceDelta delta)
+    public void RecordPrimaryModelPerformance(string roleCode, int modelId, ModelRolePerformanceDelta delta, int? agentId = null)
     {
         if (string.IsNullOrWhiteSpace(roleCode) || modelId <= 0)
         {
@@ -165,16 +207,23 @@ public class ModelFallbackService
             return;
         }
 
-        var role = _context.Roles.FirstOrDefault(r => r.Ruolo == roleCode);
+        var role = _context.Roles.FirstOrDefault(r => r.Name == roleCode);
         if (role == null)
         {
             _logger?.Log("Warning", "ModelFallback", $"Role '{roleCode}' not found in database. Cannot record performance.");
             return;
         }
 
-        // Prefer an existing primary row; fallback to any row for same model+role.
+        var resolvedAgentId = ResolveAgentIdForRole(roleCode, agentId);
+        if (!resolvedAgentId.HasValue || resolvedAgentId.Value <= 0)
+        {
+            _logger?.Log("Warning", "ModelFallback", $"No agent found for role '{roleCode}'. Cannot record performance.");
+            return;
+        }
+
+        // Prefer an existing primary row; fallback to any row for same model+role+agent.
         var mr = _context.ModelRoles
-            .Where(x => x.RoleId == role.Id && x.ModelId == modelId)
+            .Where(x => x.RoleId == role.Id && x.ModelId == modelId && x.AgentId == resolvedAgentId.Value)
             .OrderByDescending(x => x.IsPrimary)
             .ThenBy(x => x.Id)
             .FirstOrDefault();
@@ -186,6 +235,7 @@ public class ModelFallbackService
             {
                 ModelId = modelId,
                 RoleId = role.Id,
+                AgentId = resolvedAgentId.Value,
                 IsPrimary = true,
                 Enabled = true,
                 CreatedAt = now,
@@ -195,7 +245,7 @@ public class ModelFallbackService
             _context.SaveChanges();
         }
 
-        EnsureSinglePrimaryForRole(role.Id, modelId);
+        EnsureSinglePrimaryForRole(role.Id, resolvedAgentId.Value, modelId);
 
         mr.TotalPromptTokens += Math.Max(0, delta.PromptTokens);
         mr.TotalOutputTokens += Math.Max(0, delta.OutputTokens);
@@ -207,16 +257,16 @@ public class ModelFallbackService
         _context.SaveChanges();
     }
 
-    private void EnsureSinglePrimaryForRole(int roleId, int primaryModelId)
+    private void EnsureSinglePrimaryForRole(int roleId, int agentId, int primaryModelId)
     {
-        if (roleId <= 0 || primaryModelId <= 0)
+        if (roleId <= 0 || agentId <= 0 || primaryModelId <= 0)
         {
             return;
         }
 
         var now = DateTime.UtcNow.ToString("o");
         var rows = _context.ModelRoles
-            .Where(x => x.RoleId == roleId)
+            .Where(x => x.RoleId == roleId && x.AgentId == agentId)
             .OrderBy(x => x.Id)
             .ToList();
         if (rows.Count == 0)
@@ -264,9 +314,10 @@ public class ModelFallbackService
         int? primaryModelId,
         Func<ModelRole, Task<T>> operationAsync,
         Func<T, bool>? validateResult = null,
-        Func<ModelRole, bool>? shouldTryModelRole = null)
+        Func<ModelRole, bool>? shouldTryModelRole = null,
+        int? agentId = null)
     {
-        var fallbacks = GetFallbackModelsForRole(roleCode, primaryModelId);
+        var fallbacks = GetFallbackModelsForRole(roleCode, primaryModelId, agentId);
         if (!fallbacks.Any())
         {
             _logger?.Log("Warning", "ModelFallback", $"No fallback models available for role '{roleCode}'.");
@@ -295,8 +346,21 @@ public class ModelFallbackService
                 }
             }
 
-            _logger?.Log("Info", "ModelFallback", 
-                $"Trying fallback model: {modelRole.Model?.Name} (role={roleCode}, success_rate={modelRole.SuccessRate:P1})");
+            var succ = Math.Max(0, modelRole.UseSuccessed);
+            var fail = Math.Max(0, modelRole.UseFailed);
+            var denom = succ + fail + 1d;
+            var successRate = succ / denom;
+            var roleTotalTrials = _context.ModelRoles
+                .Where(mr => mr.RoleId == modelRole.RoleId)
+                .Sum(mr => (double?)(mr.UseSuccessed + mr.UseFailed)) ?? 0d;
+            var c = Math.Max(0d, _options.ExplorationConstant);
+            var explorationBonus = c * Math.Sqrt(Math.Log(roleTotalTrials + 1d) / denom);
+            var score = successRate + explorationBonus;
+
+            _logger?.Log(
+                "Info",
+                "ModelFallback",
+                $"Trying fallback model: {modelRole.Model?.Name} (role={roleCode}, score={score:0.####}, success_rate={successRate:P2}, exploration_bonus={explorationBonus:0.####}, C={c:0.###}, T={roleTotalTrials:0})");
 
             try
             {
@@ -329,5 +393,36 @@ public class ModelFallbackService
 
         _logger?.Log("Error", "ModelFallback", $"All fallback models exhausted for role '{roleCode}'. Operation failed definitively.");
         return (default(T), null);
+    }
+
+    private int? ResolveAgentIdForRole(string roleCode, int? preferredAgentId)
+    {
+        if (preferredAgentId.HasValue && preferredAgentId.Value > 0)
+        {
+            var preferredExists = _context.Agents.Any(a => a.Id == preferredAgentId.Value);
+            if (preferredExists)
+            {
+                return preferredAgentId.Value;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(roleCode))
+        {
+            var roleNorm = roleCode.Trim().ToLower();
+            var byRole = _context.Agents
+                .Where(a => a.Role != null && a.Role.ToLower() == roleNorm)
+                .OrderBy(a => a.Id)
+                .Select(a => (int?)a.Id)
+                .FirstOrDefault();
+            if (byRole.HasValue && byRole.Value > 0)
+            {
+                return byRole.Value;
+            }
+        }
+
+        return _context.Agents
+            .OrderBy(a => a.Id)
+            .Select(a => (int?)a.Id)
+            .FirstOrDefault();
     }
 }

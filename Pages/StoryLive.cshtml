@@ -11,6 +11,20 @@
     .live-label { font-size: 12px; text-transform: uppercase; color: #6c757d; }
     .live-value { font-size: 15px; font-weight: 600; color: #222; word-break: break-word; }
     .live-status { margin-bottom: 12px; font-size: 13px; color: #495057; }
+    .live-section-title { font-size: 13px; text-transform: uppercase; color: #6c757d; margin: 8px 0; }
+    .live-plan {
+        min-height: 140px;
+        max-height: 320px;
+        white-space: pre-wrap;
+        border: 1px solid #d9d9d9;
+        border-radius: 8px;
+        background: #f8f9fa;
+        padding: 12px;
+        font-size: 14px;
+        line-height: 1.4;
+        overflow: auto;
+        margin-bottom: 12px;
+    }
     .live-output {
         min-height: 55vh;
         white-space: pre-wrap;
@@ -41,7 +55,10 @@
     </div>
 
     <div class="live-status" id="liveStatus">Connessione in corso...</div>
-    <div class="live-output" id="liveOutput"></div>
+    <div class="live-section-title">Piano NRE (nre_planner)</div>
+    <div class="live-plan" id="planOutput">@Model.NrePlanSummary</div>
+    <div class="live-section-title">Testo approvato consolidato</div>
+    <div class="live-output" id="liveOutput">@Model.ApprovedText</div>
 </div>
 
 @section Scripts {
@@ -49,7 +66,9 @@
 (() => {
     let currentStoryId = @Model.StoryId;
     const initialGroup = currentStoryId > 0 ? `story_live_${currentStoryId}` : null;
+    let refreshTimer = null;
     const out = document.getElementById('liveOutput');
+    const planOut = document.getElementById('planOutput');
     const statusEl = document.getElementById('liveStatus');
     const titleEl = document.getElementById('storyTitle');
     const agentEl = document.getElementById('agentName');
@@ -59,10 +78,10 @@
         if (statusEl) statusEl.textContent = text;
     }
 
-    function appendChunk(text) {
-        if (!out || !text) return;
-        out.textContent += text;
-        out.scrollTop = out.scrollHeight;
+    function setConsolidated(plan, text) {
+        if (planOut) planOut.textContent = plan || '';
+        if (out) out.textContent = text || '';
+        if (out) out.scrollTop = out.scrollHeight;
     }
 
     function matchesStory(payload) {
@@ -72,6 +91,20 @@
             return true;
         }
         return incoming > 0 && incoming === Number(currentStoryId);
+    }
+
+    async function refreshState() {
+        if (!currentStoryId || Number(currentStoryId) <= 0) return;
+        try {
+            const res = await fetch(`@Url.Page("/StoryLive")?handler=State&id=${encodeURIComponent(currentStoryId)}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data || !data.ok) return;
+            if (titleEl && data.title) titleEl.textContent = data.title;
+            setConsolidated(data.nrePlanSummary || '', data.approvedText || '');
+        } catch (e) {
+            console.error(e);
+        }
     }
 
     const connection = new signalR.HubConnectionBuilder()
@@ -84,24 +117,60 @@
         if (titleEl && payload.title) titleEl.textContent = payload.title;
         if (agentEl) agentEl.textContent = payload.agentName || 'N/A';
         if (modelEl) modelEl.textContent = payload.modelName || 'N/A';
-        if (out) out.textContent = '';
+        if (typeof payload.nrePlanSummary !== 'undefined' || typeof payload.approvedText !== 'undefined') {
+            setConsolidated(payload.nrePlanSummary || '', payload.approvedText || '');
+        }
         setStatus('Streaming in corso...');
+        refreshState();
     });
 
     connection.on('StoryLiveChunk', payload => {
         if (!payload || !matchesStory(payload)) return;
-        appendChunk(payload.chunk || '');
+        // Legacy event from CallCenter streaming: keep as fallback by reloading state.
+        refreshState();
+    });
+
+    connection.on('StoryLiveConsolidated', payload => {
+        if (!payload || !matchesStory(payload)) return;
+        setConsolidated(payload.nrePlanSummary || '', payload.approvedText || '');
+        const step = Number(payload.currentStep || 0);
+        const max = Number(payload.maxStep || 0);
+        const phase = payload.phase ? ` - ${payload.phase}` : '';
+        if (step > 0 && max > 0) {
+            setStatus(`Consolidato step ${step}/${max}${phase}`);
+        } else {
+            setStatus(`Consolidato${phase}`);
+        }
     });
 
     connection.on('StoryLiveCompleted', payload => {
         if (!payload || !matchesStory(payload)) return;
+        if (typeof payload.nrePlanSummary !== 'undefined' || typeof payload.approvedText !== 'undefined') {
+            setConsolidated(payload.nrePlanSummary || '', payload.approvedText || '');
+        }
         setStatus('Completato. In attesa di eventuali nuovi tentativi...');
+        refreshState();
     });
 
     connection.on('StoryLiveFailed', payload => {
         if (!payload || !matchesStory(payload)) return;
+        if (typeof payload.nrePlanSummary !== 'undefined' || typeof payload.approvedText !== 'undefined') {
+            setConsolidated(payload.nrePlanSummary || '', payload.approvedText || '');
+        }
         const err = payload && payload.error ? payload.error : 'Errore durante la generazione';
         setStatus(`Fallito: ${err}`);
+        refreshState();
+    });
+
+    connection.onreconnected(async () => {
+        try {
+            if (currentStoryId > 0) {
+                await connection.invoke('JoinGroup', `story_live_${currentStoryId}`);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+        refreshState();
     });
 
     async function start() {
@@ -111,6 +180,8 @@
                 await connection.invoke('JoinGroup', initialGroup);
             }
             setStatus(initialGroup ? 'Connesso. In attesa di output...' : 'Connesso. In attesa di una storia in streaming...');
+            await refreshState();
+            refreshTimer = setInterval(refreshState, 2000);
         } catch (e) {
             console.error(e);
             setStatus('Errore connessione live.');

@@ -17,6 +17,20 @@
     </div>
 
     <div class="mb-3">
+        <label class="form-label">CallName (nome reale richiesta)</label>
+        <input asp-for="Model.CallName" class="form-control" placeholder="es. qwen3:14b" />
+        <span asp-validation-for="Model.CallName" class="text-danger"></span>
+        <small class="form-text text-muted">Se vuoto, viene usato automaticamente Name.</small>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Size testo</label>
+        <input asp-for="Model.SizeText" class="form-control" placeholder="es. 7B, 30B, 35B-A3B" />
+        <span asp-validation-for="Model.SizeText" class="text-danger"></span>
+        <small class="form-text text-muted">Se vuoto, viene dedotto automaticamente dal nome modello.</small>
+    </div>
+
+    <div class="mb-3">
         <label class="form-label">Provider</label>
         <select asp-for="Model.Provider" class="form-select">
             <option value="ollama">ollama</option>
@@ -24,6 +38,13 @@
             <option value="openai">openai</option>
         </select>
         <span asp-validation-for="Model.Provider" class="text-danger"></span>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Image (path relativo in wwwroot)</label>
+        <input asp-for="Model.Image" class="form-control" placeholder="providers/openai.svg" />
+        <span asp-validation-for="Model.Image" class="text-danger"></span>
+        <small class="form-text text-muted">Esempio: <code>providers/qwen.svg</code></small>
     </div>
 
     <div class="mb-3">
@@ -89,6 +110,14 @@
     </div>
 
     <div class="mb-3">
+        <label class="form-label">Thinking (fallback)</label>
+        <select asp-for="Model.Thinking" class="form-select">
+            <option value="">null (non forzare)</option>
+            <option value="true">true</option>
+            <option value="false">false</option>
+        </select>
+        <small class="form-text text-muted">Usato quando l'agente non ha un valore Thinking esplicito.</small>
+    </div>
 
     <div class="mb-3">
         <label class="form-label">Note</label>

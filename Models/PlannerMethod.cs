@@ -8,7 +8,7 @@ namespace TinyGenerator.Models;
 /// Examples: Save the Cat, Story Grid, Hero's Journey, etc.
 /// </summary>
 [Table("planner_methods")]
-public class PlannerMethod
+public partial class PlannerMethod : ISoftDelete, IActiveFlag, IOrderable
 {
     /// <summary>
     /// Primary key

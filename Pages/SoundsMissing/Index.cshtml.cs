@@ -266,6 +266,36 @@ public class IndexModel : PageModel
         return RedirectToPage("/SoundsMissing/Index", new { typeFilter = TypeFilter, statusFilter = StatusFilter });
     }
 
+    public IActionResult OnPostDeleteVisible(string? typeFilter, string? statusFilter, string? visibleIds)
+    {
+        TypeFilter = NormalizeOrNull(typeFilter, AllowedTypes);
+        StatusFilter = NormalizeOrNull(statusFilter, AllowedStatuses);
+
+        try
+        {
+            var ids = ParseIdList(visibleIds);
+            if (ids.Count == 0)
+            {
+                ActionMessageType = "info";
+                ActionMessage = "Nessun record visualizzato da cancellare.";
+                return RedirectToPage("/SoundsMissing/Index", new { typeFilter = TypeFilter, statusFilter = StatusFilter });
+            }
+
+            var deleted = _database.DeleteMissingSoundsByIds(ids);
+            ActionMessageType = deleted > 0 ? "success" : "info";
+            ActionMessage = deleted > 0
+                ? $"Cancellati {deleted} record sounds_missing visualizzati."
+                : "Nessun record cancellato.";
+        }
+        catch (Exception ex)
+        {
+            ActionMessageType = "danger";
+            ActionMessage = $"Errore cancellando i record visualizzati: {ex.Message}";
+        }
+
+        return RedirectToPage("/SoundsMissing/Index", new { typeFilter = TypeFilter, statusFilter = StatusFilter });
+    }
+
     public IActionResult OnPostToggleStatus(long id, string? currentStatus)
     {
         if (id <= 0)
@@ -317,6 +347,21 @@ public class IndexModel : PageModel
 
     private static string NormalizeType(string? value)
         => string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim().ToLowerInvariant();
+
+    private static List<long> ParseIdList(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return new List<long>();
+        }
+
+        return raw
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(token => long.TryParse(token, out var id) ? id : 0L)
+            .Where(id => id > 0)
+            .Distinct()
+            .ToList();
+    }
 
     private static IEnumerable<string> ParseTagTokens(string? raw)
     {

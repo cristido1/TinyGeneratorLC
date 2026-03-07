@@ -70,7 +70,13 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Roles that must never be validated (avoid recursion / unwanted validation).
         /// </summary>
-        public List<string> SkipRoles { get; set; } = new() { "response_checker", "log_analyzer" };
+        public List<string> SkipRoles { get; set; } = new() { "log_analyzer" };
+
+        /// <summary>
+        /// If false (default), a response_checker call is never validated again by response_checker.
+        /// Set true only for specific diagnostics, otherwise it may create validation recursion loops.
+        /// </summary>
+        public bool EnableSelfValidationForResponseChecker { get; set; } = false;
 
         /// <summary>
         /// Per operation policy. Key is typically LogScope.Current (thread scope / operation scope).

@@ -22,6 +22,8 @@
             "regen_ambient_tags" => "Rigenerare i tag RUMORI?",
             "regen_fx_tags" => "Rigenerare i tag FX?",
             "regen_music_tags" => "Rigenerare i tag MUSICA?",
+            "rerun_nre_from_plan_single_pass" => "Creare una nuova storia NRE in single_pass usando il piano salvato?",
+            "rerun_nre_from_plan_state_driven" => "Creare una nuova storia NRE in state_driven usando il piano salvato?",
             _ => "Confermi l'esecuzione di questa azione?"
         };
 }
@@ -104,6 +106,8 @@
                     <th data-col="agent">Agente</th>
                     <th data-col="model">Modello</th>
                     <th data-col="folder">Cartella</th>
+                    <th data-col="lastErrorOperation">Ultimo Errore Operazione</th>
+                    <th data-col="lastErrorDate">Ultimo Errore Data</th>
                     <th data-col="assets">Assets</th>
                     <th data-col="chars">Caratteri</th>
                     <th data-col="test">Test</th>
@@ -131,6 +135,10 @@
                         <td data-col="agent">@s.Agent</td>
                         <td data-col="model">@s.Model</td>
                         <td data-col="folder">@s.Folder</td>
+                        <td data-col="lastErrorOperation">@(!string.IsNullOrWhiteSpace(s.LastErrorOperation) ? s.LastErrorOperation : "-")</td>
+                        <td data-col="lastErrorDate">
+                            @((DateTime.TryParse(s.LastErrorDate, out var _errDt)) ? _errDt.ToString("dd/MM/yyyy HH:mm") : (!string.IsNullOrWhiteSpace(s.LastErrorDate) ? s.LastErrorDate : "-"))
+                        </td>
                         <td data-col="assets">
                             @if (!string.IsNullOrWhiteSpace(s.StoryTagged)) { <span title="Story tagged" class="text-dark me-1"><i class="bi bi-tags-fill"></i></span>; }
                             @if (s.GeneratedTtsJson) { <span title="TTS JSON" class="text-primary me-1"><i class="bi bi-file-earmark-text-fill"></i></span>; }
@@ -144,6 +152,10 @@
                             @if (s.GeneratedMusic) { <span title="Music" class="text-muted me-1"><i class="bi bi-music-note-beamed"></i></span>; }
                             @if (s.GeneratedMixedAudio) {
                                 <button type="button" class="btn btn-sm btn-link p-0 me-2 play-final-mix-btn" data-story-id="@s.Id" data-story-title="@s.Title" title="Play final mix"><i class="bi bi-play-circle-fill" style="color:#0d6efd;font-size:1.25rem;"></i></button>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(s.LastErrorOperation) || !string.IsNullOrWhiteSpace(s.LastErrorText))
+                            {
+                                <span title="@(!string.IsNullOrWhiteSpace(s.LastErrorText) ? s.LastErrorText : "Ultima operazione terminata con errore")" class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i></span>
                             }
                         </td>
                         <td data-col="chars" class="text-end">@s.CharCount</td>
@@ -237,10 +249,46 @@
                                             </form>
                                         </li>
                                     }
+                                    @if ((s.Evaluations?.Count ?? 0) > 0)
+                                    {
+                                        <li>
+                                            <form method="post" asp-page-handler="SendStoryEmail" class="m-0" onsubmit="return confirm('Inviare via email titolo, valutazione e testo revised?');">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="id" value="@s.Id" />
+                                                <button type="submit" class="dropdown-item">Invia storia via email</button>
+                                            </form>
+                                        </li>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(s.NrePlanSummary))
+                                    {
+                                        <li>
+                                            <form method="post" asp-page-handler="RerunNreFromPlanSinglePass" class="m-0" onsubmit="return confirm('Creare una nuova storia NRE in single_pass usando il piano salvato?');">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="id" value="@s.Id" />
+                                                <button type="submit" class="dropdown-item">Rifai NRE da piano (single_pass)</button>
+                                            </form>
+                                        </li>
+                                        <li>
+                                            <form method="post" asp-page-handler="RerunNreFromPlanStateDriven" class="m-0" onsubmit="return confirm('Creare una nuova storia NRE in state_driven usando il piano salvato?');">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="id" value="@s.Id" />
+                                                <button type="submit" class="dropdown-item">Rifai NRE da piano (state_driven)</button>
+                                            </form>
+                                        </li>
+                                    }
                                 </ul>
                             </div>
 
                             <template id="evalsTpl-@s.Id">
+                                <div class="card mb-2 border-danger-subtle">
+                                    <div class="card-body py-2">
+                                        <div class="small">
+                                            <div><strong>last_error_operation:</strong> @(!string.IsNullOrWhiteSpace(s.LastErrorOperation) ? s.LastErrorOperation : "-")</div>
+                                            <div><strong>last_error_date:</strong> @((DateTime.TryParse(s.LastErrorDate, out var _detailErrDt)) ? _detailErrDt.ToString("dd/MM/yyyy HH:mm") : (!string.IsNullOrWhiteSpace(s.LastErrorDate) ? s.LastErrorDate : "-"))</div>
+                                            <div><strong>last_error_text:</strong> @(!string.IsNullOrWhiteSpace(s.LastErrorText) ? s.LastErrorText : "-")</div>
+                                        </div>
+                                    </div>
+                                </div>
                                 @if (s.Evaluations != null && s.Evaluations.Any())
                                 {
                                     foreach (var e in s.Evaluations)

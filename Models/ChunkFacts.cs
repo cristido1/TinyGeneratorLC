@@ -6,7 +6,7 @@ namespace TinyGenerator.Models;
 /// Rappresenta i fatti oggettivi estratti da un chunk di storia
 /// </summary>
 [Table("chunk_facts")]
-public class ChunkFacts
+public partial class ChunkFacts : ISoftDelete, IActiveFlag, IOrderable
 {
     [Column("id")]
     public int Id { get; set; }

@@ -272,7 +272,10 @@ namespace TinyGenerator.Services
             try
             {
                 var hasExplicitNumPredict = numPredict.HasValue;
-                var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
+                var lookup = (model ?? string.Empty).Trim();
+                var modelInfo = _database.ListModels().FirstOrDefault(m =>
+                    string.Equals(m.Name, lookup, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(m.CallName, lookup, StringComparison.OrdinalIgnoreCase));
                 if (modelInfo == null)
                 {
                     throw new InvalidOperationException($"Model '{model}' not found in database");
@@ -480,7 +483,10 @@ namespace TinyGenerator.Services
             {
                 if (!_config.GetValue<bool>("ToolCalling:Enabled", false)) return schemas;
 
-                var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
+                var lookup = (model ?? string.Empty).Trim();
+                var modelInfo = _database.ListModels().FirstOrDefault(m =>
+                    string.Equals(m.Name, lookup, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(m.CallName, lookup, StringComparison.OrdinalIgnoreCase));
                 if (modelInfo == null) return schemas;
 
                 // If model explicitly does not support tools, return empty

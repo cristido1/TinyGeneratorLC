@@ -124,6 +124,9 @@ CREATE TABLE stories (
     approved INTEGER NOT NULL DEFAULT 0,
     status_id INTEGER NULL,
     folder TEXT NULL,
+    last_error_operation TEXT NULL,
+    last_error_text TEXT NULL,
+    last_error_date TEXT NULL,
     model_id INTEGER NULL,
     agent_id INTEGER NULL,
     RowVersion BLOB NULL

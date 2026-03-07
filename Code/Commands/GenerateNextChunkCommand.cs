@@ -137,8 +137,6 @@ public sealed class GenerateNextChunkCommand : ICommand
         var resourceManagerResult = await TryUpdateResourcesWithAgentAsync(
             snap,
             output,
-            phase,
-            pov,
             effectiveRunId,
             ct).ConfigureAwait(false);
         if (!resourceManagerResult.Success || string.IsNullOrWhiteSpace(resourceManagerResult.CanonStateJson))
@@ -1033,8 +1031,6 @@ public sealed class GenerateNextChunkCommand : ICommand
     private async Task<ResourceManagerUpdateResult> TryUpdateResourcesWithAgentAsync(
         DatabaseService.StateDrivenStorySnapshot snap,
         string newChunkText,
-        string phase,
-        string pov,
         string runId,
         CancellationToken ct)
     {
@@ -1053,7 +1049,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         var systemPrompt = resourceManager.Instructions ?? resourceManager.Prompt ?? "Aggiorna il canon state delle risorse e rispondi SOLO in JSON valido.";
         var history = new ChatHistory();
         history.AddSystem(systemPrompt);
-        history.AddUser(BuildResourceManagerUpdatePrompt(snap, newChunkText, phase, pov));
+        history.AddUser(BuildResourceManagerUpdatePrompt(snap, newChunkText));
 
         var options = new CallOptions
         {
@@ -1097,10 +1093,18 @@ public sealed class GenerateNextChunkCommand : ICommand
             return new ResourceManagerUpdateResult(false, null, result.FailureReason ?? "resource_manager update fallito");
         }
 
-        var canonStateJson = ExtractCanonStateJson(result.ResponseText);
+        if (!TryExtractResourceDeltaJson(result.ResponseText, out var deltaJson, out var parseError))
+        {
+            return new ResourceManagerUpdateResult(false, null, $"resource_manager: delta non valido ({parseError ?? "unknown"})");
+        }
+
+        var canonStateJson = ApplyResourceDeltaToCanonState(
+            snap.CanonStateJson,
+            deltaJson,
+            Math.Max(1, snap.CurrentChunkIndex + 1));
         if (string.IsNullOrWhiteSpace(canonStateJson))
         {
-            return new ResourceManagerUpdateResult(false, null, "resource_manager: impossibile estrarre canon_state");
+            return new ResourceManagerUpdateResult(false, null, "resource_manager: impossibile allineare canon_state con il delta");
         }
 
         _logger?.Append(runId, $"ResourceManager update ok: agente={resourceManager.Name}; modello={result.ModelUsed}");
@@ -1109,32 +1113,24 @@ public sealed class GenerateNextChunkCommand : ICommand
 
     private static string BuildResourceManagerUpdatePrompt(
         DatabaseService.StateDrivenStorySnapshot snap,
-        string newChunkText,
-        string phase,
-        string pov)
+        string newChunkText)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Aggiorna lo stato risorse e restituisci SOLO JSON valido.");
+        sb.AppendLine("Aggiorna le risorse rispetto all'ULTIMO chunk e restituisci SOLO JSON valido.");
         sb.AppendLine("Modalita: UPDATE.");
-        sb.AppendLine("Puoi aggiungere nuove risorse solo se il chunk le giustifica esplicitamente.");
-        sb.AppendLine("Se lo stato narrativo contiene eventi estremi (es. morte, distruzione), aggiorna in modo coerente.");
+        sb.AppendLine("Input disponibili: SOLO previous_canon_state e new_chunk_text.");
+        sb.AppendLine("NON riscrivere tutto il canon_state: restituisci SOLO le risorse che cambiano.");
+        sb.AppendLine("Il programma applichera' il delta allo stato completo.");
+        sb.AppendLine("Per ogni risorsa usa solo: name + (quantity oppure integrity_percent) e opzionalmente status_flag, notes_json.");
         sb.AppendLine();
         sb.AppendLine("{");
         sb.AppendLine("  \"mode\": \"UPDATE\",");
-        sb.AppendLine($"  \"story_id\": {snap.StoryId},");
-        sb.AppendLine("  \"episode_number\": null,");
-        sb.AppendLine($"  \"chunk_index\": {snap.CurrentChunkIndex + 1},");
-        sb.AppendLine($"  \"phase\": \"{EscapeJsonText(phase)}\",");
-        sb.AppendLine($"  \"pov\": \"{EscapeJsonText(pov)}\",");
         sb.AppendLine("  \"previous_canon_state\": " + (string.IsNullOrWhiteSpace(snap.CanonStateJson) ? "{}" : snap.CanonStateJson) + ",");
         sb.AppendLine("  \"new_chunk_text\": \"" + EscapeJsonText(newChunkText) + "\"");
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("Output atteso:");
-        sb.AppendLine("{");
-        sb.AppendLine("  \"canon_state\": { ... },");
-        sb.AppendLine("  \"delta\": { \"updated_resources\": [...], \"events\": [...] }");
-        sb.AppendLine("}");
+        sb.AppendLine("{ \"updated_resources\": [ ... ] }");
         return sb.ToString();
     }
 
@@ -1181,34 +1177,170 @@ public sealed class GenerateNextChunkCommand : ICommand
         return values;
     }
 
-    private static string ExtractCanonStateJson(string rawResponse)
+    private static bool TryExtractResourceDeltaJson(string? rawResponse, out string deltaJson, out string? error)
     {
+        deltaJson = string.Empty;
+        error = null;
         if (string.IsNullOrWhiteSpace(rawResponse))
         {
-            return string.Empty;
+            error = "response vuota";
+            return false;
         }
 
         try
         {
             using var doc = JsonDocument.Parse(rawResponse);
-            if (doc.RootElement.TryGetProperty("canon_state", out var canonState) &&
-                canonState.ValueKind == JsonValueKind.Object)
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
             {
-                return canonState.GetRawText();
+                error = "root JSON non object";
+                return false;
             }
 
-            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
-                doc.RootElement.TryGetProperty("resources", out _))
+            if (root.TryGetProperty("updated_resources", out var updates) &&
+                updates.ValueKind == JsonValueKind.Array)
             {
-                return doc.RootElement.GetRawText();
+                deltaJson = root.GetRawText();
+                return true;
             }
+
+            if (root.TryGetProperty("delta", out var delta) &&
+                delta.ValueKind == JsonValueKind.Object &&
+                delta.TryGetProperty("updated_resources", out var legacyUpdates) &&
+                legacyUpdates.ValueKind == JsonValueKind.Array)
+            {
+                deltaJson = delta.GetRawText();
+                return true;
+            }
+
+            error = "campo updated_resources mancante";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static string ApplyResourceDeltaToCanonState(string? currentCanonStateJson, string deltaJson, int chunkIndex)
+    {
+        var canonNode = ParseCanonStateNodeOrDefault(currentCanonStateJson);
+        if (canonNode == null)
+        {
+            return string.Empty;
+        }
+
+        if (canonNode["resources"] is not JsonArray resources)
+        {
+            resources = new JsonArray();
+            canonNode["resources"] = resources;
+        }
+
+        JsonObject? deltaNode;
+        try
+        {
+            deltaNode = JsonNode.Parse(deltaJson) as JsonObject;
         }
         catch
         {
-            // best effort
+            return string.Empty;
         }
 
-        return string.Empty;
+        if (deltaNode == null)
+        {
+            return string.Empty;
+        }
+
+        var updates = deltaNode["updated_resources"] as JsonArray;
+        if (updates == null)
+        {
+            return canonNode.ToJsonString();
+        }
+
+        var existingByName = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in resources)
+        {
+            if (item is not JsonObject obj) continue;
+            var name = obj["name"]?.GetValue<string>()?.Trim();
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            existingByName[name] = obj;
+        }
+
+        foreach (var update in updates)
+        {
+            if (update is not JsonObject updateObj)
+            {
+                continue;
+            }
+
+            var name = updateObj["name"]?.GetValue<string>()?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            if (!existingByName.TryGetValue(name, out var target))
+            {
+                target = new JsonObject { ["name"] = name };
+                resources.Add(target);
+                existingByName[name] = target;
+            }
+
+            foreach (var kvp in updateObj)
+            {
+                if (string.Equals(kvp.Key, "story_id", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "series_id", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "episode_number", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "chunk_index", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "last_update_chunk", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                target[kvp.Key] = kvp.Value?.DeepClone();
+            }
+
+            target["name"] = name;
+            target["last_update_chunk"] = Math.Max(0, chunkIndex);
+            if (target["quantity"] == null && target["integrity_percent"] == null)
+            {
+                target["quantity"] = 0;
+            }
+        }
+
+        return canonNode.ToJsonString();
+    }
+
+    private static JsonObject? ParseCanonStateNodeOrDefault(string? canonStateJson)
+    {
+        if (string.IsNullOrWhiteSpace(canonStateJson))
+        {
+            return new JsonObject
+            {
+                ["resources"] = new JsonArray()
+            };
+        }
+
+        try
+        {
+            var node = JsonNode.Parse(canonStateJson) as JsonObject;
+            if (node == null)
+            {
+                return null;
+            }
+
+            if (node["resources"] is not JsonArray)
+            {
+                node["resources"] = new JsonArray();
+            }
+
+            return node;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string EscapeJsonText(string text)
@@ -1268,14 +1400,18 @@ public sealed class GenerateNextChunkCommand : ICommand
 
     private string? ResolveModelName(Agent agent)
     {
-        if (!string.IsNullOrWhiteSpace(agent.ModelName))
-        {
-            return agent.ModelName.Trim();
-        }
-
         if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
         {
-            return _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+            var byId = _database.ResolveModelCallNameById(agent.ModelId.Value);
+            if (!string.IsNullOrWhiteSpace(byId))
+            {
+                return byId.Trim();
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        {
+            return _database.ResolveModelCallName(agent.ModelName) ?? agent.ModelName.Trim();
         }
 
         return null;

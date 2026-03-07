@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("test_prompts")]
-public class TestPrompt
+public partial class TestPrompt : ISoftDelete, IActiveFlag, IOrderable
 {
     [Column("id")]
     public int Id { get; set; }

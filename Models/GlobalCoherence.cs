@@ -6,7 +6,7 @@ namespace TinyGenerator.Models;
 /// Rappresenta la coerenza globale finale di una storia
 /// </summary>
 [Table("global_coherence")]
-public class GlobalCoherence
+public partial class GlobalCoherence : ISoftDelete, IActiveFlag, IOrderable
 {
     [Column("id")]
     public int Id { get; set; }

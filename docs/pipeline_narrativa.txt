@@ -256,3 +256,25 @@ Il sistema deve garantire:
 
 ------------------------------------------------------------
 FINE DOCUMENTO
+
+------------------------------------------------------------
+SEZIONE 14 - FALLBACK MODELLO (CALLCENTER)
+
+Regola operativa aggiornata:
+- Il fallback deve avvenire per MODELLI di fallback, non per agenti diversi.
+- I modelli fallback sono letti da model_roles, filtrati per:
+  - stesso agent_id dell'agente corrente
+  - stesso ruolo
+  - enabled = true
+  - is_primary = false
+
+Comportamento obbligatorio al fallback:
+1) L'agente resta lo stesso (stesso id/nome/ruolo).
+2) La conversazione resta la stessa (history preservata).
+3) Cambia solo il modello (model_id/model_name).
+4) Il contatore retry del modello riparte dal massimo configurato.
+   - retries per modello = MaxRetries + 1 tentativi totali.
+
+Nota:
+- Il campo agent_id in model_roles serve a statistiche/promozioni e a isolare
+  i fallback per agente, evitando propagazioni tra agenti con stesso ruolo.

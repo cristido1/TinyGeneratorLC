@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "theme", "setting", "genre", "tone"],
+  "properties": {
+    "title": { "type": "string", "description": "Titolo proposto per la nuova storia NRE." },
+    "theme": { "type": "string", "description": "Tema centrale della storia." },
+    "setting": { "type": "string", "description": "Ambientazione narrativa principale." },
+    "genre": { "type": "string", "description": "Genere prevalente della proposta." },
+    "tone": { "type": "string", "description": "Tono stilistico desiderato." },
+    "constraints": { "type": "string", "description": "Vincoli operativi/narrativi da rispettare." },
+    "resource_hints": { "type": "string", "description": "Risorse iniziali utili alla storia (personaggi, mezzi, luoghi, oggetti)." }
+  }
+}

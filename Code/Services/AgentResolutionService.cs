@@ -35,12 +35,15 @@ public sealed class AgentResolutionService : IAgentResolutionService
         {
             throw new InvalidOperationException($"Model not found for agent {agent.Name}");
         }
+        var callModelName = string.IsNullOrWhiteSpace(modelInfo.CallName)
+            ? modelInfo.Name
+            : modelInfo.CallName.Trim();
 
         var baseSystemPrompt = BuildSystemPrompt(agent);
-        var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { modelInfo.Name };
+        var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { callModelName };
 
         // TODO: support policy-based agent selection (e.g. capability tags, weighted routing).
-        return new ResolvedAgent(agent, modelId, modelInfo.Name, baseSystemPrompt, tried);
+        return new ResolvedAgent(agent, modelId, callModelName, baseSystemPrompt, tried);
     }
 
     private static string? BuildSystemPrompt(Models.Agent agent)

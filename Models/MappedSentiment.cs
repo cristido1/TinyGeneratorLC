@@ -9,7 +9,7 @@ namespace TinyGenerator.Models;
 /// Funge da cache per evitare ricalcoli.
 /// </summary>
 [Table("mapped_sentiments")]
-public class MappedSentiment
+public partial class MappedSentiment : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

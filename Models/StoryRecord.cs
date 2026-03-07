@@ -6,7 +6,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("stories")]
-    public class StoryRecord
+    public partial class StoryRecord : ISoftDelete, IActiveFlag, IOrderable
     {
         [Column("id")]
         public long Id { get; set; }
@@ -139,6 +139,15 @@ namespace TinyGenerator.Models
         [Column("auto_tts_last_error")]
         public string? AutoTtsLastError { get; set; }
 
+        [Column("last_error_operation")]
+        public string? LastErrorOperation { get; set; }
+
+        [Column("last_error_text")]
+        public string? LastErrorText { get; set; }
+
+        [Column("last_error_date")]
+        public string? LastErrorDate { get; set; }
+
         /// <summary>
         /// Indicates if the story has a final mixed audio file (final_mix.wav or final_mix.mp3)
         /// </summary>
@@ -209,6 +218,9 @@ namespace TinyGenerator.Models
 
         [Column("narrative_status")]
         public string? NarrativeEngineStatus { get; set; }
+
+        [Column("nre_plan_summary")]
+        public string? NrePlanSummary { get; set; }
 
         // Evaluations attached to the story (one for each saved evaluation)
         [NotMapped]

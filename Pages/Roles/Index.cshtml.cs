@@ -17,9 +17,9 @@ public class IndexModel : PageModel
 
     public IReadOnlyList<Role> Items { get; set; } = new List<Role>();
 
-    public void OnGet()
+    public IActionResult OnGet()
     {
-        Items = _context.Roles.OrderBy(r => r.Ruolo).ToList();
+        return RedirectToPage("/Shared/Index", new { entity = "roles", title = "Roles" });
     }
 
     public IActionResult OnGetDetail(int id)
@@ -47,13 +47,13 @@ public class IndexModel : PageModel
                 })
             .ToList();
 
-        var description = $"Comando collegato: {(string.IsNullOrWhiteSpace(role.ComandoCollegato) ? "-" : role.ComandoCollegato)}\n" +
+        var description = $"Comando collegato: {(string.IsNullOrWhiteSpace(role.LinkedCommand) ? "-" : role.LinkedCommand)}\n" +
                           $"Creato: {FormatTimestamp(role.CreatedAt)}\n" +
                           $"Aggiornato: {FormatTimestamp(role.UpdatedAt)}";
 
         return new JsonResult(new
         {
-            title = role.Ruolo,
+            title = role.Name,
             description,
             fallbackModels = fallbackItems
         });
@@ -72,13 +72,13 @@ public class IndexModel : PageModel
         var hasModelRoles = _context.ModelRoles.Any(mr => mr.RoleId == id);
         if (hasModelRoles)
         {
-            TempData["ErrorMessage"] = $"Impossibile eliminare il ruolo '{role.Ruolo}' perché è utilizzato da uno o più model_roles.";
+            TempData["ErrorMessage"] = $"Impossibile eliminare il ruolo '{role.Name}' perché è utilizzato da uno o più model_roles.";
             return RedirectToPage();
         }
 
         _context.Roles.Remove(role);
         _context.SaveChanges();
-        TempData["Message"] = $"Ruolo '{role.Ruolo}' eliminato con successo.";
+        TempData["Message"] = $"Ruolo '{role.Name}' eliminato con successo.";
         return RedirectToPage();
     }
 

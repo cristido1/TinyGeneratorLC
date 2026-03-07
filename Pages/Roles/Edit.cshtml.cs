@@ -47,8 +47,8 @@ public class EditModel : PageModel
             {
                 return NotFound();
             }
-            existing.Ruolo = Role.Ruolo;
-            existing.ComandoCollegato = Role.ComandoCollegato;
+            existing.Name = Role.Name;
+            existing.LinkedCommand = Role.LinkedCommand;
             existing.UpdatedAt = now;
         }
         else

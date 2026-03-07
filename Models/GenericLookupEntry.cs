@@ -1,8 +1,10 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
-public sealed class GenericLookupEntry
+[Table("GenericLookup")]
+public sealed partial class GenericLookupEntry : ISoftDelete, IActiveFlag, IOrderable
 {
     public long Id { get; set; }
 
@@ -27,4 +29,3 @@ public sealed class GenericLookupEntry
     public string CreatedAt { get; set; } = string.Empty;
     public string UpdatedAt { get; set; } = string.Empty;
 }
-

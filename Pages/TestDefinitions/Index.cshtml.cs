@@ -37,12 +37,9 @@ namespace TinyGenerator.Pages.TestDefinitions
 
         public int TotalCount { get; set; }
 
-        public void OnGet()
+        public IActionResult OnGet()
         {
-            // Use DB-level paging (pageIndex starts at 1)
-            var (items, total) = _db.GetPagedTestDefinitions(PageIndex, PageSize, Search, OrderBy, Ascending);
-            Definitions = items;
-            TotalCount = total;
+            return RedirectToPage("/Shared/Index", new { entity = "test_definitions", title = "Test Definitions" });
         }
 
         // Endpoint used by the preview button to retrieve the full prompt text

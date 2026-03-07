@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("micro_objectives")]
-public class MicroObjective
+public partial class MicroObjective : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

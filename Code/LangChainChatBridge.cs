@@ -471,9 +471,17 @@ namespace TinyGenerator.Services
 
         private static bool ShouldSkipValidation(ResponseValidationOptions options, string? agentRole)
         {
-            if (options.SkipRoles == null || options.SkipRoles.Count == 0) return false;
             if (string.IsNullOrWhiteSpace(agentRole)) return false;
-            return options.SkipRoles.Any(r => string.Equals(r?.Trim(), agentRole.Trim(), StringComparison.OrdinalIgnoreCase));
+
+            var role = agentRole.Trim();
+            if (string.Equals(role, "response_checker", StringComparison.OrdinalIgnoreCase) &&
+                !options.EnableSelfValidationForResponseChecker)
+            {
+                return true;
+            }
+
+            if (options.SkipRoles == null || options.SkipRoles.Count == 0) return false;
+            return options.SkipRoles.Any(r => string.Equals(r?.Trim(), role, StringComparison.OrdinalIgnoreCase));
         }
 
         private static bool IsCheckerEnabledForOperation(ResponseValidationOptions options, string operationKey)

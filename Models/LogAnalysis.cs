@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("log_analysis")]
-    public class LogAnalysis
+    public partial class LogAnalysis : ISoftDelete, IActiveFlag, IOrderable
     {
         [Key]
         [Column("id")]

@@ -21,7 +21,9 @@ namespace TinyGenerator.Pages.Agents
 
         public List<ModelInfo> Models { get; set; } = new();
         public List<RoleModel> AllRoles { get; set; } = new();
+        public List<Agent> Agents { get; set; } = new();
         public List<ModelRole> ModelRoles { get; set; } = new();
+        public Dictionary<int, int> SpeedIndexByModelRoleId { get; set; } = new();
 
         public FallbackModelsModel(DatabaseService database, TinyGeneratorDbContext context, ModelPromotionService promotionService)
         {
@@ -32,19 +34,20 @@ namespace TinyGenerator.Pages.Agents
 
         public IActionResult OnGet()
         {
-            LoadReferenceData();
-            ModelRoles = LoadModelRoles();
-            return Page();
+            return RedirectToPage("/Shared/Index", new { entity = "model_roles", title = "Fallback Models" });
         }
 
         public IActionResult OnGetList()
         {
-            var rows = LoadModelRoles()
+            var modelRoles = LoadModelRoles();
+            var speedIndexMap = BuildSpeedIndexMap(modelRoles);
+            var rows = modelRoles
                 .Select(mr => new
                 {
                     id = mr.Id,
                     modelName = mr.Model?.Name ?? string.Empty,
-                    roleName = mr.Role?.Ruolo ?? string.Empty,
+                    roleName = mr.Role?.Name ?? string.Empty,
+                    agentName = mr.Agent?.Name ?? string.Empty,
                     isPrimary = mr.IsPrimary,
                     useCount = mr.UseCount,
                     useSuccessed = mr.UseSuccessed,
@@ -52,6 +55,7 @@ namespace TinyGenerator.Pages.Agents
                     totalPromptTokens = mr.TotalPromptTokens,
                     totalOutputTokens = mr.TotalOutputTokens,
                     avgGenTps = mr.AvgGenTps,
+                    speedIndex = speedIndexMap.TryGetValue(mr.Id, out var speedIndex) ? speedIndex : 1,
                     avgPromptTps = mr.AvgPromptTps,
                     avgE2eTps = mr.AvgE2eTps,
                     loadRatio = mr.LoadRatio,
@@ -77,11 +81,35 @@ namespace TinyGenerator.Pages.Agents
                 return new JsonResult(new { ok = false, error = "Model e Role sono obbligatori." }) { StatusCode = 400 };
             }
 
+            var roleCode = _context.Roles.AsNoTracking()
+                .Where(r => r.Id == input.RoleId)
+                .Select(r => r.Name)
+                .FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(roleCode))
+            {
+                return new JsonResult(new { ok = false, error = "Ruolo non valido." }) { StatusCode = 400 };
+            }
+
+            var resolvedAgentId = input.AgentId;
+            if (resolvedAgentId <= 0)
+            {
+                resolvedAgentId = _context.Agents.AsNoTracking()
+                    .Where(a => a.Role != null && a.Role.ToLower() == roleCode.ToLower())
+                    .OrderBy(a => a.Id)
+                    .Select(a => a.Id)
+                    .FirstOrDefault();
+            }
+            if (resolvedAgentId <= 0)
+            {
+                return new JsonResult(new { ok = false, error = $"Nessun agente disponibile per il ruolo '{roleCode}'." }) { StatusCode = 400 };
+            }
+
             var now = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
             var entity = new ModelRole
             {
                 ModelId = input.ModelId,
                 RoleId = input.RoleId,
+                AgentId = resolvedAgentId,
                 Instructions = string.IsNullOrWhiteSpace(input.Instructions) ? null : input.Instructions.Trim(),
                 TopP = input.TopP,
                 TopK = input.TopK,
@@ -97,7 +125,9 @@ namespace TinyGenerator.Pages.Agents
             var hydrated = _context.ModelRoles
                 .Include(mr => mr.Model)
                 .Include(mr => mr.Role)
+                .Include(mr => mr.Agent)
                 .FirstOrDefault(mr => mr.Id == entity.Id);
+            var speedIndexMap = BuildSpeedIndexMap(LoadModelRoles());
 
             return new JsonResult(new
             {
@@ -109,7 +139,8 @@ namespace TinyGenerator.Pages.Agents
                     {
                         id = hydrated.Id,
                         modelName = hydrated.Model?.Name ?? string.Empty,
-                        roleName = hydrated.Role?.Ruolo ?? string.Empty,
+                        roleName = hydrated.Role?.Name ?? string.Empty,
+                        agentName = hydrated.Agent?.Name ?? string.Empty,
                         isPrimary = hydrated.IsPrimary,
                         useCount = hydrated.UseCount,
                         useSuccessed = hydrated.UseSuccessed,
@@ -117,6 +148,7 @@ namespace TinyGenerator.Pages.Agents
                         totalPromptTokens = hydrated.TotalPromptTokens,
                         totalOutputTokens = hydrated.TotalOutputTokens,
                         avgGenTps = hydrated.AvgGenTps,
+                        speedIndex = speedIndexMap.TryGetValue(hydrated.Id, out var speedIndex) ? speedIndex : 1,
                         avgPromptTps = hydrated.AvgPromptTps,
                         avgE2eTps = hydrated.AvgE2eTps,
                         loadRatio = hydrated.LoadRatio,
@@ -133,6 +165,7 @@ namespace TinyGenerator.Pages.Agents
             var mr = _context.ModelRoles
                 .Include(x => x.Model)
                 .Include(x => x.Role)
+                .Include(x => x.Agent)
                 .FirstOrDefault(x => x.Id == id);
 
             if (mr == null)
@@ -143,7 +176,8 @@ namespace TinyGenerator.Pages.Agents
             var instructions = string.IsNullOrWhiteSpace(mr.Instructions) ? "-" : mr.Instructions!;
             var description =
                 $"Modello: {mr.Model?.Name ?? "-"}\n" +
-                $"Ruolo: {mr.Role?.Ruolo ?? "-"}\n" +
+                $"Ruolo: {mr.Role?.Name ?? "-"}\n" +
+                $"Agente: {mr.Agent?.Name ?? "-"}\n" +
                 $"Primary: {(mr.IsPrimary ? "Yes" : "No")}\n" +
                 $"Istruzioni: {instructions}\n" +
                 $"Top-P: {(mr.TopP.HasValue ? mr.TopP.Value.ToString("0.00") : "-")}\n" +
@@ -163,8 +197,12 @@ namespace TinyGenerator.Pages.Agents
                 title = $"Fallback #{mr.Id}",
                 description,
                 id = mr.Id,
+                modelId = mr.ModelId,
+                roleId = mr.RoleId,
+                agentId = mr.AgentId,
                 modelName = mr.Model?.Name ?? "-",
-                roleName = mr.Role?.Ruolo ?? "-",
+                roleName = mr.Role?.Name ?? "-",
+                agentName = mr.Agent?.Name ?? "-",
                 isPrimary = mr.IsPrimary,
                 instructions,
                 topP = mr.TopP,
@@ -174,14 +212,18 @@ namespace TinyGenerator.Pages.Agents
             });
         }
 
-        public IActionResult OnGetErrors(int id)
+        public IActionResult OnGetErrors(int id, int? modelId = null, int? roleId = null, int? agentId = null)
         {
-            if (id <= 0)
+            if (id <= 0 && (!modelId.HasValue || modelId.Value <= 0 || !roleId.HasValue || roleId.Value <= 0))
             {
                 return new JsonResult(new { ok = false, error = "Invalid id", rows = Array.Empty<object>() }) { StatusCode = 400 };
             }
 
-            var rows = _database.ListModelRoleErrors(id, 200)
+            var rows = (modelId.HasValue && modelId.Value > 0 && roleId.HasValue && roleId.Value > 0)
+                ? _database.ListModelRoleErrorsByModelAndRole(modelId.Value, roleId.Value, 200, agentId)
+                : _database.ListModelRoleErrors(id, 200);
+
+            var payloadRows = rows
                 .Select(e => new
                 {
                     id = e.Id,
@@ -195,7 +237,7 @@ namespace TinyGenerator.Pages.Agents
                 })
                 .ToList();
 
-            return new JsonResult(new { ok = true, rows });
+            return new JsonResult(new { ok = true, rows = payloadRows });
         }
 
         public IActionResult OnPostDeleteError([FromBody] DeleteErrorRequest input)
@@ -333,7 +375,7 @@ namespace TinyGenerator.Pages.Agents
                 .OrderBy(m => m.Name)
                 .ToList();
             var roles = _context.Roles.ToList();
-            var existing = new HashSet<string>(roles.Select(r => r.Ruolo), StringComparer.OrdinalIgnoreCase);
+            var existing = new HashSet<string>(roles.Select(r => r.Name), StringComparer.OrdinalIgnoreCase);
             var agentRoles = _database.ListAgentRoles();
             var now = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             var added = false;
@@ -344,7 +386,7 @@ namespace TinyGenerator.Pages.Agents
                 if (existing.Contains(role)) continue;
                 _context.Roles.Add(new RoleModel
                 {
-                    Ruolo = role,
+                    Name = role,
                     CreatedAt = now,
                     UpdatedAt = now
                 });
@@ -360,12 +402,18 @@ namespace TinyGenerator.Pages.Agents
             var deduped = _context.Roles
                 .AsNoTracking()
                 .ToList()
-                .GroupBy(r => r.Ruolo, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.OrderBy(r => r.Id).First())
-                .OrderBy(r => r.Ruolo)
+                .OrderBy(r => r.Name)
                 .ToList();
 
             AllRoles = deduped;
+            Agents = _context.Agents
+                .AsNoTracking()
+                .Where(a => a.IsActive)
+                .OrderBy(a => a.Role)
+                .ThenBy(a => a.Name)
+                .ToList();
         }
 
         private List<ModelRole> LoadModelRoles()
@@ -373,15 +421,66 @@ namespace TinyGenerator.Pages.Agents
             return _context.ModelRoles
                 .Include(mr => mr.Model)
                 .Include(mr => mr.Role)
+                .Include(mr => mr.Agent)
                 .ToList()
                 .OrderByDescending(mr => mr.SuccessRate)
                 .ToList();
+        }
+
+        public int GetSpeedIndex(int modelRoleId)
+        {
+            return SpeedIndexByModelRoleId.TryGetValue(modelRoleId, out var value) ? value : 1;
+        }
+
+        private static Dictionary<int, int> BuildSpeedIndexMap(IEnumerable<ModelRole> modelRoles)
+        {
+            var result = new Dictionary<int, int>();
+            var rows = modelRoles?.ToList() ?? new List<ModelRole>();
+            var groups = rows.GroupBy(r => r.RoleId);
+
+            foreach (var group in groups)
+            {
+                var speeds = group
+                    .Select(r => new
+                    {
+                        Id = r.Id,
+                        Speed = r.AvgGenTps > 0 ? r.AvgGenTps : 0d
+                    })
+                    .ToList();
+
+                var min = speeds.Min(s => s.Speed);
+                var max = speeds.Max(s => s.Speed);
+
+                foreach (var item in speeds)
+                {
+                    int score;
+                    if (item.Speed <= 0)
+                    {
+                        score = 1;
+                    }
+                    else if (max <= min)
+                    {
+                        score = 10;
+                    }
+                    else
+                    {
+                        var normalized = (item.Speed - min) / (max - min);
+                        score = 1 + (int)Math.Round(normalized * 9d, MidpointRounding.AwayFromZero);
+                        score = Math.Clamp(score, 1, 10);
+                    }
+
+                    result[item.Id] = score;
+                }
+            }
+
+            return result;
         }
 
         public class ModelRoleInput
         {
             public int ModelId { get; set; }
             public int RoleId { get; set; }
+            public int AgentId { get; set; }
             public string? Instructions { get; set; }
             public double? TopP { get; set; }
             public int? TopK { get; set; }

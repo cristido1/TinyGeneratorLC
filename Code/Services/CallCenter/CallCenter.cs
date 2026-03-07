@@ -154,10 +154,14 @@ public sealed class CallCenter : ICallCenter
 
                 if (validation.IsValid)
                 {
-                    previousNormalizedResponse = NormalizeForComparison(output);
+                    var normalizedSource = validation.CorrectedText ?? output;
+                    previousNormalizedResponse = NormalizeForComparison(normalizedSource);
                 }
 
-                return new CommandModelExecutionService.DeterministicValidationResult(validation.IsValid, validation.FailureReason);
+                return new CommandModelExecutionService.DeterministicValidationResult(
+                    validation.IsValid,
+                    validation.FailureReason,
+                    validation.CorrectedText);
             }
 
             var result = await _agentExecutor.ExecuteAsync(
@@ -230,6 +234,26 @@ public sealed class CallCenter : ICallCenter
 
                     if (retryDecisionAfterChecker.Kind == RetryDecisionKind.FallbackAgent && retryDecisionAfterChecker.FallbackAgent != null)
                     {
+                        if (options.AskFailExplanation)
+                        {
+                            await TryAskFailureExplanationAsync(
+                                storyId,
+                                threadId,
+                                currentAgent,
+                                updatedHistory,
+                                options,
+                                lastFailure,
+                                cancellationToken).ConfigureAwait(false);
+                        }
+
+                        var previousModel = ResolveModelName(currentAgent) ?? "unknown";
+                        var nextModel = ResolveModelName(retryDecisionAfterChecker.FallbackAgent) ?? "unknown";
+                        var retriesPerModel = Math.Max(1, options.MaxRetries + 1);
+                        _logger?.Log(
+                            "Information",
+                            "CallCenter",
+                            $"operation={operationName}; fallback_type=model; agent={currentAgent.Name}; from_model={previousModel}; to_model={nextModel}; retries_reset_to={retriesPerModel}; conversation=preserved",
+                            result: "SUCCESS");
                         currentAgent = retryDecisionAfterChecker.FallbackAgent;
                         attemptsCurrentAgent = 0;
                         continue;
@@ -248,7 +272,7 @@ public sealed class CallCenter : ICallCenter
                 }
 
                 var effectiveSuccessModelId = ResolveEffectiveModelId(currentAgent.ModelId, result.ModelName);
-                _database.RecordModelRoleUsage(currentAgent.Role, effectiveSuccessModelId, result.ModelName, success: true);
+                _database.RecordModelRoleUsage(currentAgent.Role, effectiveSuccessModelId, result.ModelName, success: true, agentId: currentAgent.Id);
                 updatedHistory.AddAssistant(normalizedResponse);
                 _logger?.Log(
                     "Information",
@@ -303,8 +327,26 @@ public sealed class CallCenter : ICallCenter
 
             if (retryDecision.Kind == RetryDecisionKind.FallbackAgent && retryDecision.FallbackAgent != null)
             {
-                // Requested behavior: when switching to fallback agent, do not append fail-explanation
-                // requests tied to the previous model failure.
+                if (options.AskFailExplanation)
+                {
+                    await TryAskFailureExplanationAsync(
+                        storyId,
+                        threadId,
+                        currentAgent,
+                        updatedHistory,
+                        options,
+                        lastFailure,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                var previousModel = ResolveModelName(currentAgent) ?? "unknown";
+                var nextModel = ResolveModelName(retryDecision.FallbackAgent) ?? "unknown";
+                var retriesPerModel = Math.Max(1, options.MaxRetries + 1);
+                _logger?.Log(
+                    "Information",
+                    "CallCenter",
+                    $"operation={operationName}; fallback_type=model; agent={currentAgent.Name}; from_model={previousModel}; to_model={nextModel}; retries_reset_to={retriesPerModel}; conversation=preserved",
+                    result: "SUCCESS");
                 currentAgent = retryDecision.FallbackAgent;
                 attemptsCurrentAgent = 0;
                 continue;
@@ -339,6 +381,12 @@ public sealed class CallCenter : ICallCenter
         IDeterministicCheck? jsonFormatCheck)
     {
         var checks = new List<IDeterministicCheck>();
+        if (jsonFormatCheck != null)
+        {
+            // 1) JSON format validity must be checked first.
+            checks.Add(jsonFormatCheck);
+        }
+
         if (options?.DeterministicChecks != null)
         {
             foreach (var check in options.DeterministicChecks)
@@ -348,11 +396,6 @@ public sealed class CallCenter : ICallCenter
                     checks.Add(check);
                 }
             }
-        }
-
-        if (jsonFormatCheck != null)
-        {
-            checks.Add(jsonFormatCheck);
         }
 
         return checks;
@@ -434,7 +477,15 @@ public sealed class CallCenter : ICallCenter
                 CommandKey = "fail_explanation",
                 Agent = agent,
                 RoleCode = string.IsNullOrWhiteSpace(agent.Role) ? "agent" : agent.Role,
-                Prompt = BuildPromptFromHistory(history),
+                Prompt = string.Empty,
+                ConversationMessages = history.Messages
+                    .Where(m => m != null && !string.IsNullOrWhiteSpace(m.Content))
+                    .Select(m => new ConversationMessage
+                    {
+                        Role = string.IsNullOrWhiteSpace(m.Role) ? "user" : m.Role!.Trim().ToLowerInvariant(),
+                        Content = m.Content!.Trim()
+                    })
+                    .ToList(),
                 SystemPrompt = "Modalita diagnostica. Rispondi in testo semplice, niente JSON.",
                 MaxAttempts = 1,
                 StepTimeoutSec = Math.Max(1, (int)Math.Ceiling(options.Timeout.TotalSeconds)),
@@ -510,18 +561,18 @@ public sealed class CallCenter : ICallCenter
 
     private string? ResolveModelName(Agent agent)
     {
-        if (!string.IsNullOrWhiteSpace(agent.ModelName))
-        {
-            return agent.ModelName.Trim();
-        }
-
         if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
         {
-            var byId = _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+            var byId = _database.ResolveModelCallNameById(agent.ModelId.Value);
             if (!string.IsNullOrWhiteSpace(byId))
             {
                 return byId.Trim();
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        {
+            return _database.ResolveModelCallName(agent.ModelName) ?? agent.ModelName.Trim();
         }
 
         return null;
@@ -595,25 +646,8 @@ public sealed class CallCenter : ICallCenter
     {
         if (history == null) return;
 
-        var latestRequest = history.Messages
-            .Where(m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))
-            .Select(m => m.Content?.Trim())
-            .LastOrDefault(content =>
-                !string.IsNullOrWhiteSpace(content) &&
-                !content.StartsWith("[CALLCENTER_", StringComparison.OrdinalIgnoreCase));
-
-        if (!string.IsNullOrWhiteSpace(latestRequest))
-        {
-            history.AddUser($"[CALLCENTER_LAST_REQUEST]\n{latestRequest}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(failedResponse))
-        {
-            history.AddAssistant($"[CALLCENTER_LAST_FAILED_RESPONSE]\n{failedResponse.Trim()}");
-        }
-
         history.AddUser(
-            "[CALLCENTER_LAST_FAILURE] Tentativo fallito: " + reason + "\n" +
+            "[CALLCENTER_LAST_FAILURE_REASON] " + reason + "\n" +
             "[CALLCENTER_RETRY_REQUEST] Rispondi di nuovo rispettando tutti i vincoli della richiesta e correggendo gli errori evidenziati.");
     }
 
@@ -681,80 +715,134 @@ public sealed class CallCenter : ICallCenter
         foreach (var checker in options.AgentCheckers)
         {
             if (checker?.Agent == null) continue;
+            var nestedCallCenter = CreateNestedCallCenter();
 
             var checkerHistory = new ChatHistory();
             checkerHistory.AddUser(BuildAgentCheckerInput(options.CheckerContextText, primaryResponse, checker.MinimalScore));
+            var checkerOperation = !string.IsNullOrWhiteSpace(checker.Agent.Role)
+                ? checker.Agent.Role!.Trim()
+                : (!string.IsNullOrWhiteSpace(checker.Agent.Name) ? checker.Agent.Name!.Trim() : $"{operationName}:agent_checker");
 
-            var checkerOptions = new CallOptions
+            const int defaultCheckerRetries = 3;
+            var remainingRetries = defaultCheckerRetries;
+            while (true)
             {
-                Operation = $"{operationName}:agent_checker:{checker.Agent.Name}",
-                Timeout = options.Timeout,
-                MaxRetries = 1,
-                UseResponseChecker = options.UseResponseChecker,
-                AskFailExplanation = false,
-                AllowFallback = false
-            };
+                cancellationToken.ThrowIfCancellationRequested();
 
-            var checkerResult = await CallAgentAsync(
-                storyId: storyId,
-                threadId: threadId,
-                agent: checker.Agent,
-                history: checkerHistory,
-                options: checkerOptions,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                var checkerOptions = new CallOptions
+                {
+                    // Treat agent-based non-deterministic checks as regular agent calls.
+                    Operation = checkerOperation,
+                    Timeout = options.Timeout,
+                    // Nested CallCenter handles single attempt; retry loop is managed here to preserve conversation.
+                    MaxRetries = 0,
+                    UseResponseChecker = true,
+                    AskFailExplanation = true,
+                    AllowFallback = true
+                };
 
-            var outcome = new AgentCheckerOutcome
-            {
-                CheckerAgentName = checker.Agent.Name ?? "agent_checker",
-                ModelUsed = checkerResult.ModelUsed,
-                RawResponse = checkerResult.ResponseText
-            };
+                var checkerResult = await nestedCallCenter.CallAgentAsync(
+                    storyId: storyId,
+                    threadId: threadId,
+                    agent: checker.Agent,
+                    history: checkerHistory,
+                    options: checkerOptions,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            if (!checkerResult.Success || string.IsNullOrWhiteSpace(checkerResult.ResponseText))
-            {
-                outcome.Passed = false;
-                outcome.FailureReason = $"agent_checker_call_failed:{outcome.CheckerAgentName}:{checkerResult.FailureReason ?? "empty_response"}";
+                var outcome = new AgentCheckerOutcome
+                {
+                    CheckerAgentName = checker.Agent.Name ?? "agent_checker",
+                    ModelUsed = checkerResult.ModelUsed,
+                    RawResponse = checkerResult.ResponseText
+                };
+
+                if (!checkerResult.Success || string.IsNullOrWhiteSpace(checkerResult.ResponseText))
+                {
+                    if (remainingRetries > 0)
+                    {
+                        remainingRetries--;
+                        AppendFailureToHistory(
+                            checkerHistory,
+                            $"Chiamata checker fallita ({checkerResult.FailureReason ?? "empty_response"}). Riprova in JSON valido. Retries rimanenti: {remainingRetries}.");
+                        continue;
+                    }
+
+                    outcome.Passed = false;
+                    outcome.FailureReason = $"agent_checker_call_failed:{outcome.CheckerAgentName}:{checkerResult.FailureReason ?? "empty_response"}";
+                    outcomes.Add(outcome);
+                    break;
+                }
+
+                if (!TryParseAgentCheckerResult(checkerResult.ResponseText, out var score, out var needsRetry, out var issues, out var parseError))
+                {
+                    if (remainingRetries > 0)
+                    {
+                        remainingRetries--;
+                        AppendFailureToHistory(
+                            checkerHistory,
+                            $"JSON checker non parseabile ({parseError ?? "unknown"}). Rispondi SOLO con JSON valido: {{\"score\":int,\"needs_retry\":bool,\"issues\":[string]}}. Retries rimanenti: {remainingRetries}.");
+                        continue;
+                    }
+
+                    outcome.Passed = false;
+                    outcome.FailureReason = $"agent_checker_parse_failed:{outcome.CheckerAgentName}:{parseError}";
+                    outcomes.Add(outcome);
+                    break;
+                }
+
+                var minimalScore = Math.Clamp(checker.MinimalScore, 1, 100);
+                var effectiveNeedsRetry = needsRetry ?? (score < minimalScore);
+                outcome.Score = score;
+                outcome.NeedsRetry = effectiveNeedsRetry;
+                outcome.Issues = issues;
+
+                var checkerFailed = effectiveNeedsRetry;
+                if (checkerFailed)
+                {
+                    outcome.Passed = false;
+                    outcome.FailureReason = $"agent_checker_failed:{outcome.CheckerAgentName}:score={score};min={minimalScore};needs_retry={effectiveNeedsRetry}";
+                    outcomes.Add(outcome);
+                    break;
+                }
+
+                outcome.Passed = true;
                 outcomes.Add(outcome);
                 break;
             }
 
-            if (!TryParseAgentCheckerResult(checkerResult.ResponseText, out var score, out var needsRetry, out var issues, out var parseError))
+            if (outcomes.Count > 0 && outcomes[^1].Passed == false)
             {
-                outcome.Passed = false;
-                outcome.FailureReason = $"agent_checker_parse_failed:{outcome.CheckerAgentName}:{parseError}";
-                outcomes.Add(outcome);
                 break;
             }
-
-            outcome.Score = score;
-            outcome.NeedsRetry = needsRetry;
-            outcome.Issues = issues;
-
-            var checkerFailed = needsRetry || score < Math.Clamp(checker.MinimalScore, 1, 100);
-            if (checkerFailed)
-            {
-                outcome.Passed = false;
-                outcome.FailureReason = $"agent_checker_failed:{outcome.CheckerAgentName}:score={score};min={checker.MinimalScore};needs_retry={needsRetry}";
-                outcomes.Add(outcome);
-                break;
-            }
-
-            outcome.Passed = true;
-            outcomes.Add(outcome);
         }
 
         return outcomes;
+    }
+
+    private ICallCenter CreateNestedCallCenter()
+    {
+        // Every agent-based non-deterministic checker must run through a nested CallCenter call.
+        return new CallCenter(
+            _agentCallService,
+            _database,
+            _responseValidationOptions,
+            _agentExecutor,
+            _deterministicValidator,
+            _responseValidator,
+            _retryPolicy,
+            _systemPromptBuilder,
+            _hubContext,
+            _logger);
     }
 
     private static string BuildAgentCheckerInput(string? contextText, string candidateResponse, int minimalScore)
     {
         var ctx = string.IsNullOrWhiteSpace(contextText) ? "(nessun contesto aggiuntivo)" : contextText.Trim();
         var candidate = string.IsNullOrWhiteSpace(candidateResponse) ? "(vuoto)" : candidateResponse.Trim();
-        var min = Math.Clamp(minimalScore, 1, 100);
+        _ = minimalScore;
 
         return
             "Valuta la seguente risposta candidata." + Environment.NewLine +
-            $"MinimalScore richiesto: {min}" + Environment.NewLine + Environment.NewLine +
             "Context:" + Environment.NewLine + ctx + Environment.NewLine + Environment.NewLine +
             "CandidateResponse:" + Environment.NewLine + candidate;
     }
@@ -762,12 +850,12 @@ public sealed class CallCenter : ICallCenter
     private static bool TryParseAgentCheckerResult(
         string? json,
         out int score,
-        out bool needsRetry,
+        out bool? needsRetry,
         out List<string> issues,
         out string? error)
     {
         score = 0;
-        needsRetry = false;
+        needsRetry = null;
         issues = new List<string>();
         error = null;
 
@@ -787,13 +875,15 @@ public sealed class CallCenter : ICallCenter
                 return false;
             }
 
-            if (!root.TryGetProperty("needs_retry", out var retryEl) ||
-                (retryEl.ValueKind != JsonValueKind.True && retryEl.ValueKind != JsonValueKind.False))
+            if (root.TryGetProperty("needs_retry", out var retryEl))
             {
-                error = "needs_retry mancante/non bool";
-                return false;
+                if (retryEl.ValueKind != JsonValueKind.True && retryEl.ValueKind != JsonValueKind.False)
+                {
+                    error = "needs_retry non bool";
+                    return false;
+                }
+                needsRetry = retryEl.GetBoolean();
             }
-            needsRetry = retryEl.GetBoolean();
 
             if (root.TryGetProperty("issues", out var issuesEl) && issuesEl.ValueKind == JsonValueKind.Array)
             {

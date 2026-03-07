@@ -7,7 +7,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("task_executions")]
-    public class TaskExecution
+    public partial class TaskExecution : ISoftDelete, IActiveFlag, IOrderable
     {
         [Column("id")]
         public long Id { get; set; }
@@ -66,7 +66,7 @@ namespace TinyGenerator.Models
     }
 
     [Table("task_execution_steps")]
-    public class TaskExecutionStep
+    public partial class TaskExecutionStep : ISoftDelete, IActiveFlag, IOrderable
     {
         [Column("id")]
         public long Id { get; set; }
@@ -125,7 +125,7 @@ namespace TinyGenerator.Models
         }
     }
 
-    public class ValidationResult
+    public partial class ValidationResult
     {
         public bool IsValid { get; set; }
         public string Reason { get; set; } = string.Empty;
@@ -139,7 +139,7 @@ namespace TinyGenerator.Models
     }
 
     [Table("task_types")]
-    public class TaskTypeInfo
+    public partial class TaskTypeInfo : ISoftDelete, IActiveFlag, IOrderable
     {
         [Column("id")]
         public long Id { get; set; }
@@ -186,7 +186,7 @@ namespace TinyGenerator.Models
     }
 
     [Table("step_templates")]
-    public class StepTemplate
+    public partial class StepTemplate : ISoftDelete, IActiveFlag, IOrderable
     {
         [Column("id")]
         public long Id { get; set; }

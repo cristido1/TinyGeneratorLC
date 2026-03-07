@@ -300,6 +300,20 @@
             return value || (modelId ? `#${modelId}` : 'N/A');
         }
 
+        function resolveModelImagePath(modelRawValue, providerRawValue) {
+            const model = (modelRawValue || '').toString().toLowerCase();
+            const provider = (providerRawValue || '').toString().toLowerCase();
+
+            if (model.includes('qwen') || provider.includes('qwen')) return '/providers/qwen.svg';
+            if (model.includes('claude') || model.includes('anthropic') || provider.includes('anthropic') || provider.includes('antropic')) return '/providers/anthropic.svg';
+            if (model.includes('ibm') || model.includes('granite') || provider.includes('ibm')) return '/providers/ibm.svg';
+            if (model.includes('gemma') || provider.includes('google') || provider.includes('gemma')) return '/providers/google.svg';
+            if (model.includes('gpt') || model.includes('openai') || model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4') || provider.includes('openai') || provider.includes('chatgpt')) return '/providers/openai.svg';
+            if (model.includes('llama') || model.includes('mistral') || model.includes('deepseek') || provider.includes('llama')) return '/providers/llama.svg';
+            if (provider.includes('ollama')) return '/providers/ollama.svg';
+            return '/providers/ollama.svg';
+        }
+
         function renderCommands(cmds) {
             console.log('[CommandPanel] Rendering commands:', cmds);
             if (!Array.isArray(cmds)) cmds = [];
@@ -416,7 +430,9 @@
 
                 const modelId = c.modelId || c.ModelId || metadata.modelId || metadata.ModelId || '';
                 const modelRaw = c.modelName || c.ModelName || metadata.modelName || metadata.ModelName || metadata.model || metadata.Model || '';
+                const providerRaw = c.provider || c.Provider || metadata.provider || metadata.Provider || '';
                 const modelCode = extractModelCode(modelRaw, modelId);
+                const modelImagePath = resolveModelImagePath(modelRaw, providerRaw);
 
                 // Extract storyId from metadata if present
                 const storyId = metadata.storyId || metadata.StoryId;
@@ -469,7 +485,7 @@
                     : '';
 
                 const progressParts = [];
-                if (modelCode && modelCode !== 'N/A') progressParts.push(`<i class="bi bi-cpu me-1"></i>${modelCode}`);
+
                 if (hasStep) {
                     progressParts.push(`${isIntelligenceTestCommand ? 'Domanda' : (isScoreCommand ? 'Test' : 'Step')} ${currentStep}/${maxStep}`);
                 }
@@ -623,7 +639,7 @@
                         </div>
                         <div style="font-size:11px; color:#555; margin-top:4px;">
                             <span><i class="bi bi-person-fill me-1"></i>${agent || 'N/A'}</span>
-                            <span class="ms-2"><i class="bi bi-cpu me-1"></i>${escapeHtml(modelCode)}</span>
+                            <span class="ms-2"><img src="${modelImagePath}" alt="provider" style="width:14px;height:14px;object-fit:contain;vertical-align:-2px;margin-right:4px;" />${escapeHtml(modelCode)}</span>
                             ${elapsedText ? `<span class="ms-2"><i class="bi bi-clock me-1"></i>${elapsedText}</span>` : ''}
                         </div>
                         ${isCinoCommand ? retryInfoLine : ''}
@@ -758,7 +774,6 @@
         setInterval(pollCommands, 10000);
     }
 })();
-
 
 
 

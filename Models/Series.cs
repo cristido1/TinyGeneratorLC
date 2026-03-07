@@ -10,7 +10,7 @@ namespace TinyGenerator.Models;
 /// Personaggi ed eventi specifici NON vanno qui ma negli Episodi.
 /// </summary>
 [Table("series")]
-public sealed class Series
+public sealed partial class Series : ISoftDelete, IActiveFlag, IOrderable
 {
     // ==========================================
     // CAMPI DI FILTRAGGIO / CATALOGO

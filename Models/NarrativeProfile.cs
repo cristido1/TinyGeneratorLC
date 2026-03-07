@@ -5,7 +5,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("narrative_profiles")]
-public class NarrativeProfile
+public partial class NarrativeProfile : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

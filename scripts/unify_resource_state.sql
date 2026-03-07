@@ -27,9 +27,9 @@ CREATE INDEX IF NOT EXISTS IX_story_resource_states_series
 
 DROP TABLE IF EXISTS story_runtime_states;
 
-INSERT INTO roles (ruolo, comando_collegato, created_at, updated_at)
+INSERT INTO roles (name, linked_command, created_at, updated_at)
 SELECT 'resource_manager', 'ResourceManager', datetime('now'), datetime('now')
-WHERE NOT EXISTS (SELECT 1 FROM roles WHERE lower(ruolo) = lower('resource_manager'));
+WHERE NOT EXISTS (SELECT 1 FROM roles WHERE lower(name) = lower('resource_manager'));
 
 UPDATE agents
 SET json_response_format = 'resource_manager_state.json'

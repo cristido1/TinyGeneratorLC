@@ -1,0 +1,274 @@
+NRE – Introduzione agenti nre_plan_evaluator e nre_plan_ruler (versione in-memory)
+
+## OBIETTIVO
+
+Aggiungere due agenti al flusso NRE per:
+
+1. validare la qualità strutturale del piano (nre_plan_evaluator)
+2. generare vincoli dinamici per il writer (nre_plan_ruler)
+
+Entrambi lavorano SOLO in memoria, usando gli oggetti già presenti nel sistema.
+
+---
+
+## ARCHITETTURA AGGIORNATA
+
+FLUSSO NRE COMPLETO:
+
+USER PROMPT
+↓
+NRE_PLANNER
+↓
+NRE_PLAN_EVALUATOR        ← NUOVO (validazione piano)
+↓ (se score >= soglia)
+NRE_PLAN_RULER            ← NUOVO (genera vincoli dinamici)
+↓
+WRITER (usa le rules generate)
+↓
+RESPONSE CHECKER
+↓
+NRE_EVALUATOR (già esistente)
+↓
+OUTPUT
+
+---
+
+## OGGETTI IN MEMORIA DA USARE
+
+PlannerResult
+
+* chapters: List<ChapterPlan>
+* theme
+* setting
+* tone
+* constraints (testo)
+* objects (lista oggetti chiave)
+* protagonist
+* antagonist
+* twist
+
+DynamicRules
+
+* world_rules: List<string>
+* dialog_rules: List<string>
+* structure_rules: List<string>
+* object_rules: List<string>
+* character_rules: List<string>
+
+PlanEvaluationResult
+
+* score: int (0-100)
+
+---
+
+## AGENTE 1: nre_plan_evaluator
+
+SCOPO
+Valutare se il piano è coerente e scrivibile.
+
+MODELLO CONSIGLIATO
+
+* locale leggero ma affidabile
+* suggerito: qwen3:8b oppure mistral:7b
+* temperatura: 0.2
+* top_p: 0.9
+
+## ISTRUZIONI AGENTE (prompt base)
+
+Sei un validatore di piani narrativi per un sistema automatico multi-agente.
+
+Devi analizzare il piano e verificare che:
+
+1. esista un protagonista chiaro
+2. esista un antagonista o forza oppositiva
+3. i capitoli abbiano progressione di tensione
+4. gli oggetti narrativi abbiano una funzione
+5. il twist sia definito
+6. esista una decisione o costo finale
+7. i vincoli del mondo siano rispettati
+
+Non riscrivere la storia.
+Devi solo VALUTARE.
+
+OUTPUT OBBLIGATORIO JSON:
+
+{
+"score": int 0-100
+}
+
+REGOLE:
+
+* niente testo fuori dal JSON
+* non includere soglie o logica di validazione nel prompt dell'agente:
+  la soglia è configurata nel sistema (NarrativeRuntimeEngine.PlanEvaluatorMinScore)
+
+ESEMPIO JSON:
+
+{
+  "score": 72
+}
+
+---
+
+## AGENTE 2: nre_plan_ruler
+
+SCOPO
+Generare vincoli dinamici da passare al writer.
+
+MODELLO CONSIGLIATO
+
+* locale veloce
+* suggerito: lfm2:24b oppure qwen3:14b
+* temperatura: 0.3
+* top_p: 0.9
+
+## ISTRUZIONI AGENTE (prompt base)
+
+Sei un generatore di regole narrative per un sistema automatico di scrittura.
+
+Ricevi un piano NRE e devi produrre un insieme di regole operative
+che il writer deve rispettare.
+
+Le regole devono essere:
+
+* brevi
+* verificabili
+* deterministiche
+* massimo 5 per categoria
+
+Categorie da generare:
+WORLD RULES
+DIALOG RULES
+STRUCTURE RULES
+OBJECT RULES
+CHARACTER RULES
+
+NON inventare elementi che non esistono nel piano.
+NON scrivere narrativa.
+
+OUTPUT OBBLIGATORIO JSON:
+
+{
+"world_rules": ["..."],
+"dialog_rules": ["..."],
+"structure_rules": ["..."],
+"object_rules": ["..."],
+"character_rules": ["..."]
+}
+
+---
+
+## INTEGRAZIONE NEL CODICE (PSEUDOCODICE)
+
+var plannerResult = RunPlanner(userPrompt);
+
+var eval = RunAgent<nre_plan_evaluator>(plannerResult);
+var minScore = AppSettings.NarrativeRuntimeEngine.PlanEvaluatorMinScore;
+
+if (eval.score < minScore)
+{
+// opzionale: rigenerare piano
+throw new Exception("Planner non valido");
+}
+
+var rules = RunAgent<nre_plan_ruler>(plannerResult);
+
+var writerInput = new WriterInput
+{
+Plan = plannerResult,
+DynamicRules = rules
+};
+
+var story = RunWriter(writerInput);
+
+---
+
+## INTEGRAZIONE NEL PROMPT DEL WRITER
+
+Il writer deve ricevere SEMPRE:
+
+BASE WRITER PROMPT
++
+DYNAMIC RULES
+
+Formato suggerito:
+
+[DYNAMIC RULES]
+WORLD RULES:
+
+* ...
+
+DIALOG RULES:
+
+* ...
+
+STRUCTURE RULES:
+
+* ...
+
+OBJECT RULES:
+
+* ...
+
+CHARACTER RULES:
+
+* ...
+
+---
+
+## ESEMPIO REALE GENERATO (scandinavia)
+
+WORLD RULES:
+
+* Nessun personaggio può parlare ad alta voce
+* Parlare causa dolore e perdita memoria
+
+DIALOG RULES:
+
+* usare solo comunicazione scritta o gestuale
+* vietato dialogo tra virgolette parlato
+
+STRUCTURE RULES:
+
+* capitolo 1 solo introduzione silenzio
+* capitolo 2 prima decodifica pietra
+* capitolo 3 recupero diario
+
+OBJECT RULES:
+
+* pietra produce simbolo ogni notte
+* diario contiene chiave di decodifica
+* biblioteca conferma o smentisce il diario
+
+CHARACTER RULES:
+
+* protagonista = archivista
+* POV stabile sul protagonista
+
+---
+
+## PESI E PRIORITÀ AGENTI
+
+nre_plan_evaluator
+
+* priorità alta
+* deve bloccare pipeline se fallisce
+
+nre_plan_ruler
+
+* priorità media
+* migliora qualità writer
+
+---
+
+## BENEFICI ATTESI
+
+* riduzione errori writer ~60%
+* coerenza capitoli
+* rispetto vincoli del mondo
+* oggetti narrativi utilizzati correttamente
+* twist più coerenti
+
+---
+
+FINE DOCUMENTAZIONE

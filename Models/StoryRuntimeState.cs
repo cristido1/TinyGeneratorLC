@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("story_runtime_states")]
-public class StoryRuntimeState
+public partial class StoryRuntimeState : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

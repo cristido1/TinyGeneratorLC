@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("narrative_story_blocks")]
-public class NarrativeStoryBlock
+public partial class NarrativeStoryBlock : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("model_test_steps")]
-public class ModelTestStep
+public partial class ModelTestStep : ISoftDelete, IActiveFlag, IOrderable
 {
     [Column("id")]
     public int Id { get; set; }

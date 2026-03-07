@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Mail;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -52,6 +53,7 @@ public sealed partial class StoriesService
     private readonly StoryMainCommands _mainCommands;
     private readonly ConcurrentDictionary<long, StatusChainState> _statusChains = new();
     private readonly ConcurrentQueue<long> _autoCompleteDeferredFailures = new();
+    private readonly ConcurrentDictionary<long, byte> _storyEvalEmailSent = new();
     private static readonly JsonSerializerOptions SchemaJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -1362,7 +1364,8 @@ public sealed partial class StoriesService
                         _customLogger?.Append(runId, $"[{storyId}] Valutazione di coerenza completata. Score: {score:F2}");
                         TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione di coerenza completata. Score: {score:F2}");
                         var allowNext = true;
-                        var (count, _) = _database.GetStoryEvaluationStats(storyId);
+                        var (count, average) = _database.GetStoryEvaluationStats(storyId);
+                        TrySendStoryAfterEvaluationEmail(storyId, count, average);
                         if (count >= 2)
                         {
                             allowNext = TryTransitionStoryToEvaluatedIfRevised(storyId, runId);
@@ -1441,7 +1444,8 @@ public sealed partial class StoriesService
                         }
 
                         var allowNext = true;
-                        var (count, _) = _database.GetStoryEvaluationStats(storyId);
+                        var (count, average) = _database.GetStoryEvaluationStats(storyId);
+                        TrySendStoryAfterEvaluationEmail(storyId, count, average);
                         if (count >= 2)
                         {
                             allowNext = TryTransitionStoryToEvaluatedIfRevised(storyId, runId);
@@ -1518,7 +1522,8 @@ public sealed partial class StoriesService
                 {
                     var name = modelRole.Model?.Name;
                     return !string.IsNullOrWhiteSpace(name) && triedModelNames.Add(name);
-                });
+                },
+                agentId: agent.Id);
 
             if (fallbackResult.success && successfulModelRole?.Model != null)
             {
@@ -1806,6 +1811,113 @@ public sealed partial class StoriesService
         }
 
         return TryChangeStatus(storyId, "evaluate_story", runId);
+    }
+
+    private void TrySendStoryAfterEvaluationEmail(long storyId, int evaluationCount, double averageScore)
+    {
+        try
+        {
+            var sendEnabled = _storyEvaluationOptions.send_story_after_evaluation ?? _storyEvaluationOptions.SendStoryAfterEvaluation;
+            var threshold = _storyEvaluationOptions.send_story_after_evaluation_threshold ?? _storyEvaluationOptions.SendStoryAfterEvaluationThreshold;
+            var averageScore100 = averageScore * 100.0 / 40.0;
+            if (!sendEnabled) return;
+            if (storyId <= 0) return;
+            if (averageScore100 <= threshold) return;
+            if (!_storyEvalEmailSent.TryAdd(storyId, 1)) return;
+
+            var recipientsRaw = (_storyEvaluationOptions.send_story_after_evaluation_recipients
+                                 ?? _storyEvaluationOptions.SendStoryAfterEvaluationRecipients
+                                 ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(recipientsRaw)) return;
+
+            var story = _database.GetStoryById(storyId);
+            if (story == null) return;
+
+            var revisedText = !string.IsNullOrWhiteSpace(story.StoryRevised)
+                ? story.StoryRevised!
+                : (story.StoryRaw ?? string.Empty);
+            var planText = string.IsNullOrWhiteSpace(story.NrePlanSummary)
+                ? "(piano non disponibile)"
+                : story.NrePlanSummary!;
+
+            var subject = $"Story valutata > soglia - #{storyId} - {(string.IsNullOrWhiteSpace(story.Title) ? "Untitled" : story.Title)}";
+            var safeTitle = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(story.Title) ? "Untitled" : story.Title);
+            var safePlan = WebUtility.HtmlEncode(planText ?? string.Empty).Replace("\r\n", "\n").Replace("\n", "<br/>");
+            var safeStory = WebUtility.HtmlEncode(revisedText ?? string.Empty).Replace("\r\n", "\n").Replace("\n", "<br/>");
+            var bodyHtml =
+$@"<!doctype html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+</head>
+<body style=""margin:0;padding:24px;background:#ece7dc;color:#2d2418;font-family:Georgia,'Times New Roman',serif;"">
+  <div style=""max-width:900px;margin:0 auto;"">
+    <div style=""padding:16px 18px;margin-bottom:14px;background:#f6f1e6;border:1px solid #d9cdb8;border-radius:8px;"">
+      <div><strong>StoryId:</strong> {storyId}</div>
+      <div><strong>Titolo:</strong> {safeTitle}</div>
+      <div><strong>Valutazione media:</strong> {averageScore100:F1}/100</div>
+      <div><strong>Numero valutazioni:</strong> {evaluationCount}</div>
+    </div>
+
+    <div style=""padding:22px 24px;background:linear-gradient(180deg,#f8f2e7 0%,#f2e6d4 100%);border:1px solid #cdbb9d;border-radius:10px;box-shadow:0 6px 18px rgba(62,42,17,.15);"">
+      <h3 style=""margin:0 0 10px 0;font-size:19px;font-weight:700;"">Piano</h3>
+      <div style=""line-height:1.65;font-size:16px;white-space:normal;"">{safePlan}</div>
+      <hr style=""margin:18px 0;border:none;border-top:1px solid #cdbb9d;"" />
+      <h3 style=""margin:0 0 10px 0;font-size:19px;font-weight:700;"">Testo Revised</h3>
+      <div style=""line-height:1.75;font-size:17px;white-space:normal;text-align:justify;"">{safeStory}</div>
+    </div>
+  </div>
+</body>
+</html>";
+
+            using var message = new MailMessage();
+            message.From = new MailAddress(string.IsNullOrWhiteSpace(_storyEvaluationOptions.SmtpFrom)
+                ? "noreply@localhost"
+                : _storyEvaluationOptions.SmtpFrom!.Trim());
+            foreach (var recipient in recipientsRaw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!string.IsNullOrWhiteSpace(recipient))
+                {
+                    message.To.Add(recipient);
+                }
+            }
+            if (message.To.Count == 0) return;
+
+            message.Subject = subject;
+            message.Body = bodyHtml;
+            message.IsBodyHtml = true;
+
+            var host = (_storyEvaluationOptions.SmtpHost ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(host)) return;
+
+            using var smtp = new SmtpClient(host, _storyEvaluationOptions.SmtpPort)
+            {
+                EnableSsl = _storyEvaluationOptions.SmtpUseSsl
+            };
+
+            var smtpUser = (_storyEvaluationOptions.SmtpUsername ?? string.Empty).Trim();
+            var smtpPass = _storyEvaluationOptions.SmtpPassword ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(smtpUser))
+            {
+                smtp.Credentials = new NetworkCredential(smtpUser, smtpPass);
+            }
+            else
+            {
+                smtp.UseDefaultCredentials = true;
+            }
+
+            smtp.Send(message);
+            _logger?.LogInformation(
+                "Story evaluation email inviata per story {StoryId} (avg={Avg:F2}, count={Count})",
+                storyId,
+                averageScore100,
+                evaluationCount);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Invio email post-evaluation fallito per story {StoryId}", storyId);
+            _storyEvalEmailSent.TryRemove(storyId, out _);
+        }
     }
     private static string NormalizeEvaluatorOutput(string text)
     {
@@ -3649,7 +3761,8 @@ public sealed partial class StoriesService
                 if (!triedNames.Add(name)) return false;
                 triedFallback++;
                 return true;
-            });
+            },
+            agentId: author?.Id);
 
         if (fallbackResult.success)
         {
@@ -6497,10 +6610,10 @@ public sealed partial class StoriesService
         return null;
     }
 
-    private static bool IsBatchWorkerProcess()
+    internal static bool IsBatchWorkerProcess()
         => Environment.GetCommandLineArgs().Any(a => string.Equals(a, "--batch-worker", StringComparison.OrdinalIgnoreCase));
 
-    private void ReportCommandProgress(string runId, int current, int max, string? description, bool emitBatchProgress)
+    internal void ReportCommandProgress(string runId, int current, int max, string? description, bool emitBatchProgress)
     {
         var safeMax = Math.Max(1, max);
         var safeCurrent = Math.Clamp(current, 0, safeMax);
@@ -6669,7 +6782,7 @@ public sealed partial class StoriesService
             runId,
             0,
             ambienceSegments.Count,
-            $"chunk 0/{Math.Max(1, ambienceSegments.Count)}",
+            $"Ambient: preparazione ricerca suoni (chunk 0/{Math.Max(1, ambienceSegments.Count)})",
             emitBatchProgress);
         foreach (var segment in ambienceSegments)
         {
@@ -6682,7 +6795,7 @@ public sealed partial class StoriesService
                 runId,
                 segmentCounter,
                 ambienceSegments.Count,
-                $"chunk {segmentCounter}/{ambienceSegments.Count}",
+                $"Ambient: ricerca/assegnazione suono chunk {segmentCounter}/{ambienceSegments.Count}",
                 emitBatchProgress);
 
             try
@@ -6771,7 +6884,7 @@ public sealed partial class StoriesService
             runId,
             ambienceSegments.Count,
             ambienceSegments.Count,
-            $"chunk {ambienceSegments.Count}/{ambienceSegments.Count}",
+            $"Ambient: completato ({ambienceSegments.Count}/{ambienceSegments.Count})",
             emitBatchProgress);
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
@@ -7292,7 +7405,7 @@ public sealed partial class StoriesService
             runId,
             0,
             fxEntries.Count,
-            $"chunk 0/{Math.Max(1, fxEntries.Count)}",
+            $"FX: preparazione ricerca suoni (chunk 0/{Math.Max(1, fxEntries.Count)})",
             emitBatchProgress);
         foreach (var (index, entry, description, tags, duration) in fxEntries)
         {
@@ -7314,7 +7427,7 @@ public sealed partial class StoriesService
                 runId,
                 fxCounter,
                 fxEntries.Count,
-                $"chunk {fxCounter}/{fxEntries.Count}",
+                $"FX: ricerca/assegnazione suono chunk {fxCounter}/{fxEntries.Count}",
                 emitBatchProgress);
 
             try
@@ -7395,7 +7508,7 @@ public sealed partial class StoriesService
             runId,
             fxEntries.Count,
             fxEntries.Count,
-            $"chunk {fxEntries.Count}/{fxEntries.Count}",
+            $"FX: completato ({fxEntries.Count}/{fxEntries.Count})",
             emitBatchProgress);
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
@@ -8459,7 +8572,7 @@ public sealed partial class StoriesService
             runId,
             0,
             musicRequests.Count,
-            $"chunk 0/{Math.Max(1, musicRequests.Count)}",
+            $"Music: preparazione ricerca suoni (chunk 0/{Math.Max(1, musicRequests.Count)})",
             emitBatchProgress);
 
         var requestCounter = 0;
@@ -8470,7 +8583,7 @@ public sealed partial class StoriesService
                 runId,
                 requestCounter,
                 musicRequests.Count,
-                $"chunk {requestCounter}/{musicRequests.Count}",
+                $"Music: ricerca/assegnazione suono chunk {requestCounter}/{musicRequests.Count}",
                 emitBatchProgress);
 
             var currentMusicFile = ReadString(entry, "music_file") ?? ReadString(entry, "musicFile") ?? ReadString(entry, "MusicFile");
@@ -8544,7 +8657,7 @@ public sealed partial class StoriesService
             runId,
             musicRequests.Count,
             musicRequests.Count,
-            $"chunk {musicRequests.Count}/{musicRequests.Count}",
+            $"Music: completato ({musicRequests.Count}/{musicRequests.Count})",
             emitBatchProgress);
         _customLogger?.Append(runId, $"[{story.Id}] {successMsg}");
         return (true, successMsg);
@@ -9236,8 +9349,14 @@ private static string? SelectMusicFileDeterministic(
         }
 
         var mixGapOptions = _audioMixOptions?.CurrentValue ?? new AudioMixOptions();
+        var maxSilenceGapMs = (int)Math.Round(Math.Max(0d, mixGapOptions.MaxSilenceGapSeconds) * 1000d);
         var defaultPhraseGapMs = Math.Max(0, mixGapOptions.DefaultPhraseGapMs);
         var commaAttributionGapMs = Math.Clamp(mixGapOptions.CommaAttributionGapMs, 0, Math.Max(0, defaultPhraseGapMs));
+        if (maxSilenceGapMs > 0)
+        {
+            defaultPhraseGapMs = Math.Min(defaultPhraseGapMs, maxSilenceGapMs);
+            commaAttributionGapMs = Math.Min(commaAttributionGapMs, maxSilenceGapMs);
+        }
 
         // Accoda il resto della storia in sequenza reale:
         // start di ogni frase = fine frase precedente + gap dinamico.
@@ -9335,7 +9454,7 @@ private static string? SelectMusicFileDeterministic(
         {
             _customLogger?.Append(
                 runId,
-                $"[{story.Id}] Timeline TTS sequenziale applicata: durate reali file={wavDurationUsedCount}, gapDefault={defaultPhraseGapMs}ms, gapCommaAttribution={commaAttributionGapMs}ms");
+                $"[{story.Id}] Timeline TTS sequenziale applicata: durate reali file={wavDurationUsedCount}, gapDefault={defaultPhraseGapMs}ms, gapCommaAttribution={commaAttributionGapMs}ms, maxSilenceGap={maxSilenceGapMs}ms");
         }
 
         // Build ambience segments based on ambient_sound_file definitions and ambientSoundsDuration
@@ -9425,6 +9544,17 @@ private static string? SelectMusicFileDeterministic(
         if (!ffmpegSuccess)
         {
             return (false, ffmpegError);
+        }
+
+        // Post-process ONLY on final mixed file: trim overlong silences without touching intermediate track sync.
+        var finalSilenceOptions = _audioMixOptions?.CurrentValue ?? new AudioMixOptions();
+        if (finalSilenceOptions.EnableFinalSilenceTrim)
+        {
+            var trimResult = await ApplyFinalSilenceTrimAsync(outputFile, runId, story.Id, finalSilenceOptions);
+            if (!trimResult.success)
+            {
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Trim silenzi finali non applicato: {trimResult.error}");
+            }
         }
 
         // Also create mp3 version
@@ -9615,7 +9745,15 @@ private static string? SelectMusicFileDeterministic(
             else
             {
                 _customLogger?.Append(runId, $"[{storyId}] Mix finale di {trackFiles.Count} tracce...");
-                var finalResult = await MixFinalTracksAsync(trackFiles, outputFile, runId, storyId);
+                var finalResult = await MixFinalTracksAsync(
+                    trackFiles,
+                    outputFile,
+                    runId,
+                    storyId,
+                    mixOptions.VoiceVolume,
+                    mixOptions.BackgroundSoundsVolume,
+                    mixOptions.FxSourdsVolume,
+                    mixOptions.MusicVolume);
                 
                 // Cleanup track files
                 foreach (var track in trackFiles)
@@ -9658,6 +9796,106 @@ private static string? SelectMusicFileDeterministic(
         }
 
         return value / defaultValue;
+    }
+
+    private async Task<(bool success, string? error)> ApplyFinalSilenceTrimAsync(
+        string finalMixFilePath,
+        string runId,
+        long storyId,
+        AudioMixOptions options)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(finalMixFilePath) || !File.Exists(finalMixFilePath))
+            {
+                return (false, "File final_mix.wav non trovato");
+            }
+
+            var maxGapSeconds = Math.Max(0d, options.FinalSilenceTrimMaxGapSeconds);
+            if (maxGapSeconds <= 0d)
+            {
+                return (true, null);
+            }
+
+            var keepSeconds = Math.Clamp(options.FinalSilenceTrimKeepSeconds, 0d, maxGapSeconds);
+            var thresholdDb = options.FinalSilenceTrimThresholdDb;
+            if (!double.IsFinite(thresholdDb))
+            {
+                thresholdDb = -42d;
+            }
+            if (thresholdDb > 0d)
+            {
+                thresholdDb = -thresholdDb;
+            }
+
+            var tempOutput = Path.Combine(
+                Path.GetDirectoryName(finalMixFilePath) ?? string.Empty,
+                $"{Path.GetFileNameWithoutExtension(finalMixFilePath)}_trimmed{Path.GetExtension(finalMixFilePath)}");
+
+            var filter = string.Format(
+                CultureInfo.InvariantCulture,
+                "silenceremove=stop_periods=-1:stop_duration={0:0.###}:stop_threshold={1:0.###}dB:stop_silence={2:0.###}",
+                maxGapSeconds,
+                thresholdDb,
+                keepSeconds);
+
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "ffmpeg",
+                    Arguments = $"-y -i \"{finalMixFilePath}\" -af \"{filter}\" \"{tempOutput}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.Start();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            try
+            {
+                await process.WaitForExitAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(true); } catch { }
+                TryDeleteFile(tempOutput);
+                return (false, "Timeout ffmpeg durante trim silenzi finali");
+            }
+
+            var stderr = await stderrTask;
+            await stdoutTask;
+
+            if (process.ExitCode != 0)
+            {
+                TryDeleteFile(tempOutput);
+                var err = string.IsNullOrWhiteSpace(stderr) ? $"ffmpeg exit code {process.ExitCode}" : stderr;
+                return (false, err);
+            }
+
+            if (!File.Exists(tempOutput))
+            {
+                return (false, "ffmpeg non ha creato il file trimmed");
+            }
+
+            File.Copy(tempOutput, finalMixFilePath, overwrite: true);
+            TryDeleteFile(tempOutput);
+
+            _customLogger?.Append(
+                runId,
+                $"[{storyId}] Trim silenzi finali applicato (maxGap={maxGapSeconds.ToString("0.###", CultureInfo.InvariantCulture)}s, keep={keepSeconds.ToString("0.###", CultureInfo.InvariantCulture)}s, threshold={thresholdDb.ToString("0.###", CultureInfo.InvariantCulture)}dB)");
+
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
     }
     
     private async Task<(bool success, string? error)> CreateTtsTrackAsync(
@@ -9964,20 +10202,66 @@ private static string? SelectMusicFileDeterministic(
         List<string> trackFiles,
         string outputFile,
         string runId,
-        long storyId)
+        long storyId,
+        double voiceVolumeSetting,
+        double ambienceVolumeSetting,
+        double fxVolumeSetting,
+        double musicVolumeSetting)
     {
         // Mix the 3 tracks: TTS (full volume), Ambience+FX (already has volume), Music (already has volume)
         var inputArgs = new StringBuilder();
         var filterArgs = new StringBuilder();
-        
+        var labels = new List<string>();
+
+        var safeVoiceSetting = Math.Max(0d, voiceVolumeSetting);
+        var safeAmbienceFxSetting = Math.Max(0d, Math.Max(ambienceVolumeSetting, fxVolumeSetting));
+        var safeMusicSetting = Math.Max(0d, musicVolumeSetting);
+        var maxSetting = Math.Max(1d, Math.Max(safeVoiceSetting, Math.Max(safeAmbienceFxSetting, safeMusicSetting)));
+         
         for (int i = 0; i < trackFiles.Count; i++)
         {
             inputArgs.Append($" -i \"{trackFiles[i]}\"");
-            filterArgs.Append($"[{i}]");
+            var fileName = Path.GetFileName(trackFiles[i]) ?? string.Empty;
+            var label = $"mx{i}";
+            double trackGain;
+            if (fileName.StartsWith("track_tts_", StringComparison.OrdinalIgnoreCase))
+            {
+                trackGain = safeVoiceSetting / maxSetting;
+            }
+            else if (fileName.StartsWith("track_music_", StringComparison.OrdinalIgnoreCase))
+            {
+                trackGain = safeMusicSetting / maxSetting;
+            }
+            else
+            {
+                trackGain = safeAmbienceFxSetting / maxSetting;
+            }
+
+            // Keep a floor so tracks are never fully muted unless setting is 0.
+            trackGain = Math.Clamp(trackGain, 0d, 1.5d);
+            filterArgs.Append($"[{i}]volume={trackGain.ToString("0.###", CultureInfo.InvariantCulture)}[{label}];");
+            labels.Add($"[{label}]");
         }
-        
-        // Mix with equal weights, then normalize
-        filterArgs.Append($"amix=inputs={trackFiles.Count}:duration=longest:dropout_transition=2:normalize=0[mixed];[mixed]dynaudnorm=p=0.95:s=3[out]");
+         
+        var mixOptions = _audioMixOptions?.CurrentValue ?? new AudioMixOptions();
+        var limiterLevel = Math.Clamp(mixOptions.FinalLimiterLevel, 0.5, 0.999);
+        foreach (var lbl in labels) filterArgs.Append(lbl);
+
+        // Final mastering:
+        // - optional dynamic normalization (can color/degrade voices)
+        // - otherwise apply only a light limiter to avoid clipping while preserving timbre
+        if (mixOptions.EnableFinalDynamicNormalization)
+        {
+            filterArgs.Append($"amix=inputs={trackFiles.Count}:duration=longest:dropout_transition=2:normalize=0[mixed];[mixed]dynaudnorm=p=0.95:s=3,alimiter=limit={limiterLevel.ToString("0.###", CultureInfo.InvariantCulture)}[out]");
+            _customLogger?.Append(runId, $"[{storyId}] Final mix mastering: dynaudnorm=ON, limiter={limiterLevel.ToString("0.###", CultureInfo.InvariantCulture)}");
+        }
+        else
+        {
+            filterArgs.Append($"amix=inputs={trackFiles.Count}:duration=longest:dropout_transition=2:normalize=0[mixed];[mixed]alimiter=limit={limiterLevel.ToString("0.###", CultureInfo.InvariantCulture)}[out]");
+            _customLogger?.Append(
+                runId,
+                $"[{storyId}] Final mix mastering: dynaudnorm=OFF, limiter={limiterLevel.ToString("0.###", CultureInfo.InvariantCulture)}, gains voice={((safeVoiceSetting / maxSetting)).ToString("0.###", CultureInfo.InvariantCulture)}, ambience_fx={((safeAmbienceFxSetting / maxSetting)).ToString("0.###", CultureInfo.InvariantCulture)}, music={((safeMusicSetting / maxSetting)).ToString("0.###", CultureInfo.InvariantCulture)}");
+        }
         
         var filterFile = Path.Combine(Path.GetDirectoryName(outputFile)!, $"filter_final_{storyId}.txt");
         await File.WriteAllTextAsync(filterFile, filterArgs.ToString());

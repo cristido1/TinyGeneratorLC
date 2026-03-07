@@ -148,13 +148,18 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
             targets = OrderModelsForScoreTests(targets).ToList();
         }
 
+        var totalSteps = Math.Max(1, targets.Count * _tests.Count);
+        _dispatcher.UpdateStep(ctx.RunId, 0, totalSteps, $"instructionScore 0/{totalSteps}");
+
         var processed = 0;
-        foreach (var model in targets)
+        for (var modelIndex = 0; modelIndex < targets.Count; modelIndex++)
         {
+            var model = targets[modelIndex];
             ctx.CancellationToken.ThrowIfCancellationRequested();
             if (!model.Id.HasValue) continue;
 
-            var (score, details) = await TestSingleModelAsync(model, ctx);
+            var stepOffset = modelIndex * _tests.Count;
+            var (score, details) = await TestSingleModelAsync(model, ctx, stepOffset, totalSteps);
             _database.UpdateModelInstructionScore(model.Id.Value, score, details);
             processed++;
 
@@ -184,7 +189,7 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
             return new CommandResult(false, "Nessun test instruction disponibile (docs/instructions_test.txt vuoto o non valido).");
         }
 
-        var (score, details) = await TestSingleModelAsync(model, ctx);
+        var (score, details) = await TestSingleModelAsync(model, ctx, 0, _tests.Count);
         _database.UpdateModelInstructionScore(model.Id.Value, score, details);
 
         var summary = $"[{model.Name}] instructionScore={score}/10";
@@ -192,16 +197,22 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
         return new CommandResult(true, summary);
     }
 
-    private async Task<(int Score, string Details)> TestSingleModelAsync(ModelInfo model, CommandContext ctx)
+    private async Task<(int Score, string Details)> TestSingleModelAsync(
+        ModelInfo model,
+        CommandContext ctx,
+        int globalStepOffset,
+        int globalStepMax)
     {
         var passed = 0;
         var failures = new List<string>();
+        var safeGlobalMax = Math.Max(1, globalStepMax);
+        var initialCurrent = Math.Clamp(globalStepOffset, 0, safeGlobalMax);
         _dispatcher.UpdateOperationName(ctx.RunId, $"instructionScore:{model.Name}");
         _dispatcher.UpdateStep(
             ctx.RunId,
-            0,
-            _tests.Count,
-            $"[{model.Name}] Test 0/{_tests.Count} • score parziale 0/10 (0/0)");
+            initialCurrent,
+            safeGlobalMax,
+            $"[{model.Name}] Test 0/{_tests.Count} • progress {initialCurrent}/{safeGlobalMax} • score parziale 0/10 (0/0)");
 
         for (var i = 0; i < _tests.Count; i++)
         {
@@ -212,7 +223,7 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
                 var call = await _testCallCenter.CallAsync(new TestCallRequest
                 {
                     Operation = "instruction_score",
-                    ModelName = model.Name,
+                    ModelName = string.IsNullOrWhiteSpace(model.CallName) ? model.Name : model.CallName!,
                     SystemPrompt = SystemPrompt,
                     Prompt = test.Prompt,
                     Timeout = TimeSpan.FromSeconds(_questionTimeoutSeconds),
@@ -258,11 +269,12 @@ Non aggiungere testo extra, markdown o spiegazioni non richieste.
             }
 
             var partialScore = Math.Clamp((int)Math.Round((double)passed / (i + 1) * 10), 1, 10);
+            var currentStep = Math.Clamp(globalStepOffset + i + 1, 0, safeGlobalMax);
             _dispatcher.UpdateStep(
                 ctx.RunId,
-                i + 1,
-                _tests.Count,
-                $"[{model.Name}] Test {i + 1}/{_tests.Count} • score parziale {partialScore}/10 ({passed}/{i + 1})");
+                currentStep,
+                safeGlobalMax,
+                $"[{model.Name}] Test {i + 1}/{_tests.Count} • progress {currentStep}/{safeGlobalMax} • score parziale {partialScore}/10 ({passed}/{i + 1})");
         }
 
         var detail = failures.Count == 0 ? "tutte le risposte valide" : string.Join("; ", failures);

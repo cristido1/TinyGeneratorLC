@@ -1,14 +1,17 @@
 using TinyGenerator.Models;
+using System.Text.RegularExpressions;
 
 namespace TinyGenerator.Services;
 
 public class TestCallCenter : ITestCallCenter
 {
     private readonly ICallCenter _callCenter;
+    private readonly DatabaseService _database;
 
-    public TestCallCenter(ICallCenter callCenter)
+    public TestCallCenter(ICallCenter callCenter, DatabaseService database)
     {
         _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
+        _database = database ?? throw new ArgumentNullException(nameof(database));
     }
 
     public async Task<TestCallResult> CallAsync(TestCallRequest request, CancellationToken cancellationToken = default)
@@ -38,7 +41,10 @@ public class TestCallCenter : ITestCallCenter
             Instructions = request.SystemPrompt,
             Temperature = request.Temperature,
             TopP = request.TopP,
-            NumPredict = request.NumPredict
+            NumPredict = request.NumPredict,
+            Thinking = request.Thinking ?? _database.ResolveEffectiveThinking(
+                agent: null,
+                modelName: request.ModelName)
         };
 
         var result = await _callCenter.CallAgentAsync(
@@ -52,7 +58,7 @@ public class TestCallCenter : ITestCallCenter
         return new TestCallResult
         {
             Success = result.Success,
-            ResponseText = result.ResponseText,
+            ResponseText = SanitizeTestResponse(result.ResponseText),
             FailureReason = result.FailureReason,
             Duration = result.Duration,
             Attempts = result.Attempts,
@@ -91,13 +97,45 @@ public class TestCallCenter : ITestCallCenter
 
         options.DeterministicChecks.Insert(0, new CheckEmpty());
     }
+
+    private static string SanitizeTestResponse(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return string.Empty;
+        }
+
+        var text = raw;
+
+        // Remove <think>...</think> blocks (case-insensitive, multiline)
+        text = Regex.Replace(
+            text,
+            @"<\s*think\s*>[\s\S]*?<\s*/\s*think\s*>",
+            string.Empty,
+            RegexOptions.IgnoreCase);
+
+        // Remove fenced blocks explicitly marked as thinking/reasoning
+        text = Regex.Replace(
+            text,
+            @"```(?:thinking|reasoning|analysis)?\s*[\s\S]*?```",
+            m =>
+            {
+                var header = m.Value.Length >= 3 ? m.Value[..Math.Min(30, m.Value.Length)] : string.Empty;
+                return Regex.IsMatch(header, @"```(?:thinking|reasoning|analysis)\b", RegexOptions.IgnoreCase)
+                    ? string.Empty
+                    : m.Value;
+            },
+            RegexOptions.IgnoreCase);
+
+        return text.Trim();
+    }
 }
 
 // Alias compatibile con la richiesta utente "TestCallCanter".
 public sealed class TestCallCanter : TestCallCenter
 {
-    public TestCallCanter(ICallCenter callCenter)
-        : base(callCenter)
+    public TestCallCanter(ICallCenter callCenter, DatabaseService database)
+        : base(callCenter, database)
     {
     }
 }

@@ -162,17 +162,21 @@ public sealed class GenerateNewSerieCommand : ICommand
 
     private string? ResolveModelName(Agent agent)
     {
+        if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
+        {
+            var byId = _database.ResolveModelCallNameById(agent.ModelId.Value);
+            if (!string.IsNullOrWhiteSpace(byId))
+            {
+                return byId.Trim();
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(agent.ModelName))
         {
-            return agent.ModelName;
+            return _database.ResolveModelCallName(agent.ModelName) ?? agent.ModelName.Trim();
         }
 
-        if (!agent.ModelId.HasValue)
-        {
-            return null;
-        }
-
-        return _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+        return null;
     }
 
     private ICallCenter? ResolveCallCenter()

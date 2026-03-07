@@ -1013,9 +1013,16 @@ internal static class StateDrivenPipelineHelpers
     public static string? ResolveModelName(DatabaseService database, Agent agent)
     {
         if (agent == null) return null;
-        if (!string.IsNullOrWhiteSpace(agent.ModelName)) return agent.ModelName;
-        if (!agent.ModelId.HasValue) return null;
-        return database.GetModelInfoById(agent.ModelId.Value)?.Name;
+        if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
+        {
+            var byId = database.ResolveModelCallNameById(agent.ModelId.Value);
+            if (!string.IsNullOrWhiteSpace(byId)) return byId.Trim();
+        }
+        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        {
+            return database.ResolveModelCallName(agent.ModelName) ?? agent.ModelName.Trim();
+        }
+        return null;
     }
 
     public static async Task<AgentResponse> CallModelAsync(

@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("failure_rules")]
-public class FailureRule
+public partial class FailureRule : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

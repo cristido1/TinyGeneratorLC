@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("app_events")]
-    public class AppEventDefinition
+    public partial class AppEventDefinition : ISoftDelete, IActiveFlag, IOrderable
     {
         [Key]
         [Column("id")]

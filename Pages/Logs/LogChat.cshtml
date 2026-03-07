@@ -118,7 +118,36 @@
                                                 <span class="name">@e.ActorDisplayName</span>
                                                 @if (!string.IsNullOrWhiteSpace(e.ModelName))
                                                 {
-                                                    <span class="sub">@e.ModelName</span>
+                                                    var modelLower = e.ModelName.ToLowerInvariant();
+                                                    var iconPath = "providers/ollama.svg";
+                                                    if (modelLower.Contains("qwen"))
+                                                    {
+                                                        iconPath = "providers/qwen.svg";
+                                                    }
+                                                    else if (modelLower.Contains("claude") || modelLower.Contains("anthropic") || modelLower.Contains("antropic"))
+                                                    {
+                                                        iconPath = "providers/anthropic.svg";
+                                                    }
+                                                    else if (modelLower.Contains("ibm") || modelLower.Contains("granite"))
+                                                    {
+                                                        iconPath = "providers/ibm.svg";
+                                                    }
+                                                    else if (modelLower.Contains("gemma") || modelLower.Contains("google"))
+                                                    {
+                                                        iconPath = "providers/google.svg";
+                                                    }
+                                                    else if (modelLower.Contains("gpt") || modelLower.Contains("openai") || modelLower.StartsWith("o1") || modelLower.StartsWith("o3") || modelLower.StartsWith("o4"))
+                                                    {
+                                                        iconPath = "providers/openai.svg";
+                                                    }
+                                                    else if (modelLower.Contains("llama") || modelLower.Contains("mistral") || modelLower.Contains("deepseek"))
+                                                    {
+                                                        iconPath = "providers/llama.svg";
+                                                    }
+                                                    <span class="sub model-sub">
+                                                        <img class="provider-inline-icon" src="@Url.Content($"~/{iconPath}")" alt="provider" loading="lazy" />
+                                                        <span>@e.ModelName</span>
+                                                    </span>
                                                 }
                                                 else if (!string.IsNullOrWhiteSpace(e.ActorSubtitle))
                                                 {
@@ -231,6 +260,8 @@
     .msg .icon { width: 16px; text-align: center; }
     .msg .name { font-weight: 700; color: #111827; }
     .msg .sub { color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+    .msg .model-sub { display: inline-flex; align-items: center; gap: 4px; }
+    .msg .provider-inline-icon { width: 14px; height: 14px; object-fit: contain; flex: 0 0 auto; }
     .msg time { font-size: 11px; color: #6b7280; white-space: nowrap; }
     .msg .content { font-size: 13px; color: #111827; margin-bottom: 6px; white-space: pre-wrap; }
     .line-clamp-2 { display: block; overflow: visible; }

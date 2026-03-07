@@ -5,10 +5,14 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("models")]
-public class ModelInfo
+public partial class ModelInfo : ISoftDelete, IActiveFlag, IOrderable
 {
     public int? Id { get; set; }
     public string Name { get; set; } = string.Empty;
+    [Column("call_name")]
+    public string? CallName { get; set; }
+    [Column("size_text")]
+    public string? SizeText { get; set; }
     public string Provider { get; set; } = string.Empty;
     public string? Endpoint { get; set; }
     public bool IsLocal { get; set; }
@@ -22,6 +26,8 @@ public class ModelInfo
     public long LimitTokensMonth { get; set; }
     public string Metadata { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
+    [Column("thinking")]
+    public bool? Thinking { get; set; }
     public string? CreatedAt { get; set; }
     public string? UpdatedAt { get; set; }
     public double? TestDurationSeconds { get; set; }
@@ -58,6 +64,9 @@ public class ModelInfo
     public string? LastTtsTestFile { get; set; }
     public int Promotions { get; set; }
     public int Demotions { get; set; }
+    [Column("image")]
+    [MaxLength(200)]
+    public string? Image { get; set; }
 
     // Narrative Engine compatibility fields
     public bool IsNarrativeCompatible { get; set; } = false;

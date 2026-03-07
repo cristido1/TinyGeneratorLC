@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("consequence_impacts")]
-public class ConsequenceImpact
+public partial class ConsequenceImpact : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

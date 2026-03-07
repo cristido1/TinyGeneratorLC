@@ -6,7 +6,7 @@ namespace TinyGenerator.Models;
 /// Rappresenta lo score di coerenza (locale e globale) per un chunk
 /// </summary>
 [Table("coherence_scores")]
-public class CoherenceScore
+public partial class CoherenceScore : ISoftDelete, IActiveFlag, IOrderable
 {
     [Column("id")]
     public int Id { get; set; }

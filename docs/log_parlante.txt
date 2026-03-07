@@ -1,0 +1,12 @@
+-- LOG PARLANTE --
+- vorrei che ci fosse un agente che legge il log e che scrive queste frasi a seconda dell'operazione e dei risultati:
+
+- Nuova storia [Titolo], il planner [nome modello nre_planner] sta scrivendo lo schema della trama
+- (se riesce) : SUCCESSO, abbiamo la trama
+- (se non riesce) : Sembra che ci sia stato un ERRORE nella generazione del piano : [errore]
+- (se entra l'agente di fallback) : [nome modello precedente] ha FALLITO le sue [n] possibilità, adesso tocca al modello [nome modello di fallback] provare
+- Adesso che abbiamo la trama, l'agente [nome modello] sta mettendo le risorse iniziali della storia
+- (se riesce) : SUCCESSO : abbiamo anche le risorse iniziali della storia.
+... 
+
+

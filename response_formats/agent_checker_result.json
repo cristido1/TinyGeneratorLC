@@ -2,13 +2,13 @@
   "type": "object",
   "properties": {
     "score": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Punteggio del checker su scala 0-100." },
-    "needs_retry": { "type": "boolean", "description": "Indica se il blocco deve essere rigenerato." },
+    "needs_retry": { "type": "boolean", "description": "Opzionale: se omesso, il sistema calcola retry in base a minScore." },
     "issues": {
       "type": "array",
       "description": "Lista sintetica dei problemi riscontrati.",
       "items": { "type": "string", "description": "Descrizione breve di un problema." }
     }
   },
-  "required": ["score", "needs_retry", "issues"],
+  "required": ["score", "issues"],
   "additionalProperties": false
 }

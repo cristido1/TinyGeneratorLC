@@ -241,9 +241,24 @@ public sealed partial class StoryMainCommands
             context.CancellationToken.ThrowIfCancellationRequested();
             var sb = new StringBuilder();
             var overallSuccess = true;
+            var runId = _service.CurrentDispatcherRunId;
+            const int totalSteps = 5;
+            var emitBatchProgress = StoriesService.IsBatchWorkerProcess();
+
+            void ReportStep(int current, string description)
+            {
+                if (!string.IsNullOrWhiteSpace(runId))
+                {
+                    _service.ReportCommandProgress(runId!, current, totalSteps, description, emitBatchProgress);
+                    _service.CustomLogger?.Append(runId!, $"[{context.Story.Id}] {description}");
+                }
+            }
+
+            ReportStep(0, "prepare_tts_schema: avvio");
 
             try
             {
+                ReportStep(1, "prepare_tts_schema: generazione tts_schema.json in corso");
                 var (ttsOk, ttsMsg) = await _service.GenerateTtsSchemaJsonAsync(context.Story.Id);
                 sb.AppendLine($"GenerateTtsSchema: {ttsMsg}");
                 if (!ttsOk) overallSuccess = false;
@@ -256,6 +271,7 @@ public sealed partial class StoryMainCommands
 
             try
             {
+                ReportStep(2, "prepare_tts_schema: normalizzazione personaggi in corso");
                 var (normCharOk, normCharMsg) = await _service.NormalizeCharacterNamesAsync(context.Story.Id);
                 sb.AppendLine($"NormalizeCharacterNames: {normCharMsg}");
                 if (!normCharOk) overallSuccess = false;
@@ -268,6 +284,7 @@ public sealed partial class StoryMainCommands
 
             try
             {
+                ReportStep(3, "prepare_tts_schema: assegnazione voci in corso");
                 var (assignOk, assignMsg) = await _service.AssignVoicesAsync(context.Story.Id);
                 sb.AppendLine($"AssignVoices: {assignMsg}");
                 if (!assignOk) overallSuccess = false;
@@ -280,6 +297,7 @@ public sealed partial class StoryMainCommands
 
             try
             {
+                ReportStep(4, "prepare_tts_schema: normalizzazione sentiment in corso");
                 var (normSentOk, normSentMsg) = await _service.NormalizeSentimentsAsync(context.Story.Id);
                 sb.AppendLine($"NormalizeSentiments: {normSentMsg}");
                 if (!normSentOk) overallSuccess = false;
@@ -302,6 +320,10 @@ public sealed partial class StoryMainCommands
                     // best-effort autolaunch
                 }
             }
+
+            ReportStep(5, overallSuccess
+                ? "prepare_tts_schema: completato"
+                : "prepare_tts_schema: completato con errori");
 
             return (overallSuccess, sb.ToString());
         }

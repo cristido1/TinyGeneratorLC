@@ -12,6 +12,9 @@
             <div>
                 <div class="small text-muted">Prompt: @Model.Story?.Prompt</div>
                 <div class="small text-muted">Timestamp: @Model.Story?.Timestamp</div>
+                <div class="small text-muted">last_error_operation: @(string.IsNullOrWhiteSpace(Model.Story?.LastErrorOperation) ? "-" : Model.Story!.LastErrorOperation)</div>
+                <div class="small text-muted">last_error_date: @((DateTime.TryParse(Model.Story?.LastErrorDate, out var _detailLastErrorDate)) ? _detailLastErrorDate.ToString("dd/MM/yyyy HH:mm") : (!string.IsNullOrWhiteSpace(Model.Story?.LastErrorDate) ? Model.Story!.LastErrorDate : "-"))</div>
+                <div class="small text-muted">last_error_text: @(string.IsNullOrWhiteSpace(Model.Story?.LastErrorText) ? "-" : Model.Story!.LastErrorText)</div>
             </div>
             <div>
                 <a class="btn btn-sm btn-outline-secondary me-1" asp-page="/Stories/Edit" asp-route-id="@Model.Story?.Id">Modifica</a>
@@ -19,6 +22,15 @@
                 <a class="btn btn-sm btn-outline-success" id="macTtsPlay">Ascolta (macOS)</a>
             </div>
         </div>
+        @if (!string.IsNullOrWhiteSpace(Model.Story?.NrePlanSummary))
+        {
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="card-title mb-2">Piano NRE (sintesi planner)</h6>
+                    <pre class="mb-0" style="white-space: pre-wrap;">@Model.Story!.NrePlanSummary</pre>
+                </div>
+            </div>
+        }
         <ul class="nav nav-tabs" id="storyTabs" role="tablist">
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="story-raw-tab" data-bs-toggle="tab" data-bs-target="#story-raw-pane" type="button" role="tab" aria-controls="story-raw-pane" aria-selected="false">Storia raw</button>

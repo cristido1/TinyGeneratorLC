@@ -10,6 +10,7 @@ namespace TinyGenerator.Pages.Agents
     public class EditModel : PageModel
     {
         private readonly DatabaseService _database;
+        private readonly ICustomLogger? _logger;
 
         [BindProperty]
         public Agent Agent { get; set; } = new();
@@ -23,9 +24,10 @@ namespace TinyGenerator.Pages.Agents
         public string[] SelectedSkills { get; set; } = new string[] { };
         public string[] AvailableSkills { get; } = new string[] { "text", "math", "time", "filesystem", "http", "memory", "audiocraft", "audioevaluator", "tts", "ttsschema", "voicechoser", "evaluator", "story" };
 
-        public EditModel(DatabaseService database)
+        public EditModel(DatabaseService database, ICustomLogger? logger = null)
         {
             _database = database;
+            _logger = logger;
         }
 
         public IActionResult OnGet(int id)
@@ -131,7 +133,19 @@ namespace TinyGenerator.Pages.Agents
 
             try
             {
+                var existingAgent = _database.GetAgentById(Agent.Id);
+                var previousModelId = existingAgent?.ModelId;
                 _database.UpdateAgent(Agent);
+                if (existingAgent != null && previousModelId != Agent.ModelId)
+                {
+                    var previousModelName = ResolveModelDisplayName(previousModelId);
+                    var nextModelName = ResolveModelDisplayName(Agent.ModelId);
+                    _logger?.Log(
+                        "Information",
+                        "Agents",
+                        $"Model change: agent_id={Agent.Id}; agent_name={Agent.Name}; role={Agent.Role}; from_model_id={(previousModelId?.ToString() ?? "null")}; from_model={previousModelName}; to_model_id={(Agent.ModelId?.ToString() ?? "null")}; to_model={nextModelName}",
+                        result: "SUCCESS");
+                }
                 return RedirectToPage("/Agents/Index");
             }
             catch (Exception ex)
@@ -166,6 +180,24 @@ namespace TinyGenerator.Pages.Agents
             {
                 return new List<string>();
             }
+        }
+
+        private string ResolveModelDisplayName(int? modelId)
+        {
+            if (!modelId.HasValue || modelId.Value <= 0)
+            {
+                return "(none)";
+            }
+
+            var model = _database.GetModelInfoById(modelId.Value);
+            if (model == null)
+            {
+                return $"id:{modelId.Value}";
+            }
+
+            return string.IsNullOrWhiteSpace(model.CallName)
+                ? model.Name
+                : $"{model.Name} (call:{model.CallName})";
         }
     }
 }

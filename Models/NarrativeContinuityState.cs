@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("narrative_continuity_state")]
-public class NarrativeContinuityState
+public partial class NarrativeContinuityState : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

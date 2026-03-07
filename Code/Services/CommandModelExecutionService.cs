@@ -10,7 +10,12 @@ namespace TinyGenerator.Services;
 
 public sealed class CommandModelExecutionService : IAgentCallService
 {
-    public sealed record DeterministicValidationResult(bool IsValid, string? Reason = null);
+    private sealed class ThinkingOnlyResponseException : Exception
+    {
+        public ThinkingOnlyResponseException(string message) : base(message) { }
+    }
+
+    public sealed record DeterministicValidationResult(bool IsValid, string? Reason = null, string? CorrectedText = null);
 
     public sealed class Request
     {
@@ -18,6 +23,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         public Agent Agent { get; set; } = new();
         public string RoleCode { get; set; } = string.Empty;
         public string Prompt { get; set; } = string.Empty;
+        public List<ConversationMessage>? ConversationMessages { get; set; }
         public string? SystemPrompt { get; set; }
         public int? MaxAttempts { get; set; }
         public int? RetryDelaySeconds { get; set; }
@@ -201,9 +207,18 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var lastOutput = string.Empty;
         var hadDeterministicFailure = false;
         var explained = false;
+        var freeThinkingRetries = 0;
         var responseValidation = _responseValidationOptions?.Value;
         var (_, responsePolicy) = ResolveResponsePolicy(request.CommandKey, responseValidation);
         var rules = ResolveRules(responseValidation, responsePolicy);
+        var workingConversationMessages = request.ConversationMessages?
+            .Where(m => m != null)
+            .Select(m => new ConversationMessage
+            {
+                Role = m.Role,
+                Content = m.Content
+            })
+            .ToList();
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -228,12 +243,65 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     roleCode,
                     systemPrompt,
                     currentPrompt,
+                    workingConversationMessages,
                     request.CommandKey,
                     request.ResponseFormat,
                     skipResponseChecker: true,
                     enableStreaming: request.EnableStreamingOutput,
                     streamChunkCallback: request.StreamChunkCallback,
                     attemptToken).ConfigureAwait(false);
+            }
+            catch (ThinkingOnlyResponseException)
+            {
+                const int maxFreeThinkingRetries = 3;
+                if (freeThinkingRetries >= maxFreeThinkingRetries)
+                {
+                    lastError = $"Risposta solo thinking senza output finale (limite retry gratuiti raggiunto: {maxFreeThinkingRetries})";
+                    _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito: {lastError}");
+                    MarkLatestAttemptResult(modelName, request.Agent!, "FAILED", lastError, examined: true);
+                    await NotifyAttemptFailureAsync(
+                        request,
+                        modelName,
+                        roleCode,
+                        attempt,
+                        maxAttempts,
+                        lastError,
+                        deterministic: false,
+                        checker: false,
+                        lastSystemPrompt,
+                        currentPrompt,
+                        lastOutput,
+                        null,
+                        null,
+                        CancellationToken.None).ConfigureAwait(false);
+                    if (!explained && settings.ExplainAfterAttempt > 0 && attempt >= settings.ExplainAfterAttempt)
+                    {
+                        await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
+                        explained = true;
+                    }
+                    if (attempt < maxAttempts && delayMs > 0) await Task.Delay(delayMs, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                freeThinkingRetries++;
+                var feedback = "Hai inviato solo contenuto di thinking/reasoning senza risposta finale. Rispondi ORA con la risposta finale richiesta, senza thinking.";
+                _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt}: risposta thinking-only, retry gratuito {freeThinkingRetries}/{maxFreeThinkingRetries}");
+
+                if (workingConversationMessages != null && workingConversationMessages.Count > 0)
+                {
+                    workingConversationMessages.Add(new ConversationMessage
+                    {
+                        Role = "user",
+                        Content = feedback
+                    });
+                }
+                else
+                {
+                    currentPrompt = $"{currentPrompt}\n\n{feedback}";
+                }
+
+                attempt--;
+                continue;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested && settings.StepTimeoutSec > 0 && attemptCts.IsCancellationRequested)
             {
@@ -312,6 +380,13 @@ public sealed class CommandModelExecutionService : IAgentCallService
             if (deterministic.IsValid && settings.EnableDeterministicValidation)
             {
                 deterministic = request.DeterministicValidator?.Invoke(text) ?? new DeterministicValidationResult(true, null);
+            }
+
+            if (deterministic.IsValid && !string.IsNullOrWhiteSpace(deterministic.CorrectedText))
+            {
+                text = deterministic.CorrectedText.Trim();
+                lastOutput = text;
+                _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt}: risposta JSON corretta automaticamente");
             }
 
             if (!deterministic.IsValid)
@@ -476,7 +551,9 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 request.Agent.ModelId,
                 async modelRole =>
                 {
-                    var fallbackName = modelRole.Model?.Name;
+                    var fallbackName = string.IsNullOrWhiteSpace(modelRole.Model?.CallName)
+                        ? modelRole.Model?.Name
+                        : modelRole.Model!.CallName;
                     if (string.IsNullOrWhiteSpace(fallbackName))
                     {
                         throw new InvalidOperationException("Fallback ModelRole has no Model.Name");
@@ -487,8 +564,8 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         Id = request.Agent.Id,
                         Name = request.Agent.Name,
                         Role = request.Agent.Role,
-                        ModelId = request.Agent.ModelId,
-                        ModelName = request.Agent.ModelName,
+                        ModelId = modelRole.ModelId,
+                        ModelName = fallbackName,
                         VoiceId = request.Agent.VoiceId,
                         Skills = request.Agent.Skills,
                         Config = request.Agent.Config,
@@ -506,7 +583,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         TopK = modelRole.TopK ?? request.Agent.TopK,
                         RepeatLastN = request.Agent.RepeatLastN,
                         NumPredict = request.Agent.NumPredict,
-                        Thinking = modelRole.Thinking ?? request.Agent.Thinking,
+                        Thinking = modelRole.Thinking ?? _database.ResolveEffectiveThinking(request.Agent, modelRole.ModelId, fallbackName),
                         MultiStepTemplateId = request.Agent.MultiStepTemplateId,
                         Priority = request.Agent.Priority,
                         AllowedProfiles = request.Agent.AllowedProfiles
@@ -543,16 +620,20 @@ public sealed class CommandModelExecutionService : IAgentCallService
 
                     return result.Text;
                 },
-                validateResult: s => !string.IsNullOrWhiteSpace(s));
+                validateResult: s => !string.IsNullOrWhiteSpace(s),
+                agentId: request.Agent.Id);
 
-            if (!string.IsNullOrWhiteSpace(text) && successfulModelRole?.Model?.Name != null)
+            var successfulFallbackName = string.IsNullOrWhiteSpace(successfulModelRole?.Model?.CallName)
+                ? successfulModelRole?.Model?.Name
+                : successfulModelRole?.Model!.CallName;
+            if (!string.IsNullOrWhiteSpace(text) && !string.IsNullOrWhiteSpace(successfulFallbackName))
             {
-                _logger?.Append(request.RunId ?? string.Empty, $"[{request.RoleCode}] Fallback model succeeded: {successfulModelRole.Model.Name}");
+                _logger?.Append(request.RunId ?? string.Empty, $"[{request.RoleCode}] Fallback model succeeded: {successfulFallbackName}");
                 return new Result
                 {
                     Success = true,
                     Text = text,
-                    ModelName = successfulModelRole.Model.Name,
+                    ModelName = successfulFallbackName,
                     UsedFallback = true,
                     DeterministicFailure = false,
                     AttemptsUsed = fallbackAttemptsUsed
@@ -569,6 +650,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         string roleCode,
         string systemPrompt,
         string prompt,
+        IReadOnlyList<ConversationMessage>? conversationMessages,
         string? operationScope,
         object? responseFormat,
         bool skipResponseChecker,
@@ -576,6 +658,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         Func<string, Task>? streamChunkCallback,
         CancellationToken ct)
     {
+        var effectiveThinking = _database.ResolveEffectiveThinking(agent, modelName: modelName);
         var bridge = _kernelFactory.CreateChatBridge(
             modelName,
             agent.Temperature,
@@ -584,7 +667,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             agent.TopK,
             agent.RepeatLastN,
             agent.NumPredict,
-            agent.Thinking,
+            effectiveThinking,
             useMaxTokens: false,
             numCtx: ResolveNumCtxForAgent(agent, modelName));
         bridge.ResponseFormat = responseFormat;
@@ -602,11 +685,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             // No-op: tracing must not break command execution.
         }
 
-        var messages = new List<ConversationMessage>
-        {
-            new ConversationMessage { Role = "system", Content = systemPrompt },
-            new ConversationMessage { Role = "user", Content = prompt }
-        };
+        var messages = BuildConversationMessages(systemPrompt, prompt, conversationMessages);
 
         var effectiveScope = string.IsNullOrWhiteSpace(operationScope)
             ? (LogScope.Current ?? requestScope(roleCode))
@@ -636,17 +715,146 @@ public sealed class CommandModelExecutionService : IAgentCallService
         }
 
         var (text, _) = LangChainChatBridge.ParseChatResponse(responseJson);
+        var parsedText = text ?? string.Empty;
+        if (IsThinkingOnlyResponse(parsedText, responseJson))
+        {
+            throw new ThinkingOnlyResponseException("Model returned only thinking/reasoning content without final answer.");
+        }
         try
         {
             Console.WriteLine(
                 $"[StoryLive TRACE] CallModelTextAsync parsed_text role={roleCode} model={modelName} " +
-                $"text_len={(text?.Length ?? 0)}");
+                $"text_len={(parsedText.Length)}");
         }
         catch
         {
             // No-op: tracing must not break command execution.
         }
-        return text ?? string.Empty;
+        return parsedText;
+    }
+
+    private static bool IsThinkingOnlyResponse(string text, string? rawJson)
+    {
+        var trimmed = (text ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(trimmed))
+        {
+            // Common thinking wrapper tags used by some models.
+            if (Regex.IsMatch(trimmed, @"(?is)^\s*(<think>[\s\S]*?</think>\s*)+$"))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        return HasNonEmptyThinkingPayload(rawJson);
+    }
+
+    private static bool HasNonEmptyThinkingPayload(string? rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+
+            if (TryGetNonEmptyString(root, "thinking") ||
+                TryGetNonEmptyString(root, "reasoning") ||
+                TryGetNonEmptyString(root, "reasoning_content"))
+            {
+                return true;
+            }
+
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("message", out var message) &&
+                message.ValueKind == JsonValueKind.Object)
+            {
+                if (TryGetNonEmptyString(message, "thinking") ||
+                    TryGetNonEmptyString(message, "reasoning") ||
+                    TryGetNonEmptyString(message, "reasoning_content"))
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+            // best effort detection only
+        }
+
+        return false;
+    }
+
+    private static bool TryGetNonEmptyString(JsonElement obj, string propName)
+    {
+        if (obj.ValueKind != JsonValueKind.Object || !obj.TryGetProperty(propName, out var prop))
+        {
+            return false;
+        }
+
+        if (prop.ValueKind == JsonValueKind.String)
+        {
+            return !string.IsNullOrWhiteSpace(prop.GetString());
+        }
+
+        return prop.ValueKind switch
+        {
+            JsonValueKind.Object => prop.EnumerateObject().Any(),
+            JsonValueKind.Array => prop.GetArrayLength() > 0,
+            _ => false
+        };
+    }
+
+    private static List<ConversationMessage> BuildConversationMessages(
+        string systemPrompt,
+        string prompt,
+        IReadOnlyList<ConversationMessage>? conversationMessages)
+    {
+        if (conversationMessages != null && conversationMessages.Count > 0)
+        {
+            var sanitized = conversationMessages
+                .Where(m => m != null && !string.IsNullOrWhiteSpace(m.Content))
+                .Select(m => new ConversationMessage
+                {
+                    Role = string.IsNullOrWhiteSpace(m.Role) ? "user" : m.Role!.Trim().ToLowerInvariant(),
+                    Content = SanitizeConversationContent(m.Content!)
+                })
+                .ToList();
+
+            if (sanitized.Count > 0)
+            {
+                return sanitized;
+            }
+        }
+
+        return new List<ConversationMessage>
+        {
+            new ConversationMessage { Role = "system", Content = SanitizeConversationContent(systemPrompt) },
+            new ConversationMessage { Role = "user", Content = SanitizeConversationContent(prompt) }
+        };
+    }
+
+    private static string SanitizeConversationContent(string? content)
+    {
+        var text = (content ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        // Hard fail: flattened chat markers inside a message are always invalid.
+        // This enforces true multi-message conversation mode and prevents hidden flattening.
+        if (Regex.IsMatch(text, @"(?i)\[(user|assistant|system)\]", RegexOptions.CultureInvariant))
+        {
+            throw new InvalidOperationException(
+                "Conversazione non valida: rilevati tag flatten ([user]/[assistant]/[system]) dentro un messaggio.");
+        }
+
+        return text.Trim();
     }
 
     private async Task<ValidationResult> ValidateWithCheckerAsync(
@@ -682,6 +890,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
     {
         try
         {
+            var effectiveThinking = _database.ResolveEffectiveThinking(request.Agent, modelName: modelName);
             var bridge = _kernelFactory.CreateChatBridge(
                 modelName,
                 request.Agent.Temperature,
@@ -690,7 +899,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 request.Agent.TopK,
                 request.Agent.RepeatLastN,
                 request.Agent.NumPredict,
-                request.Agent.Thinking,
+                effectiveThinking,
                 useMaxTokens: false,
                 numCtx: ResolveNumCtxForAgent(request.Agent, modelName));
 
@@ -1489,7 +1698,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             return basePrompt;
         }
 
-        var frequentErrors = _database.ListTopModelRoleErrors(modelId.Value, null, roleCode, 10);
+        var frequentErrors = _database.ListTopModelRoleErrors(modelId.Value, null, roleCode, 10, request.Agent?.Id);
         if (frequentErrors.Count == 0)
         {
             return basePrompt;
@@ -1579,9 +1788,18 @@ public sealed class CommandModelExecutionService : IAgentCallService
 
     private string? ResolveModelName(Agent agent)
     {
-        if (!string.IsNullOrWhiteSpace(agent.ModelName)) return agent.ModelName;
-        if (!agent.ModelId.HasValue) return null;
-        return _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+        if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
+        {
+            var byId = _database.ResolveModelCallNameById(agent.ModelId.Value);
+            if (!string.IsNullOrWhiteSpace(byId)) return byId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        {
+            return _database.ResolveModelCallName(agent.ModelName) ?? agent.ModelName.Trim();
+        }
+
+        return null;
     }
 
     private static string requestScope(string roleCode) => $"command/{roleCode}";

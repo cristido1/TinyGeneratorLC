@@ -37,6 +37,19 @@ public sealed class DatabaseService
 
     private readonly string _connectionString;
     private readonly IServiceProvider _serviceProvider;
+    private readonly object _modelsCacheLock = new();
+    private List<ModelInfo>? _modelsCache;
+    private DateTime _modelsCacheExpiresUtc = DateTime.MinValue;
+    private static readonly TimeSpan ModelsCacheTtl = TimeSpan.FromMinutes(20);
+    private readonly object _rolesCacheLock = new();
+    private List<TinyGenerator.Models.Role>? _rolesCache;
+    private DateTime _rolesCacheExpiresUtc = DateTime.MinValue;
+    private static readonly TimeSpan RolesCacheTtl = TimeSpan.FromMinutes(20);
+
+    private readonly object _agentsCacheLock = new();
+    private List<TinyGenerator.Models.Agent>? _agentsCache;
+    private DateTime _agentsCacheExpiresUtc = DateTime.MinValue;
+    private static readonly TimeSpan AgentsCacheTtl = TimeSpan.FromMinutes(20);
 
     public DatabaseService(string dbPath = "data/storage.db", IOllamaMonitorService? ollamaMonitor = null, IServiceProvider? serviceProvider = null)
     {
@@ -100,6 +113,221 @@ public sealed class DatabaseService
     // level data access. Use `CreateDapperConnection()` when a raw SQLite
     // connection is required.
     private IDbConnection CreateDapperConnection() => new SqliteConnection(_connectionString);
+
+    private static ModelInfo CloneModel(ModelInfo source)
+    {
+        // Keep cache entries immutable from callers by returning detached copies.
+        return new ModelInfo
+        {
+            Id = source.Id,
+            Name = source.Name,
+            CallName = source.CallName,
+            SizeText = source.SizeText,
+            Provider = source.Provider,
+            Endpoint = source.Endpoint,
+            IsLocal = source.IsLocal,
+            MaxContext = source.MaxContext,
+            ContextToUse = source.ContextToUse,
+            FunctionCallingScore = source.FunctionCallingScore,
+            CostInPerToken = source.CostInPerToken,
+            CostOutPerToken = source.CostOutPerToken,
+            LimitTokensDay = source.LimitTokensDay,
+            LimitTokensWeek = source.LimitTokensWeek,
+            LimitTokensMonth = source.LimitTokensMonth,
+            Metadata = source.Metadata,
+            Enabled = source.Enabled,
+            Thinking = source.Thinking,
+            CreatedAt = source.CreatedAt,
+            UpdatedAt = source.UpdatedAt,
+            TestDurationSeconds = source.TestDurationSeconds,
+            NoTools = source.NoTools,
+            WriterScore = source.WriterScore,
+            BaseScore = source.BaseScore,
+            TextEvalScore = source.TextEvalScore,
+            TtsScore = source.TtsScore,
+            MusicScore = source.MusicScore,
+            FxScore = source.FxScore,
+            AmbientScore = source.AmbientScore,
+            TotalScore = source.TotalScore,
+            JsonScore = source.JsonScore,
+            InstructionScore = source.InstructionScore,
+            IntelliScore = source.IntelliScore,
+            IntelliTime = source.IntelliTime,
+            Note = source.Note,
+            Speed = source.Speed,
+            LastTestResults = source.LastTestResults,
+            LastMusicTestFile = source.LastMusicTestFile,
+            LastSoundTestFile = source.LastSoundTestFile,
+            LastTtsTestFile = source.LastTtsTestFile,
+            Promotions = source.Promotions,
+            Demotions = source.Demotions,
+            IsNarrativeCompatible = source.IsNarrativeCompatible,
+            MaxContextTokens = source.MaxContextTokens,
+            InstructionFollowingScore = source.InstructionFollowingScore,
+            LastScore_Base = source.LastScore_Base,
+            LastScore_Tts = source.LastScore_Tts,
+            LastScore_Music = source.LastScore_Music,
+            LastScore_Write = source.LastScore_Write,
+            LastResults_BaseJson = source.LastResults_BaseJson,
+            LastResults_TtsJson = source.LastResults_TtsJson,
+            LastResults_MusicJson = source.LastResults_MusicJson,
+            LastResults_WriteJson = source.LastResults_WriteJson,
+            Image = source.Image,
+            RowVersion = source.RowVersion
+        };
+    }
+
+    private static List<ModelInfo> CloneModels(IEnumerable<ModelInfo> models)
+    {
+        return models.Select(CloneModel).ToList();
+    }
+
+    private static TinyGenerator.Models.Role CloneRole(TinyGenerator.Models.Role source)
+    {
+        return new TinyGenerator.Models.Role
+        {
+            Id = source.Id,
+            Name = source.Name,
+            LinkedCommand = source.LinkedCommand,
+            CreatedAt = source.CreatedAt,
+            UpdatedAt = source.UpdatedAt,
+            IsActive = source.IsActive,
+            IsDeleted = source.IsDeleted,
+            SortOrder = source.SortOrder
+        };
+    }
+
+    private static List<TinyGenerator.Models.Role> CloneRoles(IEnumerable<TinyGenerator.Models.Role> roles)
+    {
+        return roles.Select(CloneRole).ToList();
+    }
+
+    private static TinyGenerator.Models.Agent CloneAgent(TinyGenerator.Models.Agent source)
+    {
+        return new TinyGenerator.Models.Agent
+        {
+            Id = source.Id,
+            Name = source.Name,
+            Role = source.Role,
+            ModelId = source.ModelId,
+            VoiceId = source.VoiceId,
+            ModelName = source.ModelName,
+            Skills = source.Skills,
+            Config = source.Config,
+            JsonResponseFormat = source.JsonResponseFormat,
+            Prompt = source.Prompt,
+            Instructions = source.Instructions,
+            ExecutionPlan = source.ExecutionPlan,
+            IsActive = source.IsActive,
+            CreatedAt = source.CreatedAt,
+            UpdatedAt = source.UpdatedAt,
+            Notes = source.Notes,
+            VoiceName = source.VoiceName,
+            Temperature = source.Temperature,
+            TopP = source.TopP,
+            RepeatPenalty = source.RepeatPenalty,
+            TopK = source.TopK,
+            RepeatLastN = source.RepeatLastN,
+            NumPredict = source.NumPredict,
+            Thinking = source.Thinking,
+            MultiStepTemplateId = source.MultiStepTemplateId,
+            Priority = source.Priority,
+            AllowedProfiles = source.AllowedProfiles,
+            MultiStepTemplateName = source.MultiStepTemplateName,
+            RowVersion = source.RowVersion
+        };
+    }
+
+    private static List<TinyGenerator.Models.Agent> CloneAgents(IEnumerable<TinyGenerator.Models.Agent> agents)
+    {
+        return agents.Select(CloneAgent).ToList();
+    }
+
+    private void InvalidateModelsCache()
+    {
+        lock (_modelsCacheLock)
+        {
+            _modelsCache = null;
+            _modelsCacheExpiresUtc = DateTime.MinValue;
+        }
+    }
+
+    private void InvalidateRolesCache()
+    {
+        lock (_rolesCacheLock)
+        {
+            _rolesCache = null;
+            _rolesCacheExpiresUtc = DateTime.MinValue;
+        }
+    }
+
+    private void InvalidateAgentsCache()
+    {
+        lock (_agentsCacheLock)
+        {
+            _agentsCache = null;
+            _agentsCacheExpiresUtc = DateTime.MinValue;
+        }
+    }
+
+    private List<ModelInfo> LoadModelsFromDatabase()
+    {
+        using var context = CreateDbContext();
+        try
+        {
+            return context.Models.AsNoTracking().OrderBy(m => m.Name).ToList();
+        }
+        catch (Exception)
+        {
+            // Fallback to Dapper in case EF cannot read (legacy DB schema)
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var cols = SelectModelColumns();
+            var sql = $"SELECT {cols} FROM models";
+            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
+        }
+    }
+
+    private List<TinyGenerator.Models.Role> LoadRolesFromDatabase()
+    {
+        using var context = CreateDbContext();
+        try
+        {
+            return context.Roles.AsNoTracking().OrderBy(r => r.Name).ToList();
+        }
+        catch (Exception)
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var rows = conn.Query<TinyGenerator.Models.Role>("SELECT id, name, linked_command, created_at, updated_at, is_active, is_deleted, sort_order FROM roles").ToList();
+            return rows.OrderBy(r => r.Name).ToList();
+        }
+    }
+
+    private List<TinyGenerator.Models.Agent> LoadAgentsFromDatabase()
+    {
+        using var context = CreateDbContext();
+        try
+        {
+            var agents = context.Agents.AsNoTracking().OrderBy(a => a.Name).ToList();
+            // Populate friendly ModelName and MultiStepTemplateName
+            var modelMap = context.Models.AsNoTracking().ToDictionary(m => m.Id.GetValueOrDefault(), m => m.Name ?? string.Empty);
+            var templateMap = context.StepTemplates.AsNoTracking().ToDictionary(t => t.Id, t => t.Name ?? string.Empty);
+            foreach (var a in agents)
+            {
+                if (a.ModelId.HasValue && modelMap.TryGetValue(a.ModelId.Value, out var mn)) a.ModelName = mn;
+                if (a.MultiStepTemplateId.HasValue && templateMap.TryGetValue(a.MultiStepTemplateId.Value, out var tn)) a.MultiStepTemplateName = tn;
+            }
+            return agents;
+        }
+        catch (Exception)
+        {
+            using var conn = CreateDapperConnection();
+            conn.Open();
+            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, name, role, model_id, voice_rowid, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, priority, allowed_profiles FROM agents").ToList();
+            return rows.OrderBy(a => a.Name).ToList();
+        }
+    }
 
     private static bool IsSqliteMissingColumnOrTable(Exception ex)
     {
@@ -1394,6 +1622,11 @@ VALUES
         AddIfMissing("auto_tts_failed_at", "TEXT");
         AddIfMissing("auto_tts_fail_count", "INTEGER DEFAULT 0");
         AddIfMissing("auto_tts_last_error", "TEXT");
+
+        // Last story command error tracking (UI diagnostics)
+        AddIfMissing("last_error_operation", "TEXT");
+        AddIfMissing("last_error_text", "TEXT");
+        AddIfMissing("last_error_date", "TEXT");
     }
 
     public void MarkAutoTtsFailure(long storyId, string? errorMessage = null)
@@ -1663,6 +1896,54 @@ VALUES
         }
     }
 
+    public void SetStoryLastError(long storyId, string? operation, string? errorText)
+    {
+        if (storyId <= 0) return;
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            conn.Execute(@"
+                UPDATE stories
+                SET last_error_operation = @operation,
+                    last_error_text = @errorText,
+                    last_error_date = @errorDate
+                WHERE id = @id",
+                new
+                {
+                    id = storyId,
+                    operation = string.IsNullOrWhiteSpace(operation) ? null : operation.Trim(),
+                    errorText = string.IsNullOrWhiteSpace(errorText) ? "Operazione terminata con errore." : errorText.Trim(),
+                    errorDate = DateTime.UtcNow.ToString("o")
+                });
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
+    public void ClearStoryLastError(long storyId)
+    {
+        if (storyId <= 0) return;
+        try
+        {
+            using var conn = CreateConnection();
+            conn.Open();
+            conn.Execute(@"
+                UPDATE stories
+                SET last_error_operation = NULL,
+                    last_error_text = NULL,
+                    last_error_date = NULL
+                WHERE id = @id",
+                new { id = storyId });
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
     private static string ExtractFirstSqlToken(string sql)
     {
         if (string.IsNullOrWhiteSpace(sql)) return string.Empty;
@@ -1727,20 +2008,17 @@ VALUES
 
     public List<ModelInfo> ListModels()
     {
-        // Use EF Core to list models (preferable to raw SQL/Dapper)
-        using var context = CreateDbContext();
-        try
+        lock (_modelsCacheLock)
         {
-            return context.Models.AsNoTracking().OrderBy(m => m.Name).ToList();
-        }
-        catch (Exception)
-        {
-            // Fallback to Dapper in case EF cannot read (legacy DB schema)
-            using var conn = CreateDapperConnection();
-            conn.Open();
-            var cols = SelectModelColumns();
-            var sql = $"SELECT {cols} FROM models";
-            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
+            if (_modelsCache != null && DateTime.UtcNow < _modelsCacheExpiresUtc)
+            {
+                return CloneModels(_modelsCache);
+            }
+
+            var loaded = LoadModelsFromDatabase();
+            _modelsCache = CloneModels(loaded);
+            _modelsCacheExpiresUtc = DateTime.UtcNow.Add(ModelsCacheTtl);
+            return CloneModels(_modelsCache);
         }
     }
 
@@ -1749,22 +2027,10 @@ VALUES
     /// </summary>
     public List<ModelInfo> ListModelsWithoutJsonScore()
     {
-        using var context = CreateDbContext();
-        try
-        {
-            return context.Models.AsNoTracking()
-                .Where(m => m.Enabled && m.JsonScore == null)
-                .OrderBy(m => m.Name)
-                .ToList();
-        }
-        catch (Exception)
-        {
-            using var conn = CreateDapperConnection();
-            conn.Open();
-            var cols = SelectModelColumns();
-            var sql = $"SELECT {cols} FROM models WHERE JsonScore IS NULL AND Enabled = 1";
-            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
-        }
+        return ListModels()
+            .Where(m => m.Enabled && m.JsonScore == null)
+            .OrderBy(m => m.Name)
+            .ToList();
     }
 
     /// <summary>
@@ -1772,22 +2038,10 @@ VALUES
     /// </summary>
     public List<ModelInfo> ListModelsWithoutInstructionScore()
     {
-        using var context = CreateDbContext();
-        try
-        {
-            return context.Models.AsNoTracking()
-                .Where(m => m.Enabled && m.InstructionScore == null)
-                .OrderBy(m => m.Name)
-                .ToList();
-        }
-        catch (Exception)
-        {
-            using var conn = CreateDapperConnection();
-            conn.Open();
-            var cols = SelectModelColumns();
-            var sql = $"SELECT {cols} FROM models WHERE InstructionScore IS NULL AND Enabled = 1";
-            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
-        }
+        return ListModels()
+            .Where(m => m.Enabled && m.InstructionScore == null)
+            .OrderBy(m => m.Name)
+            .ToList();
     }
 
     /// <summary>
@@ -1795,22 +2049,10 @@ VALUES
     /// </summary>
     public List<ModelInfo> ListModelsWithoutIntelligenceScore()
     {
-        using var context = CreateDbContext();
-        try
-        {
-            return context.Models.AsNoTracking()
-                .Where(m => m.Enabled && m.IntelliScore == null)
-                .OrderBy(m => m.Name)
-                .ToList();
-        }
-        catch (Exception)
-        {
-            using var conn = CreateDapperConnection();
-            conn.Open();
-            var cols = SelectModelColumns();
-            var sql = $"SELECT {cols} FROM models WHERE intelliScore IS NULL AND Enabled = 1";
-            return conn.Query<ModelInfo>(sql).OrderBy(m => m.Name).ToList();
-        }
+        return ListModels()
+            .Where(m => m.Enabled && m.IntelliScore == null)
+            .OrderBy(m => m.Name)
+            .ToList();
     }
 
     /// <summary>
@@ -1819,8 +2061,7 @@ VALUES
     /// </summary>
     public (List<ModelInfo> Items, int TotalCount) GetPagedModels(string? search, string? orderBy, int pageIndex, int pageSize, bool showDisabled = true)
     {
-        using var context = CreateDbContext();
-        var query = context.Models.AsNoTracking().AsQueryable();
+        var query = ListModels().AsQueryable();
         if (!showDisabled)
         {
             query = query.Where(m => m.Enabled);
@@ -1829,7 +2070,11 @@ VALUES
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim();
-            query = query.Where(m => m.Name.Contains(s) || m.Provider.Contains(s) || (m.Note ?? string.Empty).Contains(s));
+            query = query.Where(m =>
+                m.Name.Contains(s) ||
+                (m.SizeText ?? string.Empty).Contains(s) ||
+                m.Provider.Contains(s) ||
+                (m.Note ?? string.Empty).Contains(s));
         }
 
         // Simple orderBy handling (name, provider, createdat, updatedat)
@@ -1916,11 +2161,10 @@ VALUES
     {
         try
         {
+            var modelId = GetModelIdByName(modelName);
+            if (!modelId.HasValue || modelId.Value <= 0) return null;
             using var context = CreateDbContext();
-            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
-            if (model == null || !model.Id.HasValue) return null;
-            var modelId = model.Id.Value;
-            var run = context.ModelTestRuns.Where(r => r.ModelId == modelId && r.TestGroup == groupName).OrderByDescending(r => r.Id).FirstOrDefault();
+            var run = context.ModelTestRuns.Where(r => r.ModelId == modelId.Value && r.TestGroup == groupName).OrderByDescending(r => r.Id).FirstOrDefault();
             return run?.DurationMs;
         }
         catch
@@ -1936,10 +2180,66 @@ VALUES
     /// </summary>
     public ModelInfo? GetModelInfoById(int modelId)
     {
-        using var context = CreateDbContext();
+        if (modelId <= 0) return null;
+        return ListModels().FirstOrDefault(m => m.Id == modelId);
+    }
+
+    public string? ResolveModelCallNameById(int modelId)
+    {
+        if (modelId <= 0) return null;
+        var model = GetModelInfoById(modelId);
+        if (model == null) return null;
+        return string.IsNullOrWhiteSpace(model.CallName) ? model.Name : model.CallName.Trim();
+    }
+
+    public string? ResolveModelCallName(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName)) return null;
+        var lookup = modelName.Trim();
+        var model = ListModels().FirstOrDefault(m =>
+            string.Equals(m.Name, lookup, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(m.CallName, lookup, StringComparison.OrdinalIgnoreCase));
+        if (model == null) return lookup;
+        return string.IsNullOrWhiteSpace(model.CallName) ? model.Name : model.CallName.Trim();
+    }
+
+    public bool? ResolveEffectiveThinking(Agent? agent, int? modelId = null, string? modelName = null)
+    {
+        if (agent?.Thinking.HasValue == true)
+        {
+            return agent.Thinking.Value;
+        }
+
+        var resolvedModelId = modelId;
+        if ((!resolvedModelId.HasValue || resolvedModelId.Value <= 0) && agent?.ModelId.HasValue == true)
+        {
+            resolvedModelId = agent.ModelId.Value;
+        }
+
+        if (resolvedModelId.HasValue && resolvedModelId.Value > 0)
+        {
+            var modelById = GetModelInfoById(resolvedModelId.Value);
+            if (modelById != null)
+            {
+                return modelById.Thinking;
+            }
+        }
+
+        var resolvedModelName = !string.IsNullOrWhiteSpace(modelName)
+            ? modelName.Trim()
+            : agent?.ModelName;
+        if (string.IsNullOrWhiteSpace(resolvedModelName))
+        {
+            return null;
+        }
+
         try
         {
-            return context.Models.Find(modelId);
+            return ListModels()
+                .Where(m => string.Equals(m.Name, resolvedModelName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(m.CallName, resolvedModelName, StringComparison.OrdinalIgnoreCase))
+                .Select(m => m.Thinking)
+                .FirstOrDefault();
         }
         catch
         {
@@ -1954,22 +2254,17 @@ VALUES
             return null;
         }
 
-        using var context = CreateDbContext();
-        try
-        {
-            var model = context.Models.FirstOrDefault(m => m.Name == modelName);
-            return model?.Id;
-        }
-        catch
-        {
-            return null;
-        }
+        var lookup = modelName.Trim();
+        var model = ListModels().FirstOrDefault(m =>
+            string.Equals(m.Name, lookup, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(m.CallName, lookup, StringComparison.OrdinalIgnoreCase));
+        return model?.Id;
     }
 
-    public List<ModelRoleErrorEntry> ListTopModelRoleErrors(int? modelId, string? modelName, string? roleCode, int limit = 10)
+    public List<ModelRoleErrorEntry> ListTopModelRoleErrors(int? modelId, string? modelName, string? roleCode, int limit = 10, int? agentId = null)
     {
         var result = new List<ModelRoleErrorEntry>();
-        var modelRoleId = ResolveModelRoleId(modelId, modelName, roleCode);
+        var modelRoleId = ResolveModelRoleId(modelId, modelName, roleCode, agentId);
         if (!modelRoleId.HasValue || modelRoleId.Value <= 0)
         {
             return result;
@@ -2004,7 +2299,7 @@ LIMIT @limitRows;";
         }
     }
 
-    public int? ResolveModelRoleId(int? modelId, string? modelName, string? roleCode)
+    public int? ResolveModelRoleId(int? modelId, string? modelName, string? roleCode, int? agentId = null)
     {
         if (string.IsNullOrWhiteSpace(roleCode))
         {
@@ -2026,18 +2321,26 @@ LIMIT @limitRows;";
         conn.Open();
         try
         {
+            var resolvedAgentId = ResolveAgentIdForRole(conn, roleCode, null, agentId);
+            if (!resolvedAgentId.HasValue || resolvedAgentId.Value <= 0)
+            {
+                return null;
+            }
+
             const string sql = @"
 SELECT mr.id
 FROM model_roles mr
 JOIN roles r ON r.id = mr.role_id
 WHERE mr.model_id = @modelId
-  AND lower(trim(r.ruolo)) = lower(trim(@roleCode))
+  AND mr.agent_id = @agentId
+  AND lower(trim(r.name)) = lower(trim(@roleCode))
 ORDER BY mr.is_primary DESC, mr.id ASC
 LIMIT 1;";
 
             return conn.ExecuteScalar<int?>(sql, new
             {
                 modelId = resolvedModelId.Value,
+                agentId = resolvedAgentId.Value,
                 roleCode = roleCode.Trim()
             });
         }
@@ -2047,7 +2350,7 @@ LIMIT 1;";
         }
     }
 
-    public int? ResolveOrCreateModelRoleId(int? modelId, string? modelName, string? roleCode)
+    public int? ResolveOrCreateModelRoleId(int? modelId, string? modelName, string? roleCode, int? agentId = null)
     {
         if (string.IsNullOrWhiteSpace(roleCode))
         {
@@ -2071,18 +2374,26 @@ LIMIT 1;";
         {
             var normalizedRole = roleCode.Trim();
             var roleId = conn.ExecuteScalar<int?>(
-                "SELECT id FROM roles WHERE lower(trim(ruolo)) = lower(trim(@roleCode)) LIMIT 1",
+                "SELECT id FROM roles WHERE lower(trim(name)) = lower(trim(@roleCode)) LIMIT 1",
                 new { roleCode = normalizedRole });
+
+            var resolvedAgentId = ResolveAgentIdForRole(conn, normalizedRole, roleId.Value, agentId);
+            if (!resolvedAgentId.HasValue || resolvedAgentId.Value <= 0)
+            {
+                return null;
+            }
 
             var now = DateTime.UtcNow.ToString("o");
             if (!roleId.HasValue || roleId.Value <= 0)
             {
                 conn.Execute(
-                    @"INSERT INTO roles (ruolo, created_at, updated_at)
+                    @"INSERT INTO roles (name, created_at, updated_at)
                       VALUES (@roleCode, @now, @now)",
                     new { roleCode = normalizedRole, now });
 
-                roleId = conn.ExecuteScalar<int?>("SELECT last_insert_rowid();");
+                                roleId = conn.ExecuteScalar<int?>("SELECT last_insert_rowid();");
+                                // Invalidate roles cache after inserting a new role
+                                InvalidateRolesCache();
             }
 
             if (!roleId.HasValue || roleId.Value <= 0)
@@ -2093,10 +2404,10 @@ LIMIT 1;";
             var existingId = conn.ExecuteScalar<int?>(
                 @"SELECT id
                   FROM model_roles
-                  WHERE model_id = @modelId AND role_id = @roleId
+                  WHERE model_id = @modelId AND role_id = @roleId AND agent_id = @agentId
                   ORDER BY is_primary DESC, id ASC
                   LIMIT 1",
-                new { modelId = resolvedModelId.Value, roleId = roleId.Value });
+                new { modelId = resolvedModelId.Value, roleId = roleId.Value, agentId = resolvedAgentId.Value });
 
             if (existingId.HasValue && existingId.Value > 0)
             {
@@ -2105,15 +2416,16 @@ LIMIT 1;";
 
             conn.Execute(
                 @"INSERT INTO model_roles
-                    (model_id, role_id, is_primary, enabled, created_at, updated_at)
+                    (model_id, role_id, agent_id, is_primary, enabled, use_count, use_successed, use_failed, created_at, updated_at)
                   VALUES
-                    (@modelId, @roleId, 1, 1, @now, @now)",
-                new { modelId = resolvedModelId.Value, roleId = roleId.Value, now });
+                    (@modelId, @roleId, @agentId, 1, 1, 0, 0, 0, @now, @now)",
+                new { modelId = resolvedModelId.Value, roleId = roleId.Value, agentId = resolvedAgentId.Value, now });
 
             return conn.ExecuteScalar<int?>("SELECT last_insert_rowid();");
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[DB] ResolveOrCreateModelRoleId insert failed: role={roleCode}, modelId={resolvedModelId}, agentId={agentId}, error={ex.Message}");
             return null;
         }
     }
@@ -2177,14 +2489,63 @@ VALUES (@parentId, @errorText, @errorType, 1, @now, @now);";
         }
     }
 
-    public bool RecordModelRoleUsage(string? roleCode, int? modelId, string? modelName, bool success)
+    private static int? ResolveAgentIdForRole(IDbConnection conn, string roleCode, int? roleId, int? preferredAgentId)
+    {
+        if (preferredAgentId.HasValue && preferredAgentId.Value > 0)
+        {
+            var existsPreferred = conn.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM agents WHERE id = @id",
+                new { id = preferredAgentId.Value });
+            if (existsPreferred > 0)
+            {
+                return preferredAgentId.Value;
+            }
+        }
+
+        int? byRoleId = null;
+        if (roleId.HasValue && roleId.Value > 0)
+        {
+            byRoleId = conn.ExecuteScalar<int?>(
+                @"SELECT a.id
+                  FROM agents a
+                  JOIN roles r ON lower(trim(a.role)) = lower(trim(r.name))
+                  WHERE r.id = @roleId
+                  ORDER BY a.id ASC
+                  LIMIT 1",
+                new { roleId = roleId.Value });
+        }
+
+        if (byRoleId.HasValue && byRoleId.Value > 0)
+        {
+            return byRoleId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(roleCode))
+        {
+            var byRoleCode = conn.ExecuteScalar<int?>(
+                @"SELECT id
+                  FROM agents
+                  WHERE lower(trim(role)) = lower(trim(@roleCode))
+                  ORDER BY id ASC
+                  LIMIT 1",
+                new { roleCode = roleCode.Trim() });
+            if (byRoleCode.HasValue && byRoleCode.Value > 0)
+            {
+                return byRoleCode;
+            }
+        }
+
+        return conn.ExecuteScalar<int?>("SELECT id FROM agents ORDER BY id ASC LIMIT 1");
+    }
+
+    public bool RecordModelRoleUsage(string? roleCode, int? modelId, string? modelName, bool success, int? agentId = null)
     {
         if (string.IsNullOrWhiteSpace(roleCode))
         {
             return false;
         }
 
-        var modelRoleId = ResolveOrCreateModelRoleId(modelId, modelName, roleCode);
+        var modelRoleId = ResolveOrCreateModelRoleId(modelId, modelName, roleCode, agentId);
         if (!modelRoleId.HasValue || modelRoleId.Value <= 0)
         {
             return false;
@@ -2217,6 +2578,77 @@ WHERE id = @id;";
         {
             return false;
         }
+    }
+
+    public List<(int ModelId, string ModelName, bool? Thinking)> GetEnabledFallbackModelsForAgentRole(
+        int agentId,
+        string? roleCode,
+        int? excludeModelId = null)
+    {
+        var result = new List<(int ModelId, string ModelName, bool? Thinking)>();
+        if (agentId <= 0 || string.IsNullOrWhiteSpace(roleCode))
+        {
+            return result;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            const string sql = @"
+SELECT
+    mr.model_id      AS ModelId,
+    COALESCE(NULLIF(m.call_name, ''), m.Name) AS ModelName,
+    mr.thinking      AS Thinking,
+    mr.use_successed AS UseSuccessed,
+    mr.use_failed    AS UseFailed,
+    mr.use_count     AS UseCount
+FROM model_roles mr
+JOIN roles r  ON r.id = mr.role_id
+JOIN models m ON m.Id = mr.model_id
+WHERE mr.agent_id = @agentId
+  AND lower(trim(r.name)) = lower(trim(@roleCode))
+  AND mr.enabled = 1
+  AND mr.is_primary = 0
+  AND (@excludeModelId IS NULL OR @excludeModelId <= 0 OR mr.model_id <> @excludeModelId)
+ORDER BY
+  (CAST(mr.use_successed AS REAL) / (mr.use_successed + mr.use_failed + 1.0)) DESC,
+  mr.use_count DESC,
+  mr.id ASC;";
+
+            var rows = conn.Query<DbFallbackModelRow>(sql, new
+            {
+                agentId,
+                roleCode = roleCode.Trim(),
+                excludeModelId
+            }).ToList();
+
+            foreach (var row in rows)
+            {
+                if (row.ModelId <= 0 || string.IsNullOrWhiteSpace(row.ModelName))
+                {
+                    continue;
+                }
+
+                result.Add((row.ModelId, row.ModelName.Trim(), row.Thinking));
+            }
+
+            return result;
+        }
+        catch
+        {
+            return result;
+        }
+    }
+
+    private sealed class DbFallbackModelRow
+    {
+        public int ModelId { get; set; }
+        public string ModelName { get; set; } = string.Empty;
+        public bool? Thinking { get; set; }
+        public int UseSuccessed { get; set; }
+        public int UseFailed { get; set; }
+        public int UseCount { get; set; }
     }
 
     public List<ModelRoleErrorEntry> ListModelRoleErrors(int parentId, int maxRows = 200)
@@ -2256,6 +2688,48 @@ LIMIT @limitRows;";
         }
     }
 
+    public List<ModelRoleErrorEntry> ListModelRoleErrorsByModelAndRole(int modelId, int roleId, int maxRows = 200, int? agentId = null)
+    {
+        var result = new List<ModelRoleErrorEntry>();
+        if (modelId <= 0 || roleId <= 0)
+        {
+            return result;
+        }
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        try
+        {
+            const string sql = @"
+SELECT mre.id AS Id,
+       mre.parent_id AS ParentId,
+       mre.error_text AS ErrorText,
+       mre.error_type AS ErrorType,
+       mre.error_count AS ErrorCount,
+       mre.date_insert AS DateInsert,
+       mre.date_last AS DateLast
+FROM model_roles_errors mre
+JOIN model_roles mr ON mr.id = mre.parent_id
+ WHERE mr.model_id = @modelId
+   AND mr.role_id = @roleId
+   AND (@agentId IS NULL OR @agentId <= 0 OR mr.agent_id = @agentId)
+ORDER BY mre.date_last DESC, mre.id DESC
+LIMIT @limitRows;";
+
+            return conn.Query<ModelRoleErrorEntry>(sql, new
+            {
+                modelId,
+                roleId,
+                agentId,
+                limitRows = Math.Max(1, maxRows)
+            }).ToList();
+        }
+        catch
+        {
+            return result;
+        }
+    }
+
     public List<ModelRoleErrorGridRow> ListModelRoleErrorsGrid(string? modelName = null, string? roleCode = null, int maxRows = 5000)
     {
         using var conn = CreateDapperConnection();
@@ -2264,8 +2738,8 @@ LIMIT @limitRows;";
         {
             const string sql = @"
 SELECT m.Name AS ModelName,
-       r.ruolo AS RoleCode,
-       r.comando_collegato AS Operation,
+       r.name AS RoleCode,
+       r.linked_command AS Operation,
        mre.id AS Id,
        mre.parent_id AS ParentId,
        mre.error_text AS ErrorText,
@@ -2278,7 +2752,7 @@ JOIN model_roles mr ON mr.id = mre.parent_id
 JOIN models m ON m.Id = mr.model_id
 JOIN roles r ON r.id = mr.role_id
 WHERE (@modelName IS NULL OR @modelName = '' OR lower(trim(m.Name)) = lower(trim(@modelName)))
-  AND (@roleCode IS NULL OR @roleCode = '' OR lower(trim(r.ruolo)) = lower(trim(@roleCode)))
+  AND (@roleCode IS NULL OR @roleCode = '' OR lower(trim(r.name)) = lower(trim(@roleCode)))
 ORDER BY mre.error_count DESC, mre.date_last DESC, mre.id DESC
 LIMIT @limitRows;";
 
@@ -2331,12 +2805,14 @@ LIMIT @limitRows;";
         {
             existing = context.Models.FirstOrDefault(m => m.Name == model.Name);
         }
-        
+
         // Preserve an existing non-zero FunctionCallingScore if the caller didn't set a meaningful score.
         if (existing != null && existing.FunctionCallingScore != 0 && model.FunctionCallingScore == 0)
         {
             model.FunctionCallingScore = existing.FunctionCallingScore;
         }
+        model.CallName = string.IsNullOrWhiteSpace(model.CallName) ? model.Name : model.CallName.Trim();
+        model.SizeText = NormalizeModelSizeText(model.SizeText, model.Name);
         model.CreatedAt ??= existing?.CreatedAt ?? now;
         model.UpdatedAt = now;
 
@@ -2352,6 +2828,7 @@ LIMIT @limitRows;";
             context.Models.Add(model);
         }
         context.SaveChanges();
+        InvalidateModelsCache();
     }
 
     // Delete a model by name from the models table (best-effort). Also deletes related model_test_runs entries.
@@ -2371,6 +2848,7 @@ LIMIT @limitRows;";
                     if (runs.Any()) context.ModelTestRuns.RemoveRange(runs);
                     context.Models.Remove(modelById);
                     context.SaveChanges();
+                    InvalidateModelsCache();
                 }
                 return;
             }
@@ -2390,6 +2868,7 @@ LIMIT @limitRows;";
 
                 context.Models.Remove(model);
                 context.SaveChanges();
+                InvalidateModelsCache();
             }
         }
         catch { }
@@ -2537,9 +3016,22 @@ LIMIT @limitRows;";
     // Agents CRUD (EF Core)
     public List<TinyGenerator.Models.Agent> ListAgents()
     {
-        using var context = CreateDbContext();
-        // Include related data if needed (VoiceName, MultiStepTemplateName are non-persistent)
-        return context.Agents.OrderBy(a => a.Name).ToList();
+        lock (_agentsCacheLock)
+        {
+            if (_agentsCache != null && DateTime.UtcNow < _agentsCacheExpiresUtc)
+            {
+                return CloneAgents(_agentsCache);
+            }
+        }
+
+        var loaded = LoadAgentsFromDatabase();
+
+        lock (_agentsCacheLock)
+        {
+            _agentsCache = CloneAgents(loaded);
+            _agentsCacheExpiresUtc = DateTime.UtcNow.Add(AgentsCacheTtl);
+            return CloneAgents(_agentsCache);
+        }
     }
 
     public List<string> ListAgentRoles()
@@ -2551,6 +3043,26 @@ LIMIT @limitRows;";
             .Distinct()
             .OrderBy(r => r)
             .ToList();
+    }
+
+    public List<TinyGenerator.Models.Role> ListRoles()
+    {
+        lock (_rolesCacheLock)
+        {
+            if (_rolesCache != null && DateTime.UtcNow < _rolesCacheExpiresUtc)
+            {
+                return CloneRoles(_rolesCache);
+            }
+        }
+
+        var loaded = LoadRolesFromDatabase();
+
+        lock (_rolesCacheLock)
+        {
+            _rolesCache = CloneRoles(loaded);
+            _rolesCacheExpiresUtc = DateTime.UtcNow.Add(RolesCacheTtl);
+            return CloneRoles(_rolesCache);
+        }
     }
 
     /// <summary>
@@ -2646,26 +3158,8 @@ LIMIT @limitRows;";
 
     public TinyGenerator.Models.Agent? GetAgentById(int id)
     {
-        using var context = CreateDbContext();
-
-        var row = (from a in context.Agents
-                   where a.Id == id
-                   join m in context.Models on a.ModelId equals m.Id into models
-                   from m in models.DefaultIfEmpty()
-                   join t in context.StepTemplates on a.MultiStepTemplateId equals (int?)t.Id into templates
-                   from t in templates.DefaultIfEmpty()
-                   select new
-                   {
-                       Agent = a,
-                       ModelName = m != null ? m.Name : null,
-                       TemplateName = t != null ? t.Name : null
-                   }).FirstOrDefault();
-
-        if (row == null) return null;
-
-        row.Agent.ModelName = row.ModelName;
-        row.Agent.MultiStepTemplateName = row.TemplateName;
-        return row.Agent;
+        var agents = ListAgents();
+        return agents.FirstOrDefault(a => a.Id == id);
     }
 
     // Removed GetAgentIdByName(name) to enforce id-based agent operations. Use GetAgentById(int) or query agents list where needed.
@@ -2674,8 +3168,8 @@ LIMIT @limitRows;";
     {
         if (string.IsNullOrWhiteSpace(role)) return null;
         var normalizedRole = role.Trim().ToLower();
-        using var context = CreateDbContext();
-        return context.Agents
+        var agents = ListAgents();
+        return agents
             .Where(a => (a.Role ?? string.Empty).Trim().ToLower() == normalizedRole)
             .OrderByDescending(a => a.IsActive)
             .ThenBy(a => a.Id)
@@ -2690,6 +3184,7 @@ LIMIT @limitRows;";
         a.UpdatedAt = now;
         context.Agents.Add(a);
         context.SaveChanges();
+        InvalidateAgentsCache();
         return a.Id;
     }
 
@@ -2700,6 +3195,7 @@ LIMIT @limitRows;";
         a.UpdatedAt = DateTime.UtcNow.ToString("o");
         context.Agents.Update(a);
         context.SaveChanges();
+        InvalidateAgentsCache();
     }
 
     public void DeleteAgent(int id)
@@ -2710,6 +3206,7 @@ LIMIT @limitRows;";
         {
             context.Agents.Remove(agent);
             context.SaveChanges();
+            InvalidateAgentsCache();
         }
     }
 
@@ -3116,6 +3613,7 @@ LIMIT @limitRows;";
             model.NoTools = noTools.Value;
         }
         context.SaveChanges();
+        InvalidateModelsCache();
     }
 
     public void UpdateModelTtsScore(int modelId, double score)
@@ -3127,6 +3625,7 @@ LIMIT @limitRows;";
         model.TotalScore = model.WriterScore + model.BaseScore + model.TextEvalScore + score + model.MusicScore + model.FxScore + model.AmbientScore;
         model.UpdatedAt = DateTime.UtcNow.ToString("o");
         context.SaveChanges();
+        InvalidateModelsCache();
     }
 
     /// <summary>
@@ -3826,6 +4325,7 @@ LIMIT @limitRows;";
 
             model.WriterScore = writerScore;
             context.SaveChanges();
+            InvalidateModelsCache();
         }
         catch
         {
@@ -3903,6 +4403,7 @@ SET TotalScore = (
     AmbientScore
 );";
         conn.Execute(totalSql);
+        InvalidateModelsCache();
     }
 
     public List<TinyGenerator.Models.LogEntry> GetStoryEvaluationsByStoryId(long storyId)
@@ -5935,6 +6436,30 @@ WHERE agent_id IS NOT NULL
     }
 
     /// <summary>
+    /// Updates the nre_plan_summary field for a story.
+    /// </summary>
+    public bool UpdateStoryNrePlanSummary(long storyId, string? nrePlanSummary)
+    {
+        using var context = CreateDbContext();
+        var storyRecord = context.Stories.Find(storyId);
+        if (storyRecord == null) return false;
+        storyRecord.NrePlanSummary = string.IsNullOrWhiteSpace(nrePlanSummary) ? null : nrePlanSummary.Trim();
+
+        try
+        {
+            context.SaveChanges();
+        }
+        catch (Exception ex)
+        {
+            var fullMessage = ExceptionHelper.GetFullExceptionMessage(ex);
+            Console.WriteLine($"[DB][ERROR] Failed to save nre_plan_summary for story {storyId}: {fullMessage}");
+            throw new InvalidOperationException($"Failed to update nre_plan_summary for story {storyId}: {fullMessage}", ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Removes markdown artifacts and special characters from tagged story text.
     /// </summary>
     private string SanitizeStoryTagged(string text)
@@ -7840,6 +8365,21 @@ CREATE TABLE IF NOT EXISTS usage_state (
             Console.WriteLine($"[DB] Warning: unable to add parent_story_id to stories: {ex.Message}");
         }
 
+        // Migration: add nre_plan_summary column to stories if missing
+        try
+        {
+            var hasNrePlanSummary = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='nre_plan_summary'") > 0;
+            if (!hasNrePlanSummary)
+            {
+                Console.WriteLine("[DB] Migration: adding nre_plan_summary column to stories");
+                conn.Execute("ALTER TABLE stories ADD COLUMN nre_plan_summary TEXT");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add nre_plan_summary to stories: {ex.Message}");
+        }
+
         // Migration: add Result column to Log if missing
         try
         {
@@ -8255,6 +8795,75 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
             }
         }
 
+        // Migration: Add thinking column to models if not exists (NULL/true/false)
+        var hasModelThinking = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE lower(name)='thinking'");
+        if (hasModelThinking == 0)
+        {
+            Console.WriteLine("[DB] Adding thinking column to models");
+            try
+            {
+                conn.Execute("ALTER TABLE models ADD COLUMN thinking INTEGER NULL");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to add thinking column to models: {ex.Message}");
+            }
+        }
+
+        // Migration: Add call_name column to models if not exists and backfill from Name.
+        var hasModelCallName = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE lower(name)='call_name'");
+        if (hasModelCallName == 0)
+        {
+            Console.WriteLine("[DB] Adding call_name column to models");
+            try
+            {
+                conn.Execute("ALTER TABLE models ADD COLUMN call_name TEXT NULL");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to add call_name column to models: {ex.Message}");
+            }
+        }
+        try
+        {
+            conn.Execute("UPDATE models SET call_name = Name WHERE call_name IS NULL OR TRIM(call_name) = ''");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to backfill call_name on models: {ex.Message}");
+        }
+
+        // Migration: Add size_text column to models if not exists and backfill from model name.
+        var hasModelSizeText = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE lower(name)='size_text'");
+        if (hasModelSizeText == 0)
+        {
+            Console.WriteLine("[DB] Adding size_text column to models");
+            try
+            {
+                conn.Execute("ALTER TABLE models ADD COLUMN size_text TEXT NULL");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB] Warning: failed to add size_text column to models: {ex.Message}");
+            }
+        }
+        try
+        {
+            var rows = conn.Query<(int Id, string Name, string? SizeText)>(
+                "SELECT Id, Name, size_text as SizeText FROM models");
+            foreach (var row in rows)
+            {
+                var normalized = NormalizeModelSizeText(row.SizeText, row.Name);
+                conn.Execute(
+                    "UPDATE models SET size_text=@size WHERE Id=@id",
+                    new { id = row.Id, size = normalized });
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to backfill size_text on models: {ex.Message}");
+        }
+
         // Migration: Add json_score column to models if not exists
         var hasJsonScore = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE name='JsonScore'");
         if (hasJsonScore == 0)
@@ -8366,6 +8975,162 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
         catch (Exception ex)
         {
             Console.WriteLine($"[DB] Warning: failed to add model_roles performance/thinking columns: {ex.Message}");
+        }
+
+        // Migration: enforce model_roles.agent_id (required + FK) and backfill existing rows.
+        try
+        {
+            var hasModelRolesTable = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='model_roles'");
+            if (hasModelRolesTable > 0)
+            {
+                var hasAgentId = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('model_roles') WHERE lower(name)=lower('agent_id')") > 0;
+                if (!hasAgentId)
+                {
+                    conn.Execute("ALTER TABLE model_roles ADD COLUMN agent_id INTEGER NULL");
+                    Console.WriteLine("[DB] Migration: added agent_id column to model_roles");
+                }
+
+                // Backfill using first agent matching role.
+                conn.Execute(@"
+UPDATE model_roles
+SET agent_id = (
+    SELECT a.id
+    FROM roles r
+    JOIN agents a ON lower(trim(a.role)) = lower(trim(r.name))
+    WHERE r.id = model_roles.role_id
+    ORDER BY a.id ASC
+    LIMIT 1
+)
+WHERE agent_id IS NULL OR agent_id <= 0;");
+
+                // Fallback: if a role has no dedicated agent, assign first available agent.
+                conn.Execute(@"
+UPDATE model_roles
+SET agent_id = (SELECT id FROM agents ORDER BY id ASC LIMIT 1)
+WHERE (agent_id IS NULL OR agent_id <= 0)
+  AND EXISTS (SELECT 1 FROM agents);");
+
+                var unresolvedAgentRefs = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM model_roles WHERE agent_id IS NULL OR agent_id <= 0");
+                if (unresolvedAgentRefs > 0)
+                {
+                    Console.WriteLine($"[DB] Warning: model_roles rows with unresolved agent_id after backfill: {unresolvedAgentRefs}");
+                }
+
+                var agentNotNull = conn.ExecuteScalar<long>("SELECT COALESCE(notnull, 0) FROM pragma_table_info('model_roles') WHERE lower(name)=lower('agent_id') LIMIT 1") > 0;
+                if (!agentNotNull && unresolvedAgentRefs == 0)
+                {
+                    Console.WriteLine("[DB] Migration: rebuilding model_roles to enforce agent_id NOT NULL");
+                    conn.Execute("PRAGMA foreign_keys = OFF;");
+                    try
+                    {
+                        conn.Execute(@"
+CREATE TABLE model_roles_new (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    model_id INTEGER NOT NULL,
+    role_id INTEGER NOT NULL,
+    agent_id INTEGER NOT NULL,
+    enabled INTEGER NOT NULL,
+    use_count INTEGER NOT NULL,
+    use_successed INTEGER NOT NULL,
+    use_failed INTEGER NOT NULL,
+    last_use TEXT NULL,
+    instructions TEXT NULL,
+    top_p REAL NULL,
+    top_k INTEGER NULL,
+    created_at TEXT NULL,
+    updated_at TEXT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    total_prompt_tokens INTEGER DEFAULT 0,
+    total_output_tokens INTEGER DEFAULT 0,
+    total_prompt_time_ns INTEGER DEFAULT 0,
+    total_gen_time_ns INTEGER DEFAULT 0,
+    total_load_time_ns INTEGER DEFAULT 0,
+    total_total_time_ns INTEGER DEFAULT 0,
+    thinking INTEGER NULL,
+    CONSTRAINT FK_model_roles_models_model_id FOREIGN KEY (model_id) REFERENCES models (Id) ON DELETE CASCADE,
+    CONSTRAINT FK_model_roles_roles_role_id FOREIGN KEY (role_id) REFERENCES roles (id) ON DELETE CASCADE,
+    CONSTRAINT FK_model_roles_agents_agent_id FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+);");
+
+                        conn.Execute(@"
+INSERT INTO model_roles_new (
+    id, model_id, role_id, agent_id, enabled, use_count, use_successed, use_failed,
+    last_use, instructions, top_p, top_k, created_at, updated_at, is_primary,
+    total_prompt_tokens, total_output_tokens, total_prompt_time_ns, total_gen_time_ns,
+    total_load_time_ns, total_total_time_ns, thinking
+)
+SELECT
+    id, model_id, role_id, agent_id, enabled, use_count, use_successed, use_failed,
+    last_use, instructions, top_p, top_k, created_at, updated_at, is_primary,
+    total_prompt_tokens, total_output_tokens, total_prompt_time_ns, total_gen_time_ns,
+    total_load_time_ns, total_total_time_ns, thinking
+FROM model_roles;");
+
+                        conn.Execute("DROP TABLE model_roles;");
+                        conn.Execute("ALTER TABLE model_roles_new RENAME TO model_roles;");
+                        conn.Execute("CREATE INDEX IF NOT EXISTS IX_model_roles_model_id ON model_roles(model_id);");
+                        conn.Execute("CREATE INDEX IF NOT EXISTS IX_model_roles_role_id ON model_roles(role_id);");
+                        conn.Execute("CREATE INDEX IF NOT EXISTS IX_model_roles_agent_id ON model_roles(agent_id);");
+                        conn.Execute("CREATE INDEX IF NOT EXISTS IX_model_roles_role_agent ON model_roles(role_id, agent_id);");
+                    }
+                    finally
+                    {
+                        conn.Execute("PRAGMA foreign_keys = ON;");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to enforce model_roles.agent_id migration: {ex.Message}");
+            try { conn.Execute("PRAGMA foreign_keys = ON;"); } catch { }
+        }
+
+        // Migration: ensure a model_roles row exists for each agent current model/role.
+        // This keeps usage counters consistent after changing an agent primary model.
+        try
+        {
+            var inserted = conn.Execute(@"
+INSERT INTO model_roles (model_id, role_id, agent_id, enabled, use_count, use_successed, use_failed, created_at, updated_at, is_primary)
+SELECT
+    a.model_id,
+    r.id,
+    a.id,
+    1,
+    0,
+    0,
+    0,
+    datetime('now'),
+    datetime('now'),
+    CASE
+        WHEN EXISTS (
+            SELECT 1
+            FROM model_roles mrp
+            WHERE mrp.role_id = r.id
+              AND mrp.agent_id = a.id
+              AND mrp.is_primary = 1
+        ) THEN 0
+        ELSE 1
+    END
+FROM agents a
+JOIN roles r ON lower(trim(a.role)) = lower(trim(r.name))
+JOIN models m ON m.Id = a.model_id
+LEFT JOIN model_roles mr
+    ON mr.model_id = a.model_id
+   AND mr.role_id = r.id
+   AND mr.agent_id = a.id
+WHERE a.model_id IS NOT NULL
+  AND a.model_id > 0
+  AND mr.id IS NULL;");
+
+            if (inserted > 0)
+            {
+                Console.WriteLine($"[DB] Migration: created {inserted} missing model_roles rows for current agent models.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: failed to backfill missing model_roles rows: {ex.Message}");
         }
 
         // Migration: Rename test_code to test_group if needed
@@ -8823,7 +9588,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             if (hasRolesTable)
             {
                 conn.Execute(@"
-INSERT OR IGNORE INTO roles (ruolo, comando_collegato, created_at, updated_at)
+INSERT OR IGNORE INTO roles (name, linked_command, created_at, updated_at)
 VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))");
             }
         }
@@ -9130,6 +9895,8 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         return string.Join(", ", new[] { 
             "Id", 
             "Name", 
+            "call_name as CallName",
+            "size_text as SizeText",
             "Provider", 
             "Endpoint", 
             "IsLocal", 
@@ -9148,6 +9915,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             "UpdatedAt", 
             "TestDurationSeconds",
             "NoTools",
+            "thinking as Thinking",
             "WriterScore",
             "BaseScore", 
             "TextEvalScore", 
@@ -9162,7 +9930,63 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             "intelliTime as IntelliTime",
             "promotions as Promotions",
             "demotions as Demotions"
+            ,
+            "image as Image"
         });
+    }
+
+    private static string? NormalizeModelSizeText(string? explicitValue, string? modelName)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitValue))
+        {
+            return explicitValue.Trim().ToUpperInvariant();
+        }
+
+        return DeriveModelSizeTextFromName(modelName);
+    }
+
+    private static string? DeriveModelSizeTextFromName(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return null;
+        }
+
+        var matches = Regex.Matches(modelName, @"(?i)(\d+(?:\.\d+)?)b(?:-a\d+b)?");
+        if (matches.Count == 0)
+        {
+            return null;
+        }
+
+        string? bestToken = null;
+        double bestNumeric = double.MinValue;
+        foreach (Match match in matches)
+        {
+            if (!match.Success || string.IsNullOrWhiteSpace(match.Value))
+            {
+                continue;
+            }
+
+            var token = match.Value.Trim();
+            var numMatch = Regex.Match(token, @"(?i)^\d+(?:\.\d+)?");
+            if (!numMatch.Success)
+            {
+                continue;
+            }
+
+            if (!double.TryParse(numMatch.Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var numeric))
+            {
+                continue;
+            }
+
+            if (numeric > bestNumeric)
+            {
+                bestNumeric = numeric;
+                bestToken = token;
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(bestToken) ? null : bestToken.ToUpperInvariant();
     }
 
     // Retrieve recent log entries with optional filtering by level or category and support offset for pagination.
@@ -9591,6 +10415,39 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         return logs;
     }
 
+    public List<LogEntry> GetLogsByStoryId(long storyId, int limit = 5000)
+    {
+        if (storyId <= 0) return new List<LogEntry>();
+        if (limit <= 0) limit = 5000;
+
+        using var context = CreateDbContext();
+        var logs = context.Logs
+            .Where(l => l.StoryId.HasValue && l.StoryId.Value == storyId)
+            .OrderBy(l => l.Id)
+            .Take(limit)
+            .ToList();
+        EnrichLogsForDisplay(logs);
+        return logs;
+    }
+
+    public List<long> GetRecentNreStoryIds(int limit = 100)
+    {
+        if (limit <= 0) limit = 100;
+
+        using var context = CreateDbContext();
+        return context.Logs.AsNoTracking()
+            .Where(l =>
+                l.StoryId.HasValue &&
+                l.StoryId.Value > 0 &&
+                l.ThreadScope != null &&
+                l.ThreadScope.StartsWith("nre_"))
+            .OrderByDescending(l => l.Id)
+            .Select(l => l.StoryId!.Value)
+            .Distinct()
+            .Take(limit)
+            .ToList();
+    }
+
     public LogEntry? GetLogById(long id)
     {
         using var context = CreateDbContext();
@@ -9845,6 +10702,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         }
         model.UpdatedAt = DateTime.UtcNow.ToString("o");
         ctx.SaveChanges();
+        InvalidateModelsCache();
     }
 
     public void UpdateModelInstructionScore(int modelId, double? instructionScore, string? lastResults = null)
@@ -9860,6 +10718,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         }
         model.UpdatedAt = DateTime.UtcNow.ToString("o");
         ctx.SaveChanges();
+        InvalidateModelsCache();
     }
 
     public void UpdateModelIntelligenceScore(int modelId, int? intelliScore, int? intelliTimeSeconds, string? lastResults = null)
@@ -9876,6 +10735,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         }
         model.UpdatedAt = DateTime.UtcNow.ToString("o");
         ctx.SaveChanges();
+        InvalidateModelsCache();
     }
 
     /// <summary>
@@ -9887,7 +10747,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         using var conn = CreateConnection();
         conn.Open();
 
-        var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        var modelId = GetModelIdByName(modelName);
         if (!modelId.HasValue) return new List<TestGroupSummary>();
 
         var groups = conn.Query<string>("SELECT DISTINCT test_group FROM model_test_runs WHERE model_id = @mid ORDER BY test_group", new { mid = modelId.Value }).ToList();
@@ -9926,7 +10786,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         using var conn = CreateConnection();
         conn.Open();
 
-        var modelId = conn.ExecuteScalar<int?>("SELECT Id FROM models WHERE Name = @Name LIMIT 1", new { Name = modelName });
+        var modelId = GetModelIdByName(modelName);
         if (!modelId.HasValue) return new List<object>();
 
         var runId = conn.ExecuteScalar<int?>("SELECT id FROM model_test_runs WHERE model_id = @mid AND test_group = @g ORDER BY id DESC LIMIT 1", new { mid = modelId.Value, g = groupName });
@@ -10076,6 +10936,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         
         // Recalculate TotalScore after updating individual scores
         RecalculateTotalScore(conn, modelId);
+        InvalidateModelsCache();
     }
 
     /// <summary>
@@ -10107,6 +10968,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
 
         // Recalculate TotalScore
         RecalculateTotalScore(conn, modelId);
+        InvalidateModelsCache();
     }
 
     /// <summary>

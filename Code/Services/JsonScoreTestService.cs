@@ -249,16 +249,25 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
             targets = OrderModelsForScoreTests(targets).ToList();
         }
 
+        var totalSteps = Math.Max(1, targets.Count * _tests.Count);
+        _dispatcher.UpdateStep(ctx.RunId, 0, totalSteps, $"jsonScore 0/{totalSteps}");
+
         int processed = 0;
-        foreach (var model in targets)
+        for (var modelIndex = 0; modelIndex < targets.Count; modelIndex++)
         {
+            var model = targets[modelIndex];
             ctx.CancellationToken.ThrowIfCancellationRequested();
             if (!model.Id.HasValue)
             {
                 continue;
             }
 
-            var (score, details) = await TestSingleModelAsync(model, ctx);
+            var stepOffset = modelIndex * _tests.Count;
+            var (score, details) = await TestSingleModelAsync(
+                model,
+                ctx,
+                globalStepOffset: stepOffset,
+                globalStepMax: totalSteps);
             _database.UpdateModelJsonScore(model.Id.Value, score, details);
             processed++;
 
@@ -282,7 +291,7 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
             return new CommandResult(false, "Modello non valido (Id mancante)");
         }
 
-        var (score, details) = await TestSingleModelAsync(model, ctx);
+        var (score, details) = await TestSingleModelAsync(model, ctx, globalStepOffset: 0, globalStepMax: _tests.Count);
         _database.UpdateModelJsonScore(model.Id.Value, score, details);
 
         var summary = $"[{model.Name}] jsonScore={score}/10";
@@ -290,7 +299,11 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
         return new CommandResult(true, summary);
     }
 
-    private async Task<(int Score, string Details)> TestSingleModelAsync(ModelInfo model, CommandContext ctx)
+    private async Task<(int Score, string Details)> TestSingleModelAsync(
+        ModelInfo model,
+        CommandContext ctx,
+        int globalStepOffset,
+        int globalStepMax)
     {
         var provider = model.Provider?.Trim();
         var responseFormat = string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase)
@@ -301,6 +314,13 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
         var errors = new List<string>();
 
         _dispatcher.UpdateOperationName(ctx.RunId, $"jsonScore:{model.Name}");
+        var safeGlobalMax = Math.Max(1, globalStepMax);
+        var initialCurrent = Math.Clamp(globalStepOffset, 0, safeGlobalMax);
+        _dispatcher.UpdateStep(
+            ctx.RunId,
+            initialCurrent,
+            safeGlobalMax,
+            $"[{model.Name}] Domanda 0/{_tests.Count} • progress {initialCurrent}/{safeGlobalMax}");
 
         for (int i = 0; i < _tests.Count; i++)
         {
@@ -311,7 +331,7 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
                 var call = await _testCallCenter.CallAsync(new TestCallRequest
                 {
                     Operation = "json_score",
-                    ModelName = model.Name,
+                    ModelName = string.IsNullOrWhiteSpace(model.CallName) ? model.Name : model.CallName!,
                     SystemPrompt = SystemPrompt,
                     Prompt = test.Prompt,
                     Timeout = TimeSpan.FromSeconds(60),
@@ -357,7 +377,12 @@ Rispetta esattamente la priorita richiesta dal prompt utente e i vincoli sul tit
                 _logger?.MarkLatestModelResponseResult("FAILED", ex.Message, examined: true);
             }
 
-            _dispatcher.UpdateStep(ctx.RunId, i + 1, _tests.Count, $"[{model.Name}] Domanda {i + 1}/{_tests.Count} \u2022 parziale {score}");
+            var currentStep = Math.Clamp(globalStepOffset + i + 1, 0, safeGlobalMax);
+            _dispatcher.UpdateStep(
+                ctx.RunId,
+                currentStep,
+                safeGlobalMax,
+                $"[{model.Name}] Domanda {i + 1}/{_tests.Count} • progress {currentStep}/{safeGlobalMax} • parziale {score}");
         }
 
         var detail = errors.Count == 0 ? "tutte le risposte valide" : string.Join("; ", errors);

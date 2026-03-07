@@ -8,7 +8,8 @@ public sealed class DefaultDeterministicValidator : IDeterministicValidator
 {
     public DeterministicValidatorResult Validate(AgentExecutionContext context)
     {
-        var output = context?.OutputText ?? string.Empty;
+        var originalOutput = context?.OutputText ?? string.Empty;
+        var output = originalOutput;
         var checks = context?.DeterministicChecks ?? Array.Empty<IDeterministicCheck>();
         var previousNormalizedResponse = context?.PreviousNormalizedResponse;
 
@@ -52,9 +53,19 @@ public sealed class DefaultDeterministicValidator : IDeterministicValidator
                     Violations = new List<string> { reason }
                 };
             }
+
+            if (result is JsonSchemaDeterministicResult schemaResult &&
+                !string.IsNullOrWhiteSpace(schemaResult.CorrectedText))
+            {
+                output = schemaResult.CorrectedText.Trim();
+            }
         }
 
-        return new DeterministicValidatorResult { IsValid = true };
+        return new DeterministicValidatorResult
+        {
+            IsValid = true,
+            CorrectedText = !string.Equals(originalOutput, output, StringComparison.Ordinal) ? output : null
+        };
     }
 
     private static string NormalizeForComparison(string? text) => (text ?? string.Empty).Trim();
@@ -141,13 +152,9 @@ public sealed class DefaultRetryPolicy : IRetryPolicy
         HashSet<string> usedModels,
         IReadOnlyDictionary<string, (double successRate, double tokensPerSec)> stats)
     {
-        var candidates = _database.ListAgents()
-            .Where(a =>
-                a.IsActive &&
-                a.Id != currentAgent.Id &&
-                string.Equals(a.Role, currentAgent.Role, StringComparison.OrdinalIgnoreCase))
-            .Select(a => new { Agent = a, Model = ResolveModelName(a) ?? string.Empty })
-            .Where(x => !string.IsNullOrWhiteSpace(x.Model) && !usedModels.Contains(x.Model))
+        var candidates = _database
+            .GetEnabledFallbackModelsForAgentRole(currentAgent.Id, currentAgent.Role, currentAgent.ModelId)
+            .Where(x => !string.IsNullOrWhiteSpace(x.ModelName) && !usedModels.Contains(x.ModelName))
             .ToList();
 
         if (candidates.Count == 0)
@@ -155,30 +162,50 @@ public sealed class DefaultRetryPolicy : IRetryPolicy
             return null;
         }
 
-        return candidates
-            .OrderByDescending(c => stats.TryGetValue(c.Model, out var m) ? m.successRate : 0.0)
-            .ThenByDescending(c => stats.TryGetValue(c.Model, out var m) ? m.tokensPerSec : 0.0)
-            .Select(c => c.Agent)
+        var selected = candidates
+            .OrderByDescending(c => stats.TryGetValue(c.ModelName, out var m) ? m.successRate : 0.0)
+            .ThenByDescending(c => stats.TryGetValue(c.ModelName, out var m) ? m.tokensPerSec : 0.0)
             .FirstOrDefault();
+
+        if (selected.ModelId <= 0 || string.IsNullOrWhiteSpace(selected.ModelName))
+        {
+            return null;
+        }
+
+        return CloneAgentWithModel(currentAgent, selected.ModelId, selected.ModelName, selected.Thinking);
     }
 
-    private string? ResolveModelName(Agent agent)
+    private static Agent CloneAgentWithModel(Agent source, int modelId, string modelName, bool? thinking)
     {
-        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        return new Agent
         {
-            return agent.ModelName.Trim();
-        }
-
-        if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
-        {
-            var byId = _database.GetModelInfoById(agent.ModelId.Value)?.Name;
-            if (!string.IsNullOrWhiteSpace(byId))
-            {
-                return byId.Trim();
-            }
-        }
-
-        return null;
+            Id = source.Id,
+            Name = source.Name,
+            Role = source.Role,
+            ModelId = modelId,
+            ModelName = modelName,
+            VoiceId = source.VoiceId,
+            Skills = source.Skills,
+            Config = source.Config,
+            JsonResponseFormat = source.JsonResponseFormat,
+            Prompt = source.Prompt,
+            Instructions = source.Instructions,
+            ExecutionPlan = source.ExecutionPlan,
+            IsActive = source.IsActive,
+            CreatedAt = source.CreatedAt,
+            UpdatedAt = source.UpdatedAt,
+            Notes = source.Notes,
+            Temperature = source.Temperature,
+            TopP = source.TopP,
+            RepeatPenalty = source.RepeatPenalty,
+            TopK = source.TopK,
+            RepeatLastN = source.RepeatLastN,
+            NumPredict = source.NumPredict,
+            Thinking = thinking ?? source.Thinking,
+            MultiStepTemplateId = source.MultiStepTemplateId,
+            Priority = source.Priority,
+            AllowedProfiles = source.AllowedProfiles
+        };
     }
 
     private bool IsAgentFallbackEnabledForOperation(string? operation)
@@ -267,12 +294,22 @@ public sealed class DefaultAgentExecutor : IAgentExecutor
             CommandKey = string.IsNullOrWhiteSpace(request.Options?.Operation) ? "call_center" : request.Options.Operation.Trim(),
             Agent = request.Agent,
             RoleCode = roleCode,
-            Prompt = BuildPromptFromHistory(request.History),
+            Prompt = string.Empty,
+            ConversationMessages = request.History?.Messages?
+                .Where(m => m != null && !string.IsNullOrWhiteSpace(m.Content))
+                .Select(m => new ConversationMessage
+                {
+                    Role = string.IsNullOrWhiteSpace(m.Role) ? "user" : m.Role!.Trim().ToLowerInvariant(),
+                    Content = m.Content!.Trim()
+                })
+                .ToList(),
             SystemPrompt = request.SystemPrompt,
             MaxAttempts = 1,
             StepTimeoutSec = timeoutSec,
             UseResponseChecker = request.Options?.UseResponseChecker ?? true,
-            EnableFallback = (request.Options?.AllowFallback ?? true) && IsModelFallbackEnabledByConfig(),
+            // Fallback must be coordinated by outer CallCenter retry policy so every failed response
+            // (including JSON format failures) consumes exactly one attempt.
+            EnableFallback = false,
             DiagnoseOnFinalFailure = false,
             ExplainAfterAttempt = 0,
             RunId = $"callcenter_{Guid.NewGuid():N}",
@@ -289,11 +326,11 @@ public sealed class DefaultAgentExecutor : IAgentExecutor
                 if (!IsCancellationReason(failure.Reason))
                 {
                     var effectiveFailureModelId = ResolveEffectiveModelId(request.Agent.ModelId, failure.ModelName);
-                    _database.RecordModelRoleUsage(role, effectiveFailureModelId, failure.ModelName, success: false);
+                    _database.RecordModelRoleUsage(role, effectiveFailureModelId, failure.ModelName, success: false, agentId: request.Agent.Id);
 
                     var errorTexts = BuildTrackedErrorTexts(failure);
                     var errorType = ResolveErrorType(failure);
-                    var modelRoleId = _database.ResolveOrCreateModelRoleId(effectiveFailureModelId, failure.ModelName, role);
+                    var modelRoleId = _database.ResolveOrCreateModelRoleId(effectiveFailureModelId, failure.ModelName, role, request.Agent.Id);
                     if (modelRoleId.HasValue && modelRoleId.Value > 0)
                     {
                         foreach (var errorText in errorTexts)
@@ -353,18 +390,18 @@ public sealed class DefaultAgentExecutor : IAgentExecutor
 
     private string? ResolveModelName(Agent agent)
     {
-        if (!string.IsNullOrWhiteSpace(agent.ModelName))
-        {
-            return agent.ModelName.Trim();
-        }
-
         if (agent.ModelId.HasValue && agent.ModelId.Value > 0)
         {
-            var byId = _database.GetModelInfoById(agent.ModelId.Value)?.Name;
+            var byId = _database.ResolveModelCallNameById(agent.ModelId.Value);
             if (!string.IsNullOrWhiteSpace(byId))
             {
                 return byId.Trim();
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(agent.ModelName))
+        {
+            return _database.ResolveModelCallName(agent.ModelName) ?? agent.ModelName.Trim();
         }
 
         return null;
@@ -390,35 +427,6 @@ public sealed class DefaultAgentExecutor : IAgentExecutor
         }
 
         return "exception";
-    }
-
-    private static string BuildPromptFromHistory(ChatHistory history)
-    {
-        var messages = history.Messages
-            .Where(m =>
-                !string.IsNullOrWhiteSpace(m.Content) &&
-                !string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (messages.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        if (messages.Count == 1 &&
-            string.Equals(messages[0].Role, "user", StringComparison.OrdinalIgnoreCase))
-        {
-            return messages[0].Content!.Trim();
-        }
-
-        var sb = new System.Text.StringBuilder();
-        foreach (var message in messages)
-        {
-            var role = string.IsNullOrWhiteSpace(message.Role) ? "user" : message.Role.Trim().ToLowerInvariant();
-            sb.Append('[').Append(role).Append("] ").AppendLine(message.Content!.Trim());
-        }
-
-        return sb.ToString().Trim();
     }
 
     private static List<string> BuildTrackedErrorTexts(CommandModelExecutionService.AttemptFailure failure)
@@ -562,4 +570,3 @@ public sealed class DefaultAgentExecutor : IAgentExecutor
         return string.IsNullOrWhiteSpace(tail) ? null : tail;
     }
 }
-

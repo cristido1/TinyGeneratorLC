@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using TinyGenerator.Models;
 
@@ -65,13 +66,13 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         _logger?.Start(effectiveRunId);
         _logger?.Append(effectiveRunId, "💡 Richiesta proposta NRE accodata (batch).");
 
-        var writerAgent = ResolveWriterAgent();
-        if (writerAgent == null)
+        var proposerAgent = ResolvePromptProposerAgent();
+        if (proposerAgent == null)
         {
-            return new CommandResult(false, $"Agente NRE writer non trovato: '{_options.WriterAgentName}'.");
+            return new CommandResult(false, $"Nessun agente attivo con ruolo '{_options.PromptSuggestionAgentRole}'.");
         }
 
-        _logger?.Append(effectiveRunId, $"Uso agente: {writerAgent.Name}");
+        _logger?.Append(effectiveRunId, $"Uso agente prompt proposer: {proposerAgent.Name} (role={proposerAgent.Role})");
 
         var userInput = BuildUserInput();
         var history = new ChatHistory();
@@ -80,15 +81,15 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         var callResult = await _callCenter.CallAgentAsync(
             storyId: 0,
             threadId: 0,
-            agent: writerAgent,
+            agent: proposerAgent,
             history: history,
             options: new CallOptions
             {
                 Operation = "nre_prompt_suggestion",
-                Timeout = TimeSpan.FromSeconds(Math.Max(5, _options.WriterCallTimeoutSeconds)),
-                MaxRetries = Math.Max(0, _options.CallCenterMaxRetries),
+                Timeout = TimeSpan.FromSeconds(Math.Max(5, _options.PromptSuggestionTimeoutSeconds)),
+                MaxRetries = Math.Max(0, _options.PromptSuggestionMaxRetries),
                 UseResponseChecker = false,
-                AllowFallback = _options.AllowFallback,
+                AllowFallback = _options.PromptSuggestionAllowFallback,
                 AskFailExplanation = false,
                 SystemPromptOverride = BuildSystemPromptOverride()
             },
@@ -96,7 +97,7 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
 
         if (!callResult.Success)
         {
-            var msg = $"nre_writer failed: {callResult.FailureReason ?? "unknown"}";
+            var msg = $"nre_prompt_proposer failed: {callResult.FailureReason ?? "unknown"}";
             _logger?.Append(effectiveRunId, $"❌ {msg}", "error");
             if (_logger != null) await _logger.MarkCompletedAsync(effectiveRunId, msg);
             return new CommandResult(false, msg);
@@ -104,7 +105,7 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
 
         if (!TryParseSuggestion(callResult.ResponseText, out var suggestion, out var parseError))
         {
-            var msg = $"Risposta nre_writer non parseabile: {parseError}";
+            var msg = $"Risposta nre_prompt_proposer non parseabile: {parseError}";
             _logger?.Append(effectiveRunId, $"❌ {msg}", "error");
             _logger?.Append(effectiveRunId, callResult.ResponseText ?? string.Empty, "warning");
             if (_logger != null) await _logger.MarkCompletedAsync(effectiveRunId, msg);
@@ -125,36 +126,37 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         return new CommandResult(true, json);
     }
 
-    private Agent? ResolveWriterAgent()
+    private Agent? ResolvePromptProposerAgent()
     {
-        var agents = _database.ListAgents().Where(a => a.IsActive).ToList();
+        var targetRole = string.IsNullOrWhiteSpace(_options.PromptSuggestionAgentRole)
+            ? "nre_prompt_proposer"
+            : _options.PromptSuggestionAgentRole.Trim();
+
+        var agents = _database.ListAgents()
+            .Where(a =>
+                a.IsActive &&
+                !string.IsNullOrWhiteSpace(a.Role) &&
+                string.Equals(a.Role.Trim(), targetRole, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (agents.Count == 0)
+        {
+            return null;
+        }
+
         var modelsById = _database.ListModels()
             .Where(m => m.Id.HasValue && m.Id.Value > 0)
             .ToDictionary(m => m.Id!.Value, m => m);
 
-        var randomOllamaWriters = agents
+        var enabledCandidates = agents
             .Where(a =>
-                a.ModelId.HasValue &&
-                modelsById.TryGetValue(a.ModelId.Value, out var model) &&
-                string.Equals(model.Provider?.Trim(), "ollama", StringComparison.OrdinalIgnoreCase) &&
-                model.Enabled &&
-                (string.Equals(a.Role, "writer", StringComparison.OrdinalIgnoreCase) ||
-                 string.Equals(a.Role, "writer_nre", StringComparison.OrdinalIgnoreCase) ||
-                 a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase)))
+                !a.ModelId.HasValue ||
+                !modelsById.TryGetValue(a.ModelId.Value, out var model) ||
+                model.Enabled)
             .ToList();
 
-        if (randomOllamaWriters.Count > 0)
-        {
-            return randomOllamaWriters[Random.Shared.Next(randomOllamaWriters.Count)];
-        }
-
-        var preferred = _options.WriterAgentName;
-
-        return agents.FirstOrDefault(a => string.Equals(a.Name, preferred, StringComparison.OrdinalIgnoreCase))
-               ?? agents.FirstOrDefault(a => string.Equals(a.Role, preferred, StringComparison.OrdinalIgnoreCase))
-               ?? agents.FirstOrDefault(a =>
-                   a.Name.Contains(preferred, StringComparison.OrdinalIgnoreCase) ||
-                   a.Role.Contains(preferred, StringComparison.OrdinalIgnoreCase));
+        var pool = enabledCandidates.Count > 0 ? enabledCandidates : agents;
+        return pool[Random.Shared.Next(pool.Count)];
     }
 
     private string BuildUserInput()
@@ -335,9 +337,130 @@ Rispondi SOLO in JSON valido con questa struttura:
         }
         catch (Exception ex)
         {
-            error = ex.Message;
+            if (TryParseSuggestionBestEffort(raw, out var bestEffort, out var bestEffortError))
+            {
+                suggestion = bestEffort;
+                error = null;
+                return true;
+            }
+
+            error = $"{ex.Message} | fallback: {bestEffortError}";
             return false;
         }
+    }
+
+    private static bool TryParseSuggestionBestEffort(string? raw, out NrePromptSuggestionDto suggestion, out string? error)
+    {
+        suggestion = new NrePromptSuggestionDto();
+        error = null;
+        var text = ExtractJson(raw);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            error = "risposta vuota";
+            return false;
+        }
+
+        var title = ExtractStringFieldLoose(text, "title");
+        var theme = ExtractStringFieldLoose(text, "theme");
+        var setting = ExtractStringFieldLoose(text, "setting");
+        var genre = ExtractStringFieldLoose(text, "genre");
+        var tone = ExtractStringFieldLoose(text, "tone");
+        var constraints = ExtractStringFieldLoose(text, "constraints");
+        var resourceHints = ExtractStringFieldLoose(text, "resource_hints");
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            error = "title non estraibile";
+            return false;
+        }
+        // JSON troncato: se manca theme ma il titolo è disponibile, usa un fallback coerente
+        // invece di interrompere l'intero comando.
+        if (string.IsNullOrWhiteSpace(theme))
+        {
+            theme = title;
+        }
+
+        suggestion = new NrePromptSuggestionDto
+        {
+            Title = title.Trim(),
+            Theme = theme.Trim(),
+            Setting = (setting ?? string.Empty).Trim(),
+            Genre = (genre ?? string.Empty).Trim(),
+            Tone = (tone ?? string.Empty).Trim(),
+            Constraints = (constraints ?? string.Empty).Trim(),
+            ResourceHints = (resourceHints ?? string.Empty).Trim()
+        };
+
+        return true;
+    }
+
+    private static string? ExtractStringFieldLoose(string text, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(fieldName))
+        {
+            return null;
+        }
+
+        var marker = $"\"{fieldName}\"";
+        var idx = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            return null;
+        }
+
+        var colon = text.IndexOf(':', idx + marker.Length);
+        if (colon < 0)
+        {
+            return null;
+        }
+
+        var i = colon + 1;
+        while (i < text.Length && char.IsWhiteSpace(text[i]))
+        {
+            i++;
+        }
+        if (i >= text.Length || text[i] != '"')
+        {
+            return null;
+        }
+
+        i++; // opening quote
+        var sb = new StringBuilder();
+        var escaped = false;
+        for (; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (escaped)
+            {
+                sb.Append(ch switch
+                {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    '"' => '"',
+                    '\\' => '\\',
+                    _ => ch
+                });
+                escaped = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                return sb.ToString();
+            }
+
+            sb.Append(ch);
+        }
+
+        // JSON troncato: restituisce quanto accumulato.
+        return sb.ToString().Trim();
     }
 
     private static string ExtractJson(string? raw)

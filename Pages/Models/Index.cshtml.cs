@@ -528,7 +528,7 @@ namespace TinyGenerator.Pages.Models
                 modelName,
                 rows = rows.Select(mr => new
                 {
-                    role = mr.Role?.Ruolo ?? "-",
+                    role = mr.Role?.Name ?? "-",
                     isPrimary = mr.IsPrimary,
                     enabled = mr.Enabled,
                     useCount = mr.UseCount,

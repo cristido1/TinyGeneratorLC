@@ -13,50 +13,6 @@ namespace TinyGenerator.Services
 {
     public class ResponseCheckerService
     {
-        private static readonly object CheckerResponseFormatOpenAi = new
-        {
-            type = "json_schema",
-            json_schema = new
-            {
-                name = "response_checker_validation",
-                schema = new
-                {
-                    type = "object",
-                    properties = new Dictionary<string, object>
-                    {
-                        ["is_valid"] = new Dictionary<string, object> { ["type"] = "boolean" },
-                        ["needs_retry"] = new Dictionary<string, object> { ["type"] = "boolean" },
-                        ["reason"] = new Dictionary<string, object> { ["type"] = "string" },
-                        ["violated_rules"] = new Dictionary<string, object>
-                        {
-                            ["type"] = "array",
-                            ["items"] = new Dictionary<string, object> { ["type"] = "integer" }
-                        }
-                    },
-                    required = new[] { "is_valid", "needs_retry", "reason", "violated_rules" }
-                },
-                strict = true
-            }
-        };
-
-        private static readonly object CheckerResponseFormatOllama = new
-        {
-            type = "object",
-            properties = new Dictionary<string, object>
-            {
-                ["is_valid"] = new Dictionary<string, object> { ["type"] = "boolean" },
-                ["needs_retry"] = new Dictionary<string, object> { ["type"] = "boolean" },
-                ["reason"] = new Dictionary<string, object> { ["type"] = "string" },
-                ["violated_rules"] = new Dictionary<string, object>
-                {
-                    ["type"] = "array",
-                    ["items"] = new Dictionary<string, object> { ["type"] = "integer" }
-                }
-            },
-            required = new[] { "is_valid", "needs_retry", "reason", "violated_rules" }
-        };
-
-        private readonly ILangChainKernelFactory _kernelFactory;
         private readonly DatabaseService _database;
         private readonly ICustomLogger _logger;
         private readonly HttpClient _httpClient;
@@ -67,10 +23,57 @@ namespace TinyGenerator.Services
             ICustomLogger logger,
             IHttpClientFactory httpClientFactory)
         {
-            _kernelFactory = kernelFactory;
             _database = database;
             _logger = logger;
             _httpClient = httpClientFactory.CreateClient();
+        }
+
+        private static ICallCenter? ResolveCallCenter()
+        {
+            return ServiceLocator.Services?.GetService(typeof(ICallCenter)) as ICallCenter;
+        }
+
+        private async Task<CallCenterResult?> CallResponseCheckerThroughCallCenterAsync(
+            Agent checkerAgent,
+            string operation,
+            string checkerSystemMessage,
+            string checkerUserPrompt,
+            CancellationToken ct,
+            int? threadId = null,
+            long? storyId = null,
+            TimeSpan? timeout = null)
+        {
+            var callCenter = ResolveCallCenter();
+            if (callCenter == null)
+            {
+                _logger.Log("Error", "ResponseChecker", "ICallCenter non disponibile per response_checker.");
+                return null;
+            }
+
+            var history = new ChatHistory();
+            history.AddUser(checkerUserPrompt ?? string.Empty);
+
+            var callOptions = new CallOptions
+            {
+                Operation = string.IsNullOrWhiteSpace(operation) ? "response_checker" : operation.Trim(),
+                Timeout = timeout ?? TimeSpan.FromSeconds(120),
+                MaxRetries = 0,
+                UseResponseChecker = false,
+                AskFailExplanation = false,
+                AllowFallback = true,
+                SystemPromptOverride = checkerSystemMessage
+            };
+
+            var effectiveThreadId = threadId ?? LogScope.CurrentThreadId ?? Environment.CurrentManagedThreadId;
+            var effectiveStoryId = storyId ?? LogScope.CurrentStoryId ?? 0;
+
+            return await callCenter.CallAgentAsync(
+                storyId: effectiveStoryId,
+                threadId: effectiveThreadId,
+                agent: checkerAgent,
+                history: history,
+                options: callOptions,
+                cancellationToken: ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -310,38 +313,23 @@ namespace TinyGenerator.Services
 
             try
             {
-                var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
-                var checkerModelName = modelInfo?.Name;
-                if (string.IsNullOrWhiteSpace(checkerModelName))
+                var callResult = await CallResponseCheckerThroughCallCenterAsync(
+                    checkerAgent,
+                    operation: "response_checker/writer_validation",
+                    checkerSystemMessage: checkerSystemMessage,
+                    checkerUserPrompt: prompt,
+                    ct: CancellationToken.None,
+                    threadId: threadId).ConfigureAwait(false);
+                if (callResult == null || !callResult.Success || string.IsNullOrWhiteSpace(callResult.ResponseText))
                 {
-                    throw new InvalidOperationException($"Response checker agent \"{checkerAgent.Name}\" has no model configured.");
+                    var failure = callResult?.FailureReason ?? "checker_call_failed";
+                    throw new InvalidOperationException($"Checker call via CallCenter failed: {failure}");
                 }
 
-                // Push a scope with "Response Checker" as agent name so logs show correctly in ChatLog
-                using var checkerScope = LogScope.Push(
-                    "response_checker",
-                    null,
-                    LogScope.CurrentStepNumber,
-                    LogScope.CurrentMaxStep,
-                    "Response Checker",
-                    agentRole: "response_checker");
-
-                var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
-                bridge.ResponseFormat = ResolveCheckerResponseFormat(modelInfo?.Provider);
-                var loop = new ReActLoopOrchestrator(
-                    orchestrator,
-                    _logger,
-                    maxIterations: 5,
-                    modelBridge: bridge,
-                    systemMessage: checkerSystemMessage);
-
-                var result = await loop.ExecuteAsync(prompt);
-
-                _logger.Log("Information", "MultiStep", $"Checker raw response (writer): {result.FinalResponse}");
+                _logger.Log("Information", "MultiStep", $"Checker raw response (writer): {callResult.ResponseText}");
 
                 // Parse JSON response and include semantic score
-                var validationResult = ParseValidationResponse(result.FinalResponse, semanticScore);
+                var validationResult = ParseValidationResponse(callResult.ResponseText, semanticScore);
                 _logger.Log("Information", "MultiStep", $"Writer validation result: is_valid={validationResult.IsValid}, reason={validationResult.Reason}");
 
                 return validationResult;
@@ -542,34 +530,19 @@ namespace TinyGenerator.Services
 
             try
             {
-                var modelInfo = _database.GetModelInfoById(checkerAgent.ModelId ?? 0);
-                var checkerModelName = modelInfo?.Name;
-                if (string.IsNullOrWhiteSpace(checkerModelName))
+                var callResult = await CallResponseCheckerThroughCallCenterAsync(
+                    checkerAgent,
+                    operation: "response_checker/tool_use_reminder",
+                    checkerSystemMessage: checkerSystemSb.ToString(),
+                    checkerUserPrompt: checkerUserSb.ToString(),
+                    ct: CancellationToken.None).ConfigureAwait(false);
+                if (callResult == null || !callResult.Success || string.IsNullOrWhiteSpace(callResult.ResponseText))
                 {
-                    _logger.Log("Warning", "ResponseChecker", $"Response checker agent \"{checkerAgent.Name}\" has no model configured.");
+                    _logger.Log("Warning", "ResponseChecker", $"Tool reminder checker via CallCenter failed: {callResult?.FailureReason ?? "checker_call_failed"}");
                     return null;
                 }
 
-                // Push a scope with "Response Checker" as agent name so logs show correctly in ChatLog
-                using var checkerScope = LogScope.Push(
-                    "response_checker",
-                    null,
-                    LogScope.CurrentStepNumber,
-                    LogScope.CurrentMaxStep,
-                    "Response Checker",
-                    agentRole: "response_checker");
-
-                var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
-                var loop = new ReActLoopOrchestrator(
-                    orchestrator,
-                    _logger,
-                    maxIterations: 3,
-                    modelBridge: bridge,
-                    systemMessage: checkerSystemSb.ToString());
-
-                var result = await loop.ExecuteAsync(checkerUserSb.ToString());
-                var reply = result.FinalResponse;
+                var reply = callResult.ResponseText;
                 if (string.IsNullOrWhiteSpace(reply))
                 {
                     _logger.Log("Warning", "ResponseChecker", "Tool reminder produced empty reply");
@@ -763,13 +736,6 @@ namespace TinyGenerator.Services
             };
         }
 
-        private static object ResolveCheckerResponseFormat(string? provider)
-        {
-            return string.Equals(provider?.Trim(), "ollama", StringComparison.OrdinalIgnoreCase)
-                ? CheckerResponseFormatOllama
-                : CheckerResponseFormatOpenAi;
-        }
-
         /// <summary>
         /// Generic rule-based validation via the response_checker agent.
         /// Designed for central interception of agent responses.
@@ -863,29 +829,20 @@ namespace TinyGenerator.Services
 
             try
             {
-                // Use a dedicated checker operation so stats are per-agent-operation
-                // and not inherited from the container command.
-                using var checkerScope = LogScope.Push(
-                    "response_checker",
-                    null,
-                    LogScope.CurrentStepNumber,
-                    LogScope.CurrentMaxStep,
-                    "Response Checker",
-                    agentRole: "response_checker");
+                var callResult = await CallResponseCheckerThroughCallCenterAsync(
+                    checkerAgent,
+                    operation: "response_checker/generic_validation",
+                    checkerSystemMessage: checkerSystemSb.ToString(),
+                    checkerUserPrompt: checkerUserSb.ToString(),
+                    ct: ct).ConfigureAwait(false);
+                if (callResult == null || !callResult.Success || string.IsNullOrWhiteSpace(callResult.ResponseText))
+                {
+                    var failure = callResult?.FailureReason ?? "checker_call_failed";
+                    throw new InvalidOperationException($"Checker call via CallCenter failed: {failure}");
+                }
 
-                var orchestrator = _kernelFactory.CreateOrchestrator(checkerModelName, new List<string>());
-                var bridge = _kernelFactory.CreateChatBridge(checkerModelName);
-                bridge.ResponseFormat = ResolveCheckerResponseFormat(modelInfo?.Provider);
-                var loop = new ReActLoopOrchestrator(
-                    orchestrator,
-                    _logger,
-                    maxIterations: 5,
-                    modelBridge: bridge,
-                    systemMessage: checkerSystemSb.ToString());
-                var result = await loop.ExecuteAsync(checkerUserSb.ToString(), ct);
-
-                _logger.Log("Information", "ResponseChecker", $"Checker raw response (generic): {result.FinalResponse}");
-                return ParseValidationResponse(result.FinalResponse, semanticScore: null);
+                _logger.Log("Information", "ResponseChecker", $"Checker raw response (generic): {callResult.ResponseText}");
+                return ParseValidationResponse(callResult.ResponseText, semanticScore: null);
             }
             catch (Exception ex)
             {

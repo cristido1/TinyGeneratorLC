@@ -75,6 +75,7 @@
     .fallback-rate-good { color: var(--bs-success); }
     .fallback-rate-mid { color: var(--bs-warning); }
     .fallback-rate-bad { color: var(--bs-danger); }
+    .bg-orange { background-color: #fd7e14 !important; color: #212529 !important; }
 
 </style>
 
@@ -110,11 +111,21 @@
                 <option value="">-- Select --</option>
                 @foreach (var r in Model.AllRoles)
                 {
-                    <option value="@r.Id">@r.Ruolo</option>
+                    <option value="@r.Id">@r.Name</option>
                 }
             </select>
         </div>
         <div class="col-md-2">
+            <label class="form-label small">Agent</label>
+            <select name="agentId" class="form-select form-select-sm" required>
+                <option value="">-- Select --</option>
+                @foreach (var a in Model.Agents)
+                {
+                    <option value="@a.Id">@a.Name (@a.Role)</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-1">
             <label class="form-label small">Instructions</label>
             <input type="text" name="instructions" class="form-control form-control-sm" placeholder="Optional" />
         </div>
@@ -153,6 +164,7 @@
                 <th></th>
                 <th data-col="model">Model</th>
                 <th data-col="role">Role</th>
+                <th data-col="agent">Agent</th>
                 <th data-col="primary">Primary</th>
                 <th data-col="use">Use</th>
                 <th data-col="success">Success</th>
@@ -160,6 +172,7 @@
                 <th data-col="prompttokens">P.Tok</th>
                 <th data-col="outputtokens">O.Tok</th>
                 <th data-col="gentps">Gen TPS</th>
+                <th data-col="speedindex">Speed Index</th>
                 <th data-col="prompttps">Prompt TPS</th>
                 <th data-col="e2etps">E2E TPS</th>
                 <th data-col="loadratio">Load %</th>
@@ -185,10 +198,15 @@
                     ? "bg-success"
                     : (level == "mid" ? "bg-warning text-dark" : (level == "bad" ? "bg-danger" : "bg-secondary"));
                 var toggleLabel = mr.Enabled ? "Disabilita" : "Abilita";
+                var speedIndex = Model.GetSpeedIndex(mr.Id);
+                var speedBadgeClass = speedIndex >= 8
+                    ? "bg-success"
+                    : (speedIndex >= 5 ? "bg-warning text-dark" : (speedIndex >= 3 ? "bg-orange text-dark" : "bg-danger"));
                 <tr data-id="@mr.Id" data-enabled="@(mr.Enabled ? "true" : "false")" class="@(mr.Enabled ? string.Empty : "fallback-disabled-row")">
                     <td class="dt-control"></td>
                     <td data-col="model"><strong class="@textClass">@mr.Model?.Name</strong></td>
-                    <td data-col="role"><span class="badge @roleBadgeClass">@mr.Role?.Ruolo</span></td>
+                    <td data-col="role"><span class="badge @roleBadgeClass">@mr.Role?.Name</span></td>
+                    <td data-col="agent">@mr.Agent?.Name</td>
                     <td data-col="primary">@(mr.IsPrimary ? "Yes" : "No")</td>
                     <td data-col="use">@mr.UseCount</td>
                     <td data-col="success" class="text-success">@mr.UseSuccessed</td>
@@ -196,6 +214,7 @@
                     <td data-col="prompttokens">@mr.TotalPromptTokens</td>
                     <td data-col="outputtokens">@mr.TotalOutputTokens</td>
                     <td data-col="gentps">@((mr.AvgGenTps > 0) ? mr.AvgGenTps.ToString("0.00") : "-")</td>
+                    <td data-col="speedindex"><span class="badge @speedBadgeClass">@speedIndex</span></td>
                     <td data-col="prompttps">@((mr.AvgPromptTps > 0) ? mr.AvgPromptTps.ToString("0.00") : "-")</td>
                     <td data-col="e2etps">@((mr.AvgE2eTps > 0) ? mr.AvgE2eTps.ToString("0.00") : "-")</td>
                     <td data-col="loadratio">@((mr.LoadRatio > 0) ? (mr.LoadRatio * 100.0).ToString("0.0") + "%" : "-")</td>
@@ -339,7 +358,7 @@
                 pageLength: 25,
                 lengthChange: true,
                 lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]], // Added lengthMenu for selecting number of records per page
-                order: [[13, 'desc']],
+                order: [[15, 'desc']],
                 ordering: true,
                 searching: true,
                 columnDefs: [
@@ -478,6 +497,12 @@
                     : (level === 'mid' ? 'bg-warning text-dark' : (level === 'bad' ? 'bg-danger' : 'bg-secondary'));
 
                 var toggleLabel = row.enabled ? 'Disabilita' : 'Abilita';
+                var speedIndex = Number(row.speedIndex || 1);
+                if (!isFinite(speedIndex)) speedIndex = 1;
+                speedIndex = Math.max(1, Math.min(10, Math.round(speedIndex)));
+                var speedBadgeClass = speedIndex >= 8
+                    ? 'bg-success'
+                    : (speedIndex >= 5 ? 'bg-warning text-dark' : (speedIndex >= 3 ? 'bg-orange text-dark' : 'bg-danger'));
                 var deleteLi = row.isPrimary
                     ? ''
                     : '<li><button type="button" class="dropdown-item" data-action="delete">Elimina</button></li>';
@@ -487,6 +512,7 @@
                     '<td class="dt-control"></td>' +
                     '<td data-col="model"><strong class="' + escapeHtml(textClass) + '">' + escapeHtml(row.modelName) + '</strong></td>' +
                     '<td data-col="role"><span class="badge ' + escapeHtml(roleBadgeClass) + '">' + escapeHtml(row.roleName) + '</span></td>' +
+                    '<td data-col="agent">' + escapeHtml(row.agentName || '') + '</td>' +
                     '<td data-col="primary">' + (row.isPrimary ? 'Yes' : 'No') + '</td>' +
                     '<td data-col="use">' + escapeHtml(row.useCount) + '</td>' +
                     '<td data-col="success" class="text-success">' + escapeHtml(row.useSuccessed) + '</td>' +
@@ -494,6 +520,7 @@
                     '<td data-col="prompttokens">' + escapeHtml(row.totalPromptTokens) + '</td>' +
                     '<td data-col="outputtokens">' + escapeHtml(row.totalOutputTokens) + '</td>' +
                     '<td data-col="gentps">' + escapeHtml(formatFloat(row.avgGenTps, 2)) + '</td>' +
+                    '<td data-col="speedindex"><span class="badge ' + escapeHtml(speedBadgeClass) + '">' + escapeHtml(speedIndex) + '</span></td>' +
                     '<td data-col="prompttps">' + escapeHtml(formatFloat(row.avgPromptTps, 2)) + '</td>' +
                     '<td data-col="e2etps">' + escapeHtml(formatFloat(row.avgE2eTps, 2)) + '</td>' +
                     '<td data-col="loadratio">' + (Number(row.loadRatio || 0) > 0 ? escapeHtml((Number(row.loadRatio) * 100).toFixed(1) + '%') : '-') + '</td>' +
@@ -522,6 +549,7 @@
                     var payload = {
                         modelId: parseInt(form.modelId.value || '0', 10),
                         roleId: parseInt(form.roleId.value || '0', 10),
+                        agentId: parseInt(form.agentId.value || '0', 10),
                         instructions: form.instructions.value || null,
                         topP: form.topP.value ? parseFloat(form.topP.value) : null,
                         topK: form.topK.value ? parseInt(form.topK.value, 10) : null,
@@ -733,7 +761,9 @@
                         row.child(html).show();
                         $tr.addClass('shown');
 
-                        fetch('?handler=Errors&id=' + encodeURIComponent(data.id || id), { credentials: 'same-origin' })
+                        fetch('?handler=Errors&id=' + encodeURIComponent(data.id || id) +
+                              '&modelId=' + encodeURIComponent(data.modelId || 0) +
+                              '&roleId=' + encodeURIComponent(data.roleId || 0), { credentials: 'same-origin' })
                             .then(function(resp) { return resp.ok ? resp.json() : Promise.reject(new Error('Errore caricamento errori')); })
                             .then(function(payload) {
                                 var target = document.getElementById(errorsContainerId);

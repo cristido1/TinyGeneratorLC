@@ -72,6 +72,8 @@ namespace TinyGenerator.Pages.Models
 
             // Update only allowed fields
             existing.Name = Model.Name;
+            existing.CallName = Model.CallName;
+            existing.SizeText = Model.SizeText;
             existing.Provider = Model.Provider;
             existing.Endpoint = Model.Endpoint;
             existing.MaxContext = Model.MaxContext;
@@ -83,7 +85,9 @@ namespace TinyGenerator.Pages.Models
             existing.LimitTokensMonth = Model.LimitTokensMonth;
             existing.Enabled = Model.Enabled;
             existing.NoTools = Model.NoTools;
+            existing.Thinking = Model.Thinking;
             existing.Note = Model.Note;
+            existing.Image = string.IsNullOrWhiteSpace(Model.Image) ? null : Model.Image.Trim();
 
             // Business rule: if provider is local then IsLocal = true
             if (!string.IsNullOrWhiteSpace(existing.Provider) &&

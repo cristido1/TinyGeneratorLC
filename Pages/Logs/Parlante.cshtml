@@ -1,0 +1,103 @@
+@page
+@model TinyGenerator.Pages.Logs.ParlanteModel
+@{
+    ViewData["Title"] = "Log Parlante";
+    ViewData["PageDescription"] = "Lettura deterministica dei log NRE in linguaggio naturale";
+}
+
+<form method="get" class="row g-2 align-items-end mb-3">
+    <div class="col-md-6 col-lg-5">
+        <label class="form-label" for="storyId">Storia</label>
+        <select id="storyId" name="storyId" class="form-select">
+            @if (Model.Stories.Count == 0)
+            {
+                <option value="">Nessuna storia NRE trovata</option>
+            }
+            else
+            {
+                @foreach (var s in Model.Stories)
+                {
+                    if (Model.StoryId == s.StoryId)
+                    {
+                        <option value="@s.StoryId" selected>@s.Label</option>
+                    }
+                    else
+                    {
+                        <option value="@s.StoryId">@s.Label</option>
+                    }
+                }
+            }
+        </select>
+    </div>
+    <div class="col-auto">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-search me-1"></i>Carica
+        </button>
+    </div>
+</form>
+
+@if (Model.StoryId.HasValue && Model.StoryId.Value > 0)
+{
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white">
+            <strong>Story @Model.StoryId</strong>
+            <span class="text-muted ms-2">@Model.StoryTitle</span>
+        </div>
+        <div class="card-body">
+            <ul class="timeline-list">
+                @foreach (var line in Model.Lines)
+                {
+                    var kindClass = line.Kind switch
+                    {
+                        "success" => "timeline-success",
+                        "error" => "timeline-error",
+                        "warn" => "timeline-warn",
+                        _ => "timeline-info"
+                    };
+
+                    <li class="timeline-item @kindClass">
+                        <div class="timeline-time">@line.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</div>
+                        <div class="timeline-text">@line.Text</div>
+                    </li>
+                }
+            </ul>
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-info">Seleziona una storia per vedere il log parlante.</div>
+}
+
+<style>
+    .timeline-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .timeline-item {
+        border-left: 4px solid #9aa5b1;
+        padding: 10px 12px 10px 14px;
+        margin-bottom: 10px;
+        border-radius: 6px;
+        background: #f8fafc;
+    }
+
+    .timeline-time {
+        font-size: 0.8rem;
+        color: #6b7280;
+        margin-bottom: 4px;
+    }
+
+    .timeline-text {
+        font-size: 0.95rem;
+        color: #111827;
+        white-space: pre-wrap;
+    }
+
+    .timeline-info { border-left-color: #0ea5e9; }
+    .timeline-success { border-left-color: #16a34a; background: #f0fdf4; }
+    .timeline-warn { border-left-color: #f59e0b; background: #fffbeb; }
+    .timeline-error { border-left-color: #dc2626; background: #fef2f2; }
+</style>

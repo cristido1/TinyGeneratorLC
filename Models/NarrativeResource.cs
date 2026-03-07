@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("narrative_resources")]
-public class NarrativeResource
+public partial class NarrativeResource : ISoftDelete, IActiveFlag, IOrderable
 {
     [Key]
     [Column("id")]

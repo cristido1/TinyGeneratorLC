@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("series_state")]
-public sealed class SeriesState
+public sealed partial class SeriesState : ISoftDelete, IActiveFlag, IOrderable
 {
     [Column("id")]
     [Key]

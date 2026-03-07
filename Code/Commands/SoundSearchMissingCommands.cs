@@ -15,6 +15,7 @@ public sealed class SearchMissingSoundCommand : ICommand
 
     public string CommandName => "search_missing_sound";
     public int Priority => 3;
+    public bool Batch => true;
     public event EventHandler<CommandProgressEventArgs>? Progress;
 
     public async Task<CommandResult> ExecuteAsync(CancellationToken ct = default, string? runId = null)

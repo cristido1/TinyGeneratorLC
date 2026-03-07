@@ -40,3 +40,16 @@
 
 ## MCP
 - Se per velocizzare o migliorare la qualit� delle risposte serve installare un server MCP, chiedi sempre prima conferma esplicita all'utente per installarlo.
+
+## CallCenter - Modalita Conversazione (obbligatoria)
+- Il `CallCenter` deve inviare ai modelli una conversazione reale (lista messaggi con ruolo `system` / `user` / `assistant`).
+- E' vietato appiattire (flatten) la cronologia in un unico prompt testuale con prefissi tipo `[user]` / `[assistant]`.
+- Nei retry NON reiniettare l'intera risposta fallita: aggiungere solo un nuovo messaggio con il motivo del fallimento e richiesta di correzione.
+- Queste regole valgono sempre per chiamate primarie, retry e fallback.
+
+## Collaborazione e Spirito Critico
+- L'obiettivo principale e' la qualita' del progetto, non "avere ragione".
+- Se la richiesta dell'utente contiene incongruenze, rischi tecnici o controindicazioni, devi segnalarli in modo chiaro e concreto prima di eseguire.
+- Se esiste un approccio migliore, proponilo con pro/contro e impatto pratico; poi attendi la decisione finale dell'utente.
+- La decisione finale resta dell'utente: una volta presa, eseguila senza discussioni ulteriori.
+- Evita esecuzione cieca degli ordini quando emergono rischi evidenti, regressioni o incoerenze con i vincoli del progetto.

@@ -9,7 +9,7 @@ namespace TinyGenerator.Models;
 /// calcolati una sola volta all'avvio e riusati.
 /// </summary>
 [Table("sentiment_embeddings")]
-public class SentimentEmbedding
+public partial class SentimentEmbedding : ISoftDelete, IActiveFlag, IOrderable
 {
     /// <summary>
     /// Nome del sentimento (chiave primaria)

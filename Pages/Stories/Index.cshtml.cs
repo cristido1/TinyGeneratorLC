@@ -7,6 +7,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Net;
+using System.Net.Mail;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -33,6 +35,7 @@ namespace TinyGenerator.Pages.Stories
         private readonly CinoOptions _cinoOptions;
         private readonly RepetitionDetectionOptions _repetitionOptions;
         private readonly EmbeddingRepetitionOptions _embeddingRepetitionOptions;
+        private readonly StoryEvaluationOptions _storyEvaluationOptions;
 
         public IndexModel(
             StoriesService stories,
@@ -42,6 +45,7 @@ namespace TinyGenerator.Pages.Stories
             IOptions<CinoOptions> cinoOptions,
             IOptions<RepetitionDetectionOptions> repetitionOptions,
             IOptions<EmbeddingRepetitionOptions> embeddingRepetitionOptions,
+            IOptions<StoryEvaluationOptions> storyEvaluationOptions,
             IOptions<CommandTuningOptions> tuningOptions,
             IServiceScopeFactory? scopeFactory = null,
             ICustomLogger? customLogger = null,
@@ -56,6 +60,7 @@ namespace TinyGenerator.Pages.Stories
             _cinoOptions = cinoOptions?.Value ?? new CinoOptions();
             _repetitionOptions = repetitionOptions?.Value ?? new RepetitionDetectionOptions();
             _embeddingRepetitionOptions = embeddingRepetitionOptions?.Value ?? new EmbeddingRepetitionOptions();
+            _storyEvaluationOptions = storyEvaluationOptions?.Value ?? new StoryEvaluationOptions();
             _scopeFactory = scopeFactory;
             _tuning = tuningOptions.Value ?? new CommandTuningOptions();
             _customLogger = customLogger;
@@ -326,6 +331,268 @@ namespace TinyGenerator.Pages.Stories
             }
 
             return RedirectToPage();
+        }
+
+        public IActionResult OnPostRerunNreFromPlanSinglePass(long id)
+        {
+            return RerunNreFromSavedPlan(id, "single_pass");
+        }
+
+        public IActionResult OnPostRerunNreFromPlanStateDriven(long id)
+        {
+            return RerunNreFromSavedPlan(id, "state_driven");
+        }
+
+        public IActionResult OnPostSendStoryEmail(long id)
+        {
+            try
+            {
+                if (id <= 0)
+                {
+                    TempData["ErrorMessage"] = "StoryId non valido.";
+                    return RedirectToPage();
+                }
+
+                var story = _database.GetStoryById(id);
+                if (story == null)
+                {
+                    TempData["ErrorMessage"] = $"Storia {id} non trovata.";
+                    return RedirectToPage();
+                }
+
+                var evaluations = _database.GetStoryEvaluations(id) ?? new List<StoryEvaluation>();
+                if (evaluations.Count == 0)
+                {
+                    TempData["ErrorMessage"] = "Invio email disponibile solo per storie gia valutate.";
+                    return RedirectToPage();
+                }
+
+                var avgScoreRaw = evaluations.Average(e => e.TotalScore);
+                var avgScore100 = avgScoreRaw * 100.0 / 40.0;
+                var recipientsRaw = (_storyEvaluationOptions.send_story_after_evaluation_recipients
+                                     ?? _storyEvaluationOptions.SendStoryAfterEvaluationRecipients
+                                     ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(recipientsRaw))
+                {
+                    TempData["ErrorMessage"] = "Destinatari email non configurati (StoryEvaluation.send_story_after_evaluation_recipients).";
+                    return RedirectToPage();
+                }
+
+                var smtpHost = (_storyEvaluationOptions.SmtpHost ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(smtpHost))
+                {
+                    TempData["ErrorMessage"] = "SMTP host non configurato (StoryEvaluation.SmtpHost).";
+                    return RedirectToPage();
+                }
+
+                var revisedText = !string.IsNullOrWhiteSpace(story.StoryRevised)
+                    ? story.StoryRevised!
+                    : (story.StoryRaw ?? string.Empty);
+                var planText = string.IsNullOrWhiteSpace(story.NrePlanSummary)
+                    ? "(piano non disponibile)"
+                    : story.NrePlanSummary!;
+
+                var subject = $"Story #{id} - {(string.IsNullOrWhiteSpace(story.Title) ? "Untitled" : story.Title)}";
+                var safeTitle = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(story.Title) ? "Untitled" : story.Title);
+                var safePlan = WebUtility.HtmlEncode(planText ?? string.Empty).Replace("\r\n", "\n").Replace("\n", "<br/>");
+                var safeStory = WebUtility.HtmlEncode(revisedText ?? string.Empty).Replace("\r\n", "\n").Replace("\n", "<br/>");
+                var bodyHtml =
+$@"<!doctype html>
+<html>
+<head>
+  <meta charset=""utf-8"" />
+</head>
+<body style=""margin:0;padding:24px;background:#ece7dc;color:#2d2418;font-family:Georgia,'Times New Roman',serif;"">
+  <div style=""max-width:900px;margin:0 auto;"">
+    <div style=""padding:16px 18px;margin-bottom:14px;background:#f6f1e6;border:1px solid #d9cdb8;border-radius:8px;"">
+      <div><strong>StoryId:</strong> {id}</div>
+      <div><strong>Titolo:</strong> {safeTitle}</div>
+      <div><strong>Valutazione media:</strong> {avgScore100:F1}/100</div>
+      <div><strong>Numero valutazioni:</strong> {evaluations.Count}</div>
+    </div>
+
+    <div style=""padding:22px 24px;background:linear-gradient(180deg,#f8f2e7 0%,#f2e6d4 100%);border:1px solid #cdbb9d;border-radius:10px;box-shadow:0 6px 18px rgba(62,42,17,.15);"">
+      <h3 style=""margin:0 0 10px 0;font-size:19px;font-weight:700;"">Piano</h3>
+      <div style=""line-height:1.65;font-size:16px;white-space:normal;"">{safePlan}</div>
+      <hr style=""margin:18px 0;border:none;border-top:1px solid #cdbb9d;"" />
+      <h3 style=""margin:0 0 10px 0;font-size:19px;font-weight:700;"">Testo Revised</h3>
+      <div style=""line-height:1.75;font-size:17px;white-space:normal;text-align:justify;"">{safeStory}</div>
+    </div>
+  </div>
+</body>
+</html>";
+
+                using var message = new MailMessage();
+                message.From = new MailAddress(string.IsNullOrWhiteSpace(_storyEvaluationOptions.SmtpFrom)
+                    ? "noreply@localhost"
+                    : _storyEvaluationOptions.SmtpFrom!.Trim());
+                foreach (var recipient in recipientsRaw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (!string.IsNullOrWhiteSpace(recipient))
+                    {
+                        message.To.Add(recipient);
+                    }
+                }
+                if (message.To.Count == 0)
+                {
+                    TempData["ErrorMessage"] = "Nessun destinatario email valido.";
+                    return RedirectToPage();
+                }
+
+                message.Subject = subject;
+                message.Body = bodyHtml;
+                message.IsBodyHtml = true;
+
+                using var smtp = new SmtpClient(smtpHost, _storyEvaluationOptions.SmtpPort)
+                {
+                    EnableSsl = _storyEvaluationOptions.SmtpUseSsl
+                };
+
+                var smtpUser = (_storyEvaluationOptions.SmtpUsername ?? string.Empty).Trim();
+                var smtpPass = _storyEvaluationOptions.SmtpPassword ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(smtpUser))
+                {
+                    smtp.Credentials = new NetworkCredential(smtpUser, smtpPass);
+                }
+                else
+                {
+                    smtp.UseDefaultCredentials = true;
+                }
+
+                smtp.Send(message);
+                TempData["StatusMessage"] = $"Email inviata per la storia {id}.";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore invio email: " + ex.Message;
+            }
+
+            return RedirectToPage();
+        }
+
+        private IActionResult RerunNreFromSavedPlan(long sourceStoryId, string method)
+        {
+            try
+            {
+                if (sourceStoryId <= 0)
+                {
+                    TempData["ErrorMessage"] = "StoryId sorgente non valido.";
+                    return RedirectToPage();
+                }
+
+                var sourceStory = _database.GetStoryById(sourceStoryId);
+                if (sourceStory == null)
+                {
+                    TempData["ErrorMessage"] = $"Storia sorgente {sourceStoryId} non trovata.";
+                    return RedirectToPage();
+                }
+
+                var savedPlan = sourceStory.NrePlanSummary?.Trim();
+                if (string.IsNullOrWhiteSpace(savedPlan))
+                {
+                    TempData["ErrorMessage"] = "Nessun piano NRE salvato sulla storia sorgente.";
+                    return RedirectToPage();
+                }
+
+                var prompt = sourceStory.Prompt?.Trim();
+                if (string.IsNullOrWhiteSpace(prompt))
+                {
+                    TempData["ErrorMessage"] = "Prompt sorgente mancante: impossibile rilanciare la storia.";
+                    return RedirectToPage();
+                }
+
+                var nreEngine = HttpContext.RequestServices.GetService<NreEngine>();
+                var callCenter = HttpContext.RequestServices.GetService<ICallCenter>();
+                var nreOptionsAccessor = HttpContext.RequestServices.GetService<IOptions<NarrativeRuntimeEngineOptions>>();
+                if (nreEngine == null || nreOptionsAccessor == null)
+                {
+                    TempData["ErrorMessage"] = "Servizi NRE non disponibili nel contesto corrente.";
+                    return RedirectToPage();
+                }
+
+                var nreOptions = nreOptionsAccessor.Value ?? new NarrativeRuntimeEngineOptions();
+                var normalizedMethod = string.Equals(method, "single_pass", StringComparison.OrdinalIgnoreCase)
+                    ? "single_pass"
+                    : "state_driven";
+                var planSteps = CountPlanSteps(savedPlan);
+                var maxSteps = planSteps > 0 ? planSteps : Math.Max(1, nreOptions.DefaultMaxSteps);
+
+                var request = new EngineRequest
+                {
+                    EngineName = nreOptions.EngineName,
+                    Method = normalizedMethod,
+                    StructureMode = "standard",
+                    CostSeverity = "medium",
+                    CombatIntensity = "normal",
+                    MaxSteps = maxSteps,
+                    SnapshotOnFailure = true,
+                    RunId = Guid.NewGuid().ToString("N"),
+                    UserPrompt = prompt,
+                    ResourceHints = null,
+                    PreApprovedPlanSummary = savedPlan,
+                    SeriesId = sourceStory.SerieId,
+                    SeriesEpisodeNumber = sourceStory.SerieEpisode
+                };
+
+                var titlePrefix = string.IsNullOrWhiteSpace(sourceStory.Title) ? $"Story {sourceStoryId}" : sourceStory.Title.Trim();
+                var newTitle = $"{titlePrefix} [rerun {normalizedMethod}]";
+                var runId = $"run_nre_from_plan_{normalizedMethod}_{sourceStoryId}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                _customLogger?.Start(runId);
+                _customLogger?.Append(runId, $"Avvio rerun NRE da piano salvato (sourceStoryId={sourceStoryId}, method={normalizedMethod}).");
+
+                var cmd = new RunNreCommand(
+                    title: newTitle,
+                    request: request,
+                    database: _database,
+                    engine: nreEngine,
+                    options: Microsoft.Extensions.Options.Options.Create(nreOptions),
+                    logger: _customLogger,
+                    dispatcher: _commandDispatcher,
+                    storiesService: _stories,
+                    callCenter: callCenter);
+
+                _commandDispatcher.Enqueue(
+                    "run_nre",
+                    async ctx => await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId),
+                    runId: runId,
+                    threadScope: $"story/run_nre_from_plan/{sourceStoryId}",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["operation"] = "run_nre_from_saved_plan",
+                        ["sourceStoryId"] = sourceStoryId.ToString(),
+                        ["method"] = normalizedMethod,
+                        ["maxSteps"] = maxSteps.ToString(),
+                        ["engine"] = nreOptions.EngineName
+                    },
+                    priority: 2);
+
+                TempData["StatusMessage"] = $"Rigenerazione NRE accodata da piano salvato (run {runId}).";
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = "Errore avviando la rigenerazione NRE da piano: " + ex.Message;
+            }
+
+            return RedirectToPage();
+        }
+
+        private static int CountPlanSteps(string? planSummary)
+        {
+            if (string.IsNullOrWhiteSpace(planSummary))
+            {
+                return 0;
+            }
+
+            var count = 0;
+            foreach (var line in planSummary.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (Regex.IsMatch(line, @"^\d+\.\s"))
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         public IActionResult OnPostCinoOptimize(long id)
@@ -717,10 +984,29 @@ namespace TinyGenerator.Pages.Stories
                 {
                     var sb = new System.Text.StringBuilder();
                     var overallSuccess = true;
+                    const int totalSteps = 5;
+
+                    void ReportStep(int current, string description)
+                    {
+                        try
+                        {
+                            _commandDispatcher.UpdateStep(ctx.RunId, current, totalSteps, description);
+                        }
+                        catch { }
+
+                        try
+                        {
+                            _customLogger?.Append(ctx.RunId, $"[{id}] {description}");
+                        }
+                        catch { }
+                    }
+
+                    ReportStep(0, "prepare_tts_schema: avvio");
 
                     // 1) Generate TTS schema JSON
                     try
                     {
+                        ReportStep(1, "prepare_tts_schema: generazione tts_schema.json in corso");
                         var (ttsOk, ttsMsg) = await _stories.GenerateTtsSchemaJsonAsync(id);
                         sb.AppendLine($"GenerateTtsSchema: {ttsMsg}");
                         if (!ttsOk) overallSuccess = false;
@@ -734,6 +1020,7 @@ namespace TinyGenerator.Pages.Stories
                     // 2) Normalize character names (best-effort)
                     try
                     {
+                        ReportStep(2, "prepare_tts_schema: normalizzazione personaggi in corso");
                         var (normCharOk, normCharMsg) = await _stories.NormalizeCharacterNamesAsync(id);
                         sb.AppendLine($"NormalizeCharacterNames: {normCharMsg}");
                         if (!normCharOk) overallSuccess = false;
@@ -747,6 +1034,7 @@ namespace TinyGenerator.Pages.Stories
                     // 3) Assign voices
                     try
                     {
+                        ReportStep(3, "prepare_tts_schema: assegnazione voci in corso");
                         var (assignOk, assignMsg) = await _stories.AssignVoicesAsync(id);
                         sb.AppendLine($"AssignVoices: {assignMsg}");
                         if (!assignOk) overallSuccess = false;
@@ -760,6 +1048,7 @@ namespace TinyGenerator.Pages.Stories
                     // 4) Normalize sentiments
                     try
                     {
+                        ReportStep(4, "prepare_tts_schema: normalizzazione sentiment in corso");
                         var (normSentOk, normSentMsg) = await _stories.NormalizeSentimentsAsync(id);
                         sb.AppendLine($"NormalizeSentiments: {normSentMsg}");
                         if (!normSentOk) overallSuccess = false;
@@ -771,6 +1060,9 @@ namespace TinyGenerator.Pages.Stories
                     }
 
                     var message = sb.ToString();
+                    ReportStep(5, overallSuccess
+                        ? "prepare_tts_schema: completato"
+                        : "prepare_tts_schema: completato con errori");
                     return new CommandResult(overallSuccess, message);
                 },
                 "Preparazione TTS schema avviata in background.");
@@ -1077,7 +1369,20 @@ namespace TinyGenerator.Pages.Stories
                         _stories,
                         _customLogger,
                         _tuning);
-                    return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
+                    void OnProgress(object? _, CommandProgressEventArgs args)
+                    {
+                        _commandDispatcher.UpdateStep(ctx.RunId, args.Current, args.Max, args.Description);
+                    }
+
+                    cmd.Progress += OnProgress;
+                    try
+                    {
+                        return await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId);
+                    }
+                    finally
+                    {
+                        cmd.Progress -= OnProgress;
+                    }
                 },
                 "Aggiunta tag avviata in background.");
 
@@ -1579,6 +1884,9 @@ namespace TinyGenerator.Pages.Stories
                 StatusColor = string.IsNullOrWhiteSpace(s.StatusColor) ? "#6c757d" : s.StatusColor,
                 s.Model,
                 Folder = s.Folder ?? "-",
+                LastErrorOperation = s.LastErrorOperation,
+                LastErrorDate = s.LastErrorDate,
+                LastErrorText = s.LastErrorText,
                 GeneratedTtsJson = s.GeneratedTtsJson,
                 GeneratedTts = s.GeneratedTts,
                 GeneratedAmbient = s.GeneratedAmbient,
@@ -1647,6 +1955,26 @@ namespace TinyGenerator.Pages.Stories
                     title = "Crea versione migliorata",
                     method = "POST",
                     url = Url.Page("/Stories/Index", null, new { handler = "CloneFromRevised", id = s.Id }, Request.Scheme),
+                    confirm = true
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(s.NrePlanSummary))
+            {
+                actions.Add(new
+                {
+                    id = "rerun_nre_from_plan_single_pass",
+                    title = "Rifai NRE da piano (single_pass)",
+                    method = "POST",
+                    url = Url.Page("/Stories/Index", null, new { handler = "RerunNreFromPlanSinglePass", id = s.Id }, Request.Scheme),
+                    confirm = true
+                });
+                actions.Add(new
+                {
+                    id = "rerun_nre_from_plan_state_driven",
+                    title = "Rifai NRE da piano (state_driven)",
+                    method = "POST",
+                    url = Url.Page("/Stories/Index", null, new { handler = "RerunNreFromPlanStateDriven", id = s.Id }, Request.Scheme),
                     confirm = true
                 });
             }

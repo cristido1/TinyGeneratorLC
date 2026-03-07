@@ -38,6 +38,9 @@
         border-width: 1px;
         min-height: 92px;
     }
+    .kpi-card[data-bs-toggle="tooltip"] {
+        cursor: help;
+    }
     .kpi-card.kpi-compact .kpi-value {
         font-size: 1.35rem;
     }
@@ -179,6 +182,9 @@
         font-weight: 600;
         white-space: nowrap;
     }
+    .fallback-rate-good { color: var(--bs-success); }
+    .fallback-rate-mid { color: var(--bs-warning); }
+    .fallback-rate-bad { color: var(--bs-danger); }
 </style>
 
 <div class="container-fluid px-4">
@@ -253,7 +259,7 @@
     <!-- KPI Cards Row -->
     <div class="row g-2 mb-2">
         <div class="col-6 col-md-3 col-xl-2">
-            <div class="kpi-card kpi-compact">
+            <div class="kpi-card kpi-compact" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip("KPI_01", "Storie Totali")">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.TotalStories</div>
@@ -264,7 +270,7 @@
             </div>
         </div>
         <div class="col-6 col-md-3 col-xl-2">
-            <div class="kpi-card kpi-compact">
+            <div class="kpi-card kpi-compact" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip("KPI_02", "Modelli Attivi")">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.EnabledModels<span style="font-size: 1.2rem; opacity: 0.6;">/@(Model.EnabledModels + Model.DisabledModels)</span></div>
@@ -275,7 +281,7 @@
             </div>
         </div>
         <div class="col-6 col-md-3 col-xl-2">
-            <div class="kpi-card kpi-compact">
+            <div class="kpi-card kpi-compact" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip("KPI_08", "Modelli Disabilitati")">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.DisabledModels</div>
@@ -286,7 +292,7 @@
             </div>
         </div>
         <div class="col-6 col-md-3 col-xl-2">
-            <div class="kpi-card kpi-compact">
+            <div class="kpi-card kpi-compact" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip("KPI_18", "Audio Master Ready")">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.AudioMasterGeneratedCount</div>
@@ -303,7 +309,7 @@
             @foreach (var kpi in Model.AdditionalKpis)
             {
                 <div class="col-6 col-md-3 col-xl-2">
-                    <div class="kpi-card kpi-compact">
+                    <div class="kpi-card kpi-compact" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip(kpi.Code, kpi.Label)">
                         <div class="d-flex justify-content-between align-items-start">
                             <div>
                                 <div class="kpi-value">@kpi.Value</div>
@@ -472,6 +478,50 @@
         </div>
     </div>
 
+    <!-- Best Models by Role -->
+    <div class="mt-4">
+        <div class="section-title">
+            <i class="bi bi-award me-2"></i>Migliori Modelli per Ruolo
+        </div>
+        <div class="ranking-table">
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Ruolo</th>
+                        <th>Modello</th>
+                        <th class="text-center">Utilizzi</th>
+                        <th class="text-end">% Successo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Model.BestModelsByRole.Any())
+                    {
+                        foreach (var row in Model.BestModelsByRole)
+                        {
+                            var hasResults = row.UseCount > 0;
+                            var level = !hasResults
+                                ? string.Empty
+                                : (row.SuccessPct > 80.0 ? "good" : (row.SuccessPct >= 60.0 ? "mid" : "bad"));
+                            var textClass = level == "good"
+                                ? "fallback-rate-good"
+                                : (level == "mid" ? "fallback-rate-mid" : (level == "bad" ? "fallback-rate-bad" : string.Empty));
+                            <tr>
+                                <td>@row.RoleName</td>
+                                <td>@row.ModelName</td>
+                                <td class="text-center">@row.UseCount</td>
+                                <td class="text-end"><span class="@textClass">@row.SuccessPct.ToString("F1")%</span></td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr><td colspan="4" class="text-center text-muted py-3">Nessun dato disponibile</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <!-- Recent System Reports -->
     <div class="mt-4">
         <div class="section-title">
@@ -554,6 +604,15 @@
 
 <script>
     (function(){
+        var tooltipEls = Array.prototype.slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipEls.forEach(function (el) {
+            if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+            window.bootstrap.Tooltip.getOrCreateInstance(el, {
+                container: 'body',
+                trigger: 'hover focus'
+            });
+        });
+
         var statusSlices = @Html.Raw(Model.StoriesByStatusJson);
         var scoreSlices = @Html.Raw(Model.ScoreBandJson);
 

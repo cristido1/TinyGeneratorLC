@@ -235,6 +235,15 @@ namespace TinyGenerator.Services
             var commandCts = new CancellationTokenSource();
             var workItem = new CommandWorkItem(id, op, safeScope, metadata, effectiveHandler, opNumber, priority, enqueueSeq, commandCts, agentName, agentRole);
 
+            var c = 0;
+            var m = 1;
+            var hasStepCurrent = metadata != null && metadata.TryGetValue("stepCurrent", out var sc) && int.TryParse(sc, out c);
+            var hasStepMax = metadata != null && metadata.TryGetValue("stepMax", out var sm) && int.TryParse(sm, out m);
+            var initialCurrentStep = hasStepCurrent ? c : 0;
+            var initialMaxStep = hasStepMax ? Math.Max(1, m) : 1;
+            if (initialCurrentStep < 0) initialCurrentStep = 0;
+            if (initialCurrentStep > initialMaxStep) initialCurrentStep = initialMaxStep;
+
             var state = new CommandState
             {
                 RunId = id,
@@ -245,8 +254,8 @@ namespace TinyGenerator.Services
                 EnqueuedAt = DateTimeOffset.UtcNow,
                 AgentName = agentName,
                 ModelName = modelName,
-                CurrentStep = metadata != null && metadata.TryGetValue("stepCurrent", out var sc) && int.TryParse(sc, out var c) ? c : null,
-                MaxStep = metadata != null && metadata.TryGetValue("stepMax", out var sm) && int.TryParse(sm, out var m) ? m : null,
+                CurrentStep = initialCurrentStep,
+                MaxStep = initialMaxStep,
                 MaxRetry = 0
             };
             _active[id] = state;
@@ -603,6 +612,10 @@ namespace TinyGenerator.Services
                 "continuity_validator" => "continuity_validator",
                 "state_delta_builder" => "state_delta_builder",
                 "recap_builder" => "recap_builder",
+                "nre_resource_initializer_init" => "resource_initializer",
+                "nre_resource_manager_update" => "resource_manager",
+                "run_nre:resource_initializer_init" => "resource_initializer",
+                "run_nre:resource_manager_update" => "resource_manager",
                 _ => null
             };
         }
@@ -830,6 +843,11 @@ Completed:
                 }
                 workItem.Completion.TrySetResult(result);
 
+                UpdateStoryLastErrorStateBestEffort(
+                    workItem,
+                    success: result.Success,
+                    errorMessage: result.Success ? null : finalMessage);
+
                 if (!result.Success)
                 {
                     await TryReportFailureAsync(workItem, result.Message, null, allocatedThreadId).ConfigureAwait(false);
@@ -906,6 +924,11 @@ Completed:
                 var result = new CommandResult(false, ex.Message);
                 workItem.Completion.TrySetResult(result);
 
+                UpdateStoryLastErrorStateBestEffort(
+                    workItem,
+                    success: false,
+                    errorMessage: ex.Message);
+
                 await TryReportFailureAsync(workItem, ex.Message, ex.ToString(), allocatedThreadId).ConfigureAwait(false);
                 
                 if (_active.TryGetValue(workItem.RunId, out var errorState))
@@ -942,6 +965,39 @@ Completed:
                     cancelCts.Dispose();
                 }
                 await BroadcastCommandsAsync().ConfigureAwait(false);
+            }
+        }
+
+        private void UpdateStoryLastErrorStateBestEffort(
+            CommandWorkItem workItem,
+            bool success,
+            string? errorMessage)
+        {
+            try
+            {
+                if (!TryGetStoryId(workItem.Metadata, out var storyId) || storyId <= 0)
+                {
+                    return;
+                }
+
+                var database = _services.GetService(typeof(DatabaseService)) as DatabaseService;
+                if (database == null)
+                {
+                    return;
+                }
+
+                if (success)
+                {
+                    database.ClearStoryLastError(storyId);
+                    return;
+                }
+
+                var operation = ResolveNormalizedOperation(workItem.OperationName, workItem.Metadata);
+                database.SetStoryLastError(storyId, operation, errorMessage);
+            }
+            catch
+            {
+                // best-effort
             }
         }
 

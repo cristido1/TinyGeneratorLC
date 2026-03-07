@@ -55,18 +55,24 @@ public sealed class RunNreCommand : ICommand
         _logger?.Append(effectiveRunId, "🧠 Avvio Narrative Runtime Engine...");
 
         var plannerAgent = ResolveAgent(_options.PlannerAgentName);
+        var planEvaluatorAgent = ResolveAgent(_options.PlanEvaluatorAgentName);
         var writerAgent = ResolveAgent(_options.WriterAgentName);
         var evaluatorAgent = ResolveAgent(_options.EvaluatorAgentName);
+        var resourceInitializerAgent = ResolveAgent(_options.ResourceInitializerAgentName);
         var resourceManagerAgent = ResolveAgent(_options.ResourceManagerAgentName);
 
         if (plannerAgent == null) return new CommandResult(false, $"Agente NRE planner non trovato: '{_options.PlannerAgentName}'.");
+        if (planEvaluatorAgent == null) return new CommandResult(false, $"Agente NRE plan_evaluator non trovato: '{_options.PlanEvaluatorAgentName}'.");
         if (writerAgent == null) return new CommandResult(false, $"Agente NRE writer non trovato: '{_options.WriterAgentName}'.");
         if (evaluatorAgent == null) return new CommandResult(false, $"Agente NRE evaluator non trovato: '{_options.EvaluatorAgentName}'.");
+        if (resourceInitializerAgent == null) return new CommandResult(false, $"Agente NRE resource_initializer non trovato: '{_options.ResourceInitializerAgentName}'.");
         if (resourceManagerAgent == null) return new CommandResult(false, $"Agente NRE resource_manager non trovato: '{_options.ResourceManagerAgentName}'.");
 
         _logger?.Append(effectiveRunId, $"Planner: {plannerAgent.Name}");
+        _logger?.Append(effectiveRunId, $"PlanEvaluator: {planEvaluatorAgent.Name}");
         _logger?.Append(effectiveRunId, $"Writer: {writerAgent.Name}");
         _logger?.Append(effectiveRunId, $"Evaluator: {evaluatorAgent.Name}");
+        _logger?.Append(effectiveRunId, $"ResourceInitializer: {resourceInitializerAgent.Name}");
         _logger?.Append(effectiveRunId, $"ResourceManager: {resourceManagerAgent.Name}");
 
         var runningStatusId = _database.GetStoryStatusByCode(_options.StoryStatuses.Running)?.Id;
@@ -130,10 +136,12 @@ public sealed class RunNreCommand : ICommand
                 RunId = string.IsNullOrWhiteSpace(_request.RunId) ? effectiveRunId : _request.RunId,
                 UserPrompt = _request.UserPrompt,
                 ResourceHints = _request.ResourceHints,
+                PreApprovedPlanSummary = _request.PreApprovedPlanSummary,
                 SeriesId = _request.SeriesId,
                 SeriesEpisodeNumber = _request.SeriesEpisodeNumber
             },
             StoryId = storyId,
+            StoryTitle = string.IsNullOrWhiteSpace(story.Title) ? _title : story.Title,
             StoryFolder = storyFolder,
             SnapshotsFolder = snapshotsFolder,
             CancellationToken = ct,
@@ -174,9 +182,28 @@ public sealed class RunNreCommand : ICommand
             },
             Telemetry = new EngineTelemetry(),
             Trace = new List<EngineEvent>(),
+            PersistPlannerSummary = summary =>
+            {
+                if (string.IsNullOrWhiteSpace(summary))
+                {
+                    return;
+                }
+
+                try
+                {
+                    _database.UpdateStoryNrePlanSummary(storyId, summary);
+                    _logger?.Append(effectiveRunId, $"Piano NRE salvato subito (storyId={storyId}).");
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Append(effectiveRunId, $"[WARN] Salvataggio anticipato nre_plan_summary fallito: {ex.Message}", "warning");
+                }
+            },
             PlannerAgent = plannerAgent,
+            PlanEvaluatorAgent = planEvaluatorAgent,
             WriterAgent = writerAgent,
             EvaluatorAgent = evaluatorAgent,
+            ResourceInitializerAgent = resourceInitializerAgent,
             ResourceManagerAgent = resourceManagerAgent,
             ThreadId = 0
         };
@@ -184,6 +211,17 @@ public sealed class RunNreCommand : ICommand
         try
         {
             var result = await _engine.RunAsync(engineContext).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(result.PlannerSummary))
+            {
+                try
+                {
+                    _database.UpdateStoryNrePlanSummary(storyId, result.PlannerSummary);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Append(effectiveRunId, $"[WARN] Impossibile salvare nre_plan_summary: {ex.Message}", "warning");
+                }
+            }
             if (result.Succeeded && !string.IsNullOrWhiteSpace(result.FinalText))
             {
                 _database.UpdateStoryById(

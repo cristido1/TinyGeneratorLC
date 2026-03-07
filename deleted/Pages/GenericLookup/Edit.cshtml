@@ -1,0 +1,79 @@
+@page "{id?}"
+@model TinyGenerator.Pages.GenericLookup.EditModel
+@{
+    ViewData["Title"] = Model.IsNew ? "Nuovo Generic Lookup" : "Modifica Generic Lookup";
+    ViewData["PageDescription"] = "Create/Update record GenericLookup";
+}
+
+<div class="container-fluid py-3">
+    <div class="card">
+        <div class="card-body">
+            <form method="post">
+                <input type="hidden" asp-for="Item.Id" />
+
+                <div asp-validation-summary="All" class="text-danger mb-3"></div>
+
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <label asp-for="Item.Type" class="form-label"></label>
+                        <input asp-for="Item.Type" class="form-control" list="typeSuggestions" maxlength="50" />
+                        <datalist id="typeSuggestions">
+                            @foreach (var t in Model.ExistingTypes)
+                            {
+                                <option value="@t"></option>
+                            }
+                        </datalist>
+                    </div>
+                    <div class="col-md-4">
+                        <label asp-for="Item.Code" class="form-label"></label>
+                        <input asp-for="Item.Code" class="form-control" maxlength="50" />
+                    </div>
+                    <div class="col-md-4">
+                        <label asp-for="Item.Value" class="form-label"></label>
+                        <input asp-for="Item.Value" class="form-control" maxlength="200" />
+                    </div>
+
+                    <div class="col-12">
+                        <label asp-for="Item.Description" class="form-label"></label>
+                        <textarea asp-for="Item.Description" class="form-control" rows="3" maxlength="500"></textarea>
+                    </div>
+
+                    <div class="col-md-3">
+                        <label asp-for="Item.SortOrder" class="form-label"></label>
+                        <input asp-for="Item.SortOrder" class="form-control" type="number" />
+                    </div>
+                    <div class="col-md-3">
+                        <label asp-for="Item.Weight" class="form-label"></label>
+                        <input asp-for="Item.Weight" class="form-control" type="number" />
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <div class="form-check">
+                            <input asp-for="Item.IsActive" class="form-check-input" />
+                            <label asp-for="Item.IsActive" class="form-check-label"></label>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        @if (!Model.IsNew)
+                        {
+                            <label class="form-label">Created/Updated</label>
+                            <div class="small text-muted">
+                                <div>CreatedAt: @Model.Item.CreatedAt</div>
+                                <div>UpdatedAt: @Model.Item.UpdatedAt</div>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="mt-4 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">Salva</button>
+                    <a asp-page="./Index" class="btn btn-outline-secondary">Annulla</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}
+

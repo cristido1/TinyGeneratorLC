@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("stats_models")]
-    public class ModelStatsRecord
+    public partial class ModelStatsRecord : ISoftDelete, IActiveFlag, IOrderable
     {
         [Column("model_name")]
         public string ModelName { get; set; } = string.Empty;

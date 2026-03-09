@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("series_characters")]
-public sealed partial class SeriesCharacter : ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class SeriesCharacter : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     [Key]
@@ -14,7 +14,7 @@ public sealed partial class SeriesCharacter : ISoftDelete, IActiveFlag, IOrderab
     [Required]
     public int SerieId { get; set; }
 
-    [Column("name")]
+    [Column("description")]
     [Required]
     [MaxLength(200)]
     public string Name { get; set; } = string.Empty;
@@ -24,8 +24,12 @@ public sealed partial class SeriesCharacter : ISoftDelete, IActiveFlag, IOrderab
     [MaxLength(20)]
     public string Gender { get; set; } = "other";
 
-    [Column("description")]
-    public string? Description { get; set; }
+    [NotMapped]
+    public string? Description
+    {
+        get => Name;
+        set => Name = value ?? string.Empty;
+    }
 
     [Column("eta")]
     public string? Eta { get; set; }
@@ -75,3 +79,4 @@ public sealed partial class SeriesCharacter : ISoftDelete, IActiveFlag, IOrderab
     [Column("aspect")]
     public string? Aspect { get; set; }
 }
+

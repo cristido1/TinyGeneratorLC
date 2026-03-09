@@ -4,25 +4,25 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("name_gender")]
-public sealed class NameGenderEntry : ISoftDelete, IActiveFlag, ICreateUpdateDate, IDescription, IOrderable
+public sealed class NameGenderEntry : ISoftDelete, IActiveFlag, ITimeStamped, IDescription, IOrderable, IEntity
 {
     [Column("id")]
-    public long Id { get; set; }
-
-    [Column("name")]
+    public int Id { get; set; }
+    [Column("description")]
     public string Name { get; set; } = string.Empty;
 
     [Column("gender")]
     public string Gender { get; set; } = "unknown";
 
-    [Column("insert_date")]
-    public string InsertDate { get; set; } = string.Empty;
-
     [Column("verified")]
     public bool Verified { get; set; }
 
-    [Column("description")]
-    public string? Description { get; set; }
+    [NotMapped]
+    public string? Description
+    {
+        get => Name;
+        set => Name = value ?? string.Empty;
+    }
 
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -39,3 +39,8 @@ public sealed class NameGenderEntry : ISoftDelete, IActiveFlag, ICreateUpdateDat
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 }
+
+
+
+
+

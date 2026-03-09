@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("stories_status")]
-public sealed partial class StoryStatus : ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class StoryStatus : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     public int Id { get; set; }
@@ -40,3 +40,4 @@ public sealed partial class StoryStatus : ISoftDelete, IActiveFlag, IOrderable
     [Timestamp]
     public byte[]? RowVersion { get; set; }
 }
+

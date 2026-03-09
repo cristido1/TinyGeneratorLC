@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
@@ -9,8 +9,11 @@ namespace TinyGenerator.Models;
 /// calcolati una sola volta all'avvio e riusati.
 /// </summary>
 [Table("sentiment_embeddings")]
-public partial class SentimentEmbedding : ISoftDelete, IActiveFlag, IOrderable
+public partial class SentimentEmbedding : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
+    [NotMapped]
+    public int Id { get; set; }
+
     /// <summary>
     /// Nome del sentimento (chiave primaria)
     /// </summary>
@@ -36,3 +39,4 @@ public partial class SentimentEmbedding : ISoftDelete, IActiveFlag, IOrderable
     [Column("created_at")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
+

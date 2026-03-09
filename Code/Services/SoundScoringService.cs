@@ -68,13 +68,13 @@ public sealed class SoundScoringService
             var sw = Stopwatch.StartNew();
             try
             {
-                var durationSec = GetAudioDurationSeconds(sound.FilePath);
+                var durationSec = GetAudioDurationSeconds(sound.SoundPath);
                 _database.UpdateSoundDurationSeconds(sound.Id, durationSec);
                 sw.Stop();
                 _logger?.LogInformation(
                     "Sound duration backfill soundId={SoundId} file={FileName} durationSec={DurationSec:0.###} elapsedMs={ElapsedMs}",
                     sound.Id,
-                    sound.FileName ?? string.Empty,
+                    sound.SoundName ?? string.Empty,
                     durationSec,
                     sw.ElapsedMilliseconds);
                 updated++;
@@ -84,7 +84,7 @@ public sealed class SoundScoringService
             {
                 sw.Stop();
                 failed++;
-                var msg = $"sound {sound.Id} ({sound.FileName}): {ex.Message}";
+                var msg = $"sound {sound.Id} ({sound.SoundName}): {ex.Message}";
                 errors.Add(msg);
                 _logger?.LogWarning(ex, "Sound duration backfill failed for sound {SoundId}", sound.Id);
                 progress?.Invoke(i + 1, total, $"Durata FAIL sound #{sound.Id} ({i + 1}/{total}) • aggiornati={updated} errori={failed}");
@@ -143,7 +143,7 @@ public sealed class SoundScoringService
             {
                 sw.Stop();
                 failed++;
-                var msg = $"sound {sound.Id} ({sound.FileName}): {ex.Message}";
+                var msg = $"sound {sound.Id} ({sound.SoundName}): {ex.Message}";
                 errors.Add(msg);
                 _logger?.LogWarning(ex, "Sound scoring failed for sound {SoundId}", sound.Id);
                 progress?.Invoke(i + 1, total, $"Score FAIL sound #{sound.Id} ({i + 1}/{total}) • aggiornati={updated} errori={failed}");
@@ -178,12 +178,12 @@ public sealed class SoundScoringService
     private SoundScoreResult ComputeScores(Sound sound)
     {
         if (sound == null) throw new ArgumentNullException(nameof(sound));
-        if (string.IsNullOrWhiteSpace(sound.FilePath)) throw new InvalidOperationException("FilePath vuoto");
-        if (!File.Exists(sound.FilePath)) throw new FileNotFoundException("File audio non trovato", sound.FilePath);
+        if (string.IsNullOrWhiteSpace(sound.SoundPath)) throw new InvalidOperationException("FilePath vuoto");
+        if (!File.Exists(sound.SoundPath)) throw new FileNotFoundException("File audio non trovato", sound.SoundPath);
 
-        var wav = ReadAudioForScoring(sound.FilePath);
+        var wav = ReadAudioForScoring(sound.SoundPath);
         if (wav.Samples.Length == 0) throw new InvalidOperationException("Nessun sample audio letto");
-        var sourceExt = Path.GetExtension(sound.FilePath);
+        var sourceExt = Path.GetExtension(sound.SoundPath);
 
         var scoreLoudness = ScoreLoudness(wav);
         var scoreDynamic = ScoreDynamic(wav);
@@ -214,7 +214,7 @@ public sealed class SoundScoringService
             "SoundScoring detail soundId={SoundId} file={FileName} type={Type} elapsedMs={ElapsedMs} audioSec={AudioSec:0.###} " +
             "loud={Loud:0.##} dyn={Dyn:0.##} clip={Clip:0.##} noise={Noise:0.##} dur={Dur:0.##} fmt={Fmt:0.##} cons={Cons:0.##} tag={Tag:0.##} human={Human:0.##} final={Final:0.##} version={Version}",
             sound.Id,
-            sound.FileName ?? string.Empty,
+            sound.SoundName ?? string.Empty,
             sound.Type ?? string.Empty,
             elapsedMs,
             score.AudioDurationSeconds,
@@ -329,7 +329,7 @@ public sealed class SoundScoringService
     private static double? ScoreTagMatch(Sound sound)
     {
         var type = (sound.Type ?? string.Empty).Trim().ToLowerInvariant();
-        var text = $"{sound.Library} {sound.FileName} {sound.Description} {sound.Tags}".ToLowerInvariant();
+        var text = $"{sound.Library} {sound.SoundName} {sound.Description} {sound.Tags}".ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(text)) return 0;
 
         var score = 40.0; // base if metadata exists

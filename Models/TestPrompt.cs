@@ -1,9 +1,9 @@
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("test_prompts")]
-public partial class TestPrompt : ISoftDelete, IActiveFlag, IOrderable
+public partial class TestPrompt : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     public int Id { get; set; }
@@ -16,3 +16,4 @@ public partial class TestPrompt : ISoftDelete, IActiveFlag, IOrderable
     [Column("active")]
     public bool Active { get; set; }
 }
+

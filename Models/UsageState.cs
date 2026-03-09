@@ -1,9 +1,9 @@
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("usage_state")]
-public partial class UsageState : ISoftDelete, IActiveFlag, IOrderable
+public partial class UsageState : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     public int Id { get; set; }
     [Column("month")]
@@ -15,3 +15,4 @@ public partial class UsageState : ISoftDelete, IActiveFlag, IOrderable
     [Column("cost_this_month")]
     public double CostThisMonth { get; set; }
 }
+

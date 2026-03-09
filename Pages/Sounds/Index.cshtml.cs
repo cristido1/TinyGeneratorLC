@@ -203,14 +203,14 @@ public class IndexModel : PageModel
     public IActionResult OnGetAudio(int id)
     {
         var item = _database.GetSoundById(id);
-        if (item == null || string.IsNullOrWhiteSpace(item.FilePath))
+        if (item == null || string.IsNullOrWhiteSpace(item.SoundPath))
         {
             return NotFound();
         }
 
         try
         {
-            var full = Path.GetFullPath(item.FilePath);
+            var full = Path.GetFullPath(item.SoundPath);
             if (!full.StartsWith(SoundsRoot, StringComparison.OrdinalIgnoreCase))
             {
                 return BadRequest("Percorso non consentito.");

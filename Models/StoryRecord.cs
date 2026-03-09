@@ -6,16 +6,15 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("stories")]
-    public partial class StoryRecord : ISoftDelete, IActiveFlag, IOrderable
+    public partial class StoryRecord : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Column("id")]
-        public long Id { get; set; }
-
+        public int Id { get; set; }
         [Column("story_id")]
-        public long? StoryId { get; set; }
+        public int? StoryId { get; set; }
 
         [Column("parent_story_id")]
-        public long? ParentStoryId { get; set; }
+        public int? ParentStoryId { get; set; }
         
         [Column("generation_id")]
         public string GenerationId { get; set; } = string.Empty;
@@ -154,6 +153,12 @@ namespace TinyGenerator.Models
         [NotMapped]
         public bool HasFinalMix { get; set; }
 
+        /// <summary>
+        /// Indicates if the story has a final rendered video file (final_video.mp4)
+        /// </summary>
+        [NotMapped]
+        public bool HasFinalVideo { get; set; }
+
         // Test information (if story was generated from a test)
         [NotMapped]
         public int? TestRunId { get; set; }
@@ -214,7 +219,7 @@ namespace TinyGenerator.Models
         public int? NarrativeProfileId { get; set; }
 
         [Column("runtime_state_id")]
-        public long? RuntimeStateId { get; set; }
+        public int? RuntimeStateId { get; set; }
 
         [Column("narrative_status")]
         public string? NarrativeEngineStatus { get; set; }
@@ -248,3 +253,7 @@ namespace TinyGenerator.Models
         public byte[]? RowVersion { get; set; }
     }
 }
+
+
+
+

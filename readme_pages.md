@@ -47,4 +47,6 @@ Questa lista è ricavata dalla struttura in `Pages/`.
 - `/PlannerMethods` e `/TipoPlanning`.
 
 ## Nota su Index pages
-Per qualsiasi modifica/creazione di pagine Index (griglie/lista), seguire `docs/index_page_rules.txt` (DataTables + Bootstrap 5).
+Per qualsiasi modifica/creazione di pagine Index (griglie/lista), seguire `docs/index_page_rules.txt`.
+Standard attuale: API CRUD generica + griglia VuePrime.
+Per tabelle semplici usare `Pages/Shared/Index`.

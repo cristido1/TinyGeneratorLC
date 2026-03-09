@@ -1,10 +1,11 @@
+﻿using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("model_roles")]
-public partial class ModelRole : ISoftDelete, IActiveFlag, IOrderable
+public partial class ModelRole : ISoftDelete, IActiveFlag, ITimeStamped, IOrderable, IEntity, IUsageStats
 {
     [Key]
     [Column("id")]
@@ -24,9 +25,6 @@ public partial class ModelRole : ISoftDelete, IActiveFlag, IOrderable
 
     [Column("is_primary")]
     public bool IsPrimary { get; set; } = false;
-
-    [Column("enabled")]
-    public bool Enabled { get; set; } = true;
 
     [Column("use_count")]
     public int UseCount { get; set; } = 0;
@@ -53,10 +51,10 @@ public partial class ModelRole : ISoftDelete, IActiveFlag, IOrderable
     public bool? Thinking { get; set; }
 
     [Column("created_at")]
-    public string? CreatedAt { get; set; }
+    public DateTime? CreatedAt { get; set; }
 
     [Column("updated_at")]
-    public string? UpdatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
 
     // Cumulative token counters
     [Column("total_prompt_tokens")]
@@ -112,3 +110,5 @@ public partial class ModelRole : ISoftDelete, IActiveFlag, IOrderable
         ? (double)TotalLoadTimeNs / TotalTotalTimeNs
         : 0.0;
 }
+
+

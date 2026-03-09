@@ -4,11 +4,10 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("model_roles_errors")]
-public sealed partial class ModelRoleError : ICreateUpdateDate, ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class ModelRoleError : ITimeStamped, ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
-    public long Id { get; set; }
-
+    public int Id { get; set; }
     [Column("parent_id")]
     public int ParentId { get; set; }
 
@@ -45,3 +44,8 @@ public sealed partial class ModelRoleError : ICreateUpdateDate, ISoftDelete, IAc
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 }
+
+
+
+
+

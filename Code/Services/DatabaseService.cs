@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
+using System.Text;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Dapper;
@@ -105,6 +106,33 @@ public sealed class DatabaseService
     {
         var scope = _serviceProvider.CreateScope();
         return scope.ServiceProvider.GetRequiredService<TinyGeneratorDbContext>();
+    }
+
+    private static StoryRecord? FindStoryById(TinyGeneratorDbContext context, long storyId)
+    {
+        if (storyId <= 0 || storyId > int.MaxValue)
+        {
+            return null;
+        }
+
+        return context.Stories.Find((int)storyId);
+    }
+
+    private static int ToIntId(long value)
+    {
+        if (value <= 0 || value > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), $"Id fuori range int: {value}");
+        }
+
+        return (int)value;
+    }
+
+    private static int? ToNullableIntId(long? value)
+    {
+        if (!value.HasValue) return null;
+        if (value.Value <= 0 || value.Value > int.MaxValue) return null;
+        return (int)value.Value;
     }
 
     // NOTE: Dapper is retained only for a small set of low-level operations
@@ -299,7 +327,7 @@ public sealed class DatabaseService
         {
             using var conn = CreateDapperConnection();
             conn.Open();
-            var rows = conn.Query<TinyGenerator.Models.Role>("SELECT id, name, linked_command, created_at, updated_at, is_active, is_deleted, sort_order FROM roles").ToList();
+            var rows = conn.Query<TinyGenerator.Models.Role>("SELECT id, description AS Name, linked_command, created_at, updated_at, is_active, is_deleted, sort_order FROM roles").ToList();
             return rows.OrderBy(r => r.Name).ToList();
         }
     }
@@ -324,7 +352,7 @@ public sealed class DatabaseService
         {
             using var conn = CreateDapperConnection();
             conn.Open();
-            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, name, role, model_id, voice_rowid, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, sort_order, allowed_profiles FROM agents").ToList();
+            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, description AS Name, role, model_id, voice_rowid, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, sort_order, allowed_profiles FROM agents").ToList();
             return rows.OrderBy(a => a.Name).ToList();
         }
     }
@@ -1043,7 +1071,7 @@ VALUES
 SELECT last_insert_rowid();";
             return conn.ExecuteScalar<long>(sql, new
             {
-                StoryId = storyId,
+                StoryId = ToIntId(storyId),
                 AgentName = agentName.Trim(),
                 InputTokens = inputTokens,
                 OutputTokens = outputTokens,
@@ -1127,7 +1155,7 @@ VALUES
 
             var rows = list.Select(b => new
             {
-                StoryId = storyId,
+                StoryId = ToIntId(storyId),
                 SeriesId = seriesId,
                 EpisodeId = episodeId,
                 BlockIndex = b.BlockIndex,
@@ -1272,7 +1300,7 @@ VALUES
 
         ctx.StoryResourceStates.Add(new StoryResourceState
         {
-            StoryId = storyId,
+            StoryId = ToIntId(storyId),
             SeriesId = seriesId,
             EpisodeNumber = episodeNumber,
             ChunkIndex = 0,
@@ -1318,7 +1346,7 @@ VALUES
 
         return new CanonStateDto
         {
-            StoryId = storyId,
+            StoryId = ToIntId(storyId),
             SeriesId = seriesId,
             EpisodeNumber = episodeNumber,
             ChunkIndex = Math.Max(0, chunkIndex),
@@ -2333,7 +2361,7 @@ FROM model_roles mr
 JOIN roles r ON r.id = mr.role_id
 WHERE mr.model_id = @modelId
   AND mr.agent_id = @agentId
-  AND lower(trim(r.name)) = lower(trim(@roleCode))
+  AND lower(trim(r.description)) = lower(trim(@roleCode))
 ORDER BY mr.is_primary DESC, mr.id ASC
 LIMIT 1;";
 
@@ -2374,7 +2402,7 @@ LIMIT 1;";
         {
             var normalizedRole = roleCode.Trim();
             var roleId = conn.ExecuteScalar<int?>(
-                "SELECT id FROM roles WHERE lower(trim(name)) = lower(trim(@roleCode)) LIMIT 1",
+                "SELECT id FROM roles WHERE lower(trim(description)) = lower(trim(@roleCode)) LIMIT 1",
                 new { roleCode = normalizedRole });
 
             var resolvedAgentId = ResolveAgentIdForRole(conn, normalizedRole, roleId.Value, agentId);
@@ -2387,7 +2415,7 @@ LIMIT 1;";
             if (!roleId.HasValue || roleId.Value <= 0)
             {
                 conn.Execute(
-                    @"INSERT INTO roles (name, created_at, updated_at)
+                    @"INSERT INTO roles (description, created_at, updated_at)
                       VALUES (@roleCode, @now, @now)",
                     new { roleCode = normalizedRole, now });
 
@@ -2416,7 +2444,7 @@ LIMIT 1;";
 
             conn.Execute(
                 @"INSERT INTO model_roles
-                    (model_id, role_id, agent_id, is_primary, enabled, use_count, use_successed, use_failed, created_at, updated_at)
+                    (model_id, role_id, agent_id, is_primary, is_active, use_count, use_successed, use_failed, created_at, updated_at)
                   VALUES
                     (@modelId, @roleId, @agentId, 1, 1, 0, 0, 0, @now, @now)",
                 new { modelId = resolvedModelId.Value, roleId = roleId.Value, agentId = resolvedAgentId.Value, now });
@@ -2508,7 +2536,7 @@ VALUES (@parentId, @errorText, @errorType, 1, @now, @now);";
             byRoleId = conn.ExecuteScalar<int?>(
                 @"SELECT a.id
                   FROM agents a
-                  JOIN roles r ON lower(trim(a.role)) = lower(trim(r.name))
+                  JOIN roles r ON lower(trim(a.role)) = lower(trim(r.description))
                   WHERE r.id = @roleId
                   ORDER BY a.id ASC
                   LIMIT 1",
@@ -2598,7 +2626,7 @@ WHERE id = @id;";
             const string sql = @"
 SELECT
     mr.model_id      AS ModelId,
-    COALESCE(NULLIF(m.call_name, ''), m.Name) AS ModelName,
+    COALESCE(NULLIF(m.call_name, ''), m.description) AS ModelName,
     mr.thinking      AS Thinking,
     mr.use_successed AS UseSuccessed,
     mr.use_failed    AS UseFailed,
@@ -2607,8 +2635,8 @@ FROM model_roles mr
 JOIN roles r  ON r.id = mr.role_id
 JOIN models m ON m.Id = mr.model_id
 WHERE mr.agent_id = @agentId
-  AND lower(trim(r.name)) = lower(trim(@roleCode))
-  AND mr.enabled = 1
+  AND lower(trim(r.description)) = lower(trim(@roleCode))
+  AND mr.is_active = 1
   AND mr.is_primary = 0
   AND (@excludeModelId IS NULL OR @excludeModelId <= 0 OR mr.model_id <> @excludeModelId)
 ORDER BY
@@ -2737,8 +2765,8 @@ LIMIT @limitRows;";
         try
         {
             const string sql = @"
-SELECT m.Name AS ModelName,
-       r.name AS RoleCode,
+SELECT m.description AS ModelName,
+       r.description AS RoleCode,
        r.linked_command AS Operation,
        mre.id AS Id,
        mre.parent_id AS ParentId,
@@ -2751,8 +2779,8 @@ FROM model_roles_errors mre
 JOIN model_roles mr ON mr.id = mre.parent_id
 JOIN models m ON m.Id = mr.model_id
 JOIN roles r ON r.id = mr.role_id
-WHERE (@modelName IS NULL OR @modelName = '' OR lower(trim(m.Name)) = lower(trim(@modelName)))
-  AND (@roleCode IS NULL OR @roleCode = '' OR lower(trim(r.name)) = lower(trim(@roleCode)))
+WHERE (@modelName IS NULL OR @modelName = '' OR lower(trim(m.description)) = lower(trim(@modelName)))
+  AND (@roleCode IS NULL OR @roleCode = '' OR lower(trim(r.description)) = lower(trim(@roleCode)))
 ORDER BY mre.error_count DESC, mre.date_last DESC, mre.id DESC
 LIMIT @limitRows;";
 
@@ -4046,7 +4074,7 @@ LIMIT @limitRows;";
             Description = description,
             DurationSec = durationSec,
             SizeBytes = sizeBytes,
-            StoryId = storyId
+            StoryId = ToNullableIntId(storyId)
         };
         context.ModelTestAssets.Add(asset);
         context.SaveChanges();
@@ -4080,7 +4108,7 @@ LIMIT @limitRows;";
 
         var eval = new StoryEvaluation
         {
-            StoryId = storyId,
+            StoryId = ToIntId(storyId),
             NarrativeCoherenceScore = narrativeScore,
             NarrativeCoherenceDefects = narrativeDefects ?? string.Empty,
             OriginalityScore = originalityScore,
@@ -4094,7 +4122,7 @@ LIMIT @limitRows;";
             LenghtPenalityCharsLimit = effectiveLimit,
             LenghtPenalityPercentageApplyed = penaltyPercent,
             RawJson = rawJson ?? string.Empty,
-            ModelId = modelId.HasValue ? (long?)modelId.Value : null,
+            ModelId = modelId,
             AgentId = agentId,
             Timestamp = DateTime.UtcNow.ToString("o")
         };
@@ -4183,7 +4211,7 @@ LIMIT @limitRows;";
 
             var eval = new StoryEvaluation
             {
-                StoryId = storyId,
+                StoryId = ToIntId(storyId),
                 NarrativeCoherenceScore = nc,
                 NarrativeCoherenceDefects = ncdef ?? string.Empty,
                 OriginalityScore = org,
@@ -4197,7 +4225,7 @@ LIMIT @limitRows;";
                 LenghtPenalityCharsLimit = effectiveLimit,
                 LenghtPenalityPercentageApplyed = penaltyPercent,
                 RawJson = rawJson ?? string.Empty,
-                ModelId = modelId.HasValue ? (long?)modelId.Value : null,
+                ModelId = modelId,
                 AgentId = agentId,
                 Timestamp = DateTime.UtcNow.ToString("o")
             };
@@ -4231,7 +4259,7 @@ LIMIT @limitRows;";
 
                 var eval = new StoryEvaluation
                 {
-                    StoryId = storyId,
+                    StoryId = ToIntId(storyId),
                     NarrativeCoherenceScore = 0,
                     NarrativeCoherenceDefects = string.Empty,
                     OriginalityScore = 0,
@@ -4245,7 +4273,7 @@ LIMIT @limitRows;";
                     LenghtPenalityCharsLimit = effectiveLimit,
                     LenghtPenalityPercentageApplyed = penaltyPercent,
                     RawJson = rawJson ?? string.Empty,
-                    ModelId = modelId.HasValue ? (long?)modelId.Value : null,
+                    ModelId = modelId,
                     AgentId = agentId,
                     Timestamp = DateTime.UtcNow.ToString("o")
                 };
@@ -4411,7 +4439,7 @@ SET TotalScore = (
         // For now return as a LogEntry-like structure or a dedicated DTO. Simpler approach: return raw rows with JSON in raw_json.
         using var conn = CreateConnection();
         conn.Open();
-        var sql = @"SELECT se.id AS Id, se.ts AS Ts, COALESCE(m.Name,'') AS Model, COALESCE(a.name,'') AS Category, se.total_score AS Score, se.raw_json AS Message FROM stories_evaluations se LEFT JOIN models m ON se.model_id = m.Id LEFT JOIN agents a ON se.agent_id = a.id WHERE se.story_id = @sid ORDER BY se.id";
+        var sql = @"SELECT se.id AS Id, se.ts AS Ts, COALESCE(m.description,'') AS Model, COALESCE(a.description,'') AS Category, se.total_score AS Score, se.raw_json AS Message FROM stories_evaluations se LEFT JOIN models m ON se.model_id = m.Id LEFT JOIN agents a ON se.agent_id = a.id WHERE se.story_id = @sid ORDER BY se.id";
         return conn.Query<TinyGenerator.Models.LogEntry>(sql, new { sid = storyId }).ToList();
     }
 
@@ -4437,9 +4465,9 @@ SET TotalScore = (
                       se.model_id AS ModelId,
                       se.agent_id AS AgentId,
                       se.ts AS Ts,
-                      COALESCE(m.Name, '') AS Model,
-                      COALESCE(a.name, '') AS AgentName,
-                      COALESCE(ma.Name, '') AS AgentModel,
+                      COALESCE(m.description, '') AS Model,
+                      COALESCE(a.description, '') AS AgentName,
+                      COALESCE(ma.description, '') AS AgentModel,
                       se.total_score AS Score
                   FROM stories_evaluations se
                   LEFT JOIN models m ON se.model_id = m.Id
@@ -4464,7 +4492,7 @@ SET TotalScore = (
                     var synthetic = new TinyGenerator.Models.StoryEvaluation
                     {
                         Id = global.Id > 0 ? -global.Id : 0, // negative id to avoid collision
-                        StoryId = storyId,
+                        StoryId = ToIntId(storyId),
                         NarrativeCoherenceScore = (int)Math.Round(global.GlobalCoherenceValue * 10.0),
                         NarrativeCoherenceDefects = string.Empty,
                         OriginalityScore = 0,
@@ -5964,18 +5992,18 @@ VALUES (
     public long? GetStoryCorrelationId(long storyDbId)
     {
         using var context = CreateDbContext();
-        var s = context.Stories.Find(storyDbId);
+        var s = FindStoryById(context, storyDbId);
         return s?.StoryId;
     }
 
     public long EnsureStoryCorrelationId(long storyDbId, long newStoryId)
     {
         using var context = CreateDbContext();
-        var s = context.Stories.Find(storyDbId);
+        var s = FindStoryById(context, storyDbId);
         if (s == null) throw new InvalidOperationException($"Story {storyDbId} not found");
         if (s.StoryId.HasValue && s.StoryId.Value > 0) return s.StoryId.Value;
 
-        s.StoryId = newStoryId;
+        s.StoryId = ToNullableIntId(newStoryId);
         context.SaveChanges();
         return newStoryId;
     }
@@ -5983,7 +6011,7 @@ VALUES (
     public void DeleteStoryById(long id)
     {
         using var context = CreateDbContext();
-        var story = context.Stories.Find(id);
+        var story = FindStoryById(context, id);
         if (story == null) return;
         story.Deleted = true;
         context.SaveChanges();
@@ -6019,7 +6047,7 @@ VALUES (
         var storyRecord = new StoryRecord
         {
             StoryId = null,
-            ParentStoryId = parentStoryId,
+            ParentStoryId = ToNullableIntId(parentStoryId),
             GenerationId = genId,
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
@@ -6093,8 +6121,8 @@ VALUES (
         var charCount = (story ?? string.Empty).Length;
         var storyRecord = new StoryRecord
         {
-            StoryId = storyId,
-            ParentStoryId = parentStoryId,
+            StoryId = ToNullableIntId(storyId),
+            ParentStoryId = ToNullableIntId(parentStoryId),
             GenerationId = genId,
             MemoryKey = memoryKey ?? genId,
             Timestamp = ts,
@@ -6153,7 +6181,7 @@ VALUES (
     {
         if (!allowSeriesUpdate && !serieId.HasValue && !serieEpisode.HasValue) return;
         using var context = CreateDbContext();
-        var story = context.Stories.Find(storyId);
+        var story = FindStoryById(context, storyId);
         if (story == null) return;
         
         // Series metadata (serie_id/serie_episode) should be stable: only allow updates if allowSeriesUpdate=true (explicit Edit page operation)
@@ -6272,7 +6300,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;", new { k = key.Trim(), v
     public bool UpdateStoryById(long id, string? story = null, int? modelId = null, int? agentId = null, int? statusId = null, bool updateStatus = false, bool allowCreatorMetadataUpdate = false)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(id);
+        var storyRecord = FindStoryById(context, id);
         if (storyRecord == null) return false;
 
         // Creator metadata (model_id/agent_id) must be stable: it can be SET only if currently NULL,
@@ -6323,7 +6351,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;", new { k = key.Trim(), v
     public bool UpdateStoryRevised(long storyId, string storyRevised)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.StoryRevised = storyRevised ?? string.Empty;
         
@@ -6369,7 +6397,7 @@ WHERE agent_id IS NOT NULL
     public bool UpdateStoryCharacters(long storyId, string charactersJson)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.Characters = charactersJson;
         
@@ -6393,7 +6421,7 @@ WHERE agent_id IS NOT NULL
     public bool UpdateStorySummary(long storyId, string summary)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.Summary = summary;
         
@@ -6417,7 +6445,7 @@ WHERE agent_id IS NOT NULL
     public bool UpdateStoryStructure(long storyId, string structureJson)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.StoryStructure = structureJson;
         
@@ -6441,7 +6469,7 @@ WHERE agent_id IS NOT NULL
     public bool UpdateStoryNrePlanSummary(long storyId, string? nrePlanSummary)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.NrePlanSummary = string.IsNullOrWhiteSpace(nrePlanSummary) ? null : nrePlanSummary.Trim();
 
@@ -6510,7 +6538,7 @@ WHERE agent_id IS NOT NULL
     public bool UpdateStoryTagged(long storyId, string storyTagged, int? formatterModelId, string? formatterPromptHash, int? storyTaggedVersion = null)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.StoryTagged = SanitizeStoryTagged(storyTagged ?? string.Empty);
         if (storyTaggedVersion.HasValue)
@@ -6543,7 +6571,7 @@ WHERE agent_id IS NOT NULL
     public bool UpdateStoryTaggedContent(long storyId, string storyTagged)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.StoryTagged = SanitizeStoryTagged(storyTagged ?? string.Empty);
 
@@ -6567,7 +6595,7 @@ WHERE agent_id IS NOT NULL
     public bool UpdateStoryRowsAndTags(long storyId, string? storyRows, string? storyTags)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.StoryRows = storyRows;
         storyRecord.StoryTags = storyTags;
@@ -6592,7 +6620,7 @@ WHERE agent_id IS NOT NULL
     public bool ClearStoryTagged(long storyId)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(storyId);
+        var storyRecord = FindStoryById(context, storyId);
         if (storyRecord == null) return false;
         storyRecord.StoryTagged = string.Empty;
         storyRecord.StoryTaggedVersion = null;
@@ -6788,15 +6816,15 @@ SELECT
     id           AS Id,
     type         AS Type,
     library      AS Library,
-    filepath     AS FilePath,
-    filename     AS FileName,
+    sound_path   AS SoundPath,
+    sound_name   AS SoundName,
     description  AS Description,
     license      AS License,
     tags         AS Tags,
     embedding    AS Embedding,
-    insert_date  AS InsertDate,
+    created_at   AS InsertDate,
     duration_seconds AS DurationSeconds,
-    COALESCE(enabled, 1) AS Enabled,
+    COALESCE(is_active, 1) AS Enabled,
     COALESCE(usage_count, 0) AS UsageCount,
     usage_last   AS UsageLast,
     score_loudness AS ScoreLoudness,
@@ -6813,7 +6841,7 @@ SELECT
     score_version AS ScoreVersion
 FROM sounds
 WHERE (@search IS NULL OR @search = '' OR
-       lower(coalesce(filename,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(sound_name,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(description,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(tags,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(library,'')) LIKE '%' || lower(@search) || '%')
@@ -6826,7 +6854,7 @@ ORDER BY
     usage_last ASC,
     CASE lower(type) WHEN 'amb' THEN 1 WHEN 'music' THEN 2 ELSE 3 END,
     coalesce(library,''),
-    coalesce(filename,'');";
+    coalesce(sound_name,'');";
 
         return conn.Query<Sound>(sql, new { search, type }).ToList();
     }
@@ -6855,15 +6883,15 @@ SELECT
     id           AS Id,
     type         AS Type,
     library      AS Library,
-    filepath     AS FilePath,
-    filename     AS FileName,
+    sound_path   AS SoundPath,
+    sound_name   AS SoundName,
     description  AS Description,
     license      AS License,
     tags         AS Tags,
     embedding    AS Embedding,
-    insert_date  AS InsertDate,
+    created_at   AS InsertDate,
     duration_seconds AS DurationSeconds,
-    COALESCE(enabled, 1) AS Enabled,
+    COALESCE(is_active, 1) AS Enabled,
     COALESCE(usage_count, 0) AS UsageCount,
     usage_last   AS UsageLast,
     score_loudness AS ScoreLoudness,
@@ -6881,7 +6909,7 @@ SELECT
 FROM sounds
 WHERE (@type IS NULL OR @type = '' OR lower(type) = lower(@type))
   AND (@search IS NULL OR @search = '' OR
-       lower(coalesce(filename,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(sound_name,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(description,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(tags,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(library,'')) LIKE '%' || lower(@search) || '%')";
@@ -6896,7 +6924,7 @@ SELECT COUNT(*)
 FROM sounds
 WHERE (@type IS NULL OR @type = '' OR lower(type) = lower(@type))
   AND (@search IS NULL OR @search = '' OR
-       lower(coalesce(filename,'')) LIKE '%' || lower(@search) || '%' OR
+       lower(coalesce(sound_name,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(description,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(tags,'')) LIKE '%' || lower(@search) || '%' OR
        lower(coalesce(library,'')) LIKE '%' || lower(@search) || '%');";
@@ -6923,12 +6951,13 @@ LIMIT @length OFFSET @start;";
             "id" => "id",
             "type" => "lower(coalesce(type,''))",
             "library" => "lower(coalesce(library,''))",
-            "filename" => "lower(coalesce(filename,''))",
+            "filename" => "lower(coalesce(sound_name,''))",
+            "soundname" => "lower(coalesce(sound_name,''))",
             "description" => "lower(coalesce(description,''))",
             "tags" => "lower(coalesce(tags,''))",
             "usagecount" => "COALESCE(usage_count, 0)",
             "usagelast" => "coalesce(usage_last,'')",
-            "insertdate" => "coalesce(insert_date,'')",
+            "insertdate" => "coalesce(created_at,'')",
             "durationseconds" => "COALESCE(duration_seconds, -1)",
             "scorefinal" => "COALESCE(score_final, -1)",
             "scorehuman" => "COALESCE(score_human, -1)",
@@ -6942,8 +6971,9 @@ LIMIT @length OFFSET @start;";
             "scoretagmatch" => "COALESCE(score_tag_match, -1)",
             "scorelastcalc" => "coalesce(score_last_calc,'')",
             "scoreversion" => "coalesce(score_version,'')",
-            "filepath" => "lower(coalesce(filepath,''))",
-            "enabled" => "COALESCE(enabled, 1)",
+            "filepath" => "lower(coalesce(sound_path,''))",
+            "soundpath" => "lower(coalesce(sound_path,''))",
+            "enabled" => "COALESCE(is_active, 1)",
             _ => "COALESCE(score_final, -1)"
         };
     }
@@ -6959,15 +6989,15 @@ SELECT
     id           AS Id,
     type         AS Type,
     library      AS Library,
-    filepath     AS FilePath,
-    filename     AS FileName,
+    sound_path   AS SoundPath,
+    sound_name   AS SoundName,
     description  AS Description,
     license      AS License,
     tags         AS Tags,
     embedding    AS Embedding,
-    insert_date  AS InsertDate,
+    created_at   AS InsertDate,
     duration_seconds AS DurationSeconds,
-    COALESCE(enabled, 1) AS Enabled,
+    COALESCE(is_active, 1) AS Enabled,
     COALESCE(usage_count, 0) AS UsageCount,
     usage_last   AS UsageLast,
     score_loudness AS ScoreLoudness,
@@ -6997,11 +7027,11 @@ LIMIT 1;";
 
         const string sql = @"
 INSERT INTO sounds(
-    type, library, filepath, filename, description, license, tags, embedding, duration_seconds, enabled, usage_count, usage_last,
+    type, library, sound_path, sound_name, description, license, tags, embedding, duration_seconds, is_active, usage_count, usage_last,
     score_loudness, score_dynamic, score_clipping, score_noise, score_duration,
     score_format, score_consistency, score_tag_match, score_human, score_final, score_last_calc, score_version)
 VALUES (
-    @Type, @Library, @FilePath, @FileName, @Description, @License, @Tags, @Embedding, @DurationSeconds, @Enabled, @UsageCount, @UsageLast,
+    @Type, @Library, @SoundPath, @SoundName, @Description, @License, @Tags, @Embedding, @DurationSeconds, @Enabled, @UsageCount, @UsageLast,
     @ScoreLoudness, @ScoreDynamic, @ScoreClipping, @ScoreNoise, @ScoreDuration,
     @ScoreFormat, @ScoreConsistency, @ScoreTagMatch, @ScoreHuman, @ScoreFinal, @ScoreLastCalc, @ScoreVersion);
 SELECT last_insert_rowid();";
@@ -7022,13 +7052,13 @@ UPDATE sounds
 SET
     type = @Type,
     library = @Library,
-    filepath = @FilePath,
-    filename = @FileName,
+    sound_path = @SoundPath,
+    sound_name = @SoundName,
     description = @Description,
     license = @License,
     tags = @Tags,
     embedding = @Embedding,
-    enabled = @Enabled,
+    is_active = @Enabled,
     score_human = @ScoreHuman
 WHERE id = @Id;";
 
@@ -7058,6 +7088,127 @@ WHERE id = @id;", new
         {
             id,
             ts = DateTime.UtcNow.ToString("o")
+        });
+    }
+
+    public List<ImageAsset> ListActiveImagesByTags(IEnumerable<string>? tags, int limit = 20)
+    {
+        limit = Math.Clamp(limit, 1, 200);
+        var normalizedTags = (tags ?? Array.Empty<string>())
+            .Select(t => (t ?? string.Empty).Trim().ToLowerInvariant())
+            .Where(t => t.Length >= 3)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToList();
+
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        var sql = new StringBuilder(@"
+SELECT
+    id           AS Id,
+    image_name   AS ImageName,
+    description  AS Description,
+    provenance   AS Provenance,
+    tags         AS Tags,
+    image_path   AS ImagePath,
+    COALESCE(usage_count, 0) AS UsageCount,
+    COALESCE(is_active, 1)   AS IsActive,
+    COALESCE(is_deleted, 0)  AS IsDeleted,
+    COALESCE(sort_order, 0)  AS SortOrder,
+    created_at   AS CreatedAt,
+    updated_at   AS UpdatedAt
+FROM images
+WHERE COALESCE(is_deleted, 0) = 0
+  AND COALESCE(is_active, 1) = 1");
+
+        var dp = new DynamicParameters();
+        if (normalizedTags.Count > 0)
+        {
+            sql.Append(" AND (");
+            for (var i = 0; i < normalizedTags.Count; i++)
+            {
+                if (i > 0) sql.Append(" OR ");
+                sql.Append($"lower(COALESCE(tags, '')) LIKE @tag{i}");
+                dp.Add($"tag{i}", $"%{normalizedTags[i]}%");
+            }
+            sql.Append(')');
+        }
+
+        sql.Append(@"
+ORDER BY COALESCE(usage_count, 0) DESC, id DESC
+LIMIT @limit;");
+        dp.Add("limit", limit);
+
+        return conn.Query<ImageAsset>(sql.ToString(), dp).ToList();
+    }
+
+    public long InsertImage(ImageAsset image)
+    {
+        if (image == null) throw new ArgumentNullException(nameof(image));
+        using var conn = CreateDapperConnection();
+        conn.Open();
+
+        const string sql = @"
+INSERT INTO images(
+    image_name,
+    description,
+    provenance,
+    tags,
+    image_path,
+    usage_count,
+    is_active,
+    is_deleted,
+    sort_order,
+    created_at,
+    updated_at)
+VALUES (
+    @ImageName,
+    @Description,
+    @Provenance,
+    @Tags,
+    @ImagePath,
+    @UsageCount,
+    @IsActive,
+    @IsDeleted,
+    @SortOrder,
+    @CreatedAt,
+    @UpdatedAt);
+SELECT last_insert_rowid();";
+
+        var now = DateTime.UtcNow;
+        var payload = new
+        {
+            ImageName = (image.ImageName ?? string.Empty).Trim(),
+            Description = (image.Description ?? string.Empty).Trim(),
+            Provenance = (image.Provenance ?? string.Empty).Trim(),
+            Tags = (image.Tags ?? string.Empty).Trim(),
+            ImagePath = (image.ImagePath ?? string.Empty).Trim(),
+            UsageCount = Math.Max(0, image.UsageCount),
+            IsActive = image.IsActive,
+            IsDeleted = image.IsDeleted,
+            SortOrder = image.SortOrder,
+            CreatedAt = image.CreatedAt ?? now,
+            UpdatedAt = image.UpdatedAt ?? now
+        };
+
+        return conn.ExecuteScalar<long>(sql, payload);
+    }
+
+    public void MarkImageUsed(long id)
+    {
+        if (id <= 0) return;
+        using var conn = CreateDapperConnection();
+        conn.Open();
+        conn.Execute(@"
+UPDATE images
+SET
+    usage_count = COALESCE(usage_count, 0) + 1,
+    updated_at = @now
+WHERE id = @id;", new
+        {
+            id,
+            now = DateTime.UtcNow
         });
     }
 
@@ -7292,15 +7443,15 @@ SELECT last_insert_rowid();",
         const string sql = @"
 SELECT
     id          AS Id,
-    name        AS Name,
+    description AS Name,
     gender      AS Gender,
-    insert_date AS InsertDate,
+    created_at AS CreatedAt,
     COALESCE(verified, 0) AS Verified
 FROM name_gender
-WHERE (@search IS NULL OR @search = '' OR lower(name) LIKE '%' || lower(@search) || '%')
+WHERE (@search IS NULL OR @search = '' OR lower(description) LIKE '%' || lower(@search) || '%')
 ORDER BY
     COALESCE(verified, 0) DESC,
-    lower(name) ASC,
+    lower(description) ASC,
     id ASC;";
 
         return conn.Query<NameGenderEntry>(sql, new { search }).ToList();
@@ -7315,12 +7466,12 @@ ORDER BY
         const string sql = @"
 SELECT
     id          AS Id,
-    name        AS Name,
+    description AS Name,
     gender      AS Gender,
-    insert_date AS InsertDate,
+    created_at AS CreatedAt,
     COALESCE(verified, 0) AS Verified
 FROM name_gender
-WHERE lower(trim(name)) = lower(trim(@name))
+WHERE lower(trim(description)) = lower(trim(@name))
 LIMIT 1;";
 
         return conn.QueryFirstOrDefault<NameGenderEntry>(sql, new { name = name.Trim() });
@@ -7342,12 +7493,12 @@ LIMIT 1;";
         var existing = conn.QueryFirstOrDefault<NameGenderEntry>(@"
 SELECT
     id          AS Id,
-    name        AS Name,
+    description AS Name,
     gender      AS Gender,
-    insert_date AS InsertDate,
+    created_at AS CreatedAt,
     COALESCE(verified, 0) AS Verified
 FROM name_gender
-WHERE lower(trim(name)) = lower(trim(@name))
+WHERE lower(trim(description)) = lower(trim(@name))
 LIMIT 1;",
             new { name = normalizedName }, tx);
 
@@ -7371,7 +7522,7 @@ WHERE id = @id;",
         }
 
         var id = conn.ExecuteScalar<long>(@"
-INSERT INTO name_gender (name, gender, insert_date, verified)
+INSERT INTO name_gender (description, gender, created_at, verified)
 VALUES (@name, @gender, @insertDate, @verified);
 SELECT last_insert_rowid();",
             new
@@ -7677,9 +7828,9 @@ SELECT last_insert_rowid();",
 
         var sql = @"
 SELECT
-    id AS Id, type AS Type, library AS Library, filepath AS FilePath, filename AS FileName,
+    id AS Id, type AS Type, library AS Library, sound_path AS SoundPath, sound_name AS SoundName,
     description AS Description, tags AS Tags, embedding AS Embedding, duration_seconds AS DurationSeconds,
-    COALESCE(enabled,1) AS Enabled,
+    COALESCE(is_active,1) AS Enabled,
     COALESCE(usage_count,0) AS UsageCount, usage_last AS UsageLast,
     score_loudness AS ScoreLoudness, score_dynamic AS ScoreDynamic, score_clipping AS ScoreClipping,
     score_noise AS ScoreNoise, score_duration AS ScoreDuration, score_format AS ScoreFormat,
@@ -7751,9 +7902,9 @@ WHERE id = @id;", new
 
         var sql = @"
 SELECT
-    id AS Id, type AS Type, library AS Library, filepath AS FilePath, filename AS FileName,
+    id AS Id, type AS Type, library AS Library, sound_path AS SoundPath, sound_name AS SoundName,
     description AS Description, tags AS Tags, embedding AS Embedding, duration_seconds AS DurationSeconds,
-    COALESCE(enabled,1) AS Enabled,
+    COALESCE(is_active,1) AS Enabled,
     COALESCE(usage_count,0) AS UsageCount, usage_last AS UsageLast,
     score_loudness AS ScoreLoudness, score_dynamic AS ScoreDynamic, score_clipping AS ScoreClipping,
     score_noise AS ScoreNoise, score_duration AS ScoreDuration, score_format AS ScoreFormat,
@@ -7799,8 +7950,8 @@ WHERE id = @id;", new
             Id = sound.Id,
             Type = normalizedType,
             Library = string.IsNullOrWhiteSpace(sound.Library) ? null : sound.Library.Trim(),
-            FilePath = (sound.FilePath ?? string.Empty).Trim(),
-            FileName = (sound.FileName ?? string.Empty).Trim(),
+            SoundPath = (sound.SoundPath ?? string.Empty).Trim(),
+            SoundName = (sound.SoundName ?? string.Empty).Trim(),
             Description = string.IsNullOrWhiteSpace(sound.Description) ? null : sound.Description.Trim(),
             License = string.IsNullOrWhiteSpace(sound.License) ? null : sound.License.Trim(),
             Tags = string.IsNullOrWhiteSpace(sound.Tags) ? null : sound.Tags.Trim(),
@@ -8553,7 +8704,7 @@ CREATE TABLE app_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_type TEXT UNIQUE NOT NULL,
     description TEXT,
-    enabled INTEGER NOT NULL DEFAULT 1,
+    is_active INTEGER NOT NULL DEFAULT 1,
     logged INTEGER NOT NULL DEFAULT 1,
     notified INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -8586,7 +8737,7 @@ CREATE TABLE app_events (
         foreach (var appEvent in defaultAppEvents)
         {
             conn.Execute(@"
-INSERT OR IGNORE INTO app_events (event_type, description, enabled, logged, notified, created_at, updated_at)
+INSERT OR IGNORE INTO app_events (event_type, description, is_active, logged, notified, created_at, updated_at)
 VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 new { event_type = appEvent.EventType, description = appEvent.Description });
         }
@@ -8810,7 +8961,7 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
             }
         }
 
-        // Migration: Add call_name column to models if not exists and backfill from Name.
+        // Migration: Add call_name column to models if not exists and backfill from description.
         var hasModelCallName = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('models') WHERE lower(name)='call_name'");
         if (hasModelCallName == 0)
         {
@@ -8826,7 +8977,7 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
         }
         try
         {
-            conn.Execute("UPDATE models SET call_name = Name WHERE call_name IS NULL OR TRIM(call_name) = ''");
+            conn.Execute("UPDATE models SET call_name = description WHERE call_name IS NULL OR TRIM(call_name) = ''");
         }
         catch (Exception ex)
         {
@@ -8850,7 +9001,7 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
         try
         {
             var rows = conn.Query<(int Id, string Name, string? SizeText)>(
-                "SELECT Id, Name, size_text as SizeText FROM models");
+                "SELECT Id, description as Name, size_text as SizeText FROM models");
             foreach (var row in rows)
             {
                 var normalized = NormalizeModelSizeText(row.SizeText, row.Name);
@@ -8996,7 +9147,7 @@ UPDATE model_roles
 SET agent_id = (
     SELECT a.id
     FROM roles r
-    JOIN agents a ON lower(trim(a.role)) = lower(trim(r.name))
+    JOIN agents a ON lower(trim(a.role)) = lower(trim(r.description))
     WHERE r.id = model_roles.role_id
     ORDER BY a.id ASC
     LIMIT 1
@@ -9029,7 +9180,7 @@ CREATE TABLE model_roles_new (
     model_id INTEGER NOT NULL,
     role_id INTEGER NOT NULL,
     agent_id INTEGER NOT NULL,
-    enabled INTEGER NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
     use_count INTEGER NOT NULL,
     use_successed INTEGER NOT NULL,
     use_failed INTEGER NOT NULL,
@@ -9037,8 +9188,8 @@ CREATE TABLE model_roles_new (
     instructions TEXT NULL,
     top_p REAL NULL,
     top_k INTEGER NULL,
-    created_at TEXT NULL,
-    updated_at TEXT NULL,
+    created_at DATETIME NULL,
+    updated_at DATETIME NULL,
     is_primary INTEGER NOT NULL DEFAULT 0,
     total_prompt_tokens INTEGER DEFAULT 0,
     total_output_tokens INTEGER DEFAULT 0,
@@ -9054,13 +9205,13 @@ CREATE TABLE model_roles_new (
 
                         conn.Execute(@"
 INSERT INTO model_roles_new (
-    id, model_id, role_id, agent_id, enabled, use_count, use_successed, use_failed,
+    id, model_id, role_id, agent_id, is_active, use_count, use_successed, use_failed,
     last_use, instructions, top_p, top_k, created_at, updated_at, is_primary,
     total_prompt_tokens, total_output_tokens, total_prompt_time_ns, total_gen_time_ns,
     total_load_time_ns, total_total_time_ns, thinking
 )
 SELECT
-    id, model_id, role_id, agent_id, enabled, use_count, use_successed, use_failed,
+    id, model_id, role_id, agent_id, COALESCE(is_active, 1), use_count, use_successed, use_failed,
     last_use, instructions, top_p, top_k, created_at, updated_at, is_primary,
     total_prompt_tokens, total_output_tokens, total_prompt_time_ns, total_gen_time_ns,
     total_load_time_ns, total_total_time_ns, thinking
@@ -9091,7 +9242,7 @@ FROM model_roles;");
         try
         {
             var inserted = conn.Execute(@"
-INSERT INTO model_roles (model_id, role_id, agent_id, enabled, use_count, use_successed, use_failed, created_at, updated_at, is_primary)
+INSERT INTO model_roles (model_id, role_id, agent_id, is_active, use_count, use_successed, use_failed, created_at, updated_at, is_primary)
 SELECT
     a.model_id,
     r.id,
@@ -9113,7 +9264,7 @@ SELECT
         ELSE 1
     END
 FROM agents a
-JOIN roles r ON lower(trim(a.role)) = lower(trim(r.name))
+JOIN roles r ON lower(trim(a.role)) = lower(trim(r.description))
 JOIN models m ON m.Id = a.model_id
 LEFT JOIN model_roles mr
     ON mr.model_id = a.model_id
@@ -9275,7 +9426,7 @@ VALUES ('tts_schema', 'TTS Schema Generation', 'tts_json', 'response_checker', '
             }
         }
 
-        conn.Execute("UPDATE step_templates SET task_type='tts_schema' WHERE name LIKE 'tts_schema%' AND task_type <> 'tts_schema'");
+        conn.Execute("UPDATE step_templates SET task_type='tts_schema' WHERE description LIKE 'tts_schema%' AND task_type <> 'tts_schema'");
 
         // Migration: Create task_executions table if not exists
         var hasTaskExecutions = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_executions'");
@@ -9333,10 +9484,10 @@ CREATE TABLE task_execution_steps (
             conn.Execute(@"
 CREATE TABLE step_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
+    description TEXT UNIQUE NOT NULL,
     task_type TEXT NOT NULL,
     step_prompt TEXT NOT NULL,
-    description TEXT,
+    instructions TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )");
@@ -9353,8 +9504,8 @@ CREATE TABLE step_templates (
 9. Scrivi il CAPITOLO 6 (minimo 1500 parole). Contesto: {{STEP_1}}, {{STEP_2}}, {{STEP_3_EXTRACT:Capitolo 6}}, {{STEPS_4-8_SUMMARY}}";
             
             conn.Execute(@"
-INSERT INTO step_templates (name, task_type, step_prompt, description, created_at, updated_at)
-VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generation with 6 chapters', datetime('now'), datetime('now'))",
+INSERT INTO step_templates (description, task_type, step_prompt, created_at, updated_at)
+VALUES ('story_9_chapters', 'story', @stepPrompt, datetime('now'), datetime('now'))",
                 new { stepPrompt = defaultStepPrompt });
             Console.WriteLine("[DB] Seeded default step_templates");
         }
@@ -9362,9 +9513,9 @@ VALUES ('story_9_chapters', 'story', @stepPrompt, 'Standard 9-step story generat
         // Patch tts_schema templates: correct task_type and ensure instructions are populated
         try
         {
-            conn.Execute("UPDATE step_templates SET task_type='tts_schema' WHERE name LIKE 'tts_schema%' AND task_type <> 'tts_schema'");
+            conn.Execute("UPDATE step_templates SET task_type='tts_schema' WHERE description LIKE 'tts_schema%' AND task_type <> 'tts_schema'");
 
-            var instr = conn.ExecuteScalar<string?>("SELECT instructions FROM step_templates WHERE name='tts_schema_chunk_fixed20' LIMIT 1");
+            var instr = conn.ExecuteScalar<string?>("SELECT instructions FROM step_templates WHERE description='tts_schema_chunk_fixed20' LIMIT 1");
             if (string.IsNullOrWhiteSpace(instr))
             {
                 var defaultInstr = @"Leggi attentamente il testo e trascrivilo integralmente nel formato seguente, senza riassumere o saltare frasi, senza aggiungere note o testo extra.
@@ -9385,7 +9536,7 @@ Regole:
 - Non aggiungere spiegazioni o altro testo fuori dai blocchi.
 - Copri tutto il testo, più blocchi uno dopo l’altro finché il testo è esaurito.";
 
-                conn.Execute("UPDATE step_templates SET instructions=@instr WHERE name='tts_schema_chunk_fixed20'", new { instr = defaultInstr });
+                conn.Execute("UPDATE step_templates SET instructions=@instr WHERE description='tts_schema_chunk_fixed20'", new { instr = defaultInstr });
                 Console.WriteLine("[DB] Patched instructions for tts_schema_chunk_fixed20");
             }
         }
@@ -9554,12 +9705,12 @@ CREATE TABLE global_coherence (
         // Migration: Seed SentimentMapper agent if not exists
         try
         {
-            var hasSentimentMapper = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM agents WHERE name='SentimentMapper'");
+            var hasSentimentMapper = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM agents WHERE description='SentimentMapper'");
             if (hasSentimentMapper == 0)
             {
                 Console.WriteLine("[DB] Seeding SentimentMapper agent");
                 conn.Execute(@"
-INSERT INTO agents (name, notes, is_active, role, prompt, instructions, created_at, updated_at)
+INSERT INTO agents (description, notes, is_active, role, prompt, instructions, created_at, updated_at)
 VALUES (
     'SentimentMapper',
     'Mappa sentimenti liberi ai 7 sentimenti TTS supportati (neutral, happy, sad, angry, fearful, disgusted, surprised)',
@@ -9588,7 +9739,7 @@ Rispondi SOLO con la parola inglese, senza spiegazioni.',
             if (hasRolesTable)
             {
                 conn.Execute(@"
-INSERT OR IGNORE INTO roles (name, linked_command, created_at, updated_at)
+INSERT OR IGNORE INTO roles (description, linked_command, created_at, updated_at)
 VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))");
             }
         }
@@ -9894,7 +10045,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         // Note: 'speed' column is excluded as it's not in ModelInfo
         return string.Join(", ", new[] { 
             "Id", 
-            "Name", 
+            "description as Name", 
             "call_name as CallName",
             "size_text as SizeText",
             "Provider", 
@@ -9910,7 +10061,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             "LimitTokensMonth", 
             "Metadata", 
             "Note",
-            "Enabled", 
+            "is_active as IsActive", 
             "CreatedAt", 
             "UpdatedAt", 
             "TestDurationSeconds",
@@ -10133,7 +10284,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
     public void DeleteStoryRowById(long id)
     {
         using var context = CreateDbContext();
-        var story = context.Stories.Find(id);
+        var story = FindStoryById(context, id);
         if (story == null) return;
         story.Deleted = true;
         context.SaveChanges();
@@ -10142,7 +10293,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
     public bool DeleteStoryPhysicallyById(long id)
     {
         using var context = CreateDbContext();
-        var story = context.Stories.Find(id);
+        var story = FindStoryById(context, id);
         if (story == null) return false;
 
         var evals = context.StoryEvaluations.Where(e => e.StoryId == id).ToList();
@@ -10159,7 +10310,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
     public bool UpdateStoryScore(long id, double score, string? eval = null)
     {
         using var context = CreateDbContext();
-        var storyRecord = context.Stories.Find(id);
+        var storyRecord = FindStoryById(context, id);
         if (storyRecord == null) return false;
 
         storyRecord.Score = Math.Round(score, 2);
@@ -10442,7 +10593,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
                 l.ThreadScope != null &&
                 l.ThreadScope.StartsWith("nre_"))
             .OrderByDescending(l => l.Id)
-            .Select(l => l.StoryId!.Value)
+            .Select(l => (long)l.StoryId!.Value)
             .Distinct()
             .Take(limit)
             .ToList();
@@ -10503,14 +10654,14 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             var m1 = Regex.Match(log.ThreadScope, @"story_evaluation_(\d+)", RegexOptions.IgnoreCase);
             if (m1.Success && long.TryParse(m1.Groups[1].Value, out var sid1))
             {
-                log.StoryId = sid1;
+                log.StoryId = ToNullableIntId(sid1);
             }
             else
             {
                 var m2 = Regex.Match(log.ThreadScope, @"story\/[a-z0-9_]+\/(\d+)", RegexOptions.IgnoreCase);
                 if (m2.Success && long.TryParse(m2.Groups[1].Value, out var sid2))
                 {
-                    log.StoryId = sid2;
+                    log.StoryId = ToNullableIntId(sid2);
                 }
             }
         }
@@ -10520,7 +10671,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             var bracketed = Regex.Match(log.Message, @"^\[(\d+)\]");
             if (bracketed.Success && long.TryParse(bracketed.Groups[1].Value, out var sid3))
             {
-                log.StoryId = sid3;
+                log.StoryId = ToNullableIntId(sid3);
             }
         }
 
@@ -11049,7 +11200,7 @@ WHERE Id = @modelId;";
     {
         if (storyId <= 0 || string.IsNullOrWhiteSpace(folder)) return;
         using var context = CreateDbContext();
-        var story = context.Stories.Find(storyId);
+        var story = FindStoryById(context, storyId);
         if (story != null)
         {
             story.Folder = folder;
@@ -11065,7 +11216,7 @@ WHERE Id = @modelId;";
             var totalEvaluations = context.StoryEvaluations.Count(se => se.StoryId == storyId);
             if (totalEvaluations >= 2)
             {
-                var story = context.Stories.Find(storyId);
+                var story = FindStoryById(context, storyId);
                 if (story != null)
                 {
                     story.StatusId = EvaluatedStatusId;
@@ -11346,8 +11497,9 @@ WHERE Id = @modelId;";
 
     public TinyGenerator.Models.StepTemplate? GetStepTemplateById(long id)
     {
+        if (id <= 0 || id > int.MaxValue) return null;
         using var context = CreateDbContext();
-        return context.StepTemplates.Find(id);
+        return context.StepTemplates.Find((int)id);
     }
 
     public TinyGenerator.Models.StepTemplate? GetStepTemplateByName(string name)
@@ -11458,8 +11610,9 @@ WHERE Id = @modelId;";
 
     public void DeleteStepTemplate(long id)
     {
+        if (id <= 0 || id > int.MaxValue) return;
         using var context = CreateDbContext();
-        var template = context.StepTemplates.Find(id);
+        var template = context.StepTemplates.Find((int)id);
         if (template != null)
         {
             context.StepTemplates.Remove(template);
@@ -11662,7 +11815,7 @@ WHERE Id = @modelId;";
             SELECT 
                 s.id AS Id,
                 COALESCE(s.title, '') AS Title,
-                COALESCE(a.name, '') AS Agent,
+                COALESCE(a.description, '') AS Agent,
                 AVG(se.total_score) AS AvgScore,
                 COALESCE(s.ts, '') AS Timestamp
             FROM stories s
@@ -11701,7 +11854,7 @@ WHERE Id = @modelId;";
             SELECT 
                 s.id AS Id,
                 COALESCE(s.title, '') AS Title,
-                COALESCE(a.name, '') AS Agent,
+                COALESCE(a.description, '') AS Agent,
                 AVG(se.total_score) AS AvgScore,
                 COALESCE(s.ts, '') AS Timestamp
             FROM stories s
@@ -11742,8 +11895,8 @@ WHERE Id = @modelId;";
         conn.Open();
         var sql = @"
             SELECT 
-                COALESCE(a.name, '') AS AgentName,
-                COALESCE(m.Name, '') AS ModelName,
+                COALESCE(a.description, '') AS AgentName,
+                COALESCE(m.description, '') AS ModelName,
                 AVG(se.total_score) AS AvgScore,
                 COUNT(DISTINCT s.id) AS StoryCount
             FROM stories s

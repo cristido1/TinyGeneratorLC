@@ -2,11 +2,11 @@ namespace TinyGenerator.Models;
 
 public sealed class SoundMissing
 {
-    public long Id { get; set; }
+    public int Id { get; set; }
     public string Type { get; set; } = "fx"; // fx, amb, music
     public string Prompt { get; set; } = string.Empty;
     public string? Tags { get; set; }
-    public long? StoryId { get; set; }
+    public int? StoryId { get; set; }
     public string? StoryTitle { get; set; }
     public string? Source { get; set; }
     public int Occurrences { get; set; }

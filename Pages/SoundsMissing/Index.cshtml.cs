@@ -250,7 +250,7 @@ public class IndexModel : PageModel
         {
             var resolved = _database.ListMissingSounds(status: "resolved", type: TypeFilter);
             var ids = resolved.Select(r => r.Id).Where(id => id > 0).Distinct().ToList();
-            var deleted = _database.DeleteMissingSoundsByIds(ids);
+            var deleted = _database.DeleteMissingSoundsByIds(ids.Select(id => (long)id));
 
             ActionMessageType = deleted > 0 ? "success" : "info";
             ActionMessage = deleted > 0

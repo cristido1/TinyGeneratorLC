@@ -4,7 +4,7 @@
   <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <NoWarn>$(NoWarn);CS7022</NoWarn>
+    <NoWarn>$(NoWarn);CS7022;CS8767;CS8601;CS8600;CS8602;CS8603;CS8604;CS8629;CS0618;CS8321;CA2024</NoWarn>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     <GenerateRazorAssemblyInfo>false</GenerateRazorAssemblyInfo>

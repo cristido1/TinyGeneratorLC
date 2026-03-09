@@ -132,32 +132,58 @@ public class IndexModel : PageModel
 
     public void OnGet()
     {
-        try
+        void Guarded(string step, Action action)
         {
-            // Load auto-advancement setting from config/state
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Home KPI step failed: {Step}", step);
+            }
+        }
+
+        var allStories = new List<StoryRecord>();
+
+        Guarded("auto_advancement", () =>
+        {
             EnableAutoAdvancement = _stories.IsAutoAdvancementEnabled();
             AutoAdvancementMode = _stories.GetAutoAdvancementMode();
-            
-            // Total stories
-            var allStories = _stories.GetAllStories();
-            TotalStories = allStories.Count;
+        });
 
-            // Models enabled/disabled
+        Guarded("stories_count", () =>
+        {
+            allStories = _stories.GetAllStories();
+            TotalStories = allStories.Count;
+        });
+
+        Guarded("models_count", () =>
+        {
             var models = _database.ListModels();
             EnabledModels = models.Count(m => m.Enabled);
             DisabledModels = models.Count(m => !m.Enabled);
+        });
 
-            // Stories in "audio_master_generated" status
+        Guarded("audio_master_count", () =>
+        {
+            if (allStories.Count == 0)
+            {
+                allStories = _stories.GetAllStories();
+            }
+
             var statuses = _database.ListAllStoryStatuses();
-            var audioMasterStatus = statuses.FirstOrDefault(s => 
+            var audioMasterStatus = statuses.FirstOrDefault(s =>
                 s.Code?.Equals("audio_master_generated", StringComparison.OrdinalIgnoreCase) == true ||
                 s.Code?.Equals("final_mix_ready", StringComparison.OrdinalIgnoreCase) == true);
             if (audioMasterStatus != null)
             {
                 AudioMasterGeneratedCount = allStories.Count(s => s.StatusId == audioMasterStatus.Id);
             }
+        });
 
-            // Top writers by average evaluation score (from stories_evaluations)
+        Guarded("top_writers", () =>
+        {
             var topWritersData = _database.GetTopWritersByEvaluation(10);
             TopWriters = topWritersData.Select(w => new WriterRanking
             {
@@ -166,8 +192,10 @@ public class IndexModel : PageModel
                 AvgScore = w.AvgScore,
                 StoryCount = w.StoryCount
             }).ToList();
+        });
 
-            // Top 10 stories by evaluation score (from stories_evaluations)
+        Guarded("top_stories", () =>
+        {
             var topStoriesData = _database.GetTopStoriesByEvaluation(10);
             TopStories = topStoriesData.Select(s => new TopStory
             {
@@ -178,7 +206,10 @@ public class IndexModel : PageModel
                 AvgEvalScore = s.AvgScore,
                 Timestamp = s.Timestamp
             }).ToList();
+        });
 
+        Guarded("recent_reports", () =>
+        {
             var reports = _database.GetRecentSystemReports(5);
             RecentReports = reports.Select(r => new SystemReportSummary
             {
@@ -192,16 +223,27 @@ public class IndexModel : PageModel
                 ModelName = r.ModelName,
                 OperationType = r.OperationType
             }).ToList();
+        });
 
-            AdditionalKpis = LoadAdditionalKpis();
-            StoriesByStatusSlices = LoadStoriesByStatusSlices();
-            ScoreBandSlices = LoadScoreBandSlices();
-            BestModelsByRole = LoadBestModelsByRole();
-        }
-        catch (Exception ex)
+        Guarded("additional_kpis", () =>
         {
-            _logger.LogError(ex, "Error loading KPI data");
-        }
+            AdditionalKpis = LoadAdditionalKpis();
+        });
+
+        Guarded("stories_status_pie", () =>
+        {
+            StoriesByStatusSlices = LoadStoriesByStatusSlices();
+        });
+
+        Guarded("score_band_pie", () =>
+        {
+            ScoreBandSlices = LoadScoreBandSlices();
+        });
+
+        Guarded("best_models_by_role", () =>
+        {
+            BestModelsByRole = LoadBestModelsByRole();
+        });
     }
     
     public IActionResult OnPostToggleAutoAdvancement(bool enabled, string? mode)
@@ -333,7 +375,7 @@ SELECT CASE WHEN SUM(mr.use_count) > 0
     ELSE NULL END
 FROM model_roles mr
 JOIN roles r ON mr.role_id = r.id
-WHERE lower(r.name) = 'writer'
+WHERE lower(r.description) = 'writer'
   AND mr.is_primary = 1;
 ") ?? 0.0;
                 cards.Add(new KpiCard { Code = "KPI_16", Label = "Writer Primario Success", Value = $"{writerPrimarySuccess:F1}%" });
@@ -347,7 +389,7 @@ WHERE lower(r.name) = 'writer'
 
             if (HasRows("sounds"))
             {
-                var avgSoundUsage = ScalarDoubleNullable("SELECT AVG(usage_count) FROM sounds WHERE enabled = 1;") ?? 0.0;
+                var avgSoundUsage = ScalarDoubleNullable("SELECT AVG(usage_count) FROM sounds WHERE is_active = 1;") ?? 0.0;
                 cards.Add(new KpiCard { Code = "KPI_26", Label = "Utilizzo Medio Suoni", Value = $"{avgSoundUsage:F2}" });
             }
 
@@ -543,8 +585,8 @@ SELECT AVG(cnt) FROM (
             cmd.CommandText = @"
 WITH ranked AS (
     SELECT
-        r.name AS role_name,
-        m.name AS model_name,
+        r.description AS role_name,
+        m.description AS model_name,
         COALESCE(mr.use_count, 0) AS use_count,
         CASE
             WHEN COALESCE(mr.use_count, 0) > 0

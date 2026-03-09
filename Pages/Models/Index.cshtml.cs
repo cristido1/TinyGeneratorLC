@@ -530,7 +530,7 @@ namespace TinyGenerator.Pages.Models
                 {
                     role = mr.Role?.Name ?? "-",
                     isPrimary = mr.IsPrimary,
-                    enabled = mr.Enabled,
+                    enabled = mr.IsActive,
                     useCount = mr.UseCount,
                     successRatePct = mr.SuccessRate * 100.0,
                     totalPromptTokens = mr.TotalPromptTokens,

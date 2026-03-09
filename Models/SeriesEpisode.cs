@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("series_episodes")]
-public sealed partial class SeriesEpisode : ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class SeriesEpisode : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     [Key]
@@ -70,3 +70,4 @@ public sealed partial class SeriesEpisode : ISoftDelete, IActiveFlag, IOrderable
         !string.IsNullOrWhiteSpace(DeltaJson) &&
         !string.IsNullOrWhiteSpace(StateOutJson);
 }
+

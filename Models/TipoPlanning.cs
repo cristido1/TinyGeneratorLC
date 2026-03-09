@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("tipo_planning")]
-public sealed partial class TipoPlanning : ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class TipoPlanning : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id_tipo_planning")]
@@ -20,8 +20,12 @@ public sealed partial class TipoPlanning : ISoftDelete, IActiveFlag, IOrderable
     [Column("nome")]
     public string Nome { get; set; } = string.Empty;
 
-    [Column("descrizione")]
-    public string? Descrizione { get; set; }
+    [NotMapped]
+    public string? Descrizione
+    {
+        get => Description;
+        set => Description = value;
+    }
 
     [Required]
     [MaxLength(500)]
@@ -31,3 +35,4 @@ public sealed partial class TipoPlanning : ISoftDelete, IActiveFlag, IOrderable
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
 }
+

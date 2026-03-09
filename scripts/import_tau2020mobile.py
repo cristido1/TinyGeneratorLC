@@ -150,7 +150,7 @@ def import_to_db() -> None:
         print(f"Record esistenti sounds library={LIB_NAME}: {before}", flush=True)
         sql = (
             "INSERT OR IGNORE INTO sounds "
-            "(type, library, filepath, filename, description, tags, duration_seconds, enabled, insert_date, license) "
+            "(type, library, sound_path, sound_name, description, tags, duration_seconds, enabled, created_at, license) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         batch = 500

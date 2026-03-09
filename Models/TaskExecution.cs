@@ -7,16 +7,15 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("task_executions")]
-    public partial class TaskExecution : ISoftDelete, IActiveFlag, IOrderable
+    public partial class TaskExecution : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Column("id")]
-        public long Id { get; set; }
-        
+        public int Id { get; set; }
         [Column("task_type")]
         public string TaskType { get; set; } = string.Empty;
         
         [Column("entity_id")]
-        public long? EntityId { get; set; }
+        public int? EntityId { get; set; }
         
         [Column("step_prompt")]
         public string StepPrompt { get; set; } = string.Empty;
@@ -66,13 +65,12 @@ namespace TinyGenerator.Models
     }
 
     [Table("task_execution_steps")]
-    public partial class TaskExecutionStep : ISoftDelete, IActiveFlag, IOrderable
+    public partial class TaskExecutionStep : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Column("id")]
-        public long Id { get; set; }
-        
+        public int Id { get; set; }
         [Column("execution_id")]
-        public long ExecutionId { get; set; }
+        public int ExecutionId { get; set; }
         
         [Column("step_number")]
         public int StepNumber { get; set; }
@@ -139,11 +137,10 @@ namespace TinyGenerator.Models
     }
 
     [Table("task_types")]
-    public partial class TaskTypeInfo : ISoftDelete, IActiveFlag, IOrderable
+    public partial class TaskTypeInfo : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Column("id")]
-        public long Id { get; set; }
-        
+        public int Id { get; set; }
         [Column("code")]
         public string Code { get; set; } = string.Empty;
         
@@ -186,12 +183,11 @@ namespace TinyGenerator.Models
     }
 
     [Table("step_templates")]
-    public partial class StepTemplate : ISoftDelete, IActiveFlag, IOrderable
+    public partial class StepTemplate : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Column("id")]
-        public long Id { get; set; }
-        
-        [Column("name")]
+        public int Id { get; set; }
+        [Column("description")]
         public string Name { get; set; } = string.Empty;
         
         [Column("task_type")]
@@ -203,8 +199,12 @@ namespace TinyGenerator.Models
         [Column("instructions")]
         public string? Instructions { get; set; }
         
-        [Column("description")]
-        public string? Description { get; set; }
+        [NotMapped]
+        public string? Description
+        {
+            get => Name;
+            set => Name = value ?? string.Empty;
+        }
         
         /// <summary>
         /// Step number that generates the character list (e.g., 2 means step 2 output contains characters).
@@ -291,3 +291,7 @@ namespace TinyGenerator.Models
         }
     }
 }
+
+
+
+

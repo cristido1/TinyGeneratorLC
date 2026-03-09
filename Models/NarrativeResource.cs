@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("narrative_resources")]
-public partial class NarrativeResource : ISoftDelete, IActiveFlag, IOrderable
+public partial class NarrativeResource : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
@@ -14,7 +14,7 @@ public partial class NarrativeResource : ISoftDelete, IActiveFlag, IOrderable
     public int NarrativeProfileId { get; set; }
 
     [MaxLength(200)]
-    [Column("name")]
+    [Column("description")]
     public string Name { get; set; } = string.Empty;
 
     [Column("initial_value")]
@@ -28,3 +28,4 @@ public partial class NarrativeResource : ISoftDelete, IActiveFlag, IOrderable
 
     public NarrativeProfile? NarrativeProfile { get; set; }
 }
+

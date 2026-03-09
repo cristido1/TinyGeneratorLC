@@ -105,7 +105,7 @@
                         <th data-col="id">Id</th>
                         <th data-col="type">Type</th>
                         <th data-col="library">Library</th>
-                        <th data-col="filename">Filename</th>
+                        <th data-col="soundname">SoundName</th>
                         <th data-col="description">Description</th>
                         <th data-col="tags">Tags</th>
                         <th data-col="usageCount">Usage Count</th>
@@ -124,7 +124,7 @@
                         <th data-col="scoreTagMatch">Score Tag Match</th>
                         <th data-col="scoreLastCalc">Score Last Calc</th>
                         <th data-col="scoreVersion">Score Version</th>
-                        <th data-col="filepath">FilePath</th>
+                        <th data-col="soundpath">SoundPath</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -272,7 +272,7 @@
                     { data: 'id', name: 'id' },
                     { data: 'type', name: 'type', render: function(v, __, row){ return typeBadge(v, !!(row.enabled ?? row.Enabled)); } },
                     { data: 'library', name: 'library', defaultContent: '' },
-                    { data: 'fileName', name: 'filename', defaultContent: '' },
+                    { data: 'soundName', name: 'soundname', defaultContent: '' },
                     { data: 'description', name: 'description', defaultContent: '' },
                     { data: 'tags', name: 'tags', defaultContent: '' },
                     { data: 'usageCount', name: 'usageCount', defaultContent: 0 },
@@ -291,7 +291,7 @@
                     { data: 'scoreTagMatch', name: 'scoreTagMatch', render: function(v){ return `<span class="score-pill ${scoreCss(v)}">${fmtNum(v, 2)}</span>`; } },
                     { data: 'scoreLastCalc', name: 'scoreLastCalc', defaultContent: '' },
                     { data: 'scoreVersion', name: 'scoreVersion', defaultContent: '' },
-                    { data: 'filePath', name: 'filepath', defaultContent: '', className: 'sound-path' }
+                    { data: 'soundPath', name: 'soundpath', defaultContent: '', className: 'sound-path' }
                 ],
                 columnDefs: [
                     { orderable: false, targets: [0, 1] }

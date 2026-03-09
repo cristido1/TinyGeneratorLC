@@ -1,18 +1,18 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
 
 namespace TinyGenerator.Models;
 
 [Table("roles")]
-public partial class Role : IKeyAndDescription, ICreateUpdateDate, IDescription, ISoftDelete, IActiveFlag, IOrderable
+public partial class Role : IKeyAndDescription, ITimeStamped, IDescription, ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
     public int Id { get; set; }
 
     [Required]
-    [Column("name")]
+    [Column("description")]
     [MaxLength(100)]
     public string Name { get; set; } = string.Empty;
 
@@ -42,13 +42,13 @@ public partial class Role : IKeyAndDescription, ICreateUpdateDate, IDescription,
         set => Name = value;
     }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseIsoDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseIsoDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -62,3 +62,5 @@ public partial class Role : IKeyAndDescription, ICreateUpdateDate, IDescription,
             : null;
     }
 }
+
+

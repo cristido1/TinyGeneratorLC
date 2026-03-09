@@ -419,15 +419,12 @@ namespace TinyGenerator.Services
                     return false;
                 }
 
-                var runId = _stories.EnqueueAllNextStatusEnqueuer(
+                var enqueued = _stories.EnqueueFinalMixPipeline(
                     storyId,
                     trigger: "auto_complete_audio_pipeline",
-                    priority: Math.Max(1, auto.Priority),
-                    ignoreActiveChain: true,
-                    resetToStatusCodeOnFailure: "evaluated",
-                    deferAutoCompleteOnFailure: true);
+                    priority: Math.Max(1, auto.Priority));
 
-                return !string.IsNullOrWhiteSpace(runId);
+                return enqueued;
             }
             catch (Exception ex)
             {
@@ -640,16 +637,13 @@ namespace TinyGenerator.Services
                             return new IdleTaskResult(false, null, reason ?? "nessuna storia candidata", filter, count);
                         }
                         var title = _database.GetStoryById(storyId)?.Title;
-                        var runId = _stories.EnqueueAllNextStatusEnqueuer(
+                        var enqueued = _stories.EnqueueFinalMixPipeline(
                             storyId,
                             trigger: "auto_complete_audio_pipeline",
-                            priority: Math.Max(1, opts.AutoCompleteAudioPipeline.Priority),
-                            ignoreActiveChain: true,
-                            resetToStatusCodeOnFailure: "evaluated",
-                            deferAutoCompleteOnFailure: true);
-                        return !string.IsNullOrWhiteSpace(runId)
+                            priority: Math.Max(1, opts.AutoCompleteAudioPipeline.Priority));
+                        return enqueued
                             ? new IdleTaskResult(true, storyId, null, filter, count, title)
-                            : new IdleTaskResult(false, storyId, "enqueue catena stati fallito", filter, count, title);
+                            : new IdleTaskResult(false, storyId, "enqueue pipeline mix+video fallito", filter, count, title);
                     }));
             }
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -10,7 +10,7 @@ namespace TinyGenerator.Models;
 /// Personaggi ed eventi specifici NON vanno qui ma negli Episodi.
 /// </summary>
 [Table("series")]
-public sealed partial class Series : ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class Series : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     // ==========================================
     // CAMPI DI FILTRAGGIO / CATALOGO
@@ -153,3 +153,4 @@ public sealed partial class Series : ISoftDelete, IActiveFlag, IOrderable
     public List<SeriesCharacter> Characters { get; set; } = new();
     public List<SeriesEpisode> Episodes { get; set; } = new();
 }
+

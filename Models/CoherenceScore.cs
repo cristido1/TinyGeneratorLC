@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
@@ -6,7 +6,7 @@ namespace TinyGenerator.Models;
 /// Rappresenta lo score di coerenza (locale e globale) per un chunk
 /// </summary>
 [Table("coherence_scores")]
-public partial class CoherenceScore : ISoftDelete, IActiveFlag, IOrderable
+public partial class CoherenceScore : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     public int Id { get; set; }
@@ -29,3 +29,4 @@ public partial class CoherenceScore : ISoftDelete, IActiveFlag, IOrderable
     [Column("ts")]
     public string Ts { get; set; } = DateTime.UtcNow.ToString("o");
 }
+

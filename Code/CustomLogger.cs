@@ -163,7 +163,9 @@ namespace TinyGenerator.Services
                 Exception = exception,
                 State = state,
                 ThreadId = effectiveThreadId,
-                StoryId = LogScope.CurrentStoryId,
+                StoryId = LogScope.CurrentStoryId.HasValue && LogScope.CurrentStoryId.Value > 0 && LogScope.CurrentStoryId.Value <= int.MaxValue
+                    ? (int?)LogScope.CurrentStoryId.Value
+                    : null,
                 ThreadScope = scope,
                 AgentName = effectiveAgentName,
                 ModelName = modelName,

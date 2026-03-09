@@ -4,14 +4,13 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("story_runtime_states")]
-public partial class StoryRuntimeState : ISoftDelete, IActiveFlag, IOrderable
+public partial class StoryRuntimeState : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
-    public long Id { get; set; }
-
+    public int Id { get; set; }
     [Column("story_id")]
-    public long StoryId { get; set; }
+    public int StoryId { get; set; }
 
     [Column("narrative_profile_id")]
     public int NarrativeProfileId { get; set; }
@@ -40,3 +39,7 @@ public partial class StoryRuntimeState : ISoftDelete, IActiveFlag, IOrderable
     public StoryRecord? Story { get; set; }
     public NarrativeProfile? NarrativeProfile { get; set; }
 }
+
+
+
+

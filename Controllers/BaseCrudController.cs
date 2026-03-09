@@ -1,10 +1,13 @@
 using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
+using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using TinyGenerator.Data;
@@ -19,10 +22,12 @@ public class BaseCrudController : ControllerBase
     private const int DefaultPageSize = 50;
     private const int MaxPageSize = 500;
     private readonly TinyGeneratorDbContext _db;
+    private readonly IWebHostEnvironment _environment;
 
-    public BaseCrudController(TinyGeneratorDbContext db)
+    public BaseCrudController(TinyGeneratorDbContext db, IWebHostEnvironment environment)
     {
         _db = db;
+        _environment = environment;
     }
 
     [HttpGet("tables")]
@@ -54,6 +59,14 @@ public class BaseCrudController : ControllerBase
         IQueryable query = CreateEntityQuery(entityType.ClrType);
         query = ApplySoftDeleteFilterIfNeeded(query, entityType.ClrType);
         var foreignKeys = BuildForeignKeyMetadata(entityType);
+        var imageField = ResolveImageField(entityType.ClrType);
+        var imageNameField = ResolveImageNameField(entityType.ClrType);
+        var soundField = ResolveSoundField(entityType.ClrType);
+        var soundNameField = ResolveSoundNameField(entityType.ClrType);
+        var videoField = ResolveVideoField(entityType.ClrType);
+        var videoNameField = ResolveVideoNameField(entityType.ClrType);
+        var usageStatsField = ResolveUsageStatsField(entityType.ClrType);
+        var fields = BuildFieldMetadata(entityType);
 
         foreach (var filter in request.Filters ?? Enumerable.Empty<CrudFilter>())
         {
@@ -74,6 +87,19 @@ public class BaseCrudController : ControllerBase
         }
 
         var sorts = (request.Sorts ?? new List<CrudSort>()).Where(s => !string.IsNullOrWhiteSpace(s.Field)).ToList();
+        var fkSortMap = foreignKeys
+            .Where(fk => !string.IsNullOrWhiteSpace(fk.DescriptionField) && !string.IsNullOrWhiteSpace(fk.DependentField))
+            .GroupBy(fk => fk.DescriptionField, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().DependentField, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var sort in sorts)
+        {
+            if (fkSortMap.TryGetValue(sort.Field, out var dependentField) && !string.IsNullOrWhiteSpace(dependentField))
+            {
+                sort.Field = dependentField;
+                continue;
+            }
+        }
         if (sorts.Count == 0)
         {
             var pk = entityType.FindPrimaryKey();
@@ -108,6 +134,10 @@ public class BaseCrudController : ControllerBase
                 .Select(ToDictionary)
                 .ToList();
             EnrichRowsWithRelatedData(entityType.ClrType, allRows);
+            EnrichRowsWithImagePreviewData(entityType.ClrType, allRows);
+            EnrichRowsWithSoundPreviewData(entityType.ClrType, allRows);
+            EnrichRowsWithVideoPreviewData(entityType.ClrType, allRows);
+            EnrichRowsWithUsageStatsData(entityType.ClrType, allRows);
 
             var keyName = groupProp.Name;
             var groups = allRows
@@ -134,6 +164,14 @@ public class BaseCrudController : ControllerBase
                 table = entityType.GetTableName(),
                 entity = entityType.ClrType.Name,
                 foreignKeys,
+                fields,
+                imageField,
+                imageNameField,
+                soundField,
+                soundNameField,
+                videoField,
+                videoNameField,
+                usageStatsField,
                 grouped = true,
                 groupBy = keyName,
                 page,
@@ -152,6 +190,10 @@ public class BaseCrudController : ControllerBase
             .Select(ToDictionary)
             .ToList();
         EnrichRowsWithRelatedData(entityType.ClrType, paged);
+        EnrichRowsWithImagePreviewData(entityType.ClrType, paged);
+        EnrichRowsWithSoundPreviewData(entityType.ClrType, paged);
+        EnrichRowsWithVideoPreviewData(entityType.ClrType, paged);
+        EnrichRowsWithUsageStatsData(entityType.ClrType, paged);
 
         return Ok(new
         {
@@ -159,6 +201,14 @@ public class BaseCrudController : ControllerBase
             table = entityType.GetTableName(),
             entity = entityType.ClrType.Name,
             foreignKeys,
+            fields,
+            imageField,
+            imageNameField,
+            soundField,
+            soundNameField,
+            videoField,
+            videoNameField,
+            usageStatsField,
             grouped = false,
             page,
             pageSize,
@@ -184,7 +234,23 @@ public class BaseCrudController : ControllerBase
         if (entity == null) return NotFound(new { success = false, error = "Record non trovato" });
         var row = ToDictionary(entity);
         EnrichRowWithRelatedData(entityType.ClrType, row);
-        return Ok(new { success = true, item = row });
+        EnrichRowWithImagePreviewData(entityType.ClrType, row);
+        EnrichRowWithSoundPreviewData(entityType.ClrType, row);
+        EnrichRowWithVideoPreviewData(entityType.ClrType, row);
+        EnrichRowWithUsageStatsData(entityType.ClrType, row);
+        return Ok(new
+        {
+            success = true,
+            fields = BuildFieldMetadata(entityType),
+            imageField = ResolveImageField(entityType.ClrType),
+            imageNameField = ResolveImageNameField(entityType.ClrType),
+            soundField = ResolveSoundField(entityType.ClrType),
+            soundNameField = ResolveSoundNameField(entityType.ClrType),
+            videoField = ResolveVideoField(entityType.ClrType),
+            videoNameField = ResolveVideoNameField(entityType.ClrType),
+            usageStatsField = ResolveUsageStatsField(entityType.ClrType),
+            item = row
+        });
     }
 
     [HttpPost("{table}")]
@@ -211,13 +277,29 @@ public class BaseCrudController : ControllerBase
             return BadRequest(new { success = false, error });
         }
 
-        ApplyCreateUpdateDateFields(entity, isCreate: true);
+        ApplyTimeStampedFields(entity, isCreate: true);
 
         _db.Add(entity);
         await _db.SaveChangesAsync().ConfigureAwait(false);
         var createdRow = ToDictionary(entity);
         EnrichRowWithRelatedData(entityType.ClrType, createdRow);
-        return Ok(new { success = true, item = createdRow });
+        EnrichRowWithImagePreviewData(entityType.ClrType, createdRow);
+        EnrichRowWithSoundPreviewData(entityType.ClrType, createdRow);
+        EnrichRowWithVideoPreviewData(entityType.ClrType, createdRow);
+        EnrichRowWithUsageStatsData(entityType.ClrType, createdRow);
+        return Ok(new
+        {
+            success = true,
+            fields = BuildFieldMetadata(entityType),
+            imageField = ResolveImageField(entityType.ClrType),
+            imageNameField = ResolveImageNameField(entityType.ClrType),
+            soundField = ResolveSoundField(entityType.ClrType),
+            soundNameField = ResolveSoundNameField(entityType.ClrType),
+            videoField = ResolveVideoField(entityType.ClrType),
+            videoNameField = ResolveVideoNameField(entityType.ClrType),
+            usageStatsField = ResolveUsageStatsField(entityType.ClrType),
+            item = createdRow
+        });
     }
 
     [HttpPut("{table}/{id}")]
@@ -244,12 +326,28 @@ public class BaseCrudController : ControllerBase
             return BadRequest(new { success = false, error });
         }
 
-        ApplyCreateUpdateDateFields(entity, isCreate: false);
+        ApplyTimeStampedFields(entity, isCreate: false);
 
         await _db.SaveChangesAsync().ConfigureAwait(false);
         var updatedRow = ToDictionary(entity);
         EnrichRowWithRelatedData(entityType.ClrType, updatedRow);
-        return Ok(new { success = true, item = updatedRow });
+        EnrichRowWithImagePreviewData(entityType.ClrType, updatedRow);
+        EnrichRowWithSoundPreviewData(entityType.ClrType, updatedRow);
+        EnrichRowWithVideoPreviewData(entityType.ClrType, updatedRow);
+        EnrichRowWithUsageStatsData(entityType.ClrType, updatedRow);
+        return Ok(new
+        {
+            success = true,
+            fields = BuildFieldMetadata(entityType),
+            imageField = ResolveImageField(entityType.ClrType),
+            imageNameField = ResolveImageNameField(entityType.ClrType),
+            soundField = ResolveSoundField(entityType.ClrType),
+            soundNameField = ResolveSoundNameField(entityType.ClrType),
+            videoField = ResolveVideoField(entityType.ClrType),
+            videoNameField = ResolveVideoNameField(entityType.ClrType),
+            usageStatsField = ResolveUsageStatsField(entityType.ClrType),
+            item = updatedRow
+        });
     }
 
     [HttpDelete("{table}/{id}")]
@@ -274,7 +372,7 @@ public class BaseCrudController : ControllerBase
             {
                 activeFlag.IsActive = false;
             }
-            ApplyCreateUpdateDateFields(entity, isCreate: false);
+            ApplyTimeStampedFields(entity, isCreate: false);
             _db.Update(entity);
         }
         else
@@ -294,9 +392,9 @@ public class BaseCrudController : ControllerBase
         return (IQueryable)setMethod.Invoke(_db, null)!;
     }
 
-    private static void ApplyCreateUpdateDateFields(object entity, bool isCreate)
+    private static void ApplyTimeStampedFields(object entity, bool isCreate)
     {
-        if (entity is not ICreateUpdateDate)
+        if (entity is not ITimeStamped)
         {
             return;
         }
@@ -369,6 +467,76 @@ public class BaseCrudController : ControllerBase
         }
 
         return lookup;
+    }
+
+    private static string? ResolveImageField(Type clrType)
+    {
+        if (typeof(IImageFile).IsAssignableFrom(clrType))
+        {
+            return nameof(IImageFile.ImagePath);
+        }
+
+        return null;
+    }
+
+    private static string? ResolveImageNameField(Type clrType)
+    {
+        if (typeof(IImageFile).IsAssignableFrom(clrType))
+        {
+            return nameof(IImageFile.ImageName);
+        }
+
+        return null;
+    }
+
+    private static string? ResolveSoundField(Type clrType)
+    {
+        if (typeof(ISoundFile).IsAssignableFrom(clrType))
+        {
+            return nameof(ISoundFile.SoundPath);
+        }
+
+        return null;
+    }
+
+    private static string? ResolveSoundNameField(Type clrType)
+    {
+        if (typeof(ISoundFile).IsAssignableFrom(clrType))
+        {
+            return nameof(ISoundFile.SoundName);
+        }
+
+        return null;
+    }
+
+    private static string? ResolveVideoField(Type clrType)
+    {
+        if (typeof(IVideoFile).IsAssignableFrom(clrType))
+        {
+            return nameof(IVideoFile.VideoPath);
+        }
+
+        return null;
+    }
+
+    private static string? ResolveVideoNameField(Type clrType)
+    {
+        if (typeof(IVideoFile).IsAssignableFrom(clrType))
+        {
+            return nameof(IVideoFile.VideoName);
+        }
+
+        return null;
+    }
+
+    private static string? ResolveUsageStatsField(Type clrType)
+    {
+        if (typeof(IUsageStats).IsAssignableFrom(clrType))
+        {
+            return "SuccessRatePercent";
+        }
+
+        return null;
     }
 
     private static bool TryApplyFilter(IQueryable source, Type type, CrudFilter filter, out IQueryable result, out string error)
@@ -522,6 +690,43 @@ public class BaseCrudController : ControllerBase
     {
         result = source;
         error = string.Empty;
+        if (typeof(IUsageStats).IsAssignableFrom(type) &&
+            string.Equals(sort.Field, "SuccessRatePercent", StringComparison.OrdinalIgnoreCase))
+        {
+            var paramUsage = Expression.Parameter(type, "x");
+            var useCountExpr = Expression.Property(paramUsage, nameof(IUsageStats.UseCount));
+            var useSuccessedExpr = Expression.Property(paramUsage, nameof(IUsageStats.UseSuccessed));
+            var useFailedExpr = Expression.Property(paramUsage, nameof(IUsageStats.UseFailed));
+
+            var useCountDouble = Expression.Convert(useCountExpr, typeof(double));
+            var successDouble = Expression.Convert(useSuccessedExpr, typeof(double));
+            var successPlusFailed = Expression.Add(useSuccessedExpr, useFailedExpr);
+            var successPlusFailedDouble = Expression.Convert(successPlusFailed, typeof(double));
+            var hundred = Expression.Constant(100.0, typeof(double));
+            var zeroInt = Expression.Constant(0, typeof(int));
+            var zeroDouble = Expression.Constant(0.0, typeof(double));
+            var denominatorExpr = Expression.Condition(
+                Expression.GreaterThan(useCountExpr, zeroInt),
+                useCountDouble,
+                successPlusFailedDouble);
+            var usageExpr = Expression.Condition(
+                Expression.GreaterThan(denominatorExpr, zeroDouble),
+                Expression.Multiply(Expression.Divide(successDouble, denominatorExpr), hundred),
+                zeroDouble);
+
+            var usageLambda = Expression.Lambda(usageExpr, paramUsage);
+            var usageDesc = string.Equals(sort.Dir, "desc", StringComparison.OrdinalIgnoreCase);
+            var usageMethodName = thenBy
+                ? (usageDesc ? "ThenByDescending" : "ThenBy")
+                : (usageDesc ? "OrderByDescending" : "OrderBy");
+            var usageMethod = typeof(Queryable).GetMethods()
+                .Where(m => m.Name == usageMethodName)
+                .First(m => m.GetParameters().Length == 2)
+                .MakeGenericMethod(type, typeof(double));
+            result = (IQueryable)usageMethod.Invoke(null, new object[] { source, usageLambda })!;
+            return true;
+        }
+
         var prop = FindProperty(type, sort.Field);
         if (prop == null)
         {
@@ -753,36 +958,146 @@ public class BaseCrudController : ControllerBase
             EnrichRowsWithForeignKeyDescriptions(entityType, rows);
         }
 
-        // Backward compatibility for existing Agent views that expect these fields.
-        if (clrType != typeof(Agent)) return;
+        // FK description fields are the canonical display values for related entities.
+        // For Agent->Model this is "ModelDescription", aligned with generic FK combos.
+    }
 
-        var modelIds = rows
-            .Select(TryGetIntModelId)
-            .Where(id => id > 0)
-            .Distinct()
-            .ToList();
+    private void EnrichRowsWithImagePreviewData(Type clrType, List<Dictionary<string, object?>> rows)
+    {
+        if (rows.Count == 0) return;
+        if (!typeof(IImageFile).IsAssignableFrom(clrType)) return;
 
-        if (modelIds.Count == 0) return;
-
-        var map = _db.Models
-            .AsNoTracking()
-            .Where(m => m.Id.HasValue && modelIds.Contains(m.Id.Value))
-            .Select(m => new { Id = m.Id!.Value, m.Name, m.Provider })
-            .ToDictionary(x => x.Id, x => new
-            {
-                Name = x.Name ?? string.Empty,
-                Display = string.IsNullOrWhiteSpace(x.Provider) ? (x.Name ?? string.Empty) : $"{x.Name} ({x.Provider})"
-            });
+        var imagePathField = ResolveImageField(clrType);
+        var imageNameField = ResolveImageNameField(clrType);
+        if (string.IsNullOrWhiteSpace(imagePathField)) return;
 
         foreach (var row in rows)
         {
-            var modelId = TryGetIntModelId(row);
-            if (modelId <= 0) continue;
-            if (!map.TryGetValue(modelId, out var data)) continue;
+            var rawPath = row.TryGetValue(imagePathField!, out var pathValue)
+                ? Convert.ToString(pathValue, CultureInfo.InvariantCulture)
+                : null;
+            if (string.IsNullOrWhiteSpace(rawPath)) continue;
 
-            row["ModelName"] = data.Name;
-            row["ModelDisplay"] = data.Display;
+            var rawName = !string.IsNullOrWhiteSpace(imageNameField) && row.TryGetValue(imageNameField!, out var nameValue)
+                ? Convert.ToString(nameValue, CultureInfo.InvariantCulture)
+                : null;
+
+            var normalizedPath = NormalizeImagePath(rawPath!);
+            if (string.IsNullOrWhiteSpace(normalizedPath) || !System.IO.File.Exists(normalizedPath))
+            {
+                continue;
+            }
+
+            if (TryEnsureImageCacheAssets(normalizedPath, rawName, out var thumbUrl, out var fullUrl))
+            {
+                row["ImageThumbnailUrl"] = thumbUrl;
+                row["ImagePreviewUrl"] = fullUrl;
+            }
         }
+    }
+
+    private void EnrichRowWithImagePreviewData(Type clrType, Dictionary<string, object?> row)
+    {
+        EnrichRowsWithImagePreviewData(clrType, new List<Dictionary<string, object?>> { row });
+    }
+
+    private void EnrichRowsWithSoundPreviewData(Type clrType, List<Dictionary<string, object?>> rows)
+    {
+        if (rows.Count == 0) return;
+        if (!typeof(ISoundFile).IsAssignableFrom(clrType)) return;
+
+        var soundPathField = ResolveSoundField(clrType);
+        var soundNameField = ResolveSoundNameField(clrType);
+        if (string.IsNullOrWhiteSpace(soundPathField)) return;
+
+        foreach (var row in rows)
+        {
+            var rawPath = row.TryGetValue(soundPathField!, out var pathValue)
+                ? Convert.ToString(pathValue, CultureInfo.InvariantCulture)
+                : null;
+            if (string.IsNullOrWhiteSpace(rawPath)) continue;
+
+            var rawName = !string.IsNullOrWhiteSpace(soundNameField) && row.TryGetValue(soundNameField!, out var nameValue)
+                ? Convert.ToString(nameValue, CultureInfo.InvariantCulture)
+                : null;
+
+            var normalizedPath = NormalizeSoundPath(rawPath!);
+            if (string.IsNullOrWhiteSpace(normalizedPath) || !System.IO.File.Exists(normalizedPath))
+            {
+                continue;
+            }
+
+            if (TryEnsureSoundCacheAsset(normalizedPath, rawName, out var previewUrl))
+            {
+                row["SoundPreviewUrl"] = previewUrl;
+            }
+        }
+    }
+
+    private void EnrichRowWithSoundPreviewData(Type clrType, Dictionary<string, object?> row)
+    {
+        EnrichRowsWithSoundPreviewData(clrType, new List<Dictionary<string, object?>> { row });
+    }
+
+    private void EnrichRowsWithVideoPreviewData(Type clrType, List<Dictionary<string, object?>> rows)
+    {
+        if (rows.Count == 0) return;
+        if (!typeof(IVideoFile).IsAssignableFrom(clrType)) return;
+
+        var videoPathField = ResolveVideoField(clrType);
+        var videoNameField = ResolveVideoNameField(clrType);
+        if (string.IsNullOrWhiteSpace(videoPathField)) return;
+
+        foreach (var row in rows)
+        {
+            var rawPath = row.TryGetValue(videoPathField!, out var pathValue)
+                ? Convert.ToString(pathValue, CultureInfo.InvariantCulture)
+                : null;
+            if (string.IsNullOrWhiteSpace(rawPath)) continue;
+
+            var rawName = !string.IsNullOrWhiteSpace(videoNameField) && row.TryGetValue(videoNameField!, out var nameValue)
+                ? Convert.ToString(nameValue, CultureInfo.InvariantCulture)
+                : null;
+
+            var normalizedPath = NormalizeVideoPath(rawPath!);
+            if (string.IsNullOrWhiteSpace(normalizedPath) || !System.IO.File.Exists(normalizedPath))
+            {
+                continue;
+            }
+
+            if (TryEnsureVideoCacheAsset(normalizedPath, rawName, out var previewUrl))
+            {
+                row["VideoPreviewUrl"] = previewUrl;
+            }
+        }
+    }
+
+    private void EnrichRowWithVideoPreviewData(Type clrType, Dictionary<string, object?> row)
+    {
+        EnrichRowsWithVideoPreviewData(clrType, new List<Dictionary<string, object?>> { row });
+    }
+
+    private static void EnrichRowsWithUsageStatsData(Type clrType, List<Dictionary<string, object?>> rows)
+    {
+        if (rows.Count == 0) return;
+        if (!typeof(IUsageStats).IsAssignableFrom(clrType)) return;
+
+        foreach (var row in rows)
+        {
+            var useCount = TryGetIntValue(row, nameof(IUsageStats.UseCount));
+            var success = TryGetIntValue(row, nameof(IUsageStats.UseSuccessed));
+            var failed = TryGetIntValue(row, nameof(IUsageStats.UseFailed));
+            var denominator = useCount > 0 ? useCount : (success + failed);
+            var percent = denominator > 0
+                ? Math.Round((double)success * 100.0 / denominator, 2, MidpointRounding.AwayFromZero)
+                : 0.0;
+            row["SuccessRatePercent"] = percent;
+        }
+    }
+
+    private static void EnrichRowWithUsageStatsData(Type clrType, Dictionary<string, object?> row)
+    {
+        EnrichRowsWithUsageStatsData(clrType, new List<Dictionary<string, object?>> { row });
     }
 
     private void EnrichRowsWithForeignKeyDescriptions(IEntityType entityType, List<Dictionary<string, object?>> rows)
@@ -947,23 +1262,264 @@ public class BaseCrudController : ControllerBase
         return list;
     }
 
+    private static List<CrudFieldMeta> BuildFieldMetadata(IEntityType entityType)
+    {
+        var pk = entityType.FindPrimaryKey();
+        var pkNames = new HashSet<string>(
+            (pk?.Properties ?? Array.Empty<IProperty>()).Select(p => p.Name),
+            StringComparer.OrdinalIgnoreCase);
+
+        var fkByDependent = entityType.GetForeignKeys()
+            .Where(fk => fk.Properties.Count == 1 && fk.PrincipalKey.Properties.Count == 1)
+            .GroupBy(fk => fk.Properties[0].Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<CrudFieldMeta>();
+        foreach (var prop in entityType.GetProperties())
+        {
+            var clrType = Nullable.GetUnderlyingType(prop.ClrType) ?? prop.ClrType;
+            var clrTypeName = clrType.Name;
+
+            fkByDependent.TryGetValue(prop.Name, out var fk);
+            var principalTable = fk?.PrincipalEntityType.GetTableName() ?? fk?.PrincipalEntityType.ClrType.Name;
+            var principalKey = fk?.PrincipalKey.Properties.FirstOrDefault()?.Name;
+
+            result.Add(new CrudFieldMeta
+            {
+                Name = prop.Name,
+                ClrType = clrTypeName,
+                Nullable = prop.IsNullable,
+                IsPrimaryKey = pkNames.Contains(prop.Name),
+                IsForeignKey = fk != null,
+                PrincipalTable = principalTable,
+                PrincipalKeyField = principalKey
+            });
+        }
+
+        return result
+            .OrderByDescending(f => f.IsPrimaryKey)
+            .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private void EnrichRowWithRelatedData(Type clrType, Dictionary<string, object?> row)
     {
         EnrichRowsWithRelatedData(clrType, new List<Dictionary<string, object?>> { row });
     }
 
-    private static int TryGetIntModelId(Dictionary<string, object?> row)
+    private static int TryGetIntValue(Dictionary<string, object?> row, string fieldName)
     {
-        if (!row.TryGetValue("ModelId", out var raw) || raw == null) return 0;
+        if (!row.TryGetValue(fieldName, out var raw) || raw == null) return 0;
         return raw switch
         {
             int i => i,
-            long l => (int)l,
+            long l when l <= int.MaxValue && l >= int.MinValue => (int)l,
             short s => s,
             byte b => b,
             string str when int.TryParse(str, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
             _ => 0
         };
+    }
+
+    private static string? NormalizeImagePath(string rawPath)
+    {
+        var trimmed = (rawPath ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(trimmed)) return null;
+
+        try
+        {
+            if (!Path.IsPathRooted(trimmed))
+            {
+                trimmed = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), trimmed));
+            }
+            else
+            {
+                trimmed = Path.GetFullPath(trimmed);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        var extension = Path.GetExtension(trimmed)?.ToLowerInvariant();
+        if (extension is not (".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp" or ".gif"))
+        {
+            return null;
+        }
+
+        return trimmed;
+    }
+
+    private static string? NormalizeSoundPath(string rawPath)
+    {
+        var trimmed = (rawPath ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(trimmed)) return null;
+
+        try
+        {
+            if (!Path.IsPathRooted(trimmed))
+            {
+                trimmed = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), trimmed));
+            }
+            else
+            {
+                trimmed = Path.GetFullPath(trimmed);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        var extension = Path.GetExtension(trimmed)?.ToLowerInvariant();
+        if (extension is not (".mp3" or ".wav" or ".ogg" or ".m4a" or ".aac" or ".flac" or ".webm"))
+        {
+            return null;
+        }
+
+        return trimmed;
+    }
+
+    private static string? NormalizeVideoPath(string rawPath)
+    {
+        var trimmed = (rawPath ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(trimmed)) return null;
+
+        try
+        {
+            if (!Path.IsPathRooted(trimmed))
+            {
+                trimmed = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), trimmed));
+            }
+            else
+            {
+                trimmed = Path.GetFullPath(trimmed);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        var extension = Path.GetExtension(trimmed)?.ToLowerInvariant();
+        if (extension is not (".mp4" or ".webm" or ".mov" or ".mkv" or ".avi" or ".m4v"))
+        {
+            return null;
+        }
+
+        return trimmed;
+    }
+
+    private bool TryEnsureImageCacheAssets(string sourcePath, string? imageName, out string thumbUrl, out string fullUrl)
+    {
+        thumbUrl = string.Empty;
+        fullUrl = string.Empty;
+
+        try
+        {
+            var sourceInfo = new FileInfo(sourcePath);
+            var cacheRoot = _environment.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var thumbsDir = Path.Combine(cacheRoot, "images_cache", "thumbs");
+            var fullDir = Path.Combine(cacheRoot, "images_cache", "full");
+            Directory.CreateDirectory(thumbsDir);
+            Directory.CreateDirectory(fullDir);
+
+            var hashInput = $"{sourceInfo.FullName}|{sourceInfo.LastWriteTimeUtc.Ticks}|{sourceInfo.Length}|{imageName}";
+            var hash = ComputeSha256(hashInput);
+            var sourceExt = sourceInfo.Extension.ToLowerInvariant();
+            var fullFileName = $"{hash}{sourceExt}";
+            var thumbFileName = $"{hash}_thumb{sourceExt}";
+            var fullPath = Path.Combine(fullDir, fullFileName);
+            var thumbPath = Path.Combine(thumbsDir, thumbFileName);
+
+            if (!System.IO.File.Exists(fullPath))
+            {
+                System.IO.File.Copy(sourceInfo.FullName, fullPath, overwrite: true);
+            }
+
+            if (!System.IO.File.Exists(thumbPath))
+            {
+                // Thumbnail cache file: reuse original bytes, UI enforces 50x50 rendering.
+                System.IO.File.Copy(sourceInfo.FullName, thumbPath, overwrite: true);
+            }
+
+            thumbUrl = $"/images_cache/thumbs/{thumbFileName}";
+            fullUrl = $"/images_cache/full/{fullFileName}";
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryEnsureSoundCacheAsset(string sourcePath, string? soundName, out string previewUrl)
+    {
+        previewUrl = string.Empty;
+
+        try
+        {
+            var sourceInfo = new FileInfo(sourcePath);
+            var cacheRoot = _environment.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var audioDir = Path.Combine(cacheRoot, "sounds_cache");
+            Directory.CreateDirectory(audioDir);
+
+            var hashInput = $"{sourceInfo.FullName}|{sourceInfo.LastWriteTimeUtc.Ticks}|{sourceInfo.Length}|{soundName}";
+            var hash = ComputeSha256(hashInput);
+            var sourceExt = sourceInfo.Extension.ToLowerInvariant();
+            var fileName = $"{hash}{sourceExt}";
+            var cachedPath = Path.Combine(audioDir, fileName);
+
+            if (!System.IO.File.Exists(cachedPath))
+            {
+                System.IO.File.Copy(sourceInfo.FullName, cachedPath, overwrite: true);
+            }
+
+            previewUrl = $"/sounds_cache/{fileName}";
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryEnsureVideoCacheAsset(string sourcePath, string? videoName, out string previewUrl)
+    {
+        previewUrl = string.Empty;
+
+        try
+        {
+            var sourceInfo = new FileInfo(sourcePath);
+            var cacheRoot = _environment.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            var videoDir = Path.Combine(cacheRoot, "videos_cache");
+            Directory.CreateDirectory(videoDir);
+
+            var hashInput = $"{sourceInfo.FullName}|{sourceInfo.LastWriteTimeUtc.Ticks}|{sourceInfo.Length}|{videoName}";
+            var hash = ComputeSha256(hashInput);
+            var sourceExt = sourceInfo.Extension.ToLowerInvariant();
+            var fileName = $"{hash}{sourceExt}";
+            var cachedPath = Path.Combine(videoDir, fileName);
+
+            if (!System.IO.File.Exists(cachedPath))
+            {
+                System.IO.File.Copy(sourceInfo.FullName, cachedPath, overwrite: true);
+            }
+
+            previewUrl = $"/videos_cache/{fileName}";
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string ComputeSha256(string input)
+    {
+        var bytes = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(input));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }
 
@@ -999,4 +1555,15 @@ public sealed class CrudForeignKeyMeta
     public string PrincipalEntity { get; set; } = string.Empty;
     public string PrincipalTable { get; set; } = string.Empty;
     public string PrincipalKeyField { get; set; } = string.Empty;
+}
+
+public sealed class CrudFieldMeta
+{
+    public string Name { get; set; } = string.Empty;
+    public string ClrType { get; set; } = string.Empty;
+    public bool Nullable { get; set; }
+    public bool IsPrimaryKey { get; set; }
+    public bool IsForeignKey { get; set; }
+    public string? PrincipalTable { get; set; }
+    public string? PrincipalKeyField { get; set; }
 }

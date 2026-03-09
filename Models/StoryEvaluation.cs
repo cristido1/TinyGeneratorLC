@@ -5,13 +5,12 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("stories_evaluations")]
-    public partial class StoryEvaluation : ISoftDelete, IActiveFlag, IOrderable
+    public partial class StoryEvaluation : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Column("id")]
-        public long Id { get; set; }
-        
+        public int Id { get; set; }
         [Column("story_id")]
-        public long StoryId { get; set; }
+        public int StoryId { get; set; }
 
         [Column("narrative_coherence_score")]
         public int NarrativeCoherenceScore { get; set; }
@@ -59,7 +58,7 @@ namespace TinyGenerator.Models
         public string RawJson { get; set; } = string.Empty;
 
         [Column("model_id")]
-        public long? ModelId { get; set; }
+        public int? ModelId { get; set; }
         
         [Column("agent_id")]
         public int? AgentId { get; set; }
@@ -78,3 +77,7 @@ namespace TinyGenerator.Models
         public byte[]? RowVersion { get; set; }
     }
 }
+
+
+
+

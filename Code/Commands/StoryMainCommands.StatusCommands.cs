@@ -506,4 +506,21 @@ public sealed partial class StoryMainCommands
         private void ReportProgress(int current, int max, string description)
             => Progress?.Invoke(this, new CommandProgressEventArgs(current, max, description));
     }
+
+    private sealed class GenerateStoryVideoCommand : StoriesService.IStoryCommand
+    {
+        private readonly StoriesService _service;
+
+        public GenerateStoryVideoCommand(StoriesService service) => _service = service;
+
+        public bool RequireStoryText => false;
+        public bool EnsureFolder => true;
+        public bool HandlesStatusTransition => true;
+
+        public Task<(bool success, string? message)> ExecuteAsync(StoriesService.StoryCommandContext context)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            return _service.StartGenerateStoryVideoAsync(context);
+        }
+    }
 }

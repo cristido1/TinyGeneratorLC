@@ -134,7 +134,8 @@ public sealed class ModelPromotionService
         }
 
         var results = new List<PromotionResult>();
-        var now = DateTime.UtcNow.ToString("o");
+        var nowDate = DateTime.UtcNow;
+        var now = nowDate.ToString("o");
         var anyChange = false;
         var touchedModels = new Dictionary<int, ModelInfo>();
 
@@ -202,7 +203,7 @@ public sealed class ModelPromotionService
                     if (row.IsPrimary != shouldBePrimary)
                     {
                         row.IsPrimary = shouldBePrimary;
-                        row.UpdatedAt = now;
+                        row.UpdatedAt = nowDate;
                         anyChange = true;
                     }
                 }
@@ -287,7 +288,7 @@ public sealed class ModelPromotionService
                                 join m in _context.Models.AsNoTracking() on mr.ModelId equals m.Id
                                 where mr.RoleId == roleId
                                       && mr.AgentId == agentId
-                                      && mr.Enabled
+                                      && mr.IsActive
                                       && m.Enabled
                                 select new
                                 {

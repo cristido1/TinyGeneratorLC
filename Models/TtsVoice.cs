@@ -1,11 +1,11 @@
-using System;
+﻿using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
     [Table("tts_voices")]
-    public partial class TtsVoice : ISoftDelete, IActiveFlag, IOrderable
+    public partial class TtsVoice : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Column("id")]
         public int Id { get; set; }
@@ -13,7 +13,7 @@ namespace TinyGenerator.Models
         [Column("voice_id")]
         public string VoiceId { get; set; } = string.Empty; // TTS service id
         
-        [Column("name")]
+        [Column("description")]
         public string Name { get; set; } = string.Empty;
         
         [Column("model")]
@@ -66,3 +66,4 @@ namespace TinyGenerator.Models
         public byte[]? RowVersion { get; set; }
     }
 }
+

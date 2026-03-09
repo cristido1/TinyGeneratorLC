@@ -281,7 +281,15 @@ namespace TinyGenerator.Services
                     throw new InvalidOperationException($"Model '{model}' not found in database");
                 }
 
-                HandleProviderSwitch(modelInfo, model);
+                var resolvedModelId = !string.IsNullOrWhiteSpace(modelInfo.CallName)
+                    ? modelInfo.CallName.Trim()
+                    : (modelInfo.Name?.Trim() ?? string.Empty);
+                if (string.IsNullOrWhiteSpace(resolvedModelId))
+                {
+                    throw new InvalidOperationException($"Model '{model}' has no valid call_name/name");
+                }
+
+                HandleProviderSwitch(modelInfo, resolvedModelId);
 
                 // Determine endpoint based on model provider
                 string endpoint;
@@ -347,7 +355,7 @@ namespace TinyGenerator.Services
                 }
 
                 _logger?.Log("Info", "LangChainKernelFactory",
-                    $"Creating ChatBridge for model '{model}' with provider '{modelInfo.Provider}' and endpoint '{endpoint}'");
+                    $"Creating ChatBridge for model '{resolvedModelId}' with provider '{modelInfo.Provider}' and endpoint '{endpoint}'");
 
                 var logAsLlama = modelInfo.Provider?.Equals("llama.cpp", StringComparison.OrdinalIgnoreCase) == true;
                 // Read NoTemperatureModels from config
@@ -359,7 +367,7 @@ namespace TinyGenerator.Services
                 var noTopKModels = _config.GetSection("OpenAI:NoTopKModels").Get<string[]>() ?? Array.Empty<string>();
                 var noRepeatLastNModels = _config.GetSection("OpenAI:NoRepeatLastNModels").Get<string[]>() ?? Array.Empty<string>();
                 var noNumPredictModels = _config.GetSection("OpenAI:NoNumPredictModels").Get<string[]>() ?? Array.Empty<string>();
-                var bridge = new LangChainChatBridge(endpoint, model, apiKey, null, _logger, forceOllama, beforeCall, afterCall, logAsLlama, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels, _services);
+                var bridge = new LangChainChatBridge(endpoint, resolvedModelId, apiKey, null, _logger, forceOllama, beforeCall, afterCall, logAsLlama, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels, _services);
                 if (temperature.HasValue) bridge.Temperature = temperature.Value;
                 if (topP.HasValue) bridge.TopP = topP.Value;
                 if (repeatPenalty.HasValue) bridge.RepeatPenalty = repeatPenalty.Value;

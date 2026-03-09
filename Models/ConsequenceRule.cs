@@ -1,11 +1,11 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("consequence_rules")]
-public partial class ConsequenceRule : ISoftDelete, IActiveFlag, IOrderable
+public partial class ConsequenceRule : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
@@ -22,3 +22,4 @@ public partial class ConsequenceRule : ISoftDelete, IActiveFlag, IOrderable
 
     public List<ConsequenceImpact> Impacts { get; set; } = new();
 }
+

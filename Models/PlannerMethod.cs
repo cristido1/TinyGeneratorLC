@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
@@ -8,7 +8,7 @@ namespace TinyGenerator.Models;
 /// Examples: Save the Cat, Story Grid, Hero's Journey, etc.
 /// </summary>
 [Table("planner_methods")]
-public partial class PlannerMethod : ISoftDelete, IActiveFlag, IOrderable
+public partial class PlannerMethod : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     /// <summary>
     /// Primary key
@@ -50,3 +50,4 @@ public partial class PlannerMethod : ISoftDelete, IActiveFlag, IOrderable
     [Timestamp]
     public byte[]? RowVersion { get; set; }
 }
+

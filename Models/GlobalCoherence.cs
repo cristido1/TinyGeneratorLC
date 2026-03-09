@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
@@ -6,7 +6,7 @@ namespace TinyGenerator.Models;
 /// Rappresenta la coerenza globale finale di una storia
 /// </summary>
 [Table("global_coherence")]
-public partial class GlobalCoherence : ISoftDelete, IActiveFlag, IOrderable
+public partial class GlobalCoherence : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     public int Id { get; set; }
@@ -26,3 +26,4 @@ public partial class GlobalCoherence : ISoftDelete, IActiveFlag, IOrderable
     [Column("ts")]
     public string Ts { get; set; } = DateTime.UtcNow.ToString("o");
 }
+

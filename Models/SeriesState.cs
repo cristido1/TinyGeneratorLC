@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("series_state")]
-public sealed partial class SeriesState : ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class SeriesState : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     [Key]
@@ -41,3 +41,4 @@ public sealed partial class SeriesState : ISoftDelete, IActiveFlag, IOrderable
     [Column("source_episode_id")]
     public int? SourceEpisodeId { get; set; }
 }
+

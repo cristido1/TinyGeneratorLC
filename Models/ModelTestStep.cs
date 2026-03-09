@@ -1,9 +1,9 @@
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("model_test_steps")]
-public partial class ModelTestStep : ISoftDelete, IActiveFlag, IOrderable
+public partial class ModelTestStep : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     public int Id { get; set; }
@@ -24,3 +24,4 @@ public partial class ModelTestStep : ISoftDelete, IActiveFlag, IOrderable
     [Column("duration_ms")]
     public long? DurationMs { get; set; }
 }
+

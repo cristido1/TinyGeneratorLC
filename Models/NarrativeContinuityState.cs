@@ -4,14 +4,13 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("narrative_continuity_state")]
-public partial class NarrativeContinuityState : ISoftDelete, IActiveFlag, IOrderable
+public partial class NarrativeContinuityState : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
-    public long Id { get; set; }
-
+    public int Id { get; set; }
     [Column("story_id")]
-    public long StoryId { get; set; }
+    public int StoryId { get; set; }
 
     [Column("series_id")]
     public int? SeriesId { get; set; }
@@ -37,3 +36,7 @@ public partial class NarrativeContinuityState : ISoftDelete, IActiveFlag, IOrder
     [Column("updated_at")]
     public string UpdatedAt { get; set; } = string.Empty;
 }
+
+
+
+

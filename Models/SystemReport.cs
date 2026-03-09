@@ -5,12 +5,11 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("system_reports")]
-    public partial class SystemReport : ISoftDelete, IActiveFlag, IOrderable
+    public partial class SystemReport : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Key]
         [Column("id")]
-        public long Id { get; set; }
-
+        public int Id { get; set; }
         [Column("created_at")]
         public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
 
@@ -48,7 +47,7 @@ namespace TinyGenerator.Models
         public string? ModelName { get; set; }
 
         [Column("story_id")]
-        public long? StoryId { get; set; }
+        public int? StoryId { get; set; }
 
         [Column("series_id")]
         public int? SeriesId { get; set; }
@@ -69,3 +68,7 @@ namespace TinyGenerator.Models
         public string? RawLogRef { get; set; }
     }
 }
+
+
+
+

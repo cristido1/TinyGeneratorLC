@@ -5,9 +5,19 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("models")]
-public partial class ModelInfo : ISoftDelete, IActiveFlag, IOrderable
+public partial class ModelInfo : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
+    [Key]
+    [Column("id")]
     public int? Id { get; set; }
+
+    [NotMapped]
+    int IEntity.Id
+    {
+        get => Id ?? 0;
+        set => Id = value;
+    }
+    [Column("description")]
     public string Name { get; set; } = string.Empty;
     [Column("call_name")]
     public string? CallName { get; set; }
@@ -25,7 +35,12 @@ public partial class ModelInfo : ISoftDelete, IActiveFlag, IOrderable
     public long LimitTokensWeek { get; set; }
     public long LimitTokensMonth { get; set; }
     public string Metadata { get; set; } = string.Empty;
-    public bool Enabled { get; set; } = true;
+    [NotMapped]
+    public bool Enabled
+    {
+        get => IsActive;
+        set => IsActive = value;
+    }
     [Column("thinking")]
     public bool? Thinking { get; set; }
     public string? CreatedAt { get; set; }
@@ -98,3 +113,7 @@ public partial class ModelInfo : ISoftDelete, IActiveFlag, IOrderable
     [Timestamp]
     public byte[]? RowVersion { get; set; }
 }
+
+
+
+

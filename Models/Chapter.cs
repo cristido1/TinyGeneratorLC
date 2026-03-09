@@ -1,9 +1,9 @@
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("chapters")]
-public partial class Chapter : ISoftDelete, IActiveFlag, IOrderable
+public partial class Chapter : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     public int Id { get; set; }
     [Column("memory_key")]
@@ -15,3 +15,4 @@ public partial class Chapter : ISoftDelete, IActiveFlag, IOrderable
     [Column("ts")]
     public string Ts { get; set; } = DateTime.UtcNow.ToString("o");
 }
+

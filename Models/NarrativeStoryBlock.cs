@@ -4,14 +4,13 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("narrative_story_blocks")]
-public partial class NarrativeStoryBlock : ISoftDelete, IActiveFlag, IOrderable
+public partial class NarrativeStoryBlock : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
-    public long Id { get; set; }
-
+    public int Id { get; set; }
     [Column("story_id")]
-    public long StoryId { get; set; }
+    public int StoryId { get; set; }
 
     [Column("series_id")]
     public int? SeriesId { get; set; }
@@ -32,7 +31,7 @@ public partial class NarrativeStoryBlock : ISoftDelete, IActiveFlag, IOrderable
     public string TextContent { get; set; } = string.Empty;
 
     [Column("continuity_state_id")]
-    public long? ContinuityStateId { get; set; }
+    public int? ContinuityStateId { get; set; }
 
     [Column("quality_score")]
     public double? QualityScore { get; set; }
@@ -43,3 +42,7 @@ public partial class NarrativeStoryBlock : ISoftDelete, IActiveFlag, IOrderable
     [Column("created_at")]
     public string CreatedAt { get; set; } = string.Empty;
 }
+
+
+
+

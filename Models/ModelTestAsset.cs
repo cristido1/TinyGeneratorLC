@@ -1,9 +1,9 @@
-using System.ComponentModel.DataAnnotations.Schema;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("model_test_assets")]
-public partial class ModelTestAsset : ISoftDelete, IActiveFlag, IOrderable
+public partial class ModelTestAsset : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     public int Id { get; set; }
@@ -20,5 +20,6 @@ public partial class ModelTestAsset : ISoftDelete, IActiveFlag, IOrderable
     [Column("size_bytes")]
     public long? SizeBytes { get; set; }
     [Column("story_id")]
-    public long? StoryId { get; set; }
+    public int? StoryId { get; set; }
 }
+

@@ -203,7 +203,7 @@ public sealed class DefaultRetryPolicy : IRetryPolicy
             NumPredict = source.NumPredict,
             Thinking = thinking ?? source.Thinking,
             MultiStepTemplateId = source.MultiStepTemplateId,
-            Priority = source.Priority,
+            SortOrder = source.SortOrder,
             AllowedProfiles = source.AllowedProfiles
         };
     }

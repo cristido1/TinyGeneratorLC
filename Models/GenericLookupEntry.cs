@@ -4,10 +4,11 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("GenericLookup")]
-public sealed partial class GenericLookupEntry : ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class GenericLookupEntry : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
-    public long Id { get; set; }
-
+    [Key]
+    [Column("id")]
+    public int Id { get; set; }
     [Required]
     [StringLength(50)]
     public string Type { get; set; } = string.Empty;
@@ -23,9 +24,14 @@ public sealed partial class GenericLookupEntry : ISoftDelete, IActiveFlag, IOrde
     [StringLength(500)]
     public string? Description { get; set; }
 
+    [Column("sort_order")]
     public int SortOrder { get; set; }
     public bool IsActive { get; set; } = true;
     public int Weight { get; set; } = 1;
     public string CreatedAt { get; set; } = string.Empty;
     public string UpdatedAt { get; set; } = string.Empty;
 }
+
+
+
+

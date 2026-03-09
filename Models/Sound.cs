@@ -1,8 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
-public sealed class Sound
+[Table("sounds")]
+public sealed class Sound : ISoundFile, IActiveFlag, IOrderable, IEntity
 {
     public int Id { get; set; }
 
@@ -15,11 +17,27 @@ public sealed class Sound
 
     [Required]
     [MaxLength(2048)]
-    public string FilePath { get; set; } = string.Empty;
+    [Column("sound_path")]
+    public string SoundPath { get; set; } = string.Empty;
 
     [Required]
     [MaxLength(512)]
-    public string FileName { get; set; } = string.Empty;
+    [Column("sound_name")]
+    public string SoundName { get; set; } = string.Empty;
+
+    [NotMapped]
+    public string FilePath
+    {
+        get => SoundPath;
+        set => SoundPath = value;
+    }
+
+    [NotMapped]
+    public string FileName
+    {
+        get => SoundName;
+        set => SoundName = value;
+    }
 
     public string? Description { get; set; }
     public string? License { get; set; }
@@ -27,9 +45,18 @@ public sealed class Sound
     public string? Tags { get; set; }
 
     public string? Embedding { get; set; }
+    [Column("created_at")]
     public string? InsertDate { get; set; }
     public double? DurationSeconds { get; set; }
-    public bool Enabled { get; set; } = true;
+    [Column("is_active")]
+    public bool IsActive { get; set; } = true;
+
+    [NotMapped]
+    public bool Enabled
+    {
+        get => IsActive;
+        set => IsActive = value;
+    }
 
     public int UsageCount { get; set; }
 
@@ -47,4 +74,8 @@ public sealed class Sound
     public double? ScoreFinal { get; set; }
     public string? ScoreLastCalc { get; set; }
     public string? ScoreVersion { get; set; }
+
+    [Column("sort_order")]
+    public int SortOrder { get; set; }
 }
+

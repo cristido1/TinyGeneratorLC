@@ -4,10 +4,14 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
-public partial class Agent : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
+public partial class Agent : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable, INote
 {
-    [Column("description")]
-    public string? Description { get; set; }
+    [NotMapped]
+    public string? Description
+    {
+        get => Name;
+        set => Name = value ?? string.Empty;
+    }
 
     [Column("is_deleted")]
     public bool IsDeleted { get; set; }
@@ -21,13 +25,13 @@ public partial class Agent : IActiveFlag, ICreateUpdateDate, IDescription, ISoft
         set => Notes = value;
     }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseInterfaceDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -43,7 +47,7 @@ public partial class Agent : IActiveFlag, ICreateUpdateDate, IDescription, ISoft
 
 }
 
-public partial class AppEventDefinition : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class AppEventDefinition : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -54,13 +58,13 @@ public partial class AppEventDefinition : IActiveFlag, ICreateUpdateDate, IDescr
     [Column("sort_order")]
     public int SortOrder { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseInterfaceDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -76,7 +80,7 @@ public partial class AppEventDefinition : IActiveFlag, ICreateUpdateDate, IDescr
 
 }
 
-public partial class Chapter : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class Chapter : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -98,7 +102,7 @@ public partial class Chapter : IActiveFlag, ICreateUpdateDate, IDescription, ISo
 
 }
 
-public partial class ChunkFacts : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ChunkFacts : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -120,7 +124,7 @@ public partial class ChunkFacts : IActiveFlag, ICreateUpdateDate, IDescription, 
 
 }
 
-public partial class CoherenceScore : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class CoherenceScore : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -142,7 +146,7 @@ public partial class CoherenceScore : IActiveFlag, ICreateUpdateDate, IDescripti
 
 }
 
-public partial class ConsequenceImpact : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ConsequenceImpact : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -164,7 +168,7 @@ public partial class ConsequenceImpact : IActiveFlag, ICreateUpdateDate, IDescri
 
 }
 
-public partial class ConsequenceRule : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ConsequenceRule : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -183,7 +187,7 @@ public partial class ConsequenceRule : IActiveFlag, ICreateUpdateDate, IDescript
 
 }
 
-public partial class FailureRule : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class FailureRule : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -202,7 +206,7 @@ public partial class FailureRule : IActiveFlag, ICreateUpdateDate, IDescription,
 
 }
 
-public partial class GlobalCoherence : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
+public partial class GlobalCoherence : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -230,7 +234,7 @@ public partial class GlobalCoherence : IActiveFlag, ICreateUpdateDate, IDescript
 
 }
 
-public partial class LogAnalysis : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class LogAnalysis : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -249,7 +253,7 @@ public partial class LogAnalysis : IActiveFlag, ICreateUpdateDate, IDescription,
 
 }
 
-public partial class LogEntry : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class LogEntry : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -271,7 +275,7 @@ public partial class LogEntry : IActiveFlag, ICreateUpdateDate, IDescription, IS
 
 }
 
-public partial class MappedSentiment : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class MappedSentiment : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -288,7 +292,7 @@ public partial class MappedSentiment : IActiveFlag, ICreateUpdateDate, IDescript
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => CreatedAt;
         set => CreatedAt = value ?? DateTime.UtcNow;
@@ -296,7 +300,7 @@ public partial class MappedSentiment : IActiveFlag, ICreateUpdateDate, IDescript
 
 }
 
-public partial class MicroObjective : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class MicroObjective : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -315,10 +319,14 @@ public partial class MicroObjective : IActiveFlag, ICreateUpdateDate, IDescripti
 
 }
 
-public partial class ModelInfo : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
+public partial class ModelInfo : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable, INote
 {
-    [Column("description")]
-    public string? Description { get; set; }
+    [NotMapped]
+    public string? Description
+    {
+        get => Name;
+        set => Name = value ?? string.Empty;
+    }
 
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -329,13 +337,13 @@ public partial class ModelInfo : IActiveFlag, ICreateUpdateDate, IDescription, I
     [Column("sort_order")]
     public int SortOrder { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseInterfaceDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -351,7 +359,7 @@ public partial class ModelInfo : IActiveFlag, ICreateUpdateDate, IDescription, I
 
 }
 
-public partial class ModelRole : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ModelRole : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -365,29 +373,9 @@ public partial class ModelRole : IActiveFlag, ICreateUpdateDate, IDescription, I
     [Column("sort_order")]
     public int SortOrder { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
-    {
-        get => ParseInterfaceDate(CreatedAt);
-        set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
-    }
-
-    DateTime? ICreateUpdateDate.UpdatedAt
-    {
-        get => ParseInterfaceDate(UpdatedAt);
-        set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
-    }
-
-    private static DateTime? ParseInterfaceDate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)) return parsed;
-        if (DateTime.TryParse(value, out parsed)) return parsed;
-        return null;
-    }
-
 }
 
-public partial class ModelStatsRecord : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ModelStatsRecord : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -409,7 +397,7 @@ public partial class ModelStatsRecord : IActiveFlag, ICreateUpdateDate, IDescrip
 
 }
 
-public partial class ModelTestAsset : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ModelTestAsset : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -428,7 +416,7 @@ public partial class ModelTestAsset : IActiveFlag, ICreateUpdateDate, IDescripti
 
 }
 
-public partial class ModelTestRun : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
+public partial class ModelTestRun : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -453,7 +441,7 @@ public partial class ModelTestRun : IActiveFlag, ICreateUpdateDate, IDescription
 
 }
 
-public partial class ModelTestStep : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class ModelTestStep : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -475,7 +463,7 @@ public partial class ModelTestStep : IActiveFlag, ICreateUpdateDate, IDescriptio
 
 }
 
-public partial class NarrativeContinuityState : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class NarrativeContinuityState : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -489,13 +477,13 @@ public partial class NarrativeContinuityState : IActiveFlag, ICreateUpdateDate, 
     [Column("sort_order")]
     public int SortOrder { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseInterfaceDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -511,7 +499,7 @@ public partial class NarrativeContinuityState : IActiveFlag, ICreateUpdateDate, 
 
 }
 
-public partial class NarrativeProfile : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class NarrativeProfile : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -530,10 +518,14 @@ public partial class NarrativeProfile : IActiveFlag, ICreateUpdateDate, IDescrip
 
 }
 
-public partial class NarrativeResource : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class NarrativeResource : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
-    [Column("description")]
-    public string? Description { get; set; }
+    [NotMapped]
+    public string? Description
+    {
+        get => Name;
+        set => Name = value ?? string.Empty;
+    }
 
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -552,7 +544,7 @@ public partial class NarrativeResource : IActiveFlag, ICreateUpdateDate, IDescri
 
 }
 
-public partial class NarrativeStoryBlock : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class NarrativeStoryBlock : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -569,7 +561,7 @@ public partial class NarrativeStoryBlock : IActiveFlag, ICreateUpdateDate, IDesc
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -585,7 +577,7 @@ public partial class NarrativeStoryBlock : IActiveFlag, ICreateUpdateDate, IDesc
 
 }
 
-public partial class PlannerMethod : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
+public partial class PlannerMethod : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable, INote
 {
     [Column("is_deleted")]
     public bool IsDeleted { get; set; }
@@ -607,7 +599,7 @@ public partial class PlannerMethod : IActiveFlag, ICreateUpdateDate, IDescriptio
 
 }
 
-public partial class SentimentEmbedding : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class SentimentEmbedding : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -624,7 +616,7 @@ public partial class SentimentEmbedding : IActiveFlag, ICreateUpdateDate, IDescr
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => CreatedAt;
         set => CreatedAt = value ?? DateTime.UtcNow;
@@ -632,7 +624,7 @@ public partial class SentimentEmbedding : IActiveFlag, ICreateUpdateDate, IDescr
 
 }
 
-public partial class Series : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class Series : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -654,7 +646,7 @@ public partial class Series : IActiveFlag, ICreateUpdateDate, IDescription, ISof
 
 }
 
-public partial class SeriesCharacter : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class SeriesCharacter : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -673,7 +665,7 @@ public partial class SeriesCharacter : IActiveFlag, ICreateUpdateDate, IDescript
 
 }
 
-public partial class SeriesEpisode : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class SeriesEpisode : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -695,7 +687,7 @@ public partial class SeriesEpisode : IActiveFlag, ICreateUpdateDate, IDescriptio
 
 }
 
-public partial class SeriesState : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class SeriesState : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -712,7 +704,7 @@ public partial class SeriesState : IActiveFlag, ICreateUpdateDate, IDescription,
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -728,7 +720,7 @@ public partial class SeriesState : IActiveFlag, ICreateUpdateDate, IDescription,
 
 }
 
-public partial class StepTemplate : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class StepTemplate : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -739,13 +731,13 @@ public partial class StepTemplate : IActiveFlag, ICreateUpdateDate, IDescription
     [Column("sort_order")]
     public int SortOrder { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseInterfaceDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -761,7 +753,7 @@ public partial class StepTemplate : IActiveFlag, ICreateUpdateDate, IDescription
 
 }
 
-public partial class StoryEvaluation : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class StoryEvaluation : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -783,7 +775,7 @@ public partial class StoryEvaluation : IActiveFlag, ICreateUpdateDate, IDescript
 
 }
 
-public partial class StoryRecord : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class StoryRecord : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -805,7 +797,7 @@ public partial class StoryRecord : IActiveFlag, ICreateUpdateDate, IDescription,
 
 }
 
-public partial class StoryResourceState : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class StoryResourceState : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -822,7 +814,7 @@ public partial class StoryResourceState : IActiveFlag, ICreateUpdateDate, IDescr
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -838,7 +830,7 @@ public partial class StoryResourceState : IActiveFlag, ICreateUpdateDate, IDescr
 
 }
 
-public partial class StoryRuntimeState : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class StoryRuntimeState : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -857,7 +849,7 @@ public partial class StoryRuntimeState : IActiveFlag, ICreateUpdateDate, IDescri
 
 }
 
-public partial class StoryStatus : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class StoryStatus : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -876,7 +868,7 @@ public partial class StoryStatus : IActiveFlag, ICreateUpdateDate, IDescription,
 
 }
 
-public partial class SystemReport : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class SystemReport : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -893,7 +885,7 @@ public partial class SystemReport : IActiveFlag, ICreateUpdateDate, IDescription
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -909,7 +901,7 @@ public partial class SystemReport : IActiveFlag, ICreateUpdateDate, IDescription
 
 }
 
-public partial class TaskExecution : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class TaskExecution : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -923,13 +915,13 @@ public partial class TaskExecution : IActiveFlag, ICreateUpdateDate, IDescriptio
     [Column("sort_order")]
     public int SortOrder { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseInterfaceDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -945,7 +937,7 @@ public partial class TaskExecution : IActiveFlag, ICreateUpdateDate, IDescriptio
 
 }
 
-public partial class TaskExecutionStep : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class TaskExecutionStep : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -967,7 +959,7 @@ public partial class TaskExecutionStep : IActiveFlag, ICreateUpdateDate, IDescri
 
 }
 
-public partial class TaskTypeInfo : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class TaskTypeInfo : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -986,7 +978,7 @@ public partial class TaskTypeInfo : IActiveFlag, ICreateUpdateDate, IDescription
 
 }
 
-public partial class TestDefinition : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class TestDefinition : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -1005,7 +997,7 @@ public partial class TestDefinition : IActiveFlag, ICreateUpdateDate, IDescripti
 
 }
 
-public partial class TestPrompt : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class TestPrompt : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -1027,7 +1019,7 @@ public partial class TestPrompt : IActiveFlag, ICreateUpdateDate, IDescription, 
 
 }
 
-public partial class TipoPlanning : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class TipoPlanning : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -1046,10 +1038,14 @@ public partial class TipoPlanning : IActiveFlag, ICreateUpdateDate, IDescription
 
 }
 
-public partial class TtsVoice : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable, INote
+public partial class TtsVoice : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable, INote
 {
-    [Column("description")]
-    public string? Description { get; set; }
+    [NotMapped]
+    public string? Description
+    {
+        get => Name;
+        set => Name = value ?? string.Empty;
+    }
 
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -1066,13 +1062,13 @@ public partial class TtsVoice : IActiveFlag, ICreateUpdateDate, IDescription, IS
         set => Notes = value;
     }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseInterfaceDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture);
@@ -1088,7 +1084,7 @@ public partial class TtsVoice : IActiveFlag, ICreateUpdateDate, IDescription, IS
 
 }
 
-public partial class UsageState : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class UsageState : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }
@@ -1110,18 +1106,18 @@ public partial class UsageState : IActiveFlag, ICreateUpdateDate, IDescription, 
 
 }
 
-public partial class GenericLookupEntry : IActiveFlag, ICreateUpdateDate, IDescription, ISoftDelete, IOrderable
+public partial class GenericLookupEntry : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
 {
     [Column("is_deleted")]
     public bool IsDeleted { get; set; }
 
-    DateTime? ICreateUpdateDate.CreatedAt
+    DateTime? ITimeStamped.CreatedAt
     {
         get => ParseInterfaceDate(CreatedAt);
         set => CreatedAt = value?.ToString("o", CultureInfo.InvariantCulture) ?? string.Empty;
     }
 
-    DateTime? ICreateUpdateDate.UpdatedAt
+    DateTime? ITimeStamped.UpdatedAt
     {
         get => ParseInterfaceDate(UpdatedAt);
         set => UpdatedAt = value?.ToString("o", CultureInfo.InvariantCulture) ?? string.Empty;

@@ -1,9 +1,9 @@
 
 USO STANDARD PAGINE INDEX
 
-Per QUALSIASI nuova pagina Razor Pages di tipo Index (lista/griglia), seguire
-obbligatoriamente le istruzioni in:
-- docs/index_page_rules.txt
+Per QUALSIASI nuova pagina Index (lista/griglia), seguire obbligatoriamente:
+- `docs/index_page_rules.txt`
 
-Motivo: standard unico DataTables + Bootstrap 5 per UI coerente e prevenzione
-errori di timing con jQuery/DataTables.
+Regola chiave:
+- usare API CRUD generica esistente + griglia VuePrime.
+- per tabelle semplici usare `Pages/Shared/Index`.

@@ -21,8 +21,8 @@ public sealed record SoundSearchCandidate(
 public sealed record SoundSearchInsertedSoundInfo(
     int SoundId,
     string Source,
-    string FilePath,
-    string FileName,
+    string SoundPath,
+    string SoundName,
     double Score);
 
 public sealed class SoundSearchProcessResult

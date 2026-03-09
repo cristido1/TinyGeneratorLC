@@ -5,11 +5,18 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("Log")]
-    public partial class LogEntry : ISoftDelete, IActiveFlag, IOrderable
+    public partial class LogEntry : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
+        [Key]
         [Column("Id")]
-        public long? Id { get; set; }
-        
+        public int? Id { get; set; }
+
+        [NotMapped]
+        int IEntity.Id
+        {
+            get => Id ?? 0;
+            set => Id = value;
+        }
         // Backing ISO timestamp (if log source uses string timestamps)
         [Column("Ts")]
         public string Ts { get; set; } = string.Empty; // ISO 8601 with millis
@@ -57,7 +64,7 @@ namespace TinyGenerator.Models
         public int? ThreadId { get; set; }
 
         [Column("story_id")]
-        public long? StoryId { get; set; }
+        public int? StoryId { get; set; }
         
         [Column("ThreadScope")]
         public string? ThreadScope { get; set; }
@@ -100,3 +107,7 @@ namespace TinyGenerator.Models
         public byte[]? RowVersion { get; set; }
     }
 }
+
+
+
+

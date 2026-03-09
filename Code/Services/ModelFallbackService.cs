@@ -43,7 +43,7 @@ public class ModelFallbackService
     /// Get fallback models for a specific role, ordered by UCB-like score:
     /// success_rate + C * sqrt(log(T + 1) / (trials + 1))
     /// where trials = success + fail for the model, T = total trials in the role.
-    /// Returns only enabled model_roles.
+    /// Returns only active model_roles.
     /// </summary>
     public List<ModelRole> GetFallbackModelsForRole(string roleCode, int? excludeModelId = null, int? agentId = null)
     {
@@ -65,7 +65,7 @@ public class ModelFallbackService
             .Include(mr => mr.Model)
             .Include(mr => mr.Role)
             .Include(mr => mr.Agent)
-            .Where(mr => mr.RoleId == role.Id && mr.AgentId == resolvedAgentId.Value && mr.Enabled && !mr.IsPrimary);
+            .Where(mr => mr.RoleId == role.Id && mr.AgentId == resolvedAgentId.Value && mr.IsActive && !mr.IsPrimary);
 
         // Exclude the currently failing model if provided
         if (excludeModelId.HasValue)
@@ -135,14 +135,14 @@ public class ModelFallbackService
             .FirstOrDefault();
         if (mr == null)
         {
-            var now = DateTime.UtcNow.ToString("o");
+            var now = DateTime.UtcNow;
             mr = new ModelRole
             {
                 ModelId = modelId,
                 RoleId = role.Id,
                 AgentId = resolvedAgentId.Value,
                 IsPrimary = true,
-                Enabled = true,
+                IsActive = true,
                 CreatedAt = now,
                 UpdatedAt = now
             };
@@ -178,7 +178,7 @@ public class ModelFallbackService
             mr.UseFailed++;
         }
         mr.LastUse = DateTime.UtcNow.ToString("o");
-        mr.UpdatedAt = DateTime.UtcNow.ToString("o");
+        mr.UpdatedAt = DateTime.UtcNow;
         _context.SaveChanges();
 
         _logger?.Log("Info", "ModelFallback", 
@@ -187,7 +187,7 @@ public class ModelFallbackService
 
     /// <summary>
     /// Aggregate model performance counters (tokens/durations) on model_roles for a specific role+model pair.
-    /// If the row does not exist, it is auto-created as primary+enabled.
+    /// If the row does not exist, it is auto-created as primary+active.
     /// </summary>
     public void RecordPrimaryModelPerformance(string roleCode, int modelId, ModelRolePerformanceDelta delta, int? agentId = null)
     {
@@ -230,14 +230,14 @@ public class ModelFallbackService
 
         if (mr == null)
         {
-            var now = DateTime.UtcNow.ToString("o");
+            var now = DateTime.UtcNow;
             mr = new ModelRole
             {
                 ModelId = modelId,
                 RoleId = role.Id,
                 AgentId = resolvedAgentId.Value,
                 IsPrimary = true,
-                Enabled = true,
+                IsActive = true,
                 CreatedAt = now,
                 UpdatedAt = now
             };
@@ -253,7 +253,7 @@ public class ModelFallbackService
         mr.TotalGenTimeNs += Math.Max(0, delta.GenTimeNs);
         mr.TotalLoadTimeNs += Math.Max(0, delta.LoadTimeNs);
         mr.TotalTotalTimeNs += Math.Max(0, delta.TotalTimeNs);
-        mr.UpdatedAt = DateTime.UtcNow.ToString("o");
+        mr.UpdatedAt = DateTime.UtcNow;
         _context.SaveChanges();
     }
 
@@ -264,7 +264,7 @@ public class ModelFallbackService
             return;
         }
 
-        var now = DateTime.UtcNow.ToString("o");
+        var now = DateTime.UtcNow;
         var rows = _context.ModelRoles
             .Where(x => x.RoleId == roleId && x.AgentId == agentId)
             .OrderBy(x => x.Id)

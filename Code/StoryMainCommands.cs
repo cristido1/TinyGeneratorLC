@@ -50,6 +50,7 @@ public sealed partial class StoryMainCommands
                     "add_music_tags_to_story" => new AddMusicTagsToStoryStateCommand(_service),
                     "add_voice_tags_to_story" => new TagStoryCommand(_service),
                     "generate_audio_master" or "audio_master" or "mix_audio" or "mix_final" or "final_mix" => new MixFinalAudioCommand(_service),
+                    "generate_story_video" or "story_video" or "video_story" or "generate_video" => new GenerateStoryVideoCommand(_service),
                     "assign_voices" or "voice_assignment" => new StoriesService.AssignVoicesCommand(_service),
                     "prepare_tts_schema" => new PrepareTtsSchemaCommand(_service),
                     "generate_tts_audio" or "tts_audio" or "build_tts_audio" or "generate_voice_tts" or "generate_voices" => new GenerateTtsAudioCommand(_service),
@@ -67,6 +68,7 @@ public sealed partial class StoryMainCommands
                     "generate_ambience_audio" or "ambience_audio" or "generate_ambient" or "ambient_sounds" => new GenerateAmbienceAudioCommand(_service),
                     "generate_fx_audio" or "fx_audio" or "generate_fx" or "sound_effects" => new GenerateFxAudioCommand(_service),
                     "generate_music" or "music_audio" or "generate_music_audio" => new GenerateMusicCommand(_service),
+                    "generate_story_video" or "story_video" or "video_story" or "generate_video" => new GenerateStoryVideoCommand(_service),
                     _ => new StoriesService.FunctionCallCommand(_service, status)
                 };
             default:

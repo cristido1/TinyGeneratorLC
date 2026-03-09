@@ -3,6 +3,7 @@
 # User-specific
 .vs/
 .vscode/
+.*/
 *.suo
 *.user
 *.userosscache
@@ -41,6 +42,10 @@ data/music_stories/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+**/*.sqlite
+*.sqlite3
+**/*.sqlite3
 
 # Backups created by the tool
 backups/
@@ -60,6 +65,7 @@ publish/
 
 # Logs
 *.log
+*.sql
 
 # Audio assets (keep large binaries out of git)
 *.wav
@@ -75,8 +81,11 @@ appsettings.secrets.json
 
 # Ignore generated or user-uploaded samples and story exports
 wwwroot/data_voices_samples/
+wwwroot/images_cache/
 stories_folder/
 series_folder/
+immagini/
+tmp_build_verify/
  # Local dataset folder: keep out of repo
  data/datasets/
 

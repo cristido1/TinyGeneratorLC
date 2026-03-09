@@ -64,6 +64,7 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<ModelRole> ModelRoles => Set<ModelRole>();
     public DbSet<ModelRoleError> ModelRoleErrors => Set<ModelRoleError>();
+    public DbSet<ImageAsset> Images => Set<ImageAsset>();
     // Note: Memory table excluded - using Dapper for embedding queries
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -81,6 +82,24 @@ public class TinyGeneratorDbContext : DbContext
             .HasOne<Series>()
             .WithMany(s => s.Episodes)
             .HasForeignKey(se => se.SerieId);
+
+        modelBuilder.Entity<Agent>()
+            .HasOne<ModelInfo>()
+            .WithMany()
+            .HasForeignKey(a => a.ModelId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<Agent>()
+            .HasOne<TtsVoice>()
+            .WithMany()
+            .HasForeignKey(a => a.VoiceId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<Agent>()
+            .HasOne<StepTemplate>()
+            .WithMany()
+            .HasForeignKey(a => a.MultiStepTemplateId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         modelBuilder.Entity<SeriesState>()
             .HasIndex(ss => ss.SerieId);
@@ -203,6 +222,21 @@ public class TinyGeneratorDbContext : DbContext
 
         modelBuilder.Entity<ModelStatsRecord>()
             .HasKey(s => new { s.ModelName, s.Operation });
+
+        modelBuilder.Entity<AppEventDefinition>()
+            .HasKey(a => a.Id);
+
+        modelBuilder.Entity<GenericLookupEntry>()
+            .HasKey(g => g.Id);
+
+        modelBuilder.Entity<ImageAsset>()
+            .HasKey(i => i.Id);
+
+        modelBuilder.Entity<LogEntry>()
+            .HasKey(l => l.Id);
+
+        modelBuilder.Entity<ModelInfo>()
+            .HasKey(m => m.Id);
 
         // Seed default roles
         var now = DateTime.UtcNow.ToString("o");

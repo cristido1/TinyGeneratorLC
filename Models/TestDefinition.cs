@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("test_definitions")]
-public sealed partial class TestDefinition : ISoftDelete, IActiveFlag, IOrderable
+public sealed partial class TestDefinition : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Column("id")]
     public int Id { get; set; }
@@ -73,3 +73,4 @@ public sealed partial class TestDefinition : ISoftDelete, IActiveFlag, IOrderabl
     [Column("top_p")]
     public double? TopP { get; set; }
 }
+

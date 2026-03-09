@@ -40,27 +40,34 @@ namespace TinyGenerator.Pages
             try
             {
                 // Fallback: try to get model from form if route param is empty
-                if (string.IsNullOrEmpty(model) && Request.Form.ContainsKey("model"))
+                if (string.IsNullOrWhiteSpace(model) && Request.Form.ContainsKey("model"))
                 {
                     model = Request.Form["model"].ToString();
                 }
 
-                if (string.IsNullOrEmpty(model))
+                if (string.IsNullOrWhiteSpace(model))
                 {
                     TempData["Error"] = "Nessun modello selezionato";
                     return RedirectToPage();
                 }
 
-                // Get model info (resolve by name via ListModels)
-                var modelInfo = _database.ListModels().FirstOrDefault(m => string.Equals(m.Name, model, StringComparison.OrdinalIgnoreCase));
+                var modelLookup = model.Trim();
+                var modelInfo = ResolveModelInfo(modelLookup);
                 if (modelInfo == null)
                 {
                     TempData["Error"] = $"Modello '{model}' non trovato nel database";
                     return RedirectToPage(new { model = model });
                 }
 
+                var effectiveModel = ResolveModelKeyForProvider(modelInfo);
+                if (string.IsNullOrWhiteSpace(effectiveModel))
+                {
+                    TempData["Error"] = $"Il modello '{modelInfo.Name}' non ha un identificativo valido (call_name/name)";
+                    return RedirectToPage(new { model = modelInfo.Name });
+                }
+
                 // Get conversation history from session
-                var history = GetConversationHistoryForApi(model);
+                var history = GetConversationHistoryForApi(modelInfo.Name);
 
                 // Add user message
                 history.Add(new Services.ConversationMessage
@@ -68,7 +75,7 @@ namespace TinyGenerator.Pages
                     Role = "user",
                     Content = message
                 });
-                await RememberChatAsync(model, "user", message);
+                await RememberChatAsync(modelInfo.Name, "user", message);
 
                 using var chatScope = LogScope.Push(
                     "chat",
@@ -79,8 +86,8 @@ namespace TinyGenerator.Pages
                     agentRole: "chat");
 
                 // Call model via LangChain bridge. If model supports tools, expose default tools (memory).
-                var chatBridge = _kernelFactory.CreateChatBridge(model);
-                var tools = _kernelFactory.GetDefaultToolSchemasForModel(model) ?? new List<Dictionary<string, object>>();
+                var chatBridge = _kernelFactory.CreateChatBridge(effectiveModel);
+                var tools = _kernelFactory.GetDefaultToolSchemasForModel(effectiveModel) ?? new List<Dictionary<string, object>>();
                 var response = await chatBridge.CallModelWithToolsAsync(
                     history,
                     tools, // Default tools (may include memory if model supports tools)
@@ -97,7 +104,7 @@ namespace TinyGenerator.Pages
                     Role = "assistant",
                     Content = textContent ?? "No response"
                 });
-                await RememberChatAsync(model, "assistant", textContent ?? "No response");
+                await RememberChatAsync(modelInfo.Name, "assistant", textContent ?? "No response");
 
                 // ReAct loop: execute tool calls, inject tool results and call model again
                 int maxIterations = 3;
@@ -109,7 +116,7 @@ namespace TinyGenerator.Pages
                     try
                     {
                         var toolNames = currentToolCalls.Select(tc => tc.ToolName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                        var orchestrator = _kernelFactory.CreateOrchestrator(model, toolNames);
+                        var orchestrator = _kernelFactory.CreateOrchestrator(effectiveModel, toolNames);
 
                         foreach (var tc in currentToolCalls)
                         {
@@ -146,7 +153,7 @@ namespace TinyGenerator.Pages
                             Role = "assistant",
                             Content = nextText ?? ""
                         });
-                        await RememberChatAsync(model, "assistant", nextText ?? "");
+                        await RememberChatAsync(modelInfo.Name, "assistant", nextText ?? "");
 
                         currentToolCalls = nextToolCalls ?? new List<ToolCallFromModel>();
                         iteration++;
@@ -163,10 +170,10 @@ namespace TinyGenerator.Pages
                 }
 
                 // Save updated history to session
-                SaveConversationHistory(model, history);
+                SaveConversationHistory(modelInfo.Name, history);
 
                 // Use PRG pattern to avoid form resubmission and preserve model in URL
-                return RedirectToPage(new { model = model });
+                return RedirectToPage(new { model = modelInfo.Name });
             }
             catch (Exception ex)
             {
@@ -220,26 +227,46 @@ namespace TinyGenerator.Pages
             AvailableModels = _database.ListModels();
 
             // If route parameter is empty, try fallback to querystring (safer for names containing slashes)
-            if (string.IsNullOrEmpty(model))
+            if (string.IsNullOrWhiteSpace(model))
             {
                 if (Request?.Query != null && Request.Query.ContainsKey("model"))
                 {
                     var q = Request.Query["model"].ToString();
-                    if (!string.IsNullOrEmpty(q))
+                    if (!string.IsNullOrWhiteSpace(q))
                     {
                         model = System.Net.WebUtility.UrlDecode(q);
                     }
                 }
             }
 
-            if (!string.IsNullOrEmpty(model) && AvailableModels.Any(m => m.Name == model))
+            if (!string.IsNullOrWhiteSpace(model))
             {
-                SelectedModel = model;
-                SelectedModelInfo = AvailableModels.FirstOrDefault(m => m.Name == model);
-                
-                // Load conversation history from session
-                ConversationHistory = GetConversationHistory(model);
+                var modelInfo = ResolveModelInfo(model.Trim());
+                if (modelInfo != null)
+                {
+                    SelectedModel = modelInfo.Name;
+                    SelectedModelInfo = modelInfo;
+                    ConversationHistory = GetConversationHistory(modelInfo.Name);
+                }
             }
+        }
+
+        private ModelInfo? ResolveModelInfo(string lookup)
+        {
+            var models = _database.ListModels();
+            return models.FirstOrDefault(m =>
+                string.Equals(m.Name, lookup, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(m.CallName, lookup, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string ResolveModelKeyForProvider(ModelInfo modelInfo)
+        {
+            if (!string.IsNullOrWhiteSpace(modelInfo.CallName))
+            {
+                return modelInfo.CallName.Trim();
+            }
+
+            return modelInfo.Name?.Trim() ?? string.Empty;
         }
 
         private List<ConversationMessage> GetConversationHistory(string modelName)

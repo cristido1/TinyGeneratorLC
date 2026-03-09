@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Net.Mail;
 using System.Text;
 using System.Text.Json;
@@ -2053,7 +2054,7 @@ $@"<!doctype html>
                 Message = $"[{storyId}] {message}",
                 ThreadScope = "story_evaluation",
                 ThreadId = 0,
-                StoryId = storyId,
+                StoryId = storyId > 0 && storyId <= int.MaxValue ? (int?)storyId : null,
                 AgentName = agentName,
                 Result = success ? "SUCCESS" : "FAILED",
                 DurationSecs = 1
@@ -2544,6 +2545,16 @@ $@"<!doctype html>
                     return new CommandResult(ok, ok ? "Mixaggio audio completato." : err);
                 },
                 basePriority + 8);
+
+            EnqueueIfNotQueued(
+                "generate_story_video",
+                $"generate_story_video_{storyId}_",
+                async ctx =>
+                {
+                    var (ok, err) = await GenerateStoryVideoForStoryAsync(storyId, folderName, ctx.RunId);
+                    return new CommandResult(ok, ok ? "Video con sottotitoli generato." : err);
+                },
+                basePriority + 9);
 
             return true;
         }
@@ -7776,7 +7787,7 @@ $@"<!doctype html>
         var sourcePath = ResolveExistingSoundFilePath(match.Sound);
         if (string.IsNullOrWhiteSpace(sourcePath))
         {
-            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Suono #{match.Sound.Id} selezionato ma file non trovato: {match.Sound.FilePath}");
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Suono #{match.Sound.Id} selezionato ma file non trovato: {match.Sound.SoundPath}");
             missingSoundId = RegisterMissingSoundBestEffort(story, soundType, prompt, tags, source, runId);
             return null;
         }
@@ -7790,7 +7801,7 @@ $@"<!doctype html>
             // best-effort
         }
 
-        _customLogger?.Append(runId, $"[{story.Id}] Match sounds {soundType}: soundId={match.Sound.Id}, score={match.Score:0.##}, matchedTokens={match.MatchedTokens}, file='{match.Sound.FileName}'");
+        _customLogger?.Append(runId, $"[{story.Id}] Match sounds {soundType}: soundId={match.Sound.Id}, score={match.Score:0.##}, matchedTokens={match.MatchedTokens}, file='{match.Sound.SoundName}'");
         return new CatalogSoundSelection(match.Sound, sourcePath);
     }
 
@@ -8144,14 +8155,14 @@ $@"<!doctype html>
 
     private static string? ResolveExistingSoundFilePath(Sound sound)
     {
-        if (sound == null || string.IsNullOrWhiteSpace(sound.FilePath))
+        if (sound == null || string.IsNullOrWhiteSpace(sound.SoundPath))
         {
             return null;
         }
 
         try
         {
-            var direct = sound.FilePath.Trim();
+            var direct = sound.SoundPath.Trim();
             if (File.Exists(direct)) return direct;
 
             var full = Path.GetFullPath(direct);
@@ -9362,9 +9373,13 @@ private static string? SelectMusicFileDeterministic(
         // start di ogni frase = fine frase precedente + gap dinamico.
         int currentTimeMs = introShiftMs;
         int wavDurationUsedCount = 0;
+        var subtitleTimings = new List<FinalMixSubtitleTiming>();
         for (int entryIndex = 0; entryIndex < phraseEntries.Count; entryIndex++)
         {
             var entry = phraseEntries[entryIndex];
+            var hasScheduledPhraseTiming = false;
+            var scheduledPhraseStartMs = 0;
+            var scheduledPhraseDurationMs = 0;
             // TTS file
             var ttsFileName = ReadString(entry, "fileName") ?? ReadString(entry, "FileName") ?? ReadString(entry, "file_name");
             if (!string.IsNullOrWhiteSpace(ttsFileName))
@@ -9399,6 +9414,20 @@ private static string? SelectMusicFileDeterministic(
                         durationMs = 2000; // fallback gap if duration is unavailable
 
                     ttsTrackFiles.Add((ttsFilePath, startMs));
+                    var phraseText = (ReadString(entry, "text") ?? ReadString(entry, "Text") ?? string.Empty).Trim();
+                    if (!string.IsNullOrWhiteSpace(phraseText))
+                    {
+                        subtitleTimings.Add(new FinalMixSubtitleTiming
+                        {
+                            Index = entryIndex,
+                            StartMs = Math.Max(0, startMs),
+                            EndMs = Math.Max(startMs, startMs + durationMs),
+                            Text = phraseText
+                        });
+                    }
+                    hasScheduledPhraseTiming = true;
+                    scheduledPhraseStartMs = Math.Max(0, startMs);
+                    scheduledPhraseDurationMs = Math.Max(0, durationMs);
                     var nextEntry = entryIndex + 1 < phraseEntries.Count ? phraseEntries[entryIndex + 1] : null;
                     var gapAfterMs = ComputePhraseGapMs(entry, nextEntry, defaultPhraseGapMs, commaAttributionGapMs);
                     currentTimeMs = startMs + durationMs + gapAfterMs;
@@ -9415,12 +9444,22 @@ private static string? SelectMusicFileDeterministic(
             {
                 if (File.Exists(fxFilePath))
                 {
-                    int startMs = introShiftMs;
-                    int phraseDurationMs = 0;
-                    if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
-                        startMs = (int)s + introShiftMs;
-                    if (TryReadNumber(entry, "durationMs", out var d) || TryReadNumber(entry, "DurationMs", out d) || TryReadNumber(entry, "duration_ms", out d))
-                        phraseDurationMs = (int)d;
+                    int startMs;
+                    int phraseDurationMs;
+                    if (hasScheduledPhraseTiming)
+                    {
+                        startMs = scheduledPhraseStartMs;
+                        phraseDurationMs = scheduledPhraseDurationMs;
+                    }
+                    else
+                    {
+                        startMs = introShiftMs;
+                        phraseDurationMs = 0;
+                        if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
+                            startMs = (int)s + introShiftMs;
+                        if (TryReadNumber(entry, "durationMs", out var d) || TryReadNumber(entry, "DurationMs", out d) || TryReadNumber(entry, "duration_ms", out d))
+                            phraseDurationMs = (int)d;
+                    }
                     int fxStartMs = startMs + (phraseDurationMs / 2);
                     fxTrackFiles.Add((fxFilePath, fxStartMs));
                 }
@@ -9434,9 +9473,17 @@ private static string? SelectMusicFileDeterministic(
             {
                 if (File.Exists(musicFilePath))
                 {
-                    int startMs = introShiftMs;
-                    if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
-                        startMs = (int)s + introShiftMs;
+                    int startMs;
+                    if (hasScheduledPhraseTiming)
+                    {
+                        startMs = scheduledPhraseStartMs;
+                    }
+                    else
+                    {
+                        startMs = introShiftMs;
+                        if (TryReadNumber(entry, "startMs", out var s) || TryReadNumber(entry, "StartMs", out s) || TryReadNumber(entry, "start_ms", out s))
+                            startMs = (int)s + introShiftMs;
+                    }
                     int durationMs = 20000; // default 20s for music
                     if (TryReadNumber(entry, "musicDuration", out var md) || TryReadNumber(entry, "MusicDuration", out md) || TryReadNumber(entry, "music_duration", out md))
                         durationMs = (int)md * 1000;
@@ -9456,6 +9503,9 @@ private static string? SelectMusicFileDeterministic(
                 runId,
                 $"[{story.Id}] Timeline TTS sequenziale applicata: durate reali file={wavDurationUsedCount}, gapDefault={defaultPhraseGapMs}ms, gapCommaAttribution={commaAttributionGapMs}ms, maxSilenceGap={maxSilenceGapMs}ms");
         }
+        var subtitleTimingByIndex = subtitleTimings
+            .GroupBy(t => t.Index)
+            .ToDictionary(g => g.Key, g => g.First());
 
         // Build ambience segments based on ambient_sound_file definitions and ambientSoundsDuration
         try
@@ -9478,8 +9528,18 @@ private static string? SelectMusicFileDeterministic(
                 if (string.IsNullOrWhiteSpace(ambientFile)) continue;
 
                 int startMs = 0;
-                if (TryReadNumber(e, "startMs", out var s) || TryReadNumber(e, "StartMs", out s) || TryReadNumber(e, "start_ms", out s))
-                    startMs = (int)s;
+                if (subtitleTimingByIndex.TryGetValue(i, out var timing))
+                {
+                    startMs = timing.StartMs;
+                }
+                else if (TryReadNumber(e, "startMs", out var s) || TryReadNumber(e, "StartMs", out s) || TryReadNumber(e, "start_ms", out s))
+                {
+                    startMs = (int)s + introShiftMs;
+                }
+                else
+                {
+                    startMs = introShiftMs;
+                }
                 var durationMs = ReadAmbientSoundsDurationMs(e);
                 if (durationMs <= 0) continue;
 
@@ -9490,8 +9550,8 @@ private static string? SelectMusicFileDeterministic(
                     continue;
                 }
 
-                ambienceTrackFiles.Add((fullPath, startMs + introShiftMs, durationMs));
-                _customLogger?.Append(runId, $"[{story.Id}] Ambient segment: {(string.IsNullOrWhiteSpace(ambientFile) ? Path.GetFileName(fullPath) : ambientFile)} @ {startMs + introShiftMs}ms for {durationMs}ms");
+                ambienceTrackFiles.Add((fullPath, startMs, durationMs));
+                _customLogger?.Append(runId, $"[{story.Id}] Ambient segment: {(string.IsNullOrWhiteSpace(ambientFile) ? Path.GetFileName(fullPath) : ambientFile)} @ {startMs}ms for {durationMs}ms");
             }
         }
         catch (Exception ex)
@@ -9554,6 +9614,60 @@ private static string? SelectMusicFileDeterministic(
             if (!trimResult.success)
             {
                 _customLogger?.Append(runId, $"[{story.Id}] [WARN] Trim silenzi finali non applicato: {trimResult.error}");
+            }
+        }
+
+        if (subtitleTimings.Count > 0 && finalSilenceOptions.EnableFinalSilenceTrim)
+        {
+            var maxGapMs = (int)Math.Round(Math.Max(0d, finalSilenceOptions.FinalSilenceTrimMaxGapSeconds) * 1000d);
+            var keepMs = (int)Math.Round(Math.Clamp(finalSilenceOptions.FinalSilenceTrimKeepSeconds, 0d, Math.Max(0d, finalSilenceOptions.FinalSilenceTrimMaxGapSeconds)) * 1000d);
+            if (maxGapMs > 0)
+            {
+                var (mapTimeMs, cuts, removedTotalMs) = BuildSilenceTrimMapFromSubtitleTimings(subtitleTimings, maxGapMs, keepMs);
+                if (cuts > 0)
+                {
+                    foreach (var timing in subtitleTimings)
+                    {
+                        var mappedStart = mapTimeMs(timing.StartMs);
+                        var mappedEnd = mapTimeMs(timing.EndMs);
+                        timing.StartMs = Math.Max(0, mappedStart);
+                        timing.EndMs = Math.Max(timing.StartMs, mappedEnd);
+                    }
+                    _customLogger?.Append(runId, $"[{story.Id}] Timeline sottotitoli mix compensata: {cuts} tagli, {removedTotalMs}ms rimossi.");
+                }
+            }
+        }
+
+        if (subtitleTimings.Count > 0)
+        {
+            try
+            {
+                var subtitleTimelinePath = Path.Combine(folderPath, "final_mix_subtitle_timeline.json");
+                var payload = new
+                {
+                    generated_at_utc = DateTime.UtcNow,
+                    story_id = story.Id,
+                    intro_shift_ms = introShiftMs,
+                    entries = subtitleTimings
+                        .OrderBy(t => t.Index)
+                        .Select(t => new
+                        {
+                            index = t.Index,
+                            start_ms = t.StartMs,
+                            end_ms = t.EndMs,
+                            duration_ms = Math.Max(0, t.EndMs - t.StartMs),
+                            text = t.Text
+                        })
+                };
+                await File.WriteAllTextAsync(
+                    subtitleTimelinePath,
+                    JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
+                    Encoding.UTF8);
+                _customLogger?.Append(runId, $"[{story.Id}] Timeline sottotitoli salvata: {Path.GetFileName(subtitleTimelinePath)} ({subtitleTimings.Count} frasi)");
+            }
+            catch (Exception ex)
+            {
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Impossibile salvare final_mix_subtitle_timeline.json: {ex.Message}");
             }
         }
 
@@ -10434,6 +10548,1758 @@ private static string? SelectMusicFileDeterministic(
         }
         var (success, message) = await StartMixFinalAudioAsync(context);
         return (success, message);
+    }
+
+    internal async Task<(bool success, string? message)> StartGenerateStoryVideoAsync(StoryCommandContext context)
+    {
+        var storyId = context.Story.Id;
+        var runId = string.IsNullOrWhiteSpace(CurrentDispatcherRunId)
+            ? $"video_{storyId}_{DateTime.UtcNow:yyyyMMddHHmmss}"
+            : CurrentDispatcherRunId!;
+
+        if (string.IsNullOrWhiteSpace(CurrentDispatcherRunId))
+        {
+            _customLogger?.Start(runId);
+        }
+        _customLogger?.Append(runId, $"[{storyId}] Avvio generazione video finale nella cartella {context.FolderPath}");
+
+        try
+        {
+            var (success, message) = await GenerateStoryVideoInternalAsync(context, runId);
+
+            if (success && context.TargetStatus?.Id > 0)
+            {
+                try
+                {
+                    _database.UpdateStoryById(storyId, statusId: context.TargetStatus.Id, updateStatus: true);
+                    _customLogger?.Append(runId, $"[{storyId}] Stato aggiornato a {context.TargetStatus.Code ?? context.TargetStatus.Id.ToString()}");
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, "Impossibile aggiornare lo stato video per la storia {Id}", storyId);
+                    _customLogger?.Append(runId, $"[{storyId}] Aggiornamento stato video fallito: {ex.Message}");
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(CurrentDispatcherRunId))
+            {
+                var completionMessage = message ?? (success ? "Generazione video completata" : "Errore generazione video");
+                await (_customLogger?.MarkCompletedAsync(runId, completionMessage) ?? Task.CompletedTask);
+            }
+            return (success, message);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Errore non gestito durante la generazione video per la storia {Id}", storyId);
+            _customLogger?.Append(runId, $"[{storyId}] Errore inatteso: {ex.Message}");
+            if (string.IsNullOrWhiteSpace(CurrentDispatcherRunId))
+            {
+                await (_customLogger?.MarkCompletedAsync(runId, $"Errore: {ex.Message}") ?? Task.CompletedTask);
+            }
+            return (false, $"Errore: {ex.Message}");
+        }
+    }
+
+    public async Task<(bool success, string? error)> GenerateStoryVideoForStoryAsync(long storyId, string folderName, string? dispatcherRunId = null)
+    {
+        if (string.IsNullOrWhiteSpace(folderName))
+            return (false, "Folder name is required");
+
+        var story = GetStoryById(storyId);
+        if (story == null)
+            return (false, "Story not found");
+
+        var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", folderName);
+        Directory.CreateDirectory(folderPath);
+
+        var context = new StoryCommandContext(story, folderPath, null);
+        if (!string.IsNullOrWhiteSpace(dispatcherRunId))
+        {
+            return await GenerateStoryVideoInternalAsync(context, dispatcherRunId);
+        }
+
+        return await StartGenerateStoryVideoAsync(context);
+    }
+
+    private async Task<(bool success, string? message)> GenerateStoryVideoInternalAsync(StoryCommandContext context, string runId)
+    {
+        var story = context.Story;
+        var folderPath = context.FolderPath;
+        var emitBatchProgress = IsBatchWorkerProcess();
+        void ReportVideoProgress(int current, int max, string description)
+            => ReportCommandProgress(runId, current, max, description, emitBatchProgress);
+
+        ReportVideoProgress(0, 100, $"[{story.Id}] Video: preparazione");
+        var schemaPath = Path.Combine(folderPath, "tts_schema.json");
+        if (!File.Exists(schemaPath))
+        {
+            return (false, "File tts_schema.json non trovato: genera prima lo schema TTS");
+        }
+
+        var mixAudioPath = Path.Combine(folderPath, "final_mix.mp3");
+        if (!File.Exists(mixAudioPath))
+        {
+            mixAudioPath = Path.Combine(folderPath, "final_mix.wav");
+        }
+        if (!File.Exists(mixAudioPath))
+        {
+            return (false, "File final_mix non trovato: genera prima il mix finale audio");
+        }
+
+        JsonObject? rootNode;
+        try
+        {
+            var json = await File.ReadAllTextAsync(schemaPath);
+            rootNode = JsonNode.Parse(json) as JsonObject;
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Impossibile leggere tts_schema.json: {ex.Message}");
+        }
+
+        if (rootNode == null)
+        {
+            return (false, "Formato tts_schema.json non valido");
+        }
+
+        if (!rootNode.TryGetPropertyValue("timeline", out var timelineNode))
+            rootNode.TryGetPropertyValue("Timeline", out timelineNode);
+        if (timelineNode is not JsonArray timelineArray)
+        {
+            return (false, "Timeline mancante nello schema TTS");
+        }
+
+        var phraseEntries = timelineArray.OfType<JsonObject>().Where(IsPhraseEntry).ToList();
+        if (phraseEntries.Count == 0)
+        {
+            return (false, "La timeline non contiene frasi per i sottotitoli");
+        }
+        var phrasesTotal = phraseEntries.Count;
+        var progressMax = Math.Max(phrasesTotal + 5, 10);
+        ReportVideoProgress(1, progressMax, $"[{story.Id}] Video: timeline pronta ({phrasesTotal} frasi)");
+
+        var introShiftMs = 0;
+        try
+        {
+            var selectedOpening = SelectOpeningMusicFromSoundsCatalog(story.Id);
+            if (!string.IsNullOrWhiteSpace(selectedOpening) && File.Exists(selectedOpening))
+            {
+                introShiftMs = 15000;
+            }
+        }
+        catch
+        {
+            introShiftMs = 0;
+        }
+
+        var mixGapOptions = _audioMixOptions?.CurrentValue ?? new AudioMixOptions();
+        var maxSilenceGapMs = (int)Math.Round(Math.Max(0d, mixGapOptions.MaxSilenceGapSeconds) * 1000d);
+        var defaultPhraseGapMs = Math.Max(0, mixGapOptions.DefaultPhraseGapMs);
+        var commaAttributionGapMs = Math.Clamp(mixGapOptions.CommaAttributionGapMs, 0, Math.Max(0, defaultPhraseGapMs));
+        if (maxSilenceGapMs > 0)
+        {
+            defaultPhraseGapMs = Math.Min(defaultPhraseGapMs, maxSilenceGapMs);
+            commaAttributionGapMs = Math.Min(commaAttributionGapMs, maxSilenceGapMs);
+        }
+
+        var finalTrimMaxGapMs = (int)Math.Round(Math.Max(0d, mixGapOptions.FinalSilenceTrimMaxGapSeconds) * 1000d);
+        var finalTrimKeepMs = (int)Math.Round(Math.Clamp(mixGapOptions.FinalSilenceTrimKeepSeconds, 0d, Math.Max(0d, mixGapOptions.FinalSilenceTrimMaxGapSeconds)) * 1000d);
+        if (mixGapOptions.EnableFinalSilenceTrim && finalTrimMaxGapMs > 0)
+        {
+            var (timelineCuts, mapTimeMs) = BuildTimelineSilenceTrimMap(phraseEntries, finalTrimMaxGapMs, finalTrimKeepMs);
+            if (timelineCuts.Count > 0)
+            {
+                var updatedTimelineCount = ApplyMappedTimelineTimes(phraseEntries, mapTimeMs);
+                if (updatedTimelineCount > 0)
+                {
+                    try
+                    {
+                        var pretty = rootNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+                        await File.WriteAllTextAsync(schemaPath, pretty, Encoding.UTF8);
+                    }
+                    catch (Exception ex)
+                    {
+                        _customLogger?.Append(runId, $"[{story.Id}] [WARN] Impossibile riscrivere tts_schema.json con tempi compensati: {ex.Message}");
+                    }
+                }
+
+                try
+                {
+                    var cutsPath = Path.Combine(folderPath, "final_mix_silence_cuts.json");
+                    var cutsPayload = timelineCuts.Select((c, idx) => new
+                    {
+                        index = idx + 1,
+                        original_gap_start_ms = c.GapStartMs,
+                        original_gap_end_ms = c.GapEndMs,
+                        original_gap_ms = c.GapEndMs - c.GapStartMs,
+                        kept_ms = c.KeepMs,
+                        removed_ms = c.RemovedMs,
+                        mapped_gap_end_ms = c.GapEndMs - c.CumulativeRemovedMs
+                    }).ToList();
+                    await File.WriteAllTextAsync(cutsPath, JsonSerializer.Serialize(cutsPayload, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                }
+                catch
+                {
+                    // best effort
+                }
+
+                var removedTotalMs = timelineCuts.Sum(c => c.RemovedMs);
+                _customLogger?.Append(
+                    runId,
+                    $"[{story.Id}] Compensazione timeline per trim silenzi: {timelineCuts.Count} tagli, {removedTotalMs}ms rimossi. tts_schema.json aggiornato.");
+            }
+        }
+
+        IReadOnlyDictionary<int, (int StartMs, int EndMs)>? fixedSubtitleTimings = null;
+        try
+        {
+            var subtitleTimelinePath = Path.Combine(folderPath, "final_mix_subtitle_timeline.json");
+            if (File.Exists(subtitleTimelinePath))
+            {
+                var subtitleTimelineJson = await File.ReadAllTextAsync(subtitleTimelinePath, Encoding.UTF8);
+                var subtitleTimelineNode = JsonNode.Parse(subtitleTimelineJson) as JsonObject;
+                if (subtitleTimelineNode?["entries"] is JsonArray subtitleEntriesNode)
+                {
+                    var mapped = new Dictionary<int, (int StartMs, int EndMs)>();
+                    foreach (var item in subtitleEntriesNode.OfType<JsonObject>())
+                    {
+                        if (!TryReadNumber(item, "index", out var idxRaw))
+                        {
+                            continue;
+                        }
+                        var idx = Math.Max(0, (int)Math.Round(idxRaw, MidpointRounding.AwayFromZero));
+                        var hasStart = TryReadNumber(item, "start_ms", out var startRaw) || TryReadNumber(item, "startMs", out startRaw);
+                        var hasEnd = TryReadNumber(item, "end_ms", out var endRaw) || TryReadNumber(item, "endMs", out endRaw);
+                        if (!hasStart || !hasEnd)
+                        {
+                            continue;
+                        }
+                        var start = Math.Max(0, (int)Math.Round(startRaw, MidpointRounding.AwayFromZero));
+                        var end = Math.Max(start, (int)Math.Round(endRaw, MidpointRounding.AwayFromZero));
+                        mapped[idx] = (start, end);
+                    }
+
+                    if (mapped.Count > 0)
+                    {
+                        fixedSubtitleTimings = mapped;
+                        _customLogger?.Append(runId, $"[{story.Id}] Timeline sottotitoli da mix caricata: {mapped.Count} frasi.");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Impossibile leggere final_mix_subtitle_timeline.json, fallback su tts_schema: {ex.Message}");
+        }
+
+        var subtitleEntries = BuildSubtitleEntries(
+            phraseEntries,
+            folderPath,
+            introShiftMs,
+            defaultPhraseGapMs,
+            commaAttributionGapMs,
+            fixedSubtitleTimings,
+            (current, max, description) =>
+            {
+                var mappedCurrent = 1 + Math.Clamp(current, 0, Math.Max(1, max));
+                ReportVideoProgress(mappedCurrent, progressMax, $"[{story.Id}] {description}");
+            });
+        if (subtitleEntries.Count == 0)
+        {
+            return (false, "Impossibile costruire sottotitoli: nessuna riga valida nella timeline");
+        }
+
+        var srtPath = Path.Combine(folderPath, "final_mix_subtitles.srt");
+        await File.WriteAllTextAsync(srtPath, BuildSrt(subtitleEntries), Encoding.UTF8);
+        _customLogger?.Append(runId, $"[{story.Id}] Sottotitoli generati: {Path.GetFileName(srtPath)} ({subtitleEntries.Count} righe)");
+        ReportVideoProgress(phrasesTotal + 2, progressMax, $"[{story.Id}] Video: sottotitoli pronti ({subtitleEntries.Count} righe)");
+
+        var outputVideoPath = Path.Combine(folderPath, "final_video.mp4");
+        var subtitleFilterPath = EscapeForFfmpegSubtitlesPath(srtPath);
+        var subtitleFilter = $"subtitles='{subtitleFilterPath}':force_style='Alignment=2,FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,MarginV=34'";
+        var audioDurationMs = TryGetAudioDurationMsFromFile(mixAudioPath) ?? subtitleEntries.Max(s => s.EndMs);
+        var ambientKeywords = ExtractAmbientKeywordsForOpenImages(phraseEntries).ToList();
+        var imagesFolder = Path.Combine(Directory.GetCurrentDirectory(), "immagini");
+        var backgroundImages = await ResolveStoryBackgroundImagesAsync(ambientKeywords, imagesFolder, maxImages: 6, runId, story.Id);
+        if (backgroundImages.Count == 0)
+        {
+            var fallbackImagePath = EnsureFallbackBackgroundImage(imagesFolder, runId, story.Id);
+            if (!string.IsNullOrWhiteSpace(fallbackImagePath) && File.Exists(fallbackImagePath))
+            {
+                backgroundImages.Add(fallbackImagePath);
+            }
+        }
+        var concatPath = backgroundImages.Count > 0
+            ? BuildSlideshowConcatFile(backgroundImages, folderPath, audioDurationMs, segmentSeconds: 20)
+            : null;
+        if (backgroundImages.Count > 0)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] Sfondo video: {backgroundImages.Count} immagini (catalogo + OpenImages), rotazione ogni 20s.");
+        }
+        else
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Nessuna immagine disponibile in catalogo/OpenImages, uso sfondo grafico di fallback.");
+        }
+        ReportVideoProgress(phrasesTotal + 3, progressMax, $"[{story.Id}] Video: sfondo pronto ({backgroundImages.Count} immagini)");
+
+        async Task<(bool ok, string? error)> RunFfmpegAsync(bool useConcatInput, string? loopImagePath = null)
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "ffmpeg",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.StartInfo.ArgumentList.Add("-y");
+            if (useConcatInput)
+            {
+                process.StartInfo.ArgumentList.Add("-f");
+                process.StartInfo.ArgumentList.Add("concat");
+                process.StartInfo.ArgumentList.Add("-safe");
+                process.StartInfo.ArgumentList.Add("0");
+                process.StartInfo.ArgumentList.Add("-i");
+                process.StartInfo.ArgumentList.Add(concatPath!);
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(loopImagePath) || !File.Exists(loopImagePath))
+                {
+                    return (false, "Impossibile preparare un'immagine di sfondo valida per il video.");
+                }
+                process.StartInfo.ArgumentList.Add("-loop");
+                process.StartInfo.ArgumentList.Add("1");
+                process.StartInfo.ArgumentList.Add("-i");
+                process.StartInfo.ArgumentList.Add(loopImagePath);
+            }
+
+            process.StartInfo.ArgumentList.Add("-i");
+            process.StartInfo.ArgumentList.Add(mixAudioPath);
+            process.StartInfo.ArgumentList.Add("-vf");
+            process.StartInfo.ArgumentList.Add($"scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,{subtitleFilter}");
+            process.StartInfo.ArgumentList.Add("-c:v");
+            process.StartInfo.ArgumentList.Add("libx264");
+            process.StartInfo.ArgumentList.Add("-preset");
+            process.StartInfo.ArgumentList.Add("veryfast");
+            process.StartInfo.ArgumentList.Add("-crf");
+            process.StartInfo.ArgumentList.Add("22");
+            process.StartInfo.ArgumentList.Add("-pix_fmt");
+            process.StartInfo.ArgumentList.Add("yuv420p");
+            process.StartInfo.ArgumentList.Add("-r");
+            process.StartInfo.ArgumentList.Add("30");
+            process.StartInfo.ArgumentList.Add("-c:a");
+            process.StartInfo.ArgumentList.Add("aac");
+            process.StartInfo.ArgumentList.Add("-b:a");
+            process.StartInfo.ArgumentList.Add("192k");
+            process.StartInfo.ArgumentList.Add("-shortest");
+            process.StartInfo.ArgumentList.Add("-movflags");
+            process.StartInfo.ArgumentList.Add("+faststart");
+            process.StartInfo.ArgumentList.Add(outputVideoPath);
+
+            process.Start();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(true); } catch { }
+                return (false, "Timeout ffmpeg durante la generazione video (30 minuti)");
+            }
+
+            var stderr = await stderrTask;
+            await stdoutTask;
+            if (process.ExitCode == 0)
+            {
+                return (true, null);
+            }
+
+            var shortErr = stderr.Substring(0, Math.Min(1200, stderr.Length));
+            return (false, $"Errore ffmpeg video (exit code {process.ExitCode}): {shortErr}");
+        }
+
+        try
+        {
+            ReportVideoProgress(phrasesTotal + 4, progressMax, $"[{story.Id}] Video: rendering ffmpeg in corso");
+            var hasConcatInput = !string.IsNullOrWhiteSpace(concatPath) && File.Exists(concatPath);
+            var fallbackImagePath = backgroundImages.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p))
+                                    ?? EnsureFallbackBackgroundImage(imagesFolder, runId, story.Id);
+
+            var (ok, err) = await RunFfmpegAsync(hasConcatInput, hasConcatInput ? null : fallbackImagePath);
+            if (!ok && hasConcatInput)
+            {
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Rendering slideshow fallito, retry con immagine singola. Dettaglio: {err}");
+                (ok, err) = await RunFfmpegAsync(useConcatInput: false, loopImagePath: fallbackImagePath);
+            }
+
+            if (!ok)
+            {
+                return (false, err);
+            }
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Eccezione durante la generazione video: {ex.Message}");
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(concatPath))
+            {
+                TryDeleteFile(concatPath);
+            }
+        }
+
+        if (!File.Exists(outputVideoPath))
+        {
+            return (false, "ffmpeg non ha creato final_video.mp4");
+        }
+
+        try
+        {
+            var targetStatus = GetStoryStatusByCode("video_generated_1");
+            if (targetStatus != null)
+            {
+                _database.UpdateStoryById(story.Id, statusId: targetStatus.Id, updateStatus: true);
+                _customLogger?.Append(runId, $"[{story.Id}] Stato aggiornato a video_generated_1");
+            }
+            else
+            {
+                _customLogger?.Append(runId, $"[{story.Id}] [WARN] Stato 'video_generated_1' non trovato nel DB; video creato senza cambio stato.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{story.Id}] [WARN] Aggiornamento stato video fallito: {ex.Message}");
+        }
+
+        var msg = $"Video generato: {Path.GetFileName(outputVideoPath)}";
+        _customLogger?.Append(runId, $"[{story.Id}] {msg}");
+        ReportVideoProgress(progressMax, progressMax, $"[{story.Id}] Video completato");
+        return (true, msg);
+    }
+
+    private readonly record struct TimelineSilenceCut(
+        int GapStartMs,
+        int GapEndMs,
+        int KeepMs,
+        int RemovedMs,
+        int CumulativeRemovedMs);
+
+    private sealed class FinalMixSubtitleTiming
+    {
+        public int Index { get; set; }
+        public int StartMs { get; set; }
+        public int EndMs { get; set; }
+        public string Text { get; set; } = string.Empty;
+    }
+
+    private static (List<TimelineSilenceCut> Cuts, Func<int, int> MapTimeMs) BuildTimelineSilenceTrimMap(
+        List<JsonObject> phraseEntries,
+        int maxGapMs,
+        int keepMs)
+    {
+        var cuts = new List<TimelineSilenceCut>();
+        if (phraseEntries == null || phraseEntries.Count < 2 || maxGapMs <= 0)
+        {
+            return (cuts, t => Math.Max(0, t));
+        }
+
+        var ranges = phraseEntries
+            .Select(e =>
+            {
+                var s = ReadEntryStartMs(e);
+                var eMs = ReadEntryEndMs(e);
+                if (eMs < s) eMs = s;
+                return (Start: Math.Max(0, s), End: Math.Max(0, eMs));
+            })
+            .OrderBy(r => r.Start)
+            .ToList();
+
+        var safeKeepMs = Math.Clamp(keepMs, 0, maxGapMs);
+        var cumulativeRemoved = 0;
+        for (var i = 0; i < ranges.Count - 1; i++)
+        {
+            var gapStart = ranges[i].End;
+            var gapEnd = ranges[i + 1].Start;
+            if (gapEnd <= gapStart)
+            {
+                continue;
+            }
+
+            var gap = gapEnd - gapStart;
+            if (gap <= maxGapMs)
+            {
+                continue;
+            }
+
+            var removed = gap - safeKeepMs;
+            if (removed <= 0)
+            {
+                continue;
+            }
+
+            cumulativeRemoved += removed;
+            cuts.Add(new TimelineSilenceCut(
+                GapStartMs: gapStart,
+                GapEndMs: gapEnd,
+                KeepMs: safeKeepMs,
+                RemovedMs: removed,
+                CumulativeRemovedMs: cumulativeRemoved));
+        }
+
+        if (cuts.Count == 0)
+        {
+            return (cuts, t => Math.Max(0, t));
+        }
+
+        int MapTime(int originalMs)
+        {
+            var t = Math.Max(0, originalMs);
+            var removedBefore = 0;
+            foreach (var cut in cuts)
+            {
+                var keptUntil = cut.GapStartMs + cut.KeepMs;
+                if (t <= keptUntil)
+                {
+                    break;
+                }
+
+                if (t < cut.GapEndMs)
+                {
+                    return Math.Max(0, keptUntil - removedBefore);
+                }
+
+                removedBefore += cut.RemovedMs;
+            }
+
+            var mapped = t - removedBefore;
+            return mapped < 0 ? 0 : mapped;
+        }
+
+        return (cuts, MapTime);
+    }
+
+    private static int ApplyMappedTimelineTimes(List<JsonObject> phraseEntries, Func<int, int> mapTimeMs)
+    {
+        if (phraseEntries == null || phraseEntries.Count == 0 || mapTimeMs == null)
+        {
+            return 0;
+        }
+
+        var updated = 0;
+        foreach (var entry in phraseEntries)
+        {
+            var start = ReadEntryStartMs(entry);
+            var end = ReadEntryEndMs(entry);
+            if (end < start)
+            {
+                end = start;
+            }
+
+            var mappedStart = mapTimeMs(start);
+            var mappedEnd = mapTimeMs(end);
+            if (mappedEnd < mappedStart)
+            {
+                mappedEnd = mappedStart;
+            }
+
+            var changed = mappedStart != start || mappedEnd != end;
+            entry["startMs"] = mappedStart;
+            entry["endMs"] = mappedEnd;
+            entry["durationMs"] = Math.Max(0, mappedEnd - mappedStart);
+            if (changed)
+            {
+                updated++;
+            }
+        }
+
+        return updated;
+    }
+
+    private static (Func<int, int> MapTimeMs, int Cuts, int RemovedTotalMs) BuildSilenceTrimMapFromSubtitleTimings(
+        List<FinalMixSubtitleTiming> timings,
+        int maxGapMs,
+        int keepMs)
+    {
+        if (timings == null || timings.Count < 2 || maxGapMs <= 0)
+        {
+            return (t => Math.Max(0, t), 0, 0);
+        }
+
+        var ordered = timings
+            .Select(t => (Start: Math.Max(0, t.StartMs), End: Math.Max(Math.Max(0, t.StartMs), t.EndMs)))
+            .OrderBy(r => r.Start)
+            .ToList();
+
+        var safeKeepMs = Math.Clamp(keepMs, 0, maxGapMs);
+        var cuts = new List<TimelineSilenceCut>();
+        var cumulativeRemoved = 0;
+        for (var i = 0; i < ordered.Count - 1; i++)
+        {
+            var gapStart = ordered[i].End;
+            var gapEnd = ordered[i + 1].Start;
+            if (gapEnd <= gapStart)
+            {
+                continue;
+            }
+
+            var gap = gapEnd - gapStart;
+            if (gap <= maxGapMs)
+            {
+                continue;
+            }
+
+            var removed = gap - safeKeepMs;
+            if (removed <= 0)
+            {
+                continue;
+            }
+
+            cumulativeRemoved += removed;
+            cuts.Add(new TimelineSilenceCut(
+                GapStartMs: gapStart,
+                GapEndMs: gapEnd,
+                KeepMs: safeKeepMs,
+                RemovedMs: removed,
+                CumulativeRemovedMs: cumulativeRemoved));
+        }
+
+        if (cuts.Count == 0)
+        {
+            return (t => Math.Max(0, t), 0, 0);
+        }
+
+        int MapTime(int originalMs)
+        {
+            var t = Math.Max(0, originalMs);
+            var removedBefore = 0;
+            foreach (var cut in cuts)
+            {
+                var keptUntil = cut.GapStartMs + cut.KeepMs;
+                if (t <= keptUntil)
+                {
+                    break;
+                }
+
+                if (t < cut.GapEndMs)
+                {
+                    return Math.Max(0, keptUntil - removedBefore);
+                }
+
+                removedBefore += cut.RemovedMs;
+            }
+
+            var mapped = t - removedBefore;
+            return mapped < 0 ? 0 : mapped;
+        }
+
+        return (MapTime, cuts.Count, cuts.Sum(c => c.RemovedMs));
+    }
+
+    private List<(int StartMs, int EndMs, string Text)> BuildSubtitleEntries(
+        List<JsonObject> phraseEntries,
+        string folderPath,
+        int introShiftMs,
+        int defaultPhraseGapMs,
+        int commaAttributionGapMs,
+        IReadOnlyDictionary<int, (int StartMs, int EndMs)>? fixedTimingsByIndex = null,
+        Action<int, int, string>? progress = null)
+    {
+        var result = new List<(int StartMs, int EndMs, string Text)>();
+        var currentMs = Math.Max(0, introShiftMs);
+
+        for (int i = 0; i < phraseEntries.Count; i++)
+        {
+            var phraseCurrent = i + 1;
+            var phraseTotal = Math.Max(1, phraseEntries.Count);
+            progress?.Invoke(phraseCurrent, phraseTotal, $"Video: elaborazione frase {phraseCurrent}/{phraseTotal}");
+
+            var entry = phraseEntries[i];
+            var text = (ReadString(entry, "text") ?? ReadString(entry, "Text") ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            var durationMs = 0;
+            var ttsFileName = ReadString(entry, "fileName") ?? ReadString(entry, "FileName") ?? ReadString(entry, "file_name");
+            if (!string.IsNullOrWhiteSpace(ttsFileName))
+            {
+                var ttsFilePath = Path.Combine(folderPath, ttsFileName);
+                if (File.Exists(ttsFilePath))
+                {
+                    durationMs = TryGetWavDurationFromFile(ttsFilePath) ?? 0;
+                    if (durationMs <= 0)
+                    {
+                        durationMs = TryGetAudioDurationMsFromFile(ttsFilePath) ?? 0;
+                    }
+                }
+            }
+
+            if (durationMs <= 0 &&
+                (TryReadNumber(entry, "durationMs", out var d) ||
+                 TryReadNumber(entry, "DurationMs", out d) ||
+                 TryReadNumber(entry, "duration_ms", out d)))
+            {
+                durationMs = (int)d;
+            }
+            if (durationMs <= 0)
+            {
+                durationMs = 1800;
+            }
+
+            var chunks = SplitSubtitleTextIntoChunks(text)
+                .Select(c => WrapSubtitleChunk(c, 44, 2))
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .ToList();
+            if (chunks.Count == 0)
+            {
+                continue;
+            }
+
+            var hasTimelineStart = TryReadNumber(entry, "startMs", out var startRaw) ||
+                                   TryReadNumber(entry, "StartMs", out startRaw) ||
+                                   TryReadNumber(entry, "start_ms", out startRaw);
+            var hasTimelineEnd = TryReadNumber(entry, "endMs", out var endRaw) ||
+                                 TryReadNumber(entry, "EndMs", out endRaw) ||
+                                 TryReadNumber(entry, "end_ms", out endRaw);
+
+            var startFromTimelineMs = hasTimelineStart ? Math.Max(0, (int)Math.Round(startRaw, MidpointRounding.AwayFromZero)) : -1;
+            var endFromTimelineMs = hasTimelineEnd ? Math.Max(0, (int)Math.Round(endRaw, MidpointRounding.AwayFromZero)) : -1;
+            var fixedTiming = (StartMs: 0, EndMs: 0);
+            var hasFixedTiming = fixedTimingsByIndex != null && fixedTimingsByIndex.TryGetValue(i, out fixedTiming);
+
+            var startMs = hasFixedTiming
+                ? Math.Max(0, fixedTiming.StartMs)
+                : hasTimelineStart
+                ? Math.Max(0, introShiftMs + startFromTimelineMs)
+                : Math.Max(0, currentMs);
+
+            var effectivePhraseDurationMs = durationMs;
+            if (hasFixedTiming)
+            {
+                effectivePhraseDurationMs = Math.Max(300, fixedTiming.EndMs - fixedTiming.StartMs);
+            }
+            else if (hasTimelineStart && hasTimelineEnd && endFromTimelineMs > startFromTimelineMs)
+            {
+                effectivePhraseDurationMs = Math.Max(300, endFromTimelineMs - startFromTimelineMs);
+            }
+
+            var chunkDurationMs = Math.Max(240, effectivePhraseDurationMs / Math.Max(1, chunks.Count));
+            var cursorMs = startMs;
+            for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
+            {
+                var chunkText = chunks[chunkIndex];
+                var chunkStart = cursorMs;
+                var chunkEnd = Math.Max(chunkStart + 200, chunkStart + chunkDurationMs);
+                result.Add((chunkStart, chunkEnd, chunkText));
+                cursorMs = chunkEnd;
+            }
+
+            var endMs = cursorMs;
+
+            var nextEntry = i + 1 < phraseEntries.Count ? phraseEntries[i + 1] : null;
+            if (hasFixedTiming)
+            {
+                if (fixedTimingsByIndex != null && fixedTimingsByIndex.TryGetValue(i + 1, out var nextFixedTiming))
+                {
+                    currentMs = Math.Max(endMs, nextFixedTiming.StartMs);
+                }
+                else
+                {
+                    currentMs = endMs + Math.Max(0, ComputePhraseGapMs(entry, nextEntry, defaultPhraseGapMs, commaAttributionGapMs));
+                }
+            }
+            else if (hasTimelineStart && hasTimelineEnd && endFromTimelineMs >= startFromTimelineMs)
+            {
+                var nextStartMs = -1;
+                if (nextEntry != null &&
+                    (TryReadNumber(nextEntry, "startMs", out var nextStartRaw) ||
+                     TryReadNumber(nextEntry, "StartMs", out nextStartRaw) ||
+                     TryReadNumber(nextEntry, "start_ms", out nextStartRaw)))
+                {
+                    nextStartMs = Math.Max(0, (int)Math.Round(nextStartRaw, MidpointRounding.AwayFromZero));
+                }
+
+                if (nextStartMs >= 0)
+                {
+                    currentMs = Math.Max(endMs, introShiftMs + nextStartMs);
+                }
+                else
+                {
+                    currentMs = endMs + Math.Max(0, ComputePhraseGapMs(entry, nextEntry, defaultPhraseGapMs, commaAttributionGapMs));
+                }
+            }
+            else
+            {
+                var gapAfterMs = ComputePhraseGapMs(entry, nextEntry, defaultPhraseGapMs, commaAttributionGapMs);
+                currentMs = endMs + Math.Max(0, gapAfterMs);
+            }
+        }
+
+        return result;
+    }
+
+    private static string BuildSrt(List<(int StartMs, int EndMs, string Text)> entries)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var e = entries[i];
+            sb.AppendLine((i + 1).ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine($"{FormatSrtTime(e.StartMs)} --> {FormatSrtTime(e.EndMs)}");
+            sb.AppendLine(EscapeSrtText(e.Text));
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string EscapeSrtText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        var lines = normalized
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => Regex.Replace(line, @"\s+", " ").Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToList();
+        if (lines.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return string.Join("\n", lines).Replace("-->", "->");
+    }
+
+    private static List<string> SplitSubtitleTextIntoChunks(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return new List<string>();
+        }
+
+        var normalized = Regex.Replace(text, @"\s+", " ").Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return new List<string>();
+        }
+
+        var chunks = Regex
+            .Split(normalized, @"(?<=[\.,])\s+")
+            .Select(s => s.Trim())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
+
+        return chunks.Count == 0 ? new List<string> { normalized } : chunks;
+    }
+
+    private static string WrapSubtitleChunk(string text, int maxLineLength, int maxLines)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var words = Regex.Split(text.Trim(), @"\s+")
+            .Where(w => !string.IsNullOrWhiteSpace(w))
+            .ToList();
+        if (words.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var lines = new List<string>();
+        var current = new StringBuilder();
+
+        foreach (var word in words)
+        {
+            if (current.Length == 0)
+            {
+                current.Append(word);
+                continue;
+            }
+
+            if (current.Length + 1 + word.Length <= maxLineLength || lines.Count >= maxLines - 1)
+            {
+                current.Append(' ').Append(word);
+                continue;
+            }
+
+            lines.Add(current.ToString());
+            current.Clear();
+            current.Append(word);
+        }
+
+        if (current.Length > 0)
+        {
+            lines.Add(current.ToString());
+        }
+
+        if (lines.Count > maxLines)
+        {
+            var head = lines.Take(maxLines - 1).ToList();
+            head.Add(string.Join(" ", lines.Skip(maxLines - 1)));
+            lines = head;
+        }
+
+        return string.Join("\n", lines.Select(l => l.Trim()).Where(l => l.Length > 0));
+    }
+
+    private static string FormatSrtTime(int ms)
+    {
+        if (ms < 0) ms = 0;
+        var t = TimeSpan.FromMilliseconds(ms);
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "{0:00}:{1:00}:{2:00},{3:000}",
+            (int)t.TotalHours,
+            t.Minutes,
+            t.Seconds,
+            t.Milliseconds);
+    }
+
+    private static string EscapeForFfmpegSubtitlesPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return string.Empty;
+
+        var normalized = path.Replace("\\", "/");
+        if (normalized.Length >= 3 && normalized[1] == ':' && normalized[2] == '/')
+        {
+            normalized = normalized.Insert(1, "\\");
+        }
+
+        normalized = normalized.Replace("'", "\\'");
+        normalized = normalized.Replace(",", "\\,");
+        return normalized;
+    }
+
+    private static readonly HttpClient OpenImagesHttpClient = new()
+    {
+        Timeout = TimeSpan.FromSeconds(25)
+    };
+
+    private static readonly string[] OpenImagesClassDescriptionUrls =
+    {
+        "https://storage.googleapis.com/openimages/v5/class-descriptions-boxable.csv"
+    };
+
+    private static readonly string[] OpenImagesValidationLabelsUrls =
+    {
+        "https://storage.googleapis.com/openimages/v5/validation-annotations-human-imagelabels-boxable.csv"
+    };
+
+    private static readonly string[] OpenImagesImageUrlTemplates =
+    {
+        "https://open-images-dataset.s3.amazonaws.com/validation/{0}.jpg",
+        "https://storage.googleapis.com/openimages/v6/validation/{0}.jpg",
+        "https://storage.googleapis.com/openimages/v5/validation/{0}.jpg",
+        "https://storage.googleapis.com/openimages/2018_04/validation/{0}.jpg"
+    };
+
+    private static readonly string[] SciFiSeedKeywords =
+    {
+        "space",
+        "planet",
+        "moon",
+        "star",
+        "rocket",
+        "spacecraft",
+        "satellite",
+        "astronaut",
+        "spaceship"
+    };
+
+    private static readonly string[] SpaceOnlyClassHints =
+    {
+        "space",
+        "astronaut",
+        "rocket",
+        "spacecraft",
+        "satellite",
+        "planet",
+        "moon",
+        "sky",
+        "star"
+    };
+
+    private static readonly Dictionary<string, string[]> AmbientKeywordSciFiMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["astronave"] = new[] { "spaceship", "spacecraft", "rocket", "space" },
+        ["navicella"] = new[] { "spacecraft", "spaceship", "space" },
+        ["spazio"] = new[] { "space", "planet", "galaxy", "star", "moon", "satellite" },
+        ["galassia"] = new[] { "galaxy", "space", "star" },
+        ["cosmo"] = new[] { "space", "galaxy", "star" },
+        ["orbita"] = new[] { "satellite", "spacecraft", "space" },
+        ["pianeta"] = new[] { "planet", "space", "moon" },
+        ["luna"] = new[] { "moon", "space", "night" },
+        ["marte"] = new[] { "planet", "desert", "space" },
+        ["stazione"] = new[] { "spacecraft", "satellite", "station" },
+        ["stazione spaziale"] = new[] { "spacecraft", "satellite", "space" },
+        ["alieno"] = new[] { "space", "planet", "creature" },
+        ["alieni"] = new[] { "space", "planet", "creature" }
+    };
+
+    private static IEnumerable<string> ExtractAmbientKeywordsForOpenImages(IEnumerable<JsonObject> phraseEntries)
+    {
+        var keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in phraseEntries)
+        {
+            var pieces = new[]
+            {
+                ReadString(entry, "ambient_sound_tags"),
+                ReadString(entry, "ambientSoundTags"),
+                ReadString(entry, "AmbientSoundTags"),
+                ReadString(entry, "ambient_sound_description"),
+                ReadString(entry, "ambientSoundDescription"),
+                ReadString(entry, "AmbientSoundDescription"),
+                ReadString(entry, "ambientSounds"),
+                ReadString(entry, "ambient_sounds")
+            };
+
+            foreach (var piece in pieces)
+            {
+                if (string.IsNullOrWhiteSpace(piece))
+                    continue;
+
+                foreach (var token in Regex.Split(piece, @"[,;|/\n\r]+"))
+                {
+                    var t = token.Trim().ToLowerInvariant();
+                    if (t.Length < 3) continue;
+                    if (t.StartsWith("suono ") || t.StartsWith("rumore "))
+                    {
+                        t = t.Split(' ', 2).LastOrDefault()?.Trim() ?? t;
+                    }
+                    if (t.Length >= 3)
+                    {
+                        keywords.Add(t);
+                    }
+                }
+            }
+        }
+
+        // Add normalized/expanded terms for better OpenImages matching, with sci-fi preference.
+        foreach (var k in keywords.ToList())
+        {
+            if (AmbientKeywordSciFiMap.TryGetValue(k, out var expansions))
+            {
+                foreach (var ex in expansions)
+                {
+                    if (!string.IsNullOrWhiteSpace(ex))
+                    {
+                        keywords.Add(ex.Trim().ToLowerInvariant());
+                    }
+                }
+            }
+        }
+
+        if (ShouldPreferSciFi(keywords))
+        {
+            foreach (var seed in SciFiSeedKeywords)
+            {
+                keywords.Add(seed);
+            }
+        }
+
+        if (keywords.Count == 0)
+        {
+            foreach (var seed in SciFiSeedKeywords.Take(8))
+            {
+                keywords.Add(seed);
+            }
+        }
+
+        return keywords.Take(24);
+    }
+
+    private static bool ShouldPreferSciFi(IEnumerable<string> ambientKeywords)
+    {
+        foreach (var raw in ambientKeywords)
+        {
+            var k = (raw ?? string.Empty).Trim().ToLowerInvariant();
+            if (k.Length == 0) continue;
+            if (k.Contains("space", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("galaxy", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("planet", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("astronaut", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("rocket", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("spaceship", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("spacecraft", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("satellite", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("futur", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("cyber", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("astronav", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("spazio", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("galassi", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("alien", StringComparison.OrdinalIgnoreCase) ||
+                k.Contains("robot", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsSpaceOrPlanetText(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var value = raw.Trim().ToLowerInvariant();
+        return value.Contains("space", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("planet", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("moon", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("rocket", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("spacecraft", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("spaceship", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("satellite", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("astronaut", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("star", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("sky", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("spazio", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("pianeta", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("luna", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("astronav", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSpaceOrPlanetImageAsset(ImageAsset image)
+    {
+        if (image == null) return false;
+        return IsSpaceOrPlanetText(image.Tags) ||
+               IsSpaceOrPlanetText(image.Description) ||
+               IsSpaceOrPlanetText(image.ImageName) ||
+               IsSpaceOrPlanetText(image.Provenance) ||
+               IsSpaceOrPlanetText(image.ImagePath);
+    }
+
+    private static int ScoreSpaceText(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return 0;
+        }
+
+        var value = raw.Trim().ToLowerInvariant();
+        var score = 0;
+        if (value.Contains("planet", StringComparison.OrdinalIgnoreCase) || value.Contains("pianeta", StringComparison.OrdinalIgnoreCase)) score += 5;
+        if (value.Contains("moon", StringComparison.OrdinalIgnoreCase) || value.Contains("luna", StringComparison.OrdinalIgnoreCase)) score += 5;
+        if (value.Contains("space", StringComparison.OrdinalIgnoreCase) || value.Contains("spazio", StringComparison.OrdinalIgnoreCase)) score += 4;
+        if (value.Contains("astronaut", StringComparison.OrdinalIgnoreCase)) score += 3;
+        if (value.Contains("satellite", StringComparison.OrdinalIgnoreCase)) score += 3;
+        if (value.Contains("rocket", StringComparison.OrdinalIgnoreCase)) score += 3;
+        if (value.Contains("spacecraft", StringComparison.OrdinalIgnoreCase) || value.Contains("spaceship", StringComparison.OrdinalIgnoreCase)) score += 3;
+        if (value.Contains("star", StringComparison.OrdinalIgnoreCase) || value.Contains("sky", StringComparison.OrdinalIgnoreCase)) score += 1;
+        return score;
+    }
+
+    private static IReadOnlyList<string> BuildNasaQueries(IReadOnlyCollection<string> ambientKeywords)
+    {
+        var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var keyword in ambientKeywords)
+        {
+            var k = (keyword ?? string.Empty).Trim().ToLowerInvariant();
+            if (k.Length >= 3 && IsSpaceOrPlanetText(k))
+            {
+                terms.Add(k);
+            }
+        }
+
+        foreach (var seed in SciFiSeedKeywords)
+        {
+            terms.Add(seed);
+        }
+
+        var topTerms = terms
+            .OrderByDescending(ScoreSpaceText)
+            .ThenBy(t => t, StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+
+        var queries = new List<string>();
+        if (topTerms.Count > 0)
+        {
+            queries.Add(string.Join(" ", topTerms));
+        }
+        queries.Add("planet moon space");
+        queries.Add("astronaut satellite rocket spacecraft");
+        return queries.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private async Task<List<string>> DownloadNasaSpaceBackgroundsAsync(
+        IReadOnlyCollection<string> ambientKeywords,
+        string destinationFolder,
+        int maxImages,
+        string runId,
+        long storyId)
+    {
+        var downloaded = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(destinationFolder);
+
+            var queries = BuildNasaQueries(ambientKeywords);
+            var candidates = new List<(string Url, string MetaText, string FileStem)>();
+            var seenUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var query in queries)
+            {
+                if (candidates.Count >= Math.Max(maxImages * 20, 40))
+                {
+                    break;
+                }
+
+                var searchUrl = $"https://images-api.nasa.gov/search?media_type=image&q={Uri.EscapeDataString(query)}";
+                using var response = await OpenImagesHttpClient.GetAsync(searchUrl, HttpCompletionOption.ResponseHeadersRead);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                await using var stream = await response.Content.ReadAsStreamAsync();
+                using var doc = await JsonDocument.ParseAsync(stream);
+                if (!doc.RootElement.TryGetProperty("collection", out var collection) ||
+                    !collection.TryGetProperty("items", out var items) ||
+                    items.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var item in items.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("data", out var dataArray) ||
+                        dataArray.ValueKind != JsonValueKind.Array ||
+                        dataArray.GetArrayLength() == 0)
+                    {
+                        continue;
+                    }
+
+                    var data = dataArray[0];
+                    var mediaType = data.TryGetProperty("media_type", out var mediaNode) ? (mediaNode.GetString() ?? string.Empty) : string.Empty;
+                    if (!string.Equals(mediaType, "image", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var title = data.TryGetProperty("title", out var titleNode) ? (titleNode.GetString() ?? string.Empty) : string.Empty;
+                    var description = data.TryGetProperty("description", out var descNode) ? (descNode.GetString() ?? string.Empty) : string.Empty;
+                    var nasaId = data.TryGetProperty("nasa_id", out var idNode) ? (idNode.GetString() ?? string.Empty) : string.Empty;
+                    var keywordsText = string.Empty;
+                    if (data.TryGetProperty("keywords", out var keywordsNode) && keywordsNode.ValueKind == JsonValueKind.Array)
+                    {
+                        keywordsText = string.Join(" ", keywordsNode.EnumerateArray()
+                            .Where(k => k.ValueKind == JsonValueKind.String)
+                            .Select(k => k.GetString())
+                            .Where(s => !string.IsNullOrWhiteSpace(s)));
+                    }
+
+                    var metaText = $"{title} {description} {keywordsText}";
+                    if (!IsSpaceOrPlanetText(metaText))
+                    {
+                        continue;
+                    }
+
+                    if (!item.TryGetProperty("links", out var linksNode) || linksNode.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    string? imageUrl = null;
+                    foreach (var link in linksNode.EnumerateArray())
+                    {
+                        if (!link.TryGetProperty("href", out var hrefNode)) continue;
+                        var href = hrefNode.GetString();
+                        if (string.IsNullOrWhiteSpace(href)) continue;
+                        if (!href.StartsWith("http", StringComparison.OrdinalIgnoreCase)) continue;
+                        imageUrl = href;
+                        break;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(imageUrl) || !seenUrls.Add(imageUrl))
+                    {
+                        continue;
+                    }
+
+                    var fileStem = string.IsNullOrWhiteSpace(nasaId) ? Guid.NewGuid().ToString("N") : SanitizeForFile(nasaId);
+                    candidates.Add((imageUrl, metaText, fileStem));
+                    if (candidates.Count >= Math.Max(maxImages * 20, 40))
+                    {
+                        break;
+                    }
+                }
+            }
+
+            var rnd = new Random(unchecked((int)(storyId ^ (storyId >> 32))));
+            var ordered = candidates
+                .OrderByDescending(c => ScoreSpaceText(c.MetaText))
+                .ThenBy(_ => rnd.Next())
+                .ToList();
+
+            foreach (var candidate in ordered)
+            {
+                if (downloaded.Count >= maxImages) break;
+
+                var extension = ".jpg";
+                try
+                {
+                    var uri = new Uri(candidate.Url);
+                    var ext = Path.GetExtension(uri.AbsolutePath);
+                    if (!string.IsNullOrWhiteSpace(ext) && ext.Length <= 5)
+                    {
+                        extension = ext;
+                    }
+                }
+                catch
+                {
+                    // keep default extension
+                }
+
+                var filePath = Path.Combine(destinationFolder, $"{candidate.FileStem}{extension}");
+                if (File.Exists(filePath))
+                {
+                    var fi = new FileInfo(filePath);
+                    if (fi.Length >= 40 * 1024)
+                    {
+                        downloaded.Add(filePath);
+                    }
+                    continue;
+                }
+
+                if (await TryDownloadImageAsync(candidate.Url, filePath, minBytes: 40 * 1024))
+                {
+                    downloaded.Add(filePath);
+                }
+            }
+
+            _customLogger?.Append(runId, $"[{storyId}] NASA immagini: query={queries.Count}, candidate={candidates.Count}, scaricate={downloaded.Count}.");
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] [WARN] Download immagini NASA fallito: {ex.Message}");
+        }
+
+        return downloaded;
+    }
+
+    private async Task<List<string>> ResolveStoryBackgroundImagesAsync(
+        IReadOnlyCollection<string> ambientKeywords,
+        string imagesFolder,
+        int maxImages,
+        string runId,
+        long storyId)
+    {
+        var result = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(imagesFolder);
+            var fromCatalog = _database.ListActiveImagesByTags(ambientKeywords, Math.Max(maxImages * 3, 12))
+                .Where(IsSpaceOrPlanetImageAsset)
+                .Where(i => !string.IsNullOrWhiteSpace(i.ImagePath) && File.Exists(i.ImagePath))
+                .Take(maxImages)
+                .ToList();
+
+            foreach (var item in fromCatalog)
+            {
+                result.Add(item.ImagePath);
+                _database.MarkImageUsed(item.Id);
+            }
+
+            if (result.Count >= maxImages)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] Riuso catalogo immagini: {result.Count} elementi trovati per i tag.");
+                return result;
+            }
+
+            var toDownload = maxImages - result.Count;
+            var downloaded = await DownloadNasaSpaceBackgroundsAsync(ambientKeywords, imagesFolder, toDownload, runId, storyId);
+            var tagsSerialized = string.Join(",", ambientKeywords
+                .Select(t => t.Trim().ToLowerInvariant())
+                .Where(t => t.Length >= 3)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(30));
+
+            foreach (var path in downloaded)
+            {
+                if (!File.Exists(path)) continue;
+                var fileName = Path.GetFileName(path);
+                var description = string.IsNullOrWhiteSpace(tagsSerialized)
+                    ? "Immagine sfondo video"
+                    : $"Immagine sfondo video tags: {tagsSerialized}";
+
+                try
+                {
+                    var id = _database.InsertImage(new ImageAsset
+                    {
+                        ImageName = fileName,
+                        Description = description,
+                        Provenance = "nasa/images-api.nasa.gov",
+                        Tags = tagsSerialized,
+                        ImagePath = path,
+                        UsageCount = 1,
+                        IsActive = true,
+                        IsDeleted = false,
+                        SortOrder = 0,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow
+                    });
+                    if (id > 0)
+                    {
+                        result.Add(path);
+                    }
+                }
+                catch
+                {
+                    // Duplicate image_path or other insert errors: still usable for video.
+                    result.Add(path);
+                }
+            }
+
+            if (result.Count == 0)
+            {
+                // Fallback soft: usa qualsiasi immagine attiva già catalogata.
+                var generic = _database.ListActiveImagesByTags(SciFiSeedKeywords, Math.Max(maxImages * 2, 8))
+                    .Where(IsSpaceOrPlanetImageAsset)
+                    .Where(i => !string.IsNullOrWhiteSpace(i.ImagePath) && File.Exists(i.ImagePath))
+                    .Take(maxImages)
+                    .ToList();
+                foreach (var item in generic)
+                {
+                    result.Add(item.ImagePath);
+                    _database.MarkImageUsed(item.Id);
+                }
+            }
+
+            if (result.Count == 0)
+            {
+                var fallbackImagePath = EnsureFallbackBackgroundImage(imagesFolder, runId, storyId);
+                if (!string.IsNullOrWhiteSpace(fallbackImagePath) && File.Exists(fallbackImagePath))
+                {
+                    result.Add(fallbackImagePath);
+                }
+            }
+
+            return result.Distinct(StringComparer.OrdinalIgnoreCase).Take(maxImages).ToList();
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] [WARN] Risoluzione immagini background fallita: {ex.Message}");
+            if (result.Count == 0)
+            {
+                try
+                {
+                    var fallbackImagePath = EnsureFallbackBackgroundImage(imagesFolder, runId, storyId);
+                    if (!string.IsNullOrWhiteSpace(fallbackImagePath) && File.Exists(fallbackImagePath))
+                    {
+                        result.Add(fallbackImagePath);
+                    }
+                }
+                catch
+                {
+                    // best effort
+                }
+            }
+            return result.Distinct(StringComparer.OrdinalIgnoreCase).Take(Math.Max(1, maxImages)).ToList();
+        }
+    }
+
+    private string EnsureFallbackBackgroundImage(string imagesFolder, string runId, long storyId)
+    {
+        Directory.CreateDirectory(imagesFolder);
+        var fallbackPath = Path.Combine(imagesFolder, "fallback_background.ppm");
+        if (File.Exists(fallbackPath))
+        {
+            return fallbackPath;
+        }
+
+        // PPM ASCII semplice: sempre leggibile da ffmpeg e senza dipendenze esterne.
+        const int width = 64;
+        const int height = 36;
+        var sb = new StringBuilder();
+        sb.AppendLine("P3");
+        sb.AppendLine($"{width} {height}");
+        sb.AppendLine("255");
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var r = 20 + (x * 80 / Math.Max(1, width - 1));
+                var g = 30 + (y * 90 / Math.Max(1, height - 1));
+                var b = 55 + ((x + y) * 100 / Math.Max(1, width + height - 2));
+                sb.Append(r).Append(' ').Append(g).Append(' ').Append(b).Append(' ');
+            }
+            sb.AppendLine();
+        }
+
+        File.WriteAllText(fallbackPath, sb.ToString(), Encoding.ASCII);
+        _customLogger?.Append(runId, $"[{storyId}] Creata immagine fallback locale: {Path.GetFileName(fallbackPath)}");
+        return fallbackPath;
+    }
+
+    private async Task<List<string>> DownloadOpenImagesBackgroundsAsync(
+        IReadOnlyCollection<string> ambientKeywords,
+        string destinationFolder,
+        int maxImages,
+        string runId,
+        long storyId)
+    {
+        var downloaded = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(destinationFolder);
+
+            var cacheRoot = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", ".openimages_cache");
+            Directory.CreateDirectory(cacheRoot);
+            var classPath = Path.Combine(cacheRoot, "class-descriptions-boxable.csv");
+            var labelsPath = Path.Combine(cacheRoot, "validation-annotations-human-imagelabels-boxable.csv");
+
+            if (!await EnsureDownloadedFromAnyUrlAsync(OpenImagesClassDescriptionUrls, classPath))
+            {
+                _customLogger?.Append(runId, $"[{storyId}] [WARN] OpenImages class-descriptions non scaricabile.");
+                return downloaded;
+            }
+
+            if (!await EnsureDownloadedFromAnyUrlAsync(OpenImagesValidationLabelsUrls, labelsPath))
+            {
+                _customLogger?.Append(runId, $"[{storyId}] [WARN] OpenImages validation labels non scaricabile.");
+                return downloaded;
+            }
+
+            var classById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var line in await File.ReadAllLinesAsync(classPath))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var idx = line.IndexOf(',');
+                if (idx <= 0 || idx >= line.Length - 1) continue;
+                var classId = line.Substring(0, idx).Trim();
+                var className = line[(idx + 1)..].Trim().ToLowerInvariant();
+                if (classId.Length > 0 && className.Length > 0 && !classById.ContainsKey(classId))
+                {
+                    classById[classId] = className;
+                }
+            }
+
+            var preferSciFi = ShouldPreferSciFi(ambientKeywords);
+            var normalizedKeywords = ambientKeywords
+                .Select(k => (k ?? string.Empty).Trim().ToLowerInvariant())
+                .Where(k => k.Length >= 3)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var classPriorityById = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var matchedClassIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var kvp in classById)
+            {
+                var classId = kvp.Key;
+                var className = kvp.Value;
+                var priority = 0;
+                var isSpaceClass = SpaceOnlyClassHints.Any(h => className.Contains(h, StringComparison.OrdinalIgnoreCase));
+                if (!isSpaceClass)
+                {
+                    continue;
+                }
+
+                if (normalizedKeywords.Any(k => className.Contains(k, StringComparison.OrdinalIgnoreCase) || k.Contains(className, StringComparison.OrdinalIgnoreCase)))
+                {
+                    priority = Math.Max(priority, 5);
+                }
+
+                priority = Math.Max(priority, 10);
+
+                if (priority > 0)
+                {
+                    matchedClassIds.Add(classId);
+                    classPriorityById[classId] = priority;
+                }
+            }
+
+            if (matchedClassIds.Count == 0)
+            {
+                _customLogger?.Append(runId, $"[{storyId}] Nessuna classe OpenImages a tema spazio/pianeti trovata.");
+                return downloaded;
+            }
+
+            var imageScores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var imageMatches = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            using (var reader = new StreamReader(labelsPath))
+            {
+                _ = await reader.ReadLineAsync(); // header
+                var scanned = 0;
+                var maxScanLines = Math.Max(200_000, maxImages * 120_000);
+                var targetCandidates = Math.Max(maxImages * 120, 120);
+                while (!reader.EndOfStream)
+                {
+                    scanned++;
+                    if (scanned > maxScanLines && imageScores.Count >= Math.Max(maxImages * 20, 20))
+                    {
+                        break;
+                    }
+
+                    var line = await reader.ReadLineAsync();
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var parts = line.Split(',');
+                    if (parts.Length < 4) continue;
+                    var imageId = parts[0].Trim();
+                    var labelId = parts[2].Trim();
+                    var confidence = parts[3].Trim();
+                    if (!matchedClassIds.Contains(labelId)) continue;
+                    if (!string.Equals(confidence, "1", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (imageId.Length == 0) continue;
+
+                    var score = classPriorityById.TryGetValue(labelId, out var w) ? w : 1;
+                    if (!imageScores.ContainsKey(imageId))
+                    {
+                        imageScores[imageId] = 0;
+                        imageMatches[imageId] = 0;
+                    }
+                    imageScores[imageId] += score;
+                    imageMatches[imageId]++;
+
+                    if (imageScores.Count >= targetCandidates && scanned > maxScanLines / 4)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            // deterministic order: first best thematic score, then pseudo-random to vary results.
+            var rnd = new Random(unchecked((int)(storyId ^ (storyId >> 32))));
+            var orderedCandidates = imageScores
+                .OrderByDescending(kvp => kvp.Value)
+                .ThenByDescending(kvp => imageMatches.TryGetValue(kvp.Key, out var m) ? m : 0)
+                .ThenBy(_ => rnd.Next())
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var imageId in orderedCandidates)
+            {
+                if (downloaded.Count >= maxImages) break;
+                var filePath = Path.Combine(destinationFolder, $"{imageId}.jpg");
+                if (File.Exists(filePath))
+                {
+                    var existing = new FileInfo(filePath);
+                    if (existing.Length >= 40 * 1024)
+                    {
+                        downloaded.Add(filePath);
+                    }
+                    continue;
+                }
+
+                foreach (var template in OpenImagesImageUrlTemplates)
+                {
+                    var url = string.Format(CultureInfo.InvariantCulture, template, imageId);
+                    if (await TryDownloadImageAsync(url, filePath, minBytes: 40 * 1024))
+                    {
+                        downloaded.Add(filePath);
+                        break;
+                    }
+                }
+            }
+
+            _customLogger?.Append(runId, $"[{storyId}] OpenImages: preferSciFi={preferSciFi}, classi={matchedClassIds.Count}, candidati={imageScores.Count}, scaricate={downloaded.Count}.");
+        }
+        catch (Exception ex)
+        {
+            _customLogger?.Append(runId, $"[{storyId}] [WARN] Download immagini OpenImages fallito: {ex.Message}");
+        }
+
+        return downloaded;
+    }
+
+    private static async Task<bool> EnsureDownloadedFromAnyUrlAsync(IEnumerable<string> urls, string destinationPath)
+    {
+        if (File.Exists(destinationPath))
+        {
+            var fi = new FileInfo(destinationPath);
+            if (fi.Length > 64) return true;
+        }
+
+        foreach (var url in urls)
+        {
+            try
+            {
+                using var response = await OpenImagesHttpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                if (!response.IsSuccessStatusCode)
+                    continue;
+
+                await using var input = await response.Content.ReadAsStreamAsync();
+                await using var output = File.Create(destinationPath);
+                await input.CopyToAsync(output);
+                var fi = new FileInfo(destinationPath);
+                if (fi.Length > 64) return true;
+            }
+            catch
+            {
+                // try next URL
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> TryDownloadImageAsync(string url, string destinationPath, int minBytes = 5120)
+    {
+        try
+        {
+            using var response = await OpenImagesHttpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            if (!response.IsSuccessStatusCode)
+            {
+                return false;
+            }
+
+            var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+            if (!mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            await using var input = await response.Content.ReadAsStreamAsync();
+            await using var output = File.Create(destinationPath);
+            await input.CopyToAsync(output);
+            return new FileInfo(destinationPath).Length >= Math.Max(1024, minBytes);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? BuildSlideshowConcatFile(IReadOnlyList<string> images, string folderPath, int targetDurationMs, int segmentSeconds)
+    {
+        if (images == null || images.Count == 0 || segmentSeconds <= 0)
+            return null;
+
+        var totalSeconds = Math.Max(1, (int)Math.Ceiling(targetDurationMs / 1000.0));
+        var blocks = Math.Max(1, (int)Math.Ceiling(totalSeconds / (double)segmentSeconds));
+        var concatPath = Path.Combine(folderPath, "video_backgrounds_concat.txt");
+        var sb = new StringBuilder();
+        for (int i = 0; i < blocks; i++)
+        {
+            var img = images[i % images.Count];
+            sb.AppendLine($"file '{img.Replace("'", "''")}'");
+            sb.AppendLine($"duration {segmentSeconds.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        // ffmpeg concat demuxer wants the final file repeated without duration
+        var lastImg = images[(blocks - 1) % images.Count];
+        sb.AppendLine($"file '{lastImg.Replace("'", "''")}'");
+
+        File.WriteAllText(concatPath, sb.ToString(), Encoding.UTF8);
+        return concatPath;
     }
 
     private static Dictionary<string, CharacterVoiceInfo> BuildCharacterMap(JsonArray charactersArray)

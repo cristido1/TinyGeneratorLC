@@ -1,11 +1,14 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
     [Table("stats_models")]
-    public partial class ModelStatsRecord : ISoftDelete, IActiveFlag, IOrderable
+    public partial class ModelStatsRecord : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
+        [NotMapped]
+        public int Id { get; set; }
+
         [Column("model_name")]
         public string ModelName { get; set; } = string.Empty;
 
@@ -70,3 +73,4 @@ namespace TinyGenerator.Models
         public int? DoneOtherCount { get; set; }
     }
 }
+

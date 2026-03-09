@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
     [Table("log_analysis")]
-    public partial class LogAnalysis : ISoftDelete, IActiveFlag, IOrderable
+    public partial class LogAnalysis : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
         [Key]
         [Column("id")]
@@ -26,3 +26,4 @@ namespace TinyGenerator.Models
         public bool Succeeded { get; set; }
     }
 }
+

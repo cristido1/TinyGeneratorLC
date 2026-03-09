@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
@@ -9,7 +9,7 @@ namespace TinyGenerator.Models;
 /// Funge da cache per evitare ricalcoli.
 /// </summary>
 [Table("mapped_sentiments")]
-public partial class MappedSentiment : ISoftDelete, IActiveFlag, IOrderable
+public partial class MappedSentiment : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
@@ -39,7 +39,7 @@ public partial class MappedSentiment : ISoftDelete, IActiveFlag, IOrderable
     public float? Confidence { get; set; }
 
     /// <summary>
-    /// Come è stata determinata la mappatura: "direct", "seed", "embedding", "agent", "default"
+    /// Come Ã¨ stata determinata la mappatura: "direct", "seed", "embedding", "agent", "default"
     /// </summary>
     [Column("source_type")]
     [MaxLength(20)]
@@ -48,3 +48,4 @@ public partial class MappedSentiment : ISoftDelete, IActiveFlag, IOrderable
     [Column("created_at")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
+

@@ -1,7 +1,8 @@
-namespace TinyGenerator.Models;
+﻿namespace TinyGenerator.Models;
 
-public interface ICreateUpdateDate
+public interface ITimeStamped
 {
     DateTime? CreatedAt { get; set; }
     DateTime? UpdatedAt { get; set; }
 }
+

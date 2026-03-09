@@ -146,10 +146,10 @@ public sealed partial class SoundSearchService
 
         var existing = _database.ListSounds(type: type);
         var existingPaths = new HashSet<string>(
-            existing.Where(s => !string.IsNullOrWhiteSpace(s.FilePath)).Select(s => Path.GetFullPath(s.FilePath)),
+            existing.Where(s => !string.IsNullOrWhiteSpace(s.SoundPath)).Select(s => Path.GetFullPath(s.SoundPath)),
             StringComparer.OrdinalIgnoreCase);
         var existingKeys = new HashSet<string>(
-            existing.Select(s => $"{NormalizeText(s.Library)}|{NormalizeText(s.FileName)}"),
+            existing.Select(s => $"{NormalizeText(s.Library)}|{NormalizeText(s.SoundName)}"),
             StringComparer.OrdinalIgnoreCase);
 
         var maxInsertPerSearch = Math.Max(1, opts.MaxInsertPerSearch > 0 ? opts.MaxInsertPerSearch : 100);
@@ -170,7 +170,7 @@ public sealed partial class SoundSearchService
                 {
                     result.Inserted.Add(inserted);
                     result.InsertedCount++;
-                    LogInfo($"Inserito soundId={inserted.SoundId} file='{inserted.FileName}' source={inserted.Source} score={inserted.Score:0.##}");
+                    LogInfo($"Inserito soundId={inserted.SoundId} file='{inserted.SoundName}' source={inserted.Source} score={inserted.Score:0.##}");
                 }
                 else
                 {
@@ -263,8 +263,8 @@ public sealed partial class SoundSearchService
         {
             Type = type,
             Library = sourceFolder,
-            FilePath = fullPath,
-            FileName = fileName,
+            SoundPath = fullPath,
+            SoundName = fileName,
             Description = BuildDescription(candidate, missing),
             License = candidate.License,
             Tags = MergeTags(missing.Tags, candidate.Tags),

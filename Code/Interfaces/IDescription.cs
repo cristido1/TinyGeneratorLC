@@ -2,5 +2,5 @@ namespace TinyGenerator.Models;
 
 public interface IDescription
 {
-    string Description { get; set; }
+    string? Description { get; set; }
 }

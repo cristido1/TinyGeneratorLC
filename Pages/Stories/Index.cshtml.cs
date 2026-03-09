@@ -944,6 +944,46 @@ $@"<!doctype html>
             return RedirectToPage();
         }
 
+        public IActionResult OnPostGenerateStoryVideo(long id, string folderName)
+        {
+            if (id <= 0 || string.IsNullOrWhiteSpace(folderName))
+            {
+                TempData["ErrorMessage"] = "Story o cartella non validi per la generazione video.";
+                return RedirectToPage();
+            }
+
+            try
+            {
+                var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", folderName);
+                var hasFinalMix = System.IO.File.Exists(Path.Combine(folderPath, "final_mix.mp3"))
+                    || System.IO.File.Exists(Path.Combine(folderPath, "final_mix.wav"));
+                if (!hasFinalMix)
+                {
+                    TempData["ErrorMessage"] = "Generazione video non disponibile: manca il mix finale (final_mix.mp3/final_mix.wav).";
+                    return RedirectToPage();
+                }
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = $"Errore nella verifica del mix finale: {ex.Message}";
+                return RedirectToPage();
+            }
+
+            var runId = QueueStoryCommand(
+                id,
+                "generate_story_video",
+                async ctx =>
+                {
+                    var (success, error) = await _stories.GenerateStoryVideoForStoryAsync(id, folderName, ctx.RunId);
+                    var message = success ? "Video con sottotitoli completato." : error;
+                    return new CommandResult(success, message);
+                },
+                "Generazione video con sottotitoli avviata in background.");
+
+            TempData["StatusMessage"] = $"Generazione video avviata (run {runId}).";
+            return RedirectToPage();
+        }
+
         public IActionResult OnPostGenerateTtsJson(long id)
         {
             var runId = QueueStoryCommand(
@@ -1094,6 +1134,123 @@ $@"<!doctype html>
             }
             
             return NotFound("File audio finale non trovato");
+        }
+
+        public IActionResult OnGetFinalVideo(long id)
+        {
+            var story = _stories.GetStoryById(id);
+            if (story == null || string.IsNullOrWhiteSpace(story.Folder)) return NotFound();
+
+            var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
+            var videoPath = Path.Combine(folderPath, "final_video.mp4");
+            if (!System.IO.File.Exists(videoPath))
+            {
+                return NotFound("File video finale non trovato");
+            }
+
+            return new PhysicalFileResult(videoPath, "video/mp4")
+            {
+                FileDownloadName = "final_video.mp4",
+                EnableRangeProcessing = true
+            };
+        }
+
+        public IActionResult OnGetFinalVideoFullscreen(long id)
+        {
+            var story = _stories.GetStoryById(id);
+            if (story == null || string.IsNullOrWhiteSpace(story.Folder)) return NotFound();
+
+            var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "stories_folder", story.Folder);
+            var videoPath = Path.Combine(folderPath, "final_video.mp4");
+            if (!System.IO.File.Exists(videoPath))
+            {
+                return NotFound("File video finale non trovato");
+            }
+
+            var videoUrl = Url.Page("/Stories/Index", null, new { handler = "FinalVideo", id }, Request.Scheme)
+                ?? $"/Stories/Index?handler=FinalVideo&id={id}";
+            var safeTitle = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(story.Title) ? $"Story {id}" : story.Title);
+            var safeVideoUrl = WebUtility.HtmlEncode(videoUrl);
+
+            var html = $@"<!doctype html>
+<html lang=""it"">
+<head>
+  <meta charset=""utf-8"">
+  <meta name=""viewport"" content=""width=device-width, initial-scale=1"">
+  <title>{safeTitle} - Video</title>
+  <style>
+    html, body {{
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }}
+    #wrap {{
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+    }}
+    video {{
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000;
+    }}
+    #fsBtn {{
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 10;
+      border: 1px solid #666;
+      background: rgba(0,0,0,.65);
+      color: #fff;
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }}
+  </style>
+</head>
+<body>
+  <button id=""fsBtn"" type=""button"">Pieno schermo</button>
+  <div id=""wrap"">
+    <video id=""video"" controls autoplay playsinline src=""{safeVideoUrl}""></video>
+  </div>
+  <script>
+    (function() {{
+      const video = document.getElementById('video');
+      const wrap = document.getElementById('wrap');
+      const btn = document.getElementById('fsBtn');
+
+      async function openFullscreen() {{
+        const target = wrap || video || document.documentElement;
+        if (!target) return;
+        try {{
+          if (document.fullscreenElement) return;
+          await target.requestFullscreen();
+        }} catch (e) {{
+          // ignore, user can click button again
+        }}
+      }}
+
+      btn.addEventListener('click', openFullscreen);
+      document.addEventListener('keydown', function(e) {{
+        if (e.key === 'f' || e.key === 'F') openFullscreen();
+      }});
+
+      // Best effort: in alcuni browser l'apertura in nuova tab da click permette fullscreen diretto.
+      setTimeout(openFullscreen, 120);
+    }})();
+  </script>
+</body>
+</html>";
+
+            return Content(html, "text/html; charset=utf-8");
         }
 
         public IActionResult OnGetTtsAudio(long id, string file)
@@ -1726,8 +1883,9 @@ $@"<!doctype html>
                         story.HasVoiceSource = System.IO.File.Exists(Path.Combine(folderPath, "tts_schema.json"));
                         story.HasFinalMix = System.IO.File.Exists(Path.Combine(folderPath, "final_mix.mp3")) 
                             || System.IO.File.Exists(Path.Combine(folderPath, "final_mix.wav"));
+                        story.HasFinalVideo = System.IO.File.Exists(Path.Combine(folderPath, "final_video.mp4"));
                     }
-                    catch { story.HasVoiceSource = false; story.HasFinalMix = false; }
+                    catch { story.HasVoiceSource = false; story.HasFinalMix = false; story.HasFinalVideo = false; }
                 }
             }
 
@@ -1900,6 +2058,7 @@ $@"<!doctype html>
                 EvalScore = evals.Any() ? ((evals.Average(e => e.TotalScore) * 100.0 / 40.0).ToString("F1") + "/100") : "-",
                 Approved = s.Approved,
                 s.HasFinalMix,
+                s.HasFinalVideo,
                 s.HasVoiceSource,
                 s.Characters,
                 Evaluations = evals.Select(e => new {
@@ -1996,6 +2155,17 @@ $@"<!doctype html>
                 actions.Add(new { id = "mix_final", title = "Mix Audio Finale WAV", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "MixFinalAudio", id = s.Id, folderName = s.Folder }, Request.Scheme) });
                 actions.Add(new { id = "final_mix_play", title = "Ascolta Mix Finale", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "FinalMixAudio", id = s.Id }, Request.Scheme) });
                 actions.Add(new { id = "tts_playlist", title = "Ascolta sequenza TTS", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "TtsPlaylist", id = s.Id }, Request.Scheme) });
+
+                if (s.HasFinalMix || s.GeneratedMixedAudio)
+                {
+                    actions.Add(new { id = "gen_video", title = "Genera Video con Sottotitoli", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "GenerateStoryVideo", id = s.Id, folderName = s.Folder }, Request.Scheme) });
+                }
+
+                if (s.HasFinalVideo)
+                {
+                    actions.Add(new { id = "final_video_play", title = "Guarda Video Finale", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "FinalVideo", id = s.Id }, Request.Scheme) });
+                    actions.Add(new { id = "final_video_fullscreen", title = "Guarda Video Finale (fullscreen)", method = "GET", url = Url.Page("/Stories/Index", null, new { handler = "FinalVideoFullscreen", id = s.Id }, Request.Scheme) });
+                }
             }
 
 /*             var addTagsAction = new { id = "add_tags", title = "Aggiungi TAG", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "AddTags", id = s.Id }, Request.Scheme) };

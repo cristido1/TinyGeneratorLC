@@ -4,14 +4,13 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("story_resource_states")]
-public partial class StoryResourceState : ISoftDelete, IActiveFlag, IOrderable
+public partial class StoryResourceState : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
-    public long Id { get; set; }
-
+    public int Id { get; set; }
     [Column("story_id")]
-    public long StoryId { get; set; }
+    public int StoryId { get; set; }
 
     [Column("series_id")]
     public int? SeriesId { get; set; }
@@ -38,3 +37,7 @@ public partial class StoryResourceState : ISoftDelete, IActiveFlag, IOrderable
     [Column("created_at")]
     public string CreatedAt { get; set; } = DateTime.UtcNow.ToString("o");
 }
+
+
+
+

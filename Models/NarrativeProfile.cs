@@ -1,11 +1,11 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("narrative_profiles")]
-public partial class NarrativeProfile : ISoftDelete, IActiveFlag, IOrderable
+public partial class NarrativeProfile : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
@@ -13,12 +13,15 @@ public partial class NarrativeProfile : ISoftDelete, IActiveFlag, IOrderable
 
     [Required]
     [MaxLength(200)]
-    [Column("name")]
+    [Column("description")]
     public string Name { get; set; } = string.Empty;
 
-    [MaxLength(2000)]
-    [Column("description")]
-    public string? Description { get; set; }
+    [NotMapped]
+    public string? Description
+    {
+        get => Name;
+        set => Name = value ?? string.Empty;
+    }
 
     [Column("base_system_prompt")]
     public string? BaseSystemPrompt { get; set; }
@@ -36,3 +39,4 @@ public partial class NarrativeProfile : ISoftDelete, IActiveFlag, IOrderable
     public List<FailureRule> FailureRules { get; set; } = new();
     public List<ConsequenceRule> ConsequenceRules { get; set; } = new();
 }
+

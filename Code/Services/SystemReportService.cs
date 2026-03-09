@@ -127,7 +127,11 @@ namespace TinyGenerator.Services
                     AgentName = agentName,
                     AgentRole = agentRole,
                     ModelName = modelName,
-                    StoryId = storyDbId ?? ctx.StoryCorrelationId,
+                    StoryId = storyDbId.HasValue
+                        ? (storyDbId.Value > 0 && storyDbId.Value <= int.MaxValue ? (int?)storyDbId.Value : null)
+                        : (ctx.StoryCorrelationId.HasValue && ctx.StoryCorrelationId.Value > 0 && ctx.StoryCorrelationId.Value <= int.MaxValue
+                            ? (int?)ctx.StoryCorrelationId.Value
+                            : null),
                     SeriesId = seriesId,
                     SeriesEpisode = seriesEpisode,
                     OperationType = string.IsNullOrWhiteSpace(ctx.OperationType) ? ctx.OperationName : ctx.OperationType,

@@ -8,6 +8,7 @@ using TinyGenerator.Hubs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
 using TinyGenerator.Services.Commands;
 
@@ -18,6 +19,12 @@ using TinyGenerator.Services.Commands;
 
 Console.WriteLine($"[Startup] Creating WebApplication builder at {DateTime.UtcNow:o}");
 var builder = WebApplication.CreateBuilder(args);
+var dataProtectionKeysPath = Path.Combine(builder.Environment.ContentRootPath, "data", "dpkeys");
+Directory.CreateDirectory(dataProtectionKeysPath);
+builder.Services
+    .AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath))
+    .SetApplicationName("TinyGenerator");
 builder.Services.Configure<FormOptions>(options =>
 {
     options.ValueCountLimit = 5000;

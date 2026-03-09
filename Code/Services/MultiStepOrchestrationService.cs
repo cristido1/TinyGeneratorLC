@@ -380,7 +380,7 @@ namespace TinyGenerator.Services
             var execution = new TaskExecution
             {
                 TaskType = taskType,
-                EntityId = entityId,
+                EntityId = entityId.HasValue && entityId.Value > 0 && entityId.Value <= int.MaxValue ? (int?)entityId.Value : null,
                 StepPrompt = stepPrompt,
                 InitialContext = initialContext,
                 CurrentStep = 1,
@@ -705,7 +705,7 @@ namespace TinyGenerator.Services
                 _database.UpdateTaskExecution(execution);
                 return new TaskExecutionStep
                 {
-                    ExecutionId = executionId,
+                    ExecutionId = executionId > 0 && executionId <= int.MaxValue ? (int)executionId : 0,
                     StepNumber = execution.CurrentStep,
                     StepInstruction = stepInstruction,
                     StepOutput = string.Empty,
@@ -1308,7 +1308,7 @@ namespace TinyGenerator.Services
                             // Save failed attempt with evaluator feedback
                             var evalFailedStep = new TaskExecutionStep
                             {
-                                ExecutionId = executionId,
+                                ExecutionId = executionId > 0 && executionId <= int.MaxValue ? (int)executionId : 0,
                                 StepNumber = execution.CurrentStep,
                                 StepInstruction = stepInstruction,
                                 StepOutput = output,
@@ -1346,7 +1346,7 @@ namespace TinyGenerator.Services
                 // Step valid - save and advance
                 var step = new TaskExecutionStep
                 {
-                    ExecutionId = executionId,
+                    ExecutionId = executionId > 0 && executionId <= int.MaxValue ? (int)executionId : 0,
                     StepNumber = execution.CurrentStep,
                     StepInstruction = stepInstruction,
                     StepOutput = output,
@@ -1378,7 +1378,7 @@ namespace TinyGenerator.Services
                 // Step invalid - save failed attempt for feedback, then retry
                 var failedStep = new TaskExecutionStep
                 {
-                    ExecutionId = executionId,
+                    ExecutionId = executionId > 0 && executionId <= int.MaxValue ? (int)executionId : 0,
                     StepNumber = execution.CurrentStep,
                     StepInstruction = stepInstruction,
                     StepOutput = output,
@@ -2569,7 +2569,7 @@ RIASSUNTO:";
                                 serieId: serieId,
                                 serieEpisode: serieEpisode);
                             
-                            execution.EntityId = storyId;
+                            execution.EntityId = storyId > 0 && storyId <= int.MaxValue ? (int?)storyId : null;
                             _database.UpdateTaskExecution(execution);
                             _logger.Log("Information", "MultiStep", 
                                 $"Created new story {storyId} from full_story_step with title='{title}'");
@@ -2693,7 +2693,7 @@ RIASSUNTO:";
                         EnqueueAutomaticStoryRevision(storyId);
 
                         // Update execution with the new entity ID
-                        execution.EntityId = storyId;
+                        execution.EntityId = storyId > 0 && storyId <= int.MaxValue ? (int?)storyId : null;
                         try
                         {
                             _database.UpdateTaskExecution(execution);

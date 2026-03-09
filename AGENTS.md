@@ -2,6 +2,16 @@
 
 ## Index Pages
 - Before modifying or creating any `Index` page, read and follow the rules in `docs/index_page_rules.txt`.
+- Standard obbligatorio UI dati:
+  - Tutte le nuove pagine lista/griglia devono usare l'API CRUD generica esistente (`/api/crud/...`) e la griglia VuePrime.
+  - Per tabelle semplici (CRUD standard senza logica speciale) usare obbligatoriamente `Pages/Shared/Index`.
+  - Creare una pagina Index dedicata solo quando serve comportamento non coperto da `Shared/Index`.
+  - `Pages/Shared/Index` non deve contenere cablature specifiche per singole tabelle/campi.
+  - La logica della pagina shared deve essere guidata solo da:
+    - interfacce implementate dalle entità
+    - metadati relazionali/FK (integrità referenziale)
+    - endpoint generici del `BaseCrudController`
+  - Evitare hardcode di nomi tabella/campo per casi specifici: se serve estendere, farlo in modo generico e riusabile.
 
 ## Lingua
 - Rispondi sempre in italiano.

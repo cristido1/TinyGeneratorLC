@@ -1,10 +1,10 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models;
 
 [Table("failure_rules")]
-public partial class FailureRule : ISoftDelete, IActiveFlag, IOrderable
+public partial class FailureRule : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
     [Key]
     [Column("id")]
@@ -23,3 +23,4 @@ public partial class FailureRule : ISoftDelete, IActiveFlag, IOrderable
 
     public NarrativeProfile? NarrativeProfile { get; set; }
 }
+

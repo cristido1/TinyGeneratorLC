@@ -1,4 +1,4 @@
-﻿
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -144,7 +144,7 @@ public sealed class CanonExtractorCommand : ICommand
         var modelName = StateDrivenPipelineHelpers.ResolveModelName(_database, agent);
         if (string.IsNullOrWhiteSpace(modelName))
         {
-            return AgentResponse.Fail($"Agente {agent.Name} senza modello configurato");
+            return AgentResponse.Fail($"Agente {agent.Description} senza modello configurato");
         }
 
         var systemPrompt = StateDrivenPipelineHelpers.BuildSystemPrompt(agent);
@@ -302,7 +302,7 @@ public sealed class StateDeltaBuilderCommand : ICommand
         var modelName = StateDrivenPipelineHelpers.ResolveModelName(_database, agent);
         if (string.IsNullOrWhiteSpace(modelName))
         {
-            return AgentResponse.Fail($"Agente {agent.Name} senza modello configurato");
+            return AgentResponse.Fail($"Agente {agent.Description} senza modello configurato");
         }
 
         var systemPrompt = StateDrivenPipelineHelpers.BuildSystemPrompt(agent);
@@ -469,7 +469,7 @@ public sealed class ContinuityValidatorCommand : ICommand
         var modelName = StateDrivenPipelineHelpers.ResolveModelName(_database, agent);
         if (string.IsNullOrWhiteSpace(modelName))
         {
-            return AgentResponse.Fail($"Agente {agent.Name} senza modello configurato");
+            return AgentResponse.Fail($"Agente {agent.Description} senza modello configurato");
         }
 
         var systemPrompt = StateDrivenPipelineHelpers.BuildSystemPrompt(agent);
@@ -781,7 +781,7 @@ public sealed class StateCompressorCommand : ICommand
         var modelName = StateDrivenPipelineHelpers.ResolveModelName(_database, agent);
         if (string.IsNullOrWhiteSpace(modelName))
         {
-            return AgentResponse.Fail($"Agente {agent.Name} senza modello configurato");
+            return AgentResponse.Fail($"Agente {agent.Description} senza modello configurato");
         }
 
         var systemPrompt = StateDrivenPipelineHelpers.BuildSystemPrompt(agent);
@@ -920,7 +920,7 @@ public sealed class RecapBuilderCommand : ICommand
         var modelName = StateDrivenPipelineHelpers.ResolveModelName(_database, agent);
         if (string.IsNullOrWhiteSpace(modelName))
         {
-            return AgentResponse.Fail($"Agente {agent.Name} senza modello configurato");
+            return AgentResponse.Fail($"Agente {agent.Description} senza modello configurato");
         }
 
         var systemPrompt = StateDrivenPipelineHelpers.BuildSystemPrompt(agent);
@@ -1147,7 +1147,7 @@ internal static class StateDrivenPipelineHelpers
 
         database.InsertNarrativeAgentCallLog(
             storyId: storyId,
-            agentName: agent.Name,
+            agentName: agent.Description,
             inputTokens: null,
             outputTokens: null,
             deterministicChecksResult: deterministicResult,

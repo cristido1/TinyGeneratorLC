@@ -1,0 +1,87 @@
+OBIETTIVO
+Centralizzare la gestione dei comandi nelle pagine CRUD (Shared/Index) usando metadati,
+senza duplicare logica nelle singole pagine.
+
+NOTE IMPORTANTI (MVP)
+- In questa fase NON usare campi critici/liberi come:
+  - ApiEndpoint
+  - HttpMethod
+  - ClientHandler
+  - ConditionExpression (espressioni testuali generiche)
+- L'esecuzione dei comandi deve passare da CommandDispatcher/CallCenter.
+- Le cablature necessarie (parametri + visibilità comandi riga) vanno concentrate in funzioni centrali uniche.
+
+
+TABLE: commands
+
+Id (int, PK)
+Code (nvarchar(100), unique, not null)      -- codice ICommand (es. story_generate_story_video)
+Description (nvarchar(200), not null)       -- descrizione comando
+Icon (nvarchar(100), null)                  -- icona UI
+IsActive (bit, not null, default 1)
+CreatedAt (datetime, not null)
+UpdatedAt (datetime, null)
+
+
+TABLE: metadata_commands
+
+Id (int, PK)
+CommandId (int, not null)                   -- FK commands.Id
+TableId (int, not null)                     -- FK metadata_tables.table_id
+ViewType (nvarchar(20), not null)           -- sempre: grid
+Position (nvarchar(20), not null)           -- header | row
+Visible (bit, not null, default 1)
+Enabled (bit, not null, default 1)
+RequiresConfirm (bit, not null, default 0)
+ConfirmMessage (nvarchar(200), null)
+IsActive (bit, not null, default 1)
+CreatedAt (datetime, not null)
+UpdatedAt (datetime, null)
+
+VALORI POSSIBILI ViewType
+grid
+
+VALORI POSSIBILI Position
+header
+row
+
+
+REGOLE DI UTILIZZO (MVP)
+1) Un comando compare in UI solo se:
+   - commands.is_active = 1
+   - metadata_commands.is_active = 1
+   - metadata_commands.visible = 1
+   - position coerente con il contesto (header o row)
+
+2) Il click comando NON usa endpoint custom salvati in tabella:
+   - si invoca un endpoint centrale che delega al CommandDispatcher
+   - il comando è identificato da commands.code
+
+3) I parametri vengono costruiti da una funzione centrale lato UI:
+   - buildCommandPayload(command, tableContext, row?)
+   - page command: payload da contesto pagina
+   - row command: payload include id riga corrente
+   - bulk command: payload include lista id selezionati
+
+4) La visibilità dei comandi riga viene gestita da una funzione centrale:
+   - isRowCommandVisible(command, row, tableContext)
+   - qui si gestiscono i casi oggi necessari (stato record, campi obbligatori, ecc.)
+   - evitare cablature sparse in vari componenti
+
+
+PROPOSTA CABLATURA MINIMA (SUBITO)
+- Funzione 1: buildCommandPayload(...)
+  gestisce il passaggio parametri al comando in modo standard.
+
+- Funzione 2: isRowCommandVisible(...)
+  gestisce filtro visualizzazione comandi per riga.
+
+Entrambe in un modulo unico riusabile dalla Shared/Index.
+
+
+FASE 2 (FUTURA, NON ORA)
+- Aggiungere regole dichiarative tipizzate (non expression libera), ad esempio:
+  - required_field
+  - required_status
+  - forbidden_status
+- Eventuale supporto navigation/custom UI solo dopo stabilizzazione MVP.

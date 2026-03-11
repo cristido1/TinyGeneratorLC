@@ -6,12 +6,16 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Data;
+using System.Data.Common;
+using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using TinyGenerator.Data;
 using TinyGenerator.Models;
+using TinyGenerator.Services;
 
 namespace TinyGenerator.Controllers;
 
@@ -23,11 +27,31 @@ public class BaseCrudController : ControllerBase
     private const int MaxPageSize = 500;
     private readonly TinyGeneratorDbContext _db;
     private readonly IWebHostEnvironment _environment;
+    private readonly DatabaseService _database;
+    private readonly LangChainTestService _testService;
+    private readonly IOllamaManagementService _ollamaService;
+    private readonly JsonScoreTestService _jsonScoreTester;
+    private readonly InstructionScoreTestService _instructionScoreTester;
+    private readonly IntelligenceScoreTestService _intelligenceTestService;
 
-    public BaseCrudController(TinyGeneratorDbContext db, IWebHostEnvironment environment)
+    public BaseCrudController(
+        TinyGeneratorDbContext db,
+        IWebHostEnvironment environment,
+        DatabaseService database,
+        LangChainTestService testService,
+        IOllamaManagementService ollamaService,
+        JsonScoreTestService jsonScoreTester,
+        InstructionScoreTestService instructionScoreTester,
+        IntelligenceScoreTestService intelligenceTestService)
     {
         _db = db;
         _environment = environment;
+        _database = database;
+        _testService = testService;
+        _ollamaService = ollamaService;
+        _jsonScoreTester = jsonScoreTester;
+        _instructionScoreTester = instructionScoreTester;
+        _intelligenceTestService = intelligenceTestService;
     }
 
     [HttpGet("tables")]
@@ -43,6 +67,262 @@ public class BaseCrudController : ControllerBase
             .OrderBy(x => x.table)
             .ToList();
         return Ok(tables);
+    }
+
+    [HttpPost("metadata/sync-schema")]
+    public async Task<IActionResult> SyncMetadataSchema()
+    {
+        try
+        {
+            await using var connection = _db.Database.GetDbConnection();
+            if (connection.State != ConnectionState.Open)
+            {
+                await connection.OpenAsync().ConfigureAwait(false);
+            }
+
+            await using var transaction = await connection.BeginTransactionAsync().ConfigureAwait(false);
+
+            var tableNames = new List<string>();
+            await using (var listTablesCmd = connection.CreateCommand())
+            {
+                listTablesCmd.Transaction = transaction;
+                listTablesCmd.CommandText = @"
+SELECT name
+FROM sqlite_master
+WHERE type = 'table'
+  AND name NOT LIKE 'sqlite_%'
+  AND name NOT IN ('__EFMigrationsHistory', '__EFMigrationsLock')
+ORDER BY name;";
+
+                await using var reader = await listTablesCmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    var name = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        tableNames.Add(name.Trim());
+                    }
+                }
+            }
+
+            var addedTables = 0;
+            var addedFields = 0;
+
+            foreach (var tableName in tableNames)
+            {
+                var tableId = await EnsureMetadataTableAsync(connection, transaction, tableName).ConfigureAwait(false);
+                if (tableId.WasInserted) addedTables++;
+
+                var escapedTableName = tableName.Replace("'", "''", StringComparison.Ordinal);
+                var columns = new List<(int Cid, string Name, string Type)>();
+
+                await using (var tableInfoCmd = connection.CreateCommand())
+                {
+                    tableInfoCmd.Transaction = transaction;
+                    tableInfoCmd.CommandText = $"PRAGMA table_info('{escapedTableName}');";
+                    await using var columnsReader = await tableInfoCmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    while (await columnsReader.ReadAsync().ConfigureAwait(false))
+                    {
+                        var cid = columnsReader.IsDBNull(0) ? 0 : columnsReader.GetInt32(0);
+                        var fieldName = columnsReader.IsDBNull(1) ? string.Empty : columnsReader.GetString(1);
+                        var fieldType = columnsReader.IsDBNull(2) ? string.Empty : columnsReader.GetString(2);
+                        if (string.IsNullOrWhiteSpace(fieldName)) continue;
+                        columns.Add((cid, fieldName.Trim(), fieldType.Trim()));
+                    }
+                }
+
+                foreach (var col in columns.OrderBy(c => c.Cid))
+                {
+                    var inserted = await EnsureMetadataFieldAsync(
+                        connection,
+                        transaction,
+                        tableId.Id,
+                        col.Name,
+                        col.Type,
+                        col.Cid + 1).ConfigureAwait(false);
+                    if (inserted) addedFields++;
+                }
+            }
+
+            await transaction.CommitAsync().ConfigureAwait(false);
+            return Ok(new
+            {
+                success = true,
+                addedTables,
+                addedFields,
+                scannedTables = tableNames.Count
+            });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+    }
+
+    [HttpPost("metadata/run-crud-smoke")]
+    public async Task<IActionResult> RunCrudSmoke([FromBody] MetadataCrudSmokeRequest? request)
+    {
+        request ??= new MetadataCrudSmokeRequest();
+        var failures = new List<string>();
+        var skipped = new List<string>();
+        var succeeded = new List<string>();
+
+        await using var tx = await _db.Database.BeginTransactionAsync().ConfigureAwait(false);
+        try
+        {
+            var tableNames = _db.MetadataTables
+                .AsNoTracking()
+                .Where(x => !string.IsNullOrWhiteSpace(x.TableName))
+                .OrderBy(x => x.Id)
+                .Select(x => x.TableName)
+                .ToList();
+
+            foreach (var tableName in tableNames)
+            {
+                if (string.IsNullOrWhiteSpace(tableName))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (!TryResolveEntity(tableName, out var entityType, out var resolveError))
+                    {
+                        skipped.Add($"{tableName}: {resolveError}");
+                        continue;
+                    }
+
+                    var pk = entityType.FindPrimaryKey();
+                    if (pk == null || pk.Properties.Count != 1 || !string.Equals(pk.Properties[0].Name, "Id", StringComparison.OrdinalIgnoreCase))
+                    {
+                        skipped.Add($"{tableName}: PK non supportata (richiesta PK singola 'Id').");
+                        continue;
+                    }
+
+                    var fieldMetas = BuildFieldMetadata(entityType);
+                    var fkMetas = BuildForeignKeyMetadata(entityType)
+                        .GroupBy(x => x.DependentField, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+                    var createPayload = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    var uniqueTag = $"{tableName}_{Guid.NewGuid():N}";
+                    var now = DateTime.UtcNow;
+                    var skipTable = false;
+                    var skipReason = string.Empty;
+
+                    foreach (var field in fieldMetas)
+                    {
+                        if (field.IsPrimaryKey) continue;
+                        if (field.IsConcurrencyToken || field.IsStoreGenerated) continue;
+                        if (string.Equals(field.ClrType, "Byte[]", StringComparison.OrdinalIgnoreCase)) continue;
+
+                        var requiredNoDefault = !field.Nullable;
+                        if (fkMetas.TryGetValue(field.Name, out var fk))
+                        {
+                            var parentKey = QueryFirstPrincipalKeyValue(fk.PrincipalTable, fk.PrincipalKeyField);
+                            if (parentKey is null)
+                            {
+                                if (requiredNoDefault)
+                                {
+                                    skipTable = true;
+                                    skipReason = $"FK obbligatoria senza record parent: {field.Name} -> {fk.PrincipalTable}.{fk.PrincipalKeyField}";
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            createPayload[field.Name] = parentKey;
+                            continue;
+                        }
+
+                        createPayload[field.Name] = GenerateSmokeValue(field.Name, field.ClrType, now, uniqueTag);
+                    }
+
+                    if (skipTable)
+                    {
+                        skipped.Add($"{tableName}: {skipReason}");
+                        continue;
+                    }
+
+                    if (createPayload.Count == 0)
+                    {
+                        skipped.Add($"{tableName}: nessun campo valorizzabile.");
+                        continue;
+                    }
+
+                    var createResult = await Create(tableName, ToJsonElement(createPayload)).ConfigureAwait(false);
+                    if (!TryReadEnvelope(createResult, out var createEnvelope, out var createError) || !IsSuccessEnvelope(createEnvelope))
+                    {
+                        failures.Add($"{tableName}: CREATE failed ({createError ?? "esito non valido"})");
+                        continue;
+                    }
+
+                    var idValue = ExtractIdFromEnvelope(createEnvelope);
+                    if (idValue is null)
+                    {
+                        failures.Add($"{tableName}: CREATE ok ma Id non trovato.");
+                        continue;
+                    }
+
+                    var updateField = fieldMetas
+                        .FirstOrDefault(f =>
+                            !f.IsPrimaryKey &&
+                            !f.IsConcurrencyToken &&
+                            !f.IsStoreGenerated &&
+                            !string.Equals(f.ClrType, "Byte[]", StringComparison.OrdinalIgnoreCase) &&
+                            !fkMetas.ContainsKey(f.Name) &&
+                            !string.Equals(f.Name, "CreatedAt", StringComparison.OrdinalIgnoreCase));
+
+                    if (updateField != null)
+                    {
+                        var updatePayload = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            [updateField.Name] = GenerateSmokeUpdateValue(updateField.Name, updateField.ClrType, now, uniqueTag)
+                        };
+
+                        var updateResult = await Update(tableName, Convert.ToString(idValue, CultureInfo.InvariantCulture) ?? string.Empty, ToJsonElement(updatePayload)).ConfigureAwait(false);
+                        if (!TryReadEnvelope(updateResult, out var updateEnvelope, out var updateError) || !IsSuccessEnvelope(updateEnvelope))
+                        {
+                            failures.Add($"{tableName}: UPDATE failed ({updateError ?? "esito non valido"})");
+                            continue;
+                        }
+                    }
+
+                    var deleteResult = await Delete(tableName, Convert.ToString(idValue, CultureInfo.InvariantCulture) ?? string.Empty).ConfigureAwait(false);
+                    if (!TryReadEnvelope(deleteResult, out var deleteEnvelope, out var deleteError) || !IsSuccessEnvelope(deleteEnvelope))
+                    {
+                        failures.Add($"{tableName}: DELETE failed ({deleteError ?? "esito non valido"})");
+                        continue;
+                    }
+
+                    succeeded.Add(tableName);
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{tableName}: {ex.Message}");
+                }
+            }
+
+            await tx.RollbackAsync().ConfigureAwait(false);
+            var skippedPayload = request.IncludeSkippedDetails ? skipped : new List<string>();
+            return Ok(new
+            {
+                success = failures.Count == 0,
+                scanned = succeeded.Count + skipped.Count + failures.Count,
+                okCount = succeeded.Count,
+                skippedCount = skipped.Count,
+                failCount = failures.Count,
+                succeeded,
+                skipped = skippedPayload,
+                failures,
+                rolledBack = true
+            });
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync().ConfigureAwait(false);
+            return BadRequest(new { success = false, error = ex.Message });
+        }
     }
 
     [HttpPost("{table}/query")]
@@ -67,6 +347,9 @@ public class BaseCrudController : ControllerBase
         var videoNameField = ResolveVideoNameField(entityType.ClrType);
         var usageStatsField = ResolveUsageStatsField(entityType.ClrType);
         var fields = BuildFieldMetadata(entityType);
+        var metadataTable = LoadMetadataTableConfig(entityType.GetTableName());
+        var metadataFieldOverrides = LoadMetadataFieldOverrides(metadataTable?.TableId);
+        var metadataCommands = LoadMetadataCommands(metadataTable?.TableId, viewType: "grid");
 
         foreach (var filter in request.Filters ?? Enumerable.Empty<CrudFilter>())
         {
@@ -172,6 +455,9 @@ public class BaseCrudController : ControllerBase
                 videoField,
                 videoNameField,
                 usageStatsField,
+                metadataTable,
+                metadataFieldOverrides,
+                metadataCommands,
                 grouped = true,
                 groupBy = keyName,
                 page,
@@ -209,6 +495,9 @@ public class BaseCrudController : ControllerBase
             videoField,
             videoNameField,
             usageStatsField,
+            metadataTable,
+            metadataFieldOverrides,
+            metadataCommands,
             grouped = false,
             page,
             pageSize,
@@ -233,6 +522,8 @@ public class BaseCrudController : ControllerBase
         var entity = await _db.FindAsync(entityType.ClrType, new[] { keyValue }).ConfigureAwait(false);
         if (entity == null) return NotFound(new { success = false, error = "Record non trovato" });
         var row = ToDictionary(entity);
+        var metadataTable = LoadMetadataTableConfig(entityType.GetTableName());
+        var metadataFieldOverrides = LoadMetadataFieldOverrides(metadataTable?.TableId);
         EnrichRowWithRelatedData(entityType.ClrType, row);
         EnrichRowWithImagePreviewData(entityType.ClrType, row);
         EnrichRowWithSoundPreviewData(entityType.ClrType, row);
@@ -249,6 +540,8 @@ public class BaseCrudController : ControllerBase
             videoField = ResolveVideoField(entityType.ClrType),
             videoNameField = ResolveVideoNameField(entityType.ClrType),
             usageStatsField = ResolveUsageStatsField(entityType.ClrType),
+            metadataTable,
+            metadataFieldOverrides,
             item = row
         });
     }
@@ -282,6 +575,8 @@ public class BaseCrudController : ControllerBase
         _db.Add(entity);
         await _db.SaveChangesAsync().ConfigureAwait(false);
         var createdRow = ToDictionary(entity);
+        var metadataTable = LoadMetadataTableConfig(entityType.GetTableName());
+        var metadataFieldOverrides = LoadMetadataFieldOverrides(metadataTable?.TableId);
         EnrichRowWithRelatedData(entityType.ClrType, createdRow);
         EnrichRowWithImagePreviewData(entityType.ClrType, createdRow);
         EnrichRowWithSoundPreviewData(entityType.ClrType, createdRow);
@@ -298,6 +593,8 @@ public class BaseCrudController : ControllerBase
             videoField = ResolveVideoField(entityType.ClrType),
             videoNameField = ResolveVideoNameField(entityType.ClrType),
             usageStatsField = ResolveUsageStatsField(entityType.ClrType),
+            metadataTable,
+            metadataFieldOverrides,
             item = createdRow
         });
     }
@@ -330,6 +627,8 @@ public class BaseCrudController : ControllerBase
 
         await _db.SaveChangesAsync().ConfigureAwait(false);
         var updatedRow = ToDictionary(entity);
+        var metadataTable = LoadMetadataTableConfig(entityType.GetTableName());
+        var metadataFieldOverrides = LoadMetadataFieldOverrides(metadataTable?.TableId);
         EnrichRowWithRelatedData(entityType.ClrType, updatedRow);
         EnrichRowWithImagePreviewData(entityType.ClrType, updatedRow);
         EnrichRowWithSoundPreviewData(entityType.ClrType, updatedRow);
@@ -346,6 +645,8 @@ public class BaseCrudController : ControllerBase
             videoField = ResolveVideoField(entityType.ClrType),
             videoNameField = ResolveVideoNameField(entityType.ClrType),
             usageStatsField = ResolveUsageStatsField(entityType.ClrType),
+            metadataTable,
+            metadataFieldOverrides,
             item = updatedRow
         });
     }
@@ -383,6 +684,243 @@ public class BaseCrudController : ControllerBase
         return Ok(new { success = true });
     }
 
+    [HttpPost("{table}/commands/{commandCode}")]
+    public async Task<IActionResult> ExecuteMetadataCommand(
+        [FromRoute] string table,
+        [FromRoute] string commandCode,
+        [FromBody] CrudCommandExecuteRequest? request)
+    {
+        if (!TryResolveEntity(table, out var entityType, out var error))
+        {
+            return NotFound(new { success = false, error });
+        }
+
+        var metadataTable = LoadMetadataTableConfig(entityType.GetTableName());
+        if (metadataTable?.TableId is null or <= 0)
+        {
+            return BadRequest(new { success = false, error = "Metadata tabella non configurati." });
+        }
+
+        var command = ResolveMetadataCommand(metadataTable.TableId, commandCode, viewType: "grid");
+        if (command == null)
+        {
+            return NotFound(new { success = false, error = $"Comando non configurato o non attivo: '{commandCode}'" });
+        }
+
+        var payload = request ?? new CrudCommandExecuteRequest();
+        try
+        {
+            var result = await ExecuteSupportedMetadataCommandAsync(entityType.GetTableName() ?? table, command.Code, payload).ConfigureAwait(false);
+            return Ok(new
+            {
+                success = true,
+                command = command.Code,
+                runId = result.RunId,
+                runIds = result.RunIds,
+                message = result.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+    }
+
+    private async Task<CrudCommandExecutionResult> ExecuteSupportedMetadataCommandAsync(string tableName, string commandCode, CrudCommandExecuteRequest request)
+    {
+        var table = (tableName ?? string.Empty).Trim().ToLowerInvariant();
+        var code = (commandCode ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (table == "models")
+        {
+            return await ExecuteModelsMetadataCommandAsync(code, request).ConfigureAwait(false);
+        }
+
+        throw new InvalidOperationException($"Comando '{commandCode}' non supportato per tabella '{tableName}'.");
+    }
+
+    private async Task<CrudCommandExecutionResult> ExecuteModelsMetadataCommandAsync(string commandCode, CrudCommandExecuteRequest request)
+    {
+        switch (commandCode)
+        {
+            case "models_run_json_score":
+            {
+                var handle = _jsonScoreTester.EnqueueJsonScoreForMissingModels();
+                return new CrudCommandExecutionResult("JSON score avviato.", runId: handle.RunId);
+            }
+            case "models_run_instruction_score":
+            {
+                var handle = _instructionScoreTester.EnqueueInstructionScoreForMissingModels();
+                return new CrudCommandExecutionResult("Instruction score avviato.", runId: handle.RunId);
+            }
+            case "models_run_intelligence_test":
+            {
+                var handle = _intelligenceTestService.EnqueueIntelligenceScoreForMissingModels();
+                return new CrudCommandExecutionResult("Intelligence test avviato.", runId: handle.RunId);
+            }
+            case "models_add_ollama_models":
+            {
+                var added = await _database.AddLocalOllamaModelsAsync().ConfigureAwait(false);
+                return new CrudCommandExecutionResult($"Discovery completata: {added} modelli aggiornati.");
+            }
+            case "models_purge_disabled_ollama":
+            {
+                var results = await _ollamaService.PurgeDisabledModelsAsync().ConfigureAwait(false);
+                return new CrudCommandExecutionResult($"Purge completata: {results?.Count ?? 0} operazioni.");
+            }
+            case "models_refresh_contexts":
+            {
+                var updated = await _ollamaService.RefreshRunningContextsAsync().ConfigureAwait(false);
+                return new CrudCommandExecutionResult($"Contesti aggiornati: {updated}.");
+            }
+            case "models_recalculate_scores":
+            {
+                _database.RecalculateAllWriterScores();
+                return new CrudCommandExecutionResult("Punteggi ricalcolati.");
+            }
+            case "models_run_all":
+            {
+                var selectedGroup = string.IsNullOrWhiteSpace(request.Group)
+                    ? (_database.GetTestGroups() ?? new List<string>()).FirstOrDefault()
+                    : request.Group.Trim();
+                if (string.IsNullOrWhiteSpace(selectedGroup))
+                {
+                    throw new InvalidOperationException("Nessun gruppo test disponibile.");
+                }
+
+                var runIds = new List<string>();
+                var models = _database.ListModels().Where(m => m.Enabled).ToList();
+                foreach (var model in models)
+                {
+                    var handle = _testService.EnqueueGroupRun(model.Name, selectedGroup);
+                    if (handle != null && !string.IsNullOrWhiteSpace(handle.RunId))
+                    {
+                        runIds.Add(handle.RunId);
+                    }
+                }
+
+                return new CrudCommandExecutionResult(
+                    $"Run all avviato su gruppo '{selectedGroup}'.",
+                    runIds: runIds);
+            }
+            case "models_run_group":
+            {
+                var modelName = ResolveModelName(request, out var modelId);
+                if (string.IsNullOrWhiteSpace(modelName))
+                {
+                    throw new InvalidOperationException("Modello non trovato.");
+                }
+
+                var group = string.IsNullOrWhiteSpace(request.Group)
+                    ? (_database.GetTestGroups() ?? new List<string>()).FirstOrDefault()
+                    : request.Group.Trim();
+                if (string.IsNullOrWhiteSpace(group))
+                {
+                    throw new InvalidOperationException("Gruppo test richiesto.");
+                }
+
+                var handle = _testService.EnqueueGroupRun(modelName, group);
+                if (handle == null || string.IsNullOrWhiteSpace(handle.RunId))
+                {
+                    throw new InvalidOperationException("Impossibile avviare il test di gruppo.");
+                }
+
+                return new CrudCommandExecutionResult(
+                    $"Test gruppo '{group}' avviato per modello '{modelName}'.",
+                    runId: handle.RunId);
+            }
+            case "models_run_json_score_model":
+            {
+                var modelName = ResolveEnabledModelName(request);
+                var handle = _jsonScoreTester.EnqueueJsonScoreForModel(modelName);
+                return new CrudCommandExecutionResult($"JSON score avviato per '{modelName}'.", runId: handle.RunId);
+            }
+            case "models_run_instruction_score_model":
+            {
+                var modelName = ResolveEnabledModelName(request);
+                var handle = _instructionScoreTester.EnqueueInstructionScoreForModel(modelName);
+                return new CrudCommandExecutionResult($"Instruction score avviato per '{modelName}'.", runId: handle.RunId);
+            }
+            case "models_run_intelligence_test_model":
+            {
+                var modelName = ResolveEnabledModelName(request);
+                var handle = _intelligenceTestService.EnqueueIntelligenceScoreForModel(modelName);
+                return new CrudCommandExecutionResult($"Intelligence test avviato per '{modelName}'.", runId: handle.RunId);
+            }
+            case "models_delete_model":
+            {
+                var modelName = ResolveModelName(request, out var modelId);
+                if (string.IsNullOrWhiteSpace(modelName))
+                {
+                    throw new InvalidOperationException("Modello non trovato.");
+                }
+
+                if (modelId.HasValue && modelId.Value > 0)
+                {
+                    var agentsUsing = _database.GetAgentsUsingModel(modelId.Value);
+                    if (agentsUsing.Count > 0)
+                    {
+                        throw new InvalidOperationException($"Impossibile eliminare: usato da agenti {string.Join(", ", agentsUsing)}.");
+                    }
+
+                    _database.DeleteModel(modelId.Value.ToString(CultureInfo.InvariantCulture));
+                    return new CrudCommandExecutionResult($"Modello '{modelName}' eliminato.");
+                }
+
+                _database.DeleteModel(modelName);
+                return new CrudCommandExecutionResult($"Modello '{modelName}' eliminato.");
+            }
+            default:
+                throw new InvalidOperationException($"Comando models non supportato: '{commandCode}'.");
+        }
+    }
+
+    private string ResolveEnabledModelName(CrudCommandExecuteRequest request)
+    {
+        var modelName = ResolveModelName(request, out _);
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            throw new InvalidOperationException("Modello non trovato.");
+        }
+
+        var modelInfo = _database.ListModels()
+            .FirstOrDefault(m => string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase));
+        if (modelInfo == null || !modelInfo.Enabled)
+        {
+            throw new InvalidOperationException("Il modello è disabilitato.");
+        }
+
+        return modelName;
+    }
+
+    private string ResolveModelName(CrudCommandExecuteRequest request, out int? modelId)
+    {
+        modelId = request.ModelId;
+        var modelName = string.IsNullOrWhiteSpace(request.ModelName) ? null : request.ModelName.Trim();
+
+        if ((modelId is null or <= 0) && request.RowId.HasValue)
+        {
+            modelId = request.RowId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(modelName))
+        {
+            return modelName;
+        }
+
+        if (modelId.HasValue && modelId.Value > 0)
+        {
+            var resolvedId = modelId.Value;
+            var byId = _database.ListModels().FirstOrDefault(m => m.Id == resolvedId);
+            if (byId != null)
+            {
+                return byId.Name;
+            }
+        }
+
+        return string.Empty;
+    }
+
     private IQueryable CreateEntityQuery(Type clrType)
     {
         var setMethod = typeof(DbContext).GetMethods(BindingFlags.Instance | BindingFlags.Public)
@@ -390,6 +928,170 @@ public class BaseCrudController : ControllerBase
             .MakeGenericMethod(clrType);
 
         return (IQueryable)setMethod.Invoke(_db, null)!;
+    }
+
+    private object? QueryFirstPrincipalKeyValue(string? principalTable, string? principalKeyField)
+    {
+        if (string.IsNullOrWhiteSpace(principalTable) || string.IsNullOrWhiteSpace(principalKeyField))
+        {
+            return null;
+        }
+
+        if (!TryResolveEntity(principalTable, out var principalEntityType, out _))
+        {
+            return null;
+        }
+
+        var principalRows = CreateEntityQuery(principalEntityType.ClrType)
+            .Cast<object>()
+            .ToList()
+            .Select(ToDictionary)
+            .ToList();
+
+        foreach (var row in principalRows)
+        {
+            if (!row.TryGetValue(principalKeyField, out var raw) || raw == null) continue;
+            return raw;
+        }
+
+        return null;
+    }
+
+    private static object? GenerateSmokeValue(string fieldName, string clrTypeName, DateTime now, string uniqueTag)
+    {
+        var name = fieldName.ToLowerInvariant();
+        var type = clrTypeName.ToLowerInvariant();
+        var nowIso = now.ToString("o", CultureInfo.InvariantCulture);
+
+        // Prefer CLR type first to avoid name-based false positives (es. JsonScore, GeneratedTtsJson).
+        switch (type)
+        {
+            case "byte":
+            case "sbyte":
+            case "int16":
+            case "uint16":
+            case "int32":
+            case "uint32":
+            case "int64":
+            case "uint64":
+                return 1;
+            case "single":
+            case "double":
+            case "decimal":
+                return 1.5;
+            case "boolean":
+            case "bool":
+                return true;
+            case "datetime":
+            case "datetimeoffset":
+                return nowIso;
+            case "guid":
+                return Guid.NewGuid().ToString();
+            case "byte[]":
+                return Convert.ToBase64String(new byte[] { 1, 2, 3, 4 });
+        }
+
+        if (name is "isactive" or "enabled") return true;
+        if (name is "isdeleted" or "deleted") return false;
+        if (name.Contains("createdat") || name.Contains("updatedat") || name.EndsWith("date")) return nowIso;
+        if (name.Contains("json") && type == "string") return "{}";
+        if (name.Contains("path")) return $"/tmp/{uniqueTag}.dat";
+        if (name.Contains("name") || name.Contains("title") || name.Contains("description") || name.Contains("note")) return $"test_{uniqueTag}";
+
+        return $"v_{uniqueTag}";
+    }
+
+    private static object? GenerateSmokeUpdateValue(string fieldName, string clrTypeName, DateTime now, string uniqueTag)
+    {
+        var name = fieldName.ToLowerInvariant();
+        var type = clrTypeName.ToLowerInvariant();
+        var nowIso = now.ToString("o", CultureInfo.InvariantCulture);
+
+        switch (type)
+        {
+            case "byte":
+            case "sbyte":
+            case "int16":
+            case "uint16":
+            case "int32":
+            case "uint32":
+            case "int64":
+            case "uint64":
+                return 2;
+            case "single":
+            case "double":
+            case "decimal":
+                return 2.5;
+            case "boolean":
+            case "bool":
+                return false;
+            case "datetime":
+            case "datetimeoffset":
+                return nowIso;
+            case "guid":
+                return Guid.NewGuid().ToString();
+            case "byte[]":
+                return Convert.ToBase64String(new byte[] { 5, 6, 7, 8 });
+        }
+
+        if (name is "isactive" or "enabled") return false;
+        if (name is "isdeleted" or "deleted") return true;
+        if (name.Contains("updatedat") || name.EndsWith("date")) return nowIso;
+        if (name.Contains("json") && type == "string") return "{\"updated\":true}";
+        return $"u_{uniqueTag}";
+    }
+
+    private static JsonElement ToJsonElement(object payload)
+    {
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(payload));
+        return doc.RootElement.Clone();
+    }
+
+    private static bool TryReadEnvelope(IActionResult actionResult, out JsonElement envelope, out string? error)
+    {
+        envelope = default;
+        error = null;
+
+        if (actionResult is ObjectResult objectResult)
+        {
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(objectResult.Value));
+            envelope = doc.RootElement.Clone();
+            if (envelope.TryGetProperty("error", out var errEl))
+            {
+                error = errEl.ValueKind == JsonValueKind.String ? errEl.GetString() : errEl.ToString();
+            }
+            return true;
+        }
+
+        error = "Risultato azione non supportato.";
+        return false;
+    }
+
+    private static bool IsSuccessEnvelope(JsonElement envelope)
+    {
+        if (!envelope.TryGetProperty("success", out var successEl)) return false;
+        return successEl.ValueKind == JsonValueKind.True;
+    }
+
+    private static object? ExtractIdFromEnvelope(JsonElement envelope)
+    {
+        if (!envelope.TryGetProperty("item", out var itemEl) || itemEl.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (itemEl.TryGetProperty("Id", out var idEl) || itemEl.TryGetProperty("id", out idEl))
+        {
+            return idEl.ValueKind switch
+            {
+                JsonValueKind.Number when idEl.TryGetInt32(out var i) => i,
+                JsonValueKind.Number when idEl.TryGetInt64(out var l) => l,
+                JsonValueKind.String => idEl.GetString(),
+                _ => idEl.ToString()
+            };
+        }
+
+        return null;
     }
 
     private static void ApplyTimeStampedFields(object entity, bool isCreate)
@@ -467,6 +1169,356 @@ public class BaseCrudController : ControllerBase
         }
 
         return lookup;
+    }
+
+    private CrudTableMetadataConfig? LoadMetadataTableConfig(string? tableName)
+    {
+        if (string.IsNullOrWhiteSpace(tableName))
+        {
+            return null;
+        }
+
+        var metadata = _db.MetadataTables
+            .AsNoTracking()
+            .FirstOrDefault(x => x.TableName.ToLower() == tableName.ToLower());
+        if (metadata == null)
+        {
+            return null;
+        }
+
+        return new CrudTableMetadataConfig
+        {
+            TableId = metadata.Id,
+            TableName = metadata.TableName,
+            Title = metadata.Title,
+            Note = metadata.Note,
+            Icon = metadata.Icon,
+            DefaultSortField = metadata.DefaultSortField,
+            DefaultSortDirection = metadata.DefaultSortDirection,
+            DefaultPageSize = metadata.DefaultPageSize,
+            EditMode = metadata.EditMode,
+            AllowInsert = metadata.AllowInsert,
+            AllowUpdate = metadata.AllowUpdate,
+            AllowDelete = metadata.AllowDelete,
+            ChildTableId = metadata.ChildTableId,
+            ChildTableParentIdFieldName = metadata.ChildTableParentIdFieldName
+        };
+    }
+
+    private List<CrudFieldMetadataOverride> LoadMetadataFieldOverrides(int? tableId)
+    {
+        if (!tableId.HasValue || tableId.Value <= 0)
+        {
+            return new List<CrudFieldMetadataOverride>();
+        }
+
+        return _db.MetadataFields
+            .AsNoTracking()
+            .Where(x => x.ParentTableId == tableId.Value)
+            .OrderBy(x => x.SortOverride ?? int.MaxValue)
+            .ThenBy(x => x.Id)
+            .Select(x => new CrudFieldMetadataOverride
+            {
+                FieldId = x.Id,
+                ParentTableId = x.ParentTableId,
+                FieldName = x.FieldName,
+                Caption = x.Caption,
+                EditorType = x.EditorType,
+                Width = x.Width,
+                Multiline = x.Multiline,
+                RequiredOverride = x.RequiredOverride,
+                ReadonlyOverride = x.ReadonlyOverride,
+                VisibleOverride = x.VisibleOverride,
+                SortOverride = x.SortOverride,
+                GroupName = x.GroupName
+            })
+            .ToList();
+    }
+
+    private List<CrudMetadataCommandMeta> LoadMetadataCommands(int? tableId, string viewType)
+    {
+        if (!tableId.HasValue || tableId.Value <= 0)
+        {
+            return new List<CrudMetadataCommandMeta>();
+        }
+
+        var viewTypeNormalized = (viewType ?? "grid").Trim().ToLowerInvariant();
+
+        var query =
+            from mc in _db.MetadataCommands.AsNoTracking()
+            join c in _db.Commands.AsNoTracking() on mc.CommandId equals c.Id
+            where mc.TableId == tableId.Value
+                  && (mc.ViewType ?? "grid").ToLower() == viewTypeNormalized
+                  && mc.IsActive
+                  && mc.Visible
+                  && mc.Enabled
+                  && c.IsActive
+            orderby mc.Position, mc.Id
+            select new CrudMetadataCommandMeta
+            {
+                Id = mc.Id,
+                CommandId = c.Id,
+                Code = c.Code,
+                Description = c.Description ?? c.Code,
+                Icon = c.Icon,
+                ViewType = mc.ViewType,
+                Position = mc.Position,
+                RequiresConfirm = mc.RequiresConfirm,
+                ConfirmMessage = mc.ConfirmMessage
+            };
+
+        return query.ToList();
+    }
+
+    private CrudMetadataCommandMeta? ResolveMetadataCommand(int tableId, string commandCode, string viewType)
+    {
+        if (tableId <= 0 || string.IsNullOrWhiteSpace(commandCode))
+        {
+            return null;
+        }
+
+        var code = commandCode.Trim().ToLowerInvariant();
+        var commands = LoadMetadataCommands(tableId, viewType);
+        return commands.FirstOrDefault(x => string.Equals(x.Code, code, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static async Task<(int Id, bool WasInserted)> EnsureMetadataTableAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        string tableName)
+    {
+        await using var selectCmd = connection.CreateCommand();
+        selectCmd.Transaction = transaction;
+        selectCmd.CommandText = "SELECT id FROM metadata_tables WHERE lower(table_name) = lower(@tableName) LIMIT 1;";
+        var selectParam = selectCmd.CreateParameter();
+        selectParam.ParameterName = "@tableName";
+        selectParam.Value = tableName;
+        selectCmd.Parameters.Add(selectParam);
+
+        var existing = await selectCmd.ExecuteScalarAsync().ConfigureAwait(false);
+        if (existing != null && existing != DBNull.Value)
+        {
+            return (Convert.ToInt32(existing, CultureInfo.InvariantCulture), false);
+        }
+
+        await using var insertCmd = connection.CreateCommand();
+        insertCmd.Transaction = transaction;
+        insertCmd.CommandText = @"
+INSERT INTO metadata_tables
+(
+    table_name,
+    title,
+    note,
+    icon,
+    default_sort_field,
+    default_sort_direction,
+    default_page_size,
+    edit_mode,
+    allow_insert,
+    allow_update,
+    allow_delete,
+    child_table_id,
+    child_table_parent_id_field_name
+)
+VALUES
+(
+    @tableName,
+    @title,
+    '',
+    'pi pi-table',
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    1,
+    1,
+    1,
+    NULL,
+    NULL
+);
+SELECT last_insert_rowid();";
+        var insertParam = insertCmd.CreateParameter();
+        insertParam.ParameterName = "@tableName";
+        insertParam.Value = tableName;
+        insertCmd.Parameters.Add(insertParam);
+        var titleParam = insertCmd.CreateParameter();
+        titleParam.ParameterName = "@title";
+        titleParam.Value = PrettifyFieldName(tableName);
+        insertCmd.Parameters.Add(titleParam);
+
+        var insertedId = await insertCmd.ExecuteScalarAsync().ConfigureAwait(false);
+        return (Convert.ToInt32(insertedId, CultureInfo.InvariantCulture), true);
+    }
+
+    private static async Task<bool> EnsureMetadataFieldAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        int parentTableId,
+        string fieldName,
+        string fieldType,
+        int sortOverride)
+    {
+        await using var existsCmd = connection.CreateCommand();
+        existsCmd.Transaction = transaction;
+        existsCmd.CommandText = @"
+SELECT id
+FROM metadata_fields
+WHERE parent_table_id = @parentTableId
+  AND lower(field_name) = lower(@fieldName)
+LIMIT 1;";
+        var pParent = existsCmd.CreateParameter();
+        pParent.ParameterName = "@parentTableId";
+        pParent.Value = parentTableId;
+        existsCmd.Parameters.Add(pParent);
+        var pField = existsCmd.CreateParameter();
+        pField.ParameterName = "@fieldName";
+        pField.Value = fieldName;
+        existsCmd.Parameters.Add(pField);
+
+        var existing = await existsCmd.ExecuteScalarAsync().ConfigureAwait(false);
+        if (existing != null && existing != DBNull.Value)
+        {
+            return false;
+        }
+
+        var editorType = InferEditorType(fieldName, fieldType);
+        var multiline = editorType is "textarea" or "json";
+
+        await using var insertCmd = connection.CreateCommand();
+        insertCmd.Transaction = transaction;
+        insertCmd.CommandText = @"
+INSERT INTO metadata_fields
+(
+    parent_table_id,
+    field_name,
+    caption,
+    editor_type,
+    width,
+    multiline,
+    required_override,
+    readonly_override,
+    visible_override,
+    sort_override,
+    group_name
+)
+VALUES
+(
+    @parentTableId,
+    @fieldName,
+    @caption,
+    @editorType,
+    NULL,
+    @multiline,
+    NULL,
+    NULL,
+    NULL,
+    @sortOverride,
+    NULL
+);";
+
+        var iParent = insertCmd.CreateParameter();
+        iParent.ParameterName = "@parentTableId";
+        iParent.Value = parentTableId;
+        insertCmd.Parameters.Add(iParent);
+
+        var iField = insertCmd.CreateParameter();
+        iField.ParameterName = "@fieldName";
+        iField.Value = fieldName;
+        insertCmd.Parameters.Add(iField);
+
+        var iCaption = insertCmd.CreateParameter();
+        iCaption.ParameterName = "@caption";
+        iCaption.Value = PrettifyFieldName(fieldName);
+        insertCmd.Parameters.Add(iCaption);
+
+        var iEditor = insertCmd.CreateParameter();
+        iEditor.ParameterName = "@editorType";
+        iEditor.Value = editorType;
+        insertCmd.Parameters.Add(iEditor);
+
+        var iMultiline = insertCmd.CreateParameter();
+        iMultiline.ParameterName = "@multiline";
+        iMultiline.Value = multiline ? 1 : 0;
+        insertCmd.Parameters.Add(iMultiline);
+
+        var iSort = insertCmd.CreateParameter();
+        iSort.ParameterName = "@sortOverride";
+        iSort.Value = sortOverride;
+        insertCmd.Parameters.Add(iSort);
+
+        await insertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        return true;
+    }
+
+    private static string PrettifyFieldName(string fieldName)
+    {
+        var raw = fieldName ?? string.Empty;
+        var normalized = raw.Replace("_", " ", StringComparison.Ordinal).Trim();
+        if (normalized.Length == 0) return string.Empty;
+
+        var sb = new StringBuilder(normalized.Length + 8);
+        for (var i = 0; i < normalized.Length; i++)
+        {
+            var ch = normalized[i];
+            if (i > 0 && char.IsUpper(ch) && char.IsLetter(normalized[i - 1]) && char.IsLower(normalized[i - 1]))
+            {
+                sb.Append(' ');
+            }
+            sb.Append(ch);
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    private static string InferEditorType(string fieldName, string fieldType)
+    {
+        var lowerName = (fieldName ?? string.Empty).Trim().ToLowerInvariant();
+        var lowerType = (fieldType ?? string.Empty).Trim().ToLowerInvariant();
+
+        var isBoolName = lowerName.StartsWith("is_", StringComparison.Ordinal)
+            || lowerName.StartsWith("has_", StringComparison.Ordinal)
+            || lowerName.StartsWith("allow_", StringComparison.Ordinal)
+            || lowerName.StartsWith("enabled", StringComparison.Ordinal)
+            || lowerName.StartsWith("active", StringComparison.Ordinal)
+            || lowerName is "isactive" or "is_active" or "isdeleted" or "is_deleted";
+        if (isBoolName && (lowerType.Contains("int", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(lowerType)))
+        {
+            return "checkbox";
+        }
+
+        if (lowerName.Contains("json", StringComparison.Ordinal))
+        {
+            return "json";
+        }
+
+        if (lowerType.Contains("int", StringComparison.Ordinal)
+            || lowerType.Contains("real", StringComparison.Ordinal)
+            || lowerType.Contains("floa", StringComparison.Ordinal)
+            || lowerType.Contains("doub", StringComparison.Ordinal)
+            || lowerType.Contains("dec", StringComparison.Ordinal)
+            || lowerType.Contains("num", StringComparison.Ordinal))
+        {
+            return "number";
+        }
+
+        if (lowerName.EndsWith("_at", StringComparison.Ordinal)
+            || lowerName.Contains("date", StringComparison.Ordinal)
+            || lowerName.Contains("time", StringComparison.Ordinal))
+        {
+            return "datetime";
+        }
+
+        if (lowerName.Contains("description", StringComparison.Ordinal)
+            || lowerName.Contains("prompt", StringComparison.Ordinal)
+            || lowerName.Contains("instruction", StringComparison.Ordinal)
+            || lowerName.Contains("notes", StringComparison.Ordinal)
+            || lowerName.Contains("content", StringComparison.Ordinal)
+            || lowerName.Contains("text", StringComparison.Ordinal))
+        {
+            return "textarea";
+        }
+
+        return "text";
     }
 
     private static string? ResolveImageField(Type clrType)
@@ -1291,6 +2343,8 @@ public class BaseCrudController : ControllerBase
                 Nullable = prop.IsNullable,
                 IsPrimaryKey = pkNames.Contains(prop.Name),
                 IsForeignKey = fk != null,
+                IsConcurrencyToken = prop.IsConcurrencyToken,
+                IsStoreGenerated = prop.ValueGenerated != ValueGenerated.Never,
                 PrincipalTable = principalTable,
                 PrincipalKeyField = principalKey
             });
@@ -1564,6 +2618,82 @@ public sealed class CrudFieldMeta
     public bool Nullable { get; set; }
     public bool IsPrimaryKey { get; set; }
     public bool IsForeignKey { get; set; }
+    public bool IsConcurrencyToken { get; set; }
+    public bool IsStoreGenerated { get; set; }
     public string? PrincipalTable { get; set; }
     public string? PrincipalKeyField { get; set; }
+}
+
+public sealed class CrudTableMetadataConfig
+{
+    public int TableId { get; set; }
+    public string TableName { get; set; } = string.Empty;
+    public string? Title { get; set; }
+    public string? Note { get; set; }
+    public string? Icon { get; set; }
+    public string? DefaultSortField { get; set; }
+    public string? DefaultSortDirection { get; set; }
+    public int? DefaultPageSize { get; set; }
+    public string? EditMode { get; set; }
+    public bool AllowInsert { get; set; } = true;
+    public bool AllowUpdate { get; set; } = true;
+    public bool AllowDelete { get; set; } = true;
+    public int? ChildTableId { get; set; }
+    public string? ChildTableParentIdFieldName { get; set; }
+}
+
+public sealed class CrudFieldMetadataOverride
+{
+    public int FieldId { get; set; }
+    public int ParentTableId { get; set; }
+    public string FieldName { get; set; } = string.Empty;
+    public string? Caption { get; set; }
+    public string? EditorType { get; set; }
+    public int? Width { get; set; }
+    public bool Multiline { get; set; }
+    public bool? RequiredOverride { get; set; }
+    public bool? ReadonlyOverride { get; set; }
+    public bool? VisibleOverride { get; set; }
+    public int? SortOverride { get; set; }
+    public string? GroupName { get; set; }
+}
+
+public sealed class CrudMetadataCommandMeta
+{
+    public int Id { get; set; }
+    public int CommandId { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string? Icon { get; set; }
+    public string ViewType { get; set; } = "grid";
+    public string Position { get; set; } = "row";
+    public bool RequiresConfirm { get; set; }
+    public string? ConfirmMessage { get; set; }
+}
+
+public sealed class CrudCommandExecuteRequest
+{
+    public int? RowId { get; set; }
+    public int? ModelId { get; set; }
+    public string? ModelName { get; set; }
+    public string? Group { get; set; }
+}
+
+public sealed class CrudCommandExecutionResult
+{
+    public CrudCommandExecutionResult(string message, string? runId = null, IReadOnlyList<string>? runIds = null)
+    {
+        Message = message;
+        RunId = runId;
+        RunIds = runIds;
+    }
+
+    public string Message { get; }
+    public string? RunId { get; }
+    public IReadOnlyList<string>? RunIds { get; }
+}
+
+public sealed class MetadataCrudSmokeRequest
+{
+    public bool IncludeSkippedDetails { get; set; } = true;
 }

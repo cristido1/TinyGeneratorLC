@@ -30,7 +30,8 @@ namespace TinyGenerator.Controllers
 
             var description = string.Join("\n\n", parts);
 
-            return Ok(new { title = agent.Name, description });
+            return Ok(new { title = agent.Description, description });
         }
     }
 }
+

@@ -77,13 +77,13 @@ namespace TinyGenerator.Services.Commands
                     _logger.Log("Warning", "SummarizeStory", $"Risoluzione centralizzata summarizer fallita: {ex.Message}");
                 }
 
-                if (summarizerAgent == null || !(summarizerAgent.Name?.Contains("Story Summarizer", StringComparison.OrdinalIgnoreCase) == true))
+                if (summarizerAgent == null || !(summarizerAgent.Description?.Contains("Story Summarizer", StringComparison.OrdinalIgnoreCase) == true))
                 {
                     var agents = _database.ListAgents();
                     summarizerAgent = agents.FirstOrDefault(a =>
                         string.Equals(a.Role, CommandRoleCodes.Summarizer, StringComparison.OrdinalIgnoreCase) &&
                         a.IsActive &&
-                        a.Name?.Contains("Story Summarizer", StringComparison.OrdinalIgnoreCase) == true);
+                        a.Description?.Contains("Story Summarizer", StringComparison.OrdinalIgnoreCase) == true);
                 }
 
                 if (summarizerAgent == null)
@@ -222,3 +222,4 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
+

@@ -1370,9 +1370,9 @@ namespace TinyGenerator.Services
             var preferred = _database.ListAgents()
                 .FirstOrDefault(a =>
                     a.IsActive &&
-                    !string.IsNullOrWhiteSpace(a.Name) &&
-                    a.Name.Contains("State-Driven Writer", StringComparison.OrdinalIgnoreCase) &&
-                    a.Name.Contains("Qwen3 30b", StringComparison.OrdinalIgnoreCase));
+                    !string.IsNullOrWhiteSpace(a.Description) &&
+                    a.Description.Contains("State-Driven Writer", StringComparison.OrdinalIgnoreCase) &&
+                    a.Description.Contains("Qwen3 30b", StringComparison.OrdinalIgnoreCase));
             if (preferred != null)
             {
                 return preferred;

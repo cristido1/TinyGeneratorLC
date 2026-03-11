@@ -40,7 +40,7 @@ public sealed partial class SeriesEpisode : ISoftDelete, IActiveFlag, IOrderable
     public string? InitialPhase { get; set; }
 
     /// <summary>
-    /// Optional tactical planning override for this episode (tipo_planning.id_tipo_planning).
+    /// Optional tactical planning override for this episode (tipo_planning.id).
     /// If null, the series default should be used.
     /// </summary>
     [Column("tipo_planning_id")]

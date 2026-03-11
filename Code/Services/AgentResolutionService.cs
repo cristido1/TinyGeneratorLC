@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Text;
 using TinyGenerator.Services;
@@ -26,14 +26,14 @@ public sealed class AgentResolutionService : IAgentResolutionService
 
         if (!agent.ModelId.HasValue)
         {
-            throw new InvalidOperationException($"Agent {agent.Name} has no model configured");
+            throw new InvalidOperationException($"Agent {agent.Description} has no model configured");
         }
 
         var modelId = agent.ModelId.Value;
         var modelInfo = _database.GetModelInfoById(modelId);
         if (string.IsNullOrWhiteSpace(modelInfo?.Name))
         {
-            throw new InvalidOperationException($"Model not found for agent {agent.Name}");
+            throw new InvalidOperationException($"Model not found for agent {agent.Description}");
         }
         var callModelName = string.IsNullOrWhiteSpace(modelInfo.CallName)
             ? modelInfo.Name
@@ -62,4 +62,5 @@ public sealed class AgentResolutionService : IAgentResolutionService
         return sb.Length > 0 ? sb.ToString() : null;
     }
 }
+
 

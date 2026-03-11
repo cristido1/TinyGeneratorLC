@@ -1096,9 +1096,9 @@ public class NreEngine : IEngine
 
         ctx.Telemetry.RetryCount += Math.Max(0, result.Attempts - 1);
         ctx.Telemetry.TotalLatencyMs += Math.Max(0L, (long)result.Duration.TotalMilliseconds);
-        ctx.Telemetry.LastAgentName = agent.Name;
+        ctx.Telemetry.LastAgentName = agent.Description;
         ctx.Telemetry.LastModelName = string.IsNullOrWhiteSpace(result.ModelUsed) ? ctx.Telemetry.LastModelName : result.ModelUsed;
-        ReportLive(ctx, agentName: agent.Name, modelName: ctx.Telemetry.LastModelName);
+        ReportLive(ctx, agentName: agent.Description, modelName: ctx.Telemetry.LastModelName);
 
         return result;
     }
@@ -1366,7 +1366,7 @@ public class NreEngine : IEngine
     {
         var checks = new List<IDeterministicCheck>();
         var op = (operation ?? string.Empty).Trim().ToLowerInvariant();
-        var agentIdentity = string.IsNullOrWhiteSpace(agent?.Name) ? "nre_writer" : agent.Name;
+        var agentIdentity = string.IsNullOrWhiteSpace(agent?.Description) ? "nre_writer" : agent.Description;
 
         if (op != "nre_writer")
         {

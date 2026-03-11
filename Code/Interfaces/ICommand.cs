@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using TinyGenerator.Models;
 using TinyGenerator.Services;
 
 namespace TinyGenerator.Services.Commands;
@@ -20,8 +21,11 @@ public sealed class CommandProgressEventArgs : EventArgs
     }
 }
 
-public interface ICommand
+public interface ICommand : IEntity, IDescription, IActiveFlag
 {
+    int IEntity.Id { get => 0; set { } }
+    string? IDescription.Description { get => CommandName; set { } }
+    bool IActiveFlag.IsActive { get => true; set { } }
     string CommandName => ToSnakeCase(GetType().Name);
     int Priority => 2;
     bool Batch => false;

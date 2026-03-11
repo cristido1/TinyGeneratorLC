@@ -17,6 +17,7 @@ public class IndexModel : PageModel
     public int EnabledModels { get; set; }
     public int DisabledModels { get; set; }
     public int AudioMasterGeneratedCount { get; set; }
+    public double DatabaseSizeMb { get; set; }
     public List<WriterRanking> TopWriters { get; set; } = new();
     public List<TopStory> TopStories { get; set; } = new();
     public List<SystemReportSummary> RecentReports { get; set; } = new();
@@ -94,6 +95,7 @@ public class IndexModel : PageModel
             "KPI_02" => "Mostra quanti modelli sono oggi utilizzabili rispetto al totale censito: il numero grande è quanti hanno stato attivo, il totale dopo la barra è tutti i modelli presenti in tabella models.",
             "KPI_08" => "Indica quanti modelli sono presenti ma disattivati, leggendo il campo di attivazione della tabella models.",
             "KPI_18" => "Conta quante storie sono arrivate allo stato finale audio pronto, usando lo stato della storia e cercando i codici audio_master_generated o final_mix_ready.",
+            "KPI_DB_SIZE" => "Mostra la dimensione fisica del database SQLite in megabyte, calcolata da page_count × page_size.",
             "KPI_03" => "Conta quante storie hanno almeno una valutazione registrata, quindi quante sono state effettivamente valutate usando i dati di stories_evaluations collegati a stories.",
             "KPI_04" => "Conta quante storie valutate hanno una media punteggio sopra 60: per ogni storia si fa la media delle sue valutazioni, poi si contano quelle oltre la soglia.",
             "KPI_05" => "È la percentuale di storie approvate: prende il numero di storie sopra 60 e lo divide per tutte le storie che hanno almeno una valutazione.",
@@ -180,6 +182,11 @@ public class IndexModel : PageModel
             {
                 AudioMasterGeneratedCount = allStories.Count(s => s.StatusId == audioMasterStatus.Id);
             }
+        });
+
+        Guarded("db_size_mb", () =>
+        {
+            DatabaseSizeMb = LoadDatabaseSizeMb();
         });
 
         Guarded("top_writers", () =>
@@ -659,5 +666,27 @@ ORDER BY success_pct DESC, use_count DESC, role_name ASC;";
         var safeMs = Math.Max(0, (long)Math.Round(milliseconds));
         var ts = TimeSpan.FromMilliseconds(safeMs);
         return $"{(int)ts.TotalHours}h {ts.Minutes:D2}m {ts.Seconds:D2}s";
+    }
+
+    private double LoadDatabaseSizeMb()
+    {
+        return _database.WithSqliteConnection(conn =>
+        {
+            using var pageCountCmd = conn.CreateCommand();
+            pageCountCmd.CommandText = "PRAGMA page_count;";
+            var pageCount = Convert.ToInt64(pageCountCmd.ExecuteScalar() ?? 0L);
+
+            using var pageSizeCmd = conn.CreateCommand();
+            pageSizeCmd.CommandText = "PRAGMA page_size;";
+            var pageSize = Convert.ToInt64(pageSizeCmd.ExecuteScalar() ?? 0L);
+
+            if (pageCount <= 0 || pageSize <= 0)
+            {
+                return 0.0;
+            }
+
+            var bytes = pageCount * pageSize;
+            return bytes / (1024.0 * 1024.0);
+        });
     }
 }

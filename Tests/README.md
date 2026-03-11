@@ -72,7 +72,13 @@ dotnet test
 ```bash
 dotnet test Tests/LangChainToolsTests.cs
 dotnet test Tests/LangChainIntegrationTests.cs
+dotnet test --filter MetadataTables_ShouldSupport_InsertUpdateDelete_WithGeneratedValues
 ```
+
+### Metadata CRUD smoke test
+- `MetadataCrudSmokeTests.MetadataTables_ShouldSupport_InsertUpdateDelete_WithGeneratedValues`
+- Legge `metadata_tables` e `metadata_fields`, prova `insert -> update -> delete` per ogni tabella metadata-driven.
+- Usa una transazione e termina con rollback per non alterare il DB.
 
 ### Run with verbosity
 ```bash

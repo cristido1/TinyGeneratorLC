@@ -181,13 +181,13 @@ namespace TinyGenerator.Pages.Stories
 
             if (pending.Count == 0)
             {
-                TempData["StatusMessage"] = $"Nessuna storia da valutare per l'agente {agent.Name}.";
+                TempData["StatusMessage"] = $"Nessuna storia da valutare per l'agente {agent.Description}.";
                 return RedirectToPage();
             }
 
             var runId = $"bulk_eval_{agentId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
             _customLogger?.Start(runId);
-            _customLogger?.Append(runId, $"Avvio valutazione batch di {pending.Count} storie con {agent.Name} ({agent.Role})");
+            _customLogger?.Append(runId, $"Avvio valutazione batch di {pending.Count} storie con {agent.Description} ({agent.Role})");
 
             _commandDispatcher.Enqueue(
                 "bulk_evaluate",
@@ -219,7 +219,7 @@ namespace TinyGenerator.Pages.Stories
                 metadata: new Dictionary<string, string>
                 {
                     ["agentId"] = agentId.ToString(),
-                    ["agentName"] = agent.Name ?? string.Empty,
+                    ["agentName"] = agent.Description ?? string.Empty,
                     ["agentRole"] = agent.Role ?? string.Empty,
                     ["operation"] = isCoherence ? "bulk_evaluate_coherence" : "bulk_evaluate_story"
                 });
@@ -2015,7 +2015,7 @@ $@"<!doctype html>
             return new Dictionary<string, string>
             {
                 ["agentId"] = agent.Id.ToString(),
-                ["agentName"] = agent.Name ?? string.Empty,
+                ["agentName"] = agent.Description ?? string.Empty,
                 ["agentRole"] = agent.Role ?? string.Empty,
                 ["storyId"] = storyId.ToString(),
                 ["operation"] = operationCode

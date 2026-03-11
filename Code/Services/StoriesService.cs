@@ -1199,7 +1199,7 @@ public sealed partial class StoriesService
         var runId = $"storyeval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
         _customLogger?.Start(runId);
         var evaluationOpId = LogScope.GenerateOperationId();
-        using var scope = LogScope.Push($"story_evaluation_{story.Id}", evaluationOpId, null, null, agent.Name, agent.Role, storyId: story.Id);
+        using var scope = LogScope.Push($"story_evaluation_{story.Id}", evaluationOpId, null, null, agent.Description, agent.Role, storyId: story.Id);
 
         try
         {
@@ -1248,7 +1248,7 @@ public sealed partial class StoriesService
                     var effectiveAgent = new Agent
                     {
                         Id = agent.Id,
-                        Name = agent.Name,
+                        Description = agent.Description,
                         Role = agent.Role,
                         ModelId = evaluationModelId,
                         ModelName = evaluationModelName,
@@ -1357,13 +1357,13 @@ public sealed partial class StoriesService
                         {
                             var msg = "L'agente non ha salvato la coerenza globale.";
                             _customLogger?.Append(runId, $"[{storyId}] {msg}", "Warn");
-                            TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
+                            TryLogEvaluationResult(runId, storyId, agent?.Description, success: false, msg);
                             return (false, 0, msg);
                         }
 
                         var score = globalCoherence.GlobalCoherenceValue * 10; // Convert 0-1 to 0-10 scale
                         _customLogger?.Append(runId, $"[{storyId}] Valutazione di coerenza completata. Score: {score:F2}");
-                        TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione di coerenza completata. Score: {score:F2}");
+                        TryLogEvaluationResult(runId, storyId, agent?.Description, success: true, $"Valutazione di coerenza completata. Score: {score:F2}");
                         var allowNext = true;
                         var (count, average) = _database.GetStoryEvaluationStats(storyId);
                         TrySendStoryAfterEvaluationEmail(storyId, count, average);
@@ -1389,13 +1389,13 @@ public sealed partial class StoriesService
                         {
                             var msg = "L'agente non ha salvato alcuna valutazione.";
                             _customLogger?.Append(runId, $"[{storyId}] {msg}", "Warn");
-                            TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, msg);
+                            TryLogEvaluationResult(runId, storyId, agent?.Description, success: false, msg);
                             return (false, 0, msg);
                         }
 
                         var avgScore = afterEvaluations.Average(e => e.TotalScore);
                         _customLogger?.Append(runId, $"[{storyId}] Valutazione completata. Score medio: {avgScore:F2}");
-                        TryLogEvaluationResult(runId, storyId, agent?.Name, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
+                        TryLogEvaluationResult(runId, storyId, agent?.Description, success: true, $"Valutazione completata. Score medio: {avgScore:F2}");
 
                         // Se score > 60% (su scala 0-40), avvia riassunto automatico con priorita' bassa
                         if (avgScore > 24 && _commandDispatcher != null)
@@ -1462,7 +1462,7 @@ public sealed partial class StoriesService
                 catch (Exception ex)
                 {
                     _logger?.LogError(ex, "Errore durante EvaluateStoryWithAgent per storia {StoryId} agente {AgentId}", storyId, agentId);
-                    TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, ex.Message);
+                    TryLogEvaluationResult(runId, storyId, agent?.Description, success: false, ex.Message);
                     return (false, 0, ex.Message);
                 }
             }
@@ -1537,7 +1537,7 @@ public sealed partial class StoriesService
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Errore durante EvaluateStoryWithAgent per storia {StoryId} agente {AgentId}", storyId, agentId);
-            TryLogEvaluationResult(runId, storyId, agent?.Name, success: false, ex.Message);
+            TryLogEvaluationResult(runId, storyId, agent?.Description, success: false, ex.Message);
             return (false, 0, ex.Message);
         }
         finally
@@ -2092,7 +2092,7 @@ $@"<!doctype html>
         var runId = $"actioneval_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmss}";
         _customLogger?.Start(runId);
         var evaluationOpId = LogScope.GenerateOperationId();
-        using var scope = LogScope.Push($"action_evaluation_{story.Id}", evaluationOpId, null, null, agent.Name, agent.Role, storyId: story.Id);
+        using var scope = LogScope.Push($"action_evaluation_{story.Id}", evaluationOpId, null, null, agent.Description, agent.Role, storyId: story.Id);
 
         try
         {
@@ -2155,7 +2155,7 @@ $@"<!doctype html>
         var initialModelId = agent.ModelId ?? 0;
         if (initialModelId <= 0)
         {
-            return (false, $"Agente {agent.Name} senza modello configurato");
+            return (false, $"Agente {agent.Description} senza modello configurato");
         }
 
         try
@@ -3220,6 +3220,9 @@ $@"<!doctype html>
             try
             {
                 var alreadyQueued = _commandDispatcher.GetActiveCommands().Any(s =>
+                    !string.Equals(s.Status, "completed", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(s.Status, "failed", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(s.Status, "cancelled", StringComparison.OrdinalIgnoreCase) &&
                     s.Metadata != null &&
                     s.Metadata.TryGetValue("storyId", out var sid) &&
                     string.Equals(sid, storyId.ToString(), StringComparison.OrdinalIgnoreCase) &&
@@ -5488,7 +5491,7 @@ $@"<!doctype html>
                 return;
 
             if (!metadata.ContainsKey("agentName"))
-                metadata["agentName"] = agent.Name ?? role;
+                metadata["agentName"] = agent.Description ?? role;
             if (!metadata.ContainsKey("agentRole"))
                 metadata["agentRole"] = agent.Role ?? role;
 

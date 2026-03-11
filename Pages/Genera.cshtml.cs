@@ -230,7 +230,7 @@ public class GeneraModel : PageModel
         // Load writer agents for dropdown (only those with a multi-step template)
         Agents = _database.ListAgents()
             .Where(a => a.IsActive && a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase) && a.MultiStepTemplateId.HasValue)
-            .OrderBy(a => a.Name)
+            .OrderBy(a => a.Description)
             .ToList();
 
         // Populate MultiStepTemplateName for display
@@ -252,7 +252,7 @@ public class GeneraModel : PageModel
         // State-driven writers: allow any active writer (multi-step template not required)
         StateWriterAgents = _database.ListAgents()
             .Where(a => a.IsActive && a.Role.Contains("writer", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(a => a.Name)
+            .OrderBy(a => a.Description)
             .ToList();
 
         // Populate MultiStepTemplateName where available (for nicer display)
@@ -355,7 +355,7 @@ public class GeneraModel : PageModel
         }
         if (!agent.MultiStepTemplateId.HasValue)
         {
-            return BadRequest(new { error = $"L'agente {agent.Name} non ha un template multi-step configurato." });
+            return BadRequest(new { error = $"L'agente {agent.Description} non ha un template multi-step configurato." });
         }
         var template = _database.GetStepTemplateById(agent.MultiStepTemplateId.Value);
         if (template == null)
@@ -386,7 +386,7 @@ public class GeneraModel : PageModel
             runId: genId.ToString(),
             metadata: new Dictionary<string, string>
             {
-                ["agentName"] = agent.Name ?? "unknown",
+                ["agentName"] = agent.Description ?? "unknown",
                 ["modelName"] = agent.ModelName ?? "unknown"
             }
         );
@@ -538,7 +538,7 @@ public class GeneraModel : PageModel
             runId: genId.ToString(),
             metadata: new Dictionary<string, string>
             {
-                ["agentName"] = agent.Name ?? "unknown",
+                ["agentName"] = agent.Description ?? "unknown",
                 ["modelName"] = agent.ModelName ?? "unknown",
                 ["operation"] = "series_episode"
             }

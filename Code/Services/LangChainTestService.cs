@@ -1462,7 +1462,7 @@ namespace TinyGenerator.Services
             {
                 try
                 {
-                    _customLogger?.Append(runId.ToString(), $"[{writerModel}] Evaluating with {evaluator.Name}...");
+                    _customLogger?.Append(runId.ToString(), $"[{writerModel}] Evaluating with {evaluator.Description}...");
                     var result = await _stories.EvaluateStoryWithAgentAsync(storyId, evaluator.Id);
 
                     if (result.success)
@@ -1501,3 +1501,4 @@ namespace TinyGenerator.Services
         }
     }
 }
+

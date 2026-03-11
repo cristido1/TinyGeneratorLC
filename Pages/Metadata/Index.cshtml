@@ -1,0 +1,13 @@
+@page
+@model TinyGenerator.Pages.Metadata.IndexModel
+@{
+    ViewData["Title"] = "Metadata Tables";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/js/vue-roles/metadata-index.css" asp-append-version="true" />
+}
+
+<div id="metadata-vue-app"></div>
+
+<script type="module" src="~/js/vue-roles/metadata-index.js" asp-append-version="true"></script>

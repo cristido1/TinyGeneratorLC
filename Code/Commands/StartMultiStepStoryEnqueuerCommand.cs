@@ -56,7 +56,7 @@ namespace TinyGenerator.Services.Commands
                 // Check if agent has multi-step template
                 if (!agent.MultiStepTemplateId.HasValue)
                 {
-                    _logger.Log("Warning", "MultiStep", $"Agent {agent.Name} has no multi-step template, falling back to single-step generation");
+                    _logger.Log("Warning", "MultiStep", $"Agent {agent.Description} has no multi-step template, falling back to single-step generation");
 
                     // TODO: Fallback to single-step StoryGeneratorService
                     // For now, just log and return
@@ -139,7 +139,7 @@ namespace TinyGenerator.Services.Commands
                     runId: executeRunId,
                     metadata: new Dictionary<string, string>
                     {
-                        ["agentName"] = agent.Name ?? string.Empty,
+                        ["agentName"] = agent.Description ?? string.Empty,
                         ["modelName"] = modelId.HasValue ? (_database.GetModelInfoById(modelId.Value)?.Name ?? string.Empty) : string.Empty,
                         ["operation"] = "story_multi_step"
                     }
@@ -156,5 +156,6 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
+
 
 

@@ -507,7 +507,7 @@ public sealed class CallCenter : ICallCenter
                 _logger?.Log(
                     "Information",
                     "CallCenter",
-                    $"operation=fail_explanation; status=SUCCESS; story_id={storyId}; thread_id={threadId}; agent={agent.Name}",
+                    $"operation=fail_explanation; status=SUCCESS; story_id={storyId}; thread_id={threadId}; agent={agent.Description}",
                     result: "SUCCESS");
             }
             else
@@ -515,7 +515,7 @@ public sealed class CallCenter : ICallCenter
                 _logger?.Log(
                     "Warning",
                     "CallCenter",
-                    $"operation=fail_explanation; status=FAILED; story_id={storyId}; thread_id={threadId}; agent={agent.Name}; reason={explanation.Error ?? "empty"}",
+                    $"operation=fail_explanation; status=FAILED; story_id={storyId}; thread_id={threadId}; agent={agent.Description}; reason={explanation.Error ?? "empty"}",
                     result: "FAILED");
             }
         }
@@ -524,7 +524,7 @@ public sealed class CallCenter : ICallCenter
             _logger?.Log(
                 "Warning",
                 "CallCenter",
-                $"operation=fail_explanation; status=FAILED; story_id={storyId}; thread_id={threadId}; agent={agent.Name}; reason={ex.Message}",
+                $"operation=fail_explanation; status=FAILED; story_id={storyId}; thread_id={threadId}; agent={agent.Description}; reason={ex.Message}",
                 result: "FAILED");
         }
     }
@@ -721,7 +721,7 @@ public sealed class CallCenter : ICallCenter
             checkerHistory.AddUser(BuildAgentCheckerInput(options.CheckerContextText, primaryResponse, checker.MinimalScore));
             var checkerOperation = !string.IsNullOrWhiteSpace(checker.Agent.Role)
                 ? checker.Agent.Role!.Trim()
-                : (!string.IsNullOrWhiteSpace(checker.Agent.Name) ? checker.Agent.Name!.Trim() : $"{operationName}:agent_checker");
+                : (!string.IsNullOrWhiteSpace(checker.Agent.Description) ? checker.Agent.Description!.Trim() : $"{operationName}:agent_checker");
 
             const int defaultCheckerRetries = 3;
             var remainingRetries = defaultCheckerRetries;
@@ -751,7 +751,7 @@ public sealed class CallCenter : ICallCenter
 
                 var outcome = new AgentCheckerOutcome
                 {
-                    CheckerAgentName = checker.Agent.Name ?? "agent_checker",
+                    CheckerAgentName = checker.Agent.Description ?? "agent_checker",
                     ModelUsed = checkerResult.ModelUsed,
                     RawResponse = checkerResult.ResponseText
                 };

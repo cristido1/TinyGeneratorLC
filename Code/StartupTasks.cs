@@ -555,7 +555,7 @@ evaluate_full_story({
                         : instr.TrimEnd() + "\n\n" + snippet;
 
                     db.UpdateAgent(agent);
-                    logger?.LogInformation("[Startup] Added evaluate_full_story example to agent {Id} ({Name})", agent.Id, agent.Name);
+                    logger?.LogInformation("[Startup] Added evaluate_full_story example to agent {Id} ({Name})", agent.Id, agent.Description);
                 }
             }
             catch (Exception ex)

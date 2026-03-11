@@ -396,9 +396,9 @@ public sealed partial class SoundSearchService
                 return fallbackQueries;
             }
 
-            LogRun(runId, $"Chiamata agente '{agent.Name}' via CallCenter per query di ricerca...");
+            LogRun(runId, $"Chiamata agente '{agent.Description}' via CallCenter per query di ricerca...");
             LogRun(runId,
-                $"INTERNET REQUEST | service={agent.Name} | stage=query_planner | method=CALLCENTER | url=internal://callcenter/fxfetcheragent\n" +
+                $"INTERNET REQUEST | service={agent.Description} | stage=query_planner | method=CALLCENTER | url=internal://callcenter/fxfetcheragent\n" +
                 $"REQUEST_BODY: type={NormalizeSoundType(missing.Type)} | prompt={missing.Prompt} | tags={missing.Tags} | fallback={string.Join(" || ", fallbackQueries)}");
 
             var history = new ChatHistory();
@@ -436,7 +436,7 @@ public sealed partial class SoundSearchService
 
             if (!call.Success || string.IsNullOrWhiteSpace(call.ResponseText))
             {
-                LogRun(runId, $"Agente '{agent.Name}' fallito: {call.FailureReason ?? "empty response"}", "warn");
+                LogRun(runId, $"Agente '{agent.Description}' fallito: {call.FailureReason ?? "empty response"}", "warn");
                 return fallbackQueries;
             }
 
@@ -447,16 +447,16 @@ public sealed partial class SoundSearchService
 
             if (orderedTags.Count > 0)
             {
-                LogRun(runId, $"Agente '{agent.Name}' tags ordinati: {string.Join(", ", orderedTags)}");
+                LogRun(runId, $"Agente '{agent.Description}' tags ordinati: {string.Join(", ", orderedTags)}");
                 LogRun(runId, $"Query progressive da tag (tutti->1): {string.Join(" || ", agentQueries)}");
             }
             else
             {
-                LogRun(runId, $"Agente '{agent.Name}' query response (legacy): {string.Join(" || ", agentQueries)}");
+                LogRun(runId, $"Agente '{agent.Description}' query response (legacy): {string.Join(" || ", agentQueries)}");
             }
 
             LogRun(runId,
-                $"INTERNET RESPONSE | service={agent.Name} | stage=query_planner | status=200 | url=internal://callcenter/fxfetcheragent\n" +
+                $"INTERNET RESPONSE | service={agent.Description} | stage=query_planner | status=200 | url=internal://callcenter/fxfetcheragent\n" +
                 $"RESPONSE_BODY: {TruncateForLog(call.ResponseText, 1200)}");
 
             if (agentQueries.Count == 0)
@@ -930,3 +930,4 @@ public sealed partial class SoundSearchService
         return normalized.Substring(0, maxChars) + "...";
     }
 }
+

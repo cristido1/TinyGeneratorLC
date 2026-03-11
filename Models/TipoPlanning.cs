@@ -4,10 +4,10 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models;
 
 [Table("tipo_planning")]
-public sealed partial class TipoPlanning : ISoftDelete, IActiveFlag, IOrderable, IEntity
+public sealed partial class TipoPlanning : ISoftDelete, IActiveFlag, IOrderable, IEntity, IDescription
 {
     [Key]
-    [Column("id_tipo_planning")]
+    [Column("id")]
     public int Id { get; set; }
 
     [Required]

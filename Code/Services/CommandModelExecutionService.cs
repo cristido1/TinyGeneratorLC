@@ -151,7 +151,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var modelName = ResolveModelName(request.Agent);
         if (string.IsNullOrWhiteSpace(modelName))
         {
-            return new Result { Success = false, Error = $"Agente {request.Agent.Name} senza modello configurato", DeterministicFailure = false, AttemptsUsed = 0 };
+            return new Result { Success = false, Error = $"Agente {request.Agent.Description} senza modello configurato", DeterministicFailure = false, AttemptsUsed = 0 };
         }
 
         var settings = ResolveSettings(request);
@@ -372,7 +372,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             var deterministic = await ValidateGlobalDeterministicChecksAsync(
                 text,
                 settings,
-                request.Agent?.Name,
+                request.Agent?.Description,
                 modelName,
                 roleCode,
                 request.RunId ?? string.Empty,
@@ -397,7 +397,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 _logger?.Log(
                     "Warning",
                     "DeterministicValidation",
-                    $"operation={request.CommandKey}; role={roleCode}; agent={request.Agent?.Name ?? "(unknown)"}; model={modelName}; attempt={attempt}; reason={lastError}",
+                    $"operation={request.CommandKey}; role={roleCode}; agent={request.Agent?.Description ?? "(unknown)"}; model={modelName}; attempt={attempt}; reason={lastError}",
                     state: "deterministic_validation",
                     result: "FAILED");
                 LogValidationFailureContext(
@@ -562,7 +562,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     var fallbackAgent = new Agent
                     {
                         Id = request.Agent.Id,
-                        Name = request.Agent.Name,
+                        Name = request.Agent.Description,
                         Role = request.Agent.Role,
                         ModelId = modelRole.ModelId,
                         ModelName = fallbackName,
@@ -695,7 +695,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             operationId: null,
             stepNumber: null,
             maxStep: null,
-            agentName: agent.Name ?? roleCode,
+            agentName: agent.Description ?? roleCode,
             agentRole: roleCode);
 
         var responseJson = await bridge.CallModelWithToolsAsync(
@@ -881,7 +881,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             instruction,
             outputText,
             rules,
-            agentName: request.Agent?.Name,
+            agentName: request.Agent?.Description,
             modelName: request.Agent != null ? ResolveModelName(request.Agent) : null,
             ct: ct).ConfigureAwait(false);
     }
@@ -924,7 +924,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 operationId: null,
                 stepNumber: null,
                 maxStep: null,
-                agentName: request.Agent.Name ?? request.RoleCode,
+                agentName: request.Agent.Description ?? request.RoleCode,
                 agentRole: request.RoleCode);
             var response = await bridge.CallModelWithToolsAsync(messages, new List<Dictionary<string, object>>(), ct, skipResponseChecker: true).ConfigureAwait(false);
             var (text, _) = LangChainChatBridge.ParseChatResponse(response);
@@ -953,7 +953,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         }
 
         var runId = request.RunId ?? string.Empty;
-        var agentName = string.IsNullOrWhiteSpace(request.Agent?.Name) ? "(agent n/a)" : request.Agent.Name;
+        var agentName = string.IsNullOrWhiteSpace(request.Agent?.Description) ? "(agent n/a)" : request.Agent.Description;
         var instruction = BuildInstructionForChecker(request);
 
         var sb = new StringBuilder();
@@ -985,7 +985,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         }
 
         var runId = request.RunId ?? string.Empty;
-        var agentName = string.IsNullOrWhiteSpace(request.Agent?.Name) ? "(agent n/a)" : request.Agent.Name;
+        var agentName = string.IsNullOrWhiteSpace(request.Agent?.Description) ? "(agent n/a)" : request.Agent.Description;
         var prompt = promptSent ?? request.Prompt ?? string.Empty;
         var responsePreview = responseText ?? string.Empty;
 
@@ -1943,7 +1943,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         try
         {
             var threadId = LogScope.CurrentThreadId;
-            var agentName = string.IsNullOrWhiteSpace(agent.Name) ? null : agent.Name;
+            var agentName = string.IsNullOrWhiteSpace(agent.Description) ? null : agent.Description;
             long? logId = null;
             if (threadId.HasValue && threadId.Value > 0)
             {

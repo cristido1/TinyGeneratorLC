@@ -1,0 +1,165 @@
+============================================================
+TABELL A: metadata_tables
+============================================================
+
+Descrizione:
+Metadati relativi alla configurazione generale della griglia
+e della pagina di edit per una tabella del database.
+
+Chiave logica:
+table_name
+
+Campi:
+
+table_id: int primary key
+
+table_name
+    tipo: nvarchar(128)
+    descrizione: nome della tabella del database a cui si riferiscono i metadati
+    valori: qualsiasi nome tabella esistente
+
+default_sort_field
+    tipo: nvarchar(128)
+    descrizione: campo usato per l'ordinamento iniziale della griglia
+    valori: nome di un campo della tabella
+
+default_sort_direction
+    tipo: nvarchar(4)
+    descrizione: direzione ordinamento
+    valori possibili:
+        ASC
+        DESC
+
+default_page_size
+    tipo: int
+    descrizione: numero di righe caricate per pagina
+    valori possibili tipici:
+        20
+        50
+        100
+        200
+
+edit_mode
+    tipo: nvarchar(20)
+    descrizione: modalità di modifica dei record
+    valori possibili:
+        dialog
+        inline
+        page
+
+allow_insert
+    tipo: bit
+    descrizione: abilita inserimento record
+    valori:
+        0 = no
+        1 = sì
+
+allow_update
+    tipo: bit
+    descrizione: abilita modifica record
+    valori:
+        0 = no
+        1 = sì
+
+allow_delete
+    tipo: bit
+    descrizione: abilita cancellazione record
+    valori:
+        0 = no
+        1 = sì
+
+child_table_id
+    tipo: int
+    descrizione: id dell'entità/tabella figlia
+
+child_table_parent_id_field_name
+    tipo: nvarchar(128)
+    descrizione: nome del campo nella tabella figlia che contiene
+                 l'id della tabella padre
+    valori: nome campo FK (es. OrderId, EntityId, StoryId)
+
+============================================================
+TABELLA: metadata_fields
+============================================================
+
+Descrizione:
+Metadati relativi ai singoli campi della tabella.  
+Usati per costruire automaticamente griglia e form di edit.
+
+Chiave logica:
+(table_id,field_name)
+
+Campi:
+field_id :int primary key
+
+parent_table_id : int 
+
+field_name
+    tipo: nvarchar(128)
+    descrizione: nome del campo nel database
+
+caption
+    tipo: nvarchar(200)
+    descrizione: etichetta visualizzata nella UI
+    valori: testo libero
+
+editor_type
+    tipo: nvarchar(30)
+    descrizione: tipo editor da usare nel form di edit
+    valori possibili:
+        text
+        textarea
+        number
+        checkbox
+        date
+        datetime
+        combo
+        json
+        readonly
+
+width
+    tipo: int
+    descrizione: larghezza colonna griglia in pixel
+    valori: numero intero (esempio 80, 120, 300, 500)
+
+multiline
+    tipo: bit
+    descrizione: campo multiriga
+    valori:
+        0 = no
+        1 = sì
+
+required_override
+    tipo: bit
+    descrizione: override del vincolo obbligatorio
+    valori:
+        0 = non obbligatorio
+        1 = obbligatorio
+        NULL = usa regola del database
+
+readonly_override
+    tipo: bit
+    descrizione: campo non modificabile
+    valori:
+        0 = modificabile
+        1 = sola lettura
+
+visible_override
+    tipo: bit
+    descrizione: visibilità campo nella griglia/edit
+    valori:
+        0 = nascosto
+        1 = visibile
+
+sort_override
+    tipo: int
+    descrizione: ordine visualizzazione campo
+    valori: numero intero (1..n)
+
+group_name
+    tipo: nvarchar(100)
+    descrizione: gruppo logico nel form di edit
+    valori: testo libero (es. "Generale", "Parametri", "AI")
+
+
+

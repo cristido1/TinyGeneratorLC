@@ -73,7 +73,7 @@ namespace TinyGenerator.Services.Commands
                 // Check if agent has multi-step template
                 if (!agent.MultiStepTemplateId.HasValue)
                 {
-                    _logger.Log("Error", "SeriesEpisode", $"Agent {agent.Name} has no multi-step template configured");
+                    _logger.Log("Error", "SeriesEpisode", $"Agent {agent.Description} has no multi-step template configured");
                     return;
                 }
 
@@ -153,7 +153,7 @@ namespace TinyGenerator.Services.Commands
                     _orchestrator,
                     _database,
                     _logger,
-                    agent.Name ?? string.Empty,
+                    agent.Description ?? string.Empty,
                     modelId.HasValue ? (_database.GetModelInfoById(modelId.Value)?.Name ?? string.Empty) : string.Empty,
                     serie.Titolo,
                     episodeNumber,
@@ -186,5 +186,6 @@ namespace TinyGenerator.Services.Commands
         }
     }
 }
+
 
 

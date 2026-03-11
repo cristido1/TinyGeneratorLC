@@ -534,8 +534,8 @@ namespace TinyGenerator.Services
             {
                 var db = _services?.GetService<DatabaseService>();
                 if (db == null || string.IsNullOrWhiteSpace(agentName)) return null;
-                var agent = db.ListAgents().FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Name) &&
-                    string.Equals(a.Name.Trim(), agentName.Trim(), StringComparison.OrdinalIgnoreCase));
+                var agent = db.ListAgents().FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Description) &&
+                    string.Equals(a.Description.Trim(), agentName.Trim(), StringComparison.OrdinalIgnoreCase));
                 var agentRole = agent?.Role;
                 return string.IsNullOrWhiteSpace(agentRole) ? null : agentRole.Trim();
             }

@@ -51,7 +51,7 @@
                     <option value="">-- nessuno --</option>
                     @foreach (var agent in Model.Agents)
                     {
-                        <option value="@agent.Id">@agent.Name (@agent.Role)</option>
+                        <option value="@agent.Id">@agent.Description (@agent.Role)</option>
                     }
                 </select>
             </div>
@@ -72,3 +72,4 @@
         </form>
     </div>
 </div>
+

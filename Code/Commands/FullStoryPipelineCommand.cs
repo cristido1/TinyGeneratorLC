@@ -86,11 +86,11 @@ namespace TinyGenerator.Services.Commands
                     var template = _database.GetStepTemplateById(agent.MultiStepTemplateId!.Value);
                     if (template == null)
                     {
-                        await LogAndNotifyAsync($"⚠️ Template {agent.MultiStepTemplateId} non trovato per agente {agent.Name}, skip", "warning");
+                        await LogAndNotifyAsync($"⚠️ Template {agent.MultiStepTemplateId} non trovato per agente {agent.Description}, skip", "warning");
                         continue;
                     }
 
-                    await LogAndNotifyAsync($"🚀 Avvio generazione con agente: {agent.Name}");
+                    await LogAndNotifyAsync($"🚀 Avvio generazione con agente: {agent.Description}");
 
                     // Build config with characters_step if defined in template
                     string? configOverrides = null;
@@ -142,18 +142,18 @@ namespace TinyGenerator.Services.Commands
                     var execution = _database.GetTaskExecutionById(executionId);
                     if (execution == null)
                     {
-                        await LogAndNotifyAsync($"⚠️ Execution {executionId} non trovata per {agent.Name}", "warning");
+                        await LogAndNotifyAsync($"⚠️ Execution {executionId} non trovata per {agent.Description}", "warning");
                         continue;
                     }
 
                     if (execution.Status == "completed" && execution.EntityId.HasValue)
                     {
                         successfulStories.Add((agent, execution.EntityId.Value, execution));
-                        await LogAndNotifyAsync($"✅ {agent.Name}: storia {execution.EntityId.Value} generata con successo", "success");
+                        await LogAndNotifyAsync($"✅ {agent.Description}: storia {execution.EntityId.Value} generata con successo", "success");
                     }
                     else
                     {
-                        await LogAndNotifyAsync($"❌ {agent.Name}: generazione fallita (status: {execution.Status})", "error");
+                        await LogAndNotifyAsync($"❌ {agent.Description}: generazione fallita (status: {execution.Status})", "error");
                     }
                 }
 
@@ -181,7 +181,7 @@ namespace TinyGenerator.Services.Commands
                     // Se non ci sono valutatori, prendi la prima storia
                     var (agent, storyId, _) = successfulStories[0];
                     await BroadcastPipelinePhaseAsync("Fase 7/7: Pipeline audio...");
-                    var pipelineOk = await EnqueueFullAudioPipelineForStoryAsync(storyId, agent.Name, ct);
+                    var pipelineOk = await EnqueueFullAudioPipelineForStoryAsync(storyId, agent.Description, ct);
                     if (pipelineOk)
                     {
                         await LogAndNotifyAsync("🎉 Pipeline completo terminato con successo!", "success");
@@ -208,7 +208,7 @@ namespace TinyGenerator.Services.Commands
                     {
                         ct.ThrowIfCancellationRequested();
 
-                        await LogAndNotifyAsync($"📊 Valutazione storia {storyId} con {evaluator.Name}...");
+                        await LogAndNotifyAsync($"📊 Valutazione storia {storyId} con {evaluator.Description}...");
 
                         try
                         {
@@ -217,16 +217,16 @@ namespace TinyGenerator.Services.Commands
                             if (success && score > 0)
                             {
                                 storyScores[storyId].Add((evaluator.Id, score));
-                                await LogAndNotifyAsync($"   {evaluator.Name} → punteggio: {score:F1}");
+                                await LogAndNotifyAsync($"   {evaluator.Description} → punteggio: {score:F1}");
                             }
                             else
                             {
-                                await LogAndNotifyAsync($"   ⚠️ {evaluator.Name}: valutazione fallita - {error}", "warning");
+                                await LogAndNotifyAsync($"   ⚠️ {evaluator.Description}: valutazione fallita - {error}", "warning");
                             }
                         }
                         catch (Exception ex)
                         {
-                            await LogAndNotifyAsync($"   ❌ {evaluator.Name}: errore - {ex.Message}", "error");
+                            await LogAndNotifyAsync($"   ❌ {evaluator.Description}: errore - {ex.Message}", "error");
                         }
                     }
                 }
@@ -244,18 +244,18 @@ namespace TinyGenerator.Services.Commands
                     var scores = storyScores[storyId];
                     if (scores.Count == 0)
                     {
-                        await LogAndNotifyAsync($"⚠️ Storia {storyId} ({agent.Name}): nessun punteggio valido", "warning");
+                        await LogAndNotifyAsync($"⚠️ Storia {storyId} ({agent.Description}): nessun punteggio valido", "warning");
                         continue;
                     }
 
                     var avgScore = scores.Average(s => s.score);
-                    await LogAndNotifyAsync($"📈 Storia {storyId} ({agent.Name}): punteggio medio = {avgScore:F2}");
+                    await LogAndNotifyAsync($"📈 Storia {storyId} ({agent.Description}): punteggio medio = {avgScore:F2}");
 
                     if (avgScore > bestAvgScore)
                     {
                         bestAvgScore = avgScore;
                         bestStoryId = storyId;
-                        bestWriterName = agent.Name;
+                        bestWriterName = agent.Description;
                     }
                 }
 
@@ -264,7 +264,7 @@ namespace TinyGenerator.Services.Commands
                     // Fallback: prendi la prima storia se non ci sono punteggi
                     var (agent, storyId, _) = successfulStories[0];
                     bestStoryId = storyId;
-                    bestWriterName = agent.Name;
+                    bestWriterName = agent.Description;
                     await LogAndNotifyAsync($"⚠️ Nessun punteggio valido, selezionata prima storia: {bestStoryId}", "warning");
                 }
                 else
@@ -314,14 +314,14 @@ namespace TinyGenerator.Services.Commands
                     threadId,
                     (desc, current, max, stepDesc) =>
                     {
-                        _logger.Log("Information", "FullPipeline", $"[{agent.Name}] Step {current}/{max}: {stepDesc}");
+                        _logger.Log("Information", "FullPipeline", $"[{agent.Description}] Step {current}/{max}: {stepDesc}");
                     },
                     executionCts.Token
                 );
             }
             catch (Exception ex)
             {
-                _logger.Log("Error", "FullPipeline", $"Writer {agent.Name} execution error: {ex.Message}");
+                _logger.Log("Error", "FullPipeline", $"Writer {agent.Description} execution error: {ex.Message}");
                 // Don't rethrow - we want to continue with other writers
             }
         }
@@ -390,3 +390,4 @@ namespace TinyGenerator.Services.Commands
 
     }
 }
+

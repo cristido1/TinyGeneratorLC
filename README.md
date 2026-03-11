@@ -49,6 +49,7 @@ Apri `http://localhost:5077`.
 - **NO EF Core migrations**: lo schema SQLite è gestito via SQL/manual scripts (idempotenti) e codice di “ensure”; non usare `dotnet ef`.
 - Le pagine *Index* (griglie/lista) devono seguire lo standard in `docs/index_page_rules.txt`:
   API CRUD generica + griglia VuePrime; per tabelle semplici usare `Pages/Shared/Index`.
+- Standard entita DB: tutte le tabelle devono essere mappate da entita che implementano `IEntity` e `IActiveFlag`.
 
 ## Mappa rapida del repo
 

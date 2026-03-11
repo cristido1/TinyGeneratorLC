@@ -419,7 +419,7 @@ public sealed class RunNreCommand : ICommand
         var agents = _database.ListAgents().Where(a => a.IsActive).ToList();
 
         var exactName = agents.FirstOrDefault(a =>
-            string.Equals(a.Name, preferredName, StringComparison.OrdinalIgnoreCase));
+            string.Equals(a.Description, preferredName, StringComparison.OrdinalIgnoreCase));
         if (exactName != null) return exactName;
 
         var exactRole = agents.FirstOrDefault(a =>
@@ -427,7 +427,7 @@ public sealed class RunNreCommand : ICommand
         if (exactRole != null) return exactRole;
 
         return agents.FirstOrDefault(a =>
-            a.Name.Contains(preferredName, StringComparison.OrdinalIgnoreCase) ||
+            a.Description.Contains(preferredName, StringComparison.OrdinalIgnoreCase) ||
             a.Role.Contains(preferredName, StringComparison.OrdinalIgnoreCase));
     }
 }

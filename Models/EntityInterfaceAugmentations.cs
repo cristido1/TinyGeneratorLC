@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using System.ComponentModel.DataAnnotations.Schema;
 
@@ -6,12 +6,7 @@ namespace TinyGenerator.Models;
 
 public partial class Agent : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable, INote
 {
-    [NotMapped]
-    public string? Description
-    {
-        get => Name;
-        set => Name = value ?? string.Empty;
-    }
+    
 
     [Column("is_deleted")]
     public bool IsDeleted { get; set; }
@@ -327,6 +322,7 @@ public partial class ModelInfo : IActiveFlag, ITimeStamped, IDescription, ISoftD
         get => Name;
         set => Name = value ?? string.Empty;
     }
+    
 
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -526,6 +522,7 @@ public partial class NarrativeResource : IActiveFlag, ITimeStamped, IDescription
         get => Name;
         set => Name = value ?? string.Empty;
     }
+    
 
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -1046,6 +1043,7 @@ public partial class TtsVoice : IActiveFlag, ITimeStamped, IDescription, ISoftDe
         get => Name;
         set => Name = value ?? string.Empty;
     }
+    
 
     [Column("is_active")]
     public bool IsActive { get; set; } = true;

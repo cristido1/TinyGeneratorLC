@@ -3,10 +3,11 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TinyGenerator.Models
 {
-    [Table("stats_models")]
+[Table("stats_models")]
     public partial class ModelStatsRecord : ISoftDelete, IActiveFlag, IOrderable, IEntity
     {
-        [NotMapped]
+        [Key]
+        [Column("id")]
         public int Id { get; set; }
 
         [Column("model_name")]

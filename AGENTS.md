@@ -42,6 +42,8 @@
 ## Interfacce
 - Qualsiasi modifica a qualunque interfaccia (aggiunta/rimozione/modifica di metodi, proprieta, firme o contratti) richiede SEMPRE il permesso esplicito dell'utente prima di procedere.
 - Prima di creare una nuova funzione, verificare sempre se esiste gia una funzione/metodo simile riutilizzabile nel codice; creare nuovo codice solo se necessario.
+- Standard entita/tabelle:
+  - Tutte le entita mappate a tabella devono implementare `IEntity` (chiave primaria intera) e `IActiveFlag`.
 
 ## Controlli Deterministici (Lingua Italiana)
 - Non sono accettati controlli deterministici basati sulla presenza/assenza di specifiche parole o singoli termini.

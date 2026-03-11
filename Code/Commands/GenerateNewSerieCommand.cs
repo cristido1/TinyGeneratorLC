@@ -157,7 +157,7 @@ public sealed class GenerateNewSerieCommand : ICommand
     private void ReportStep(string runId, int current, int max, string phase, Agent agent)
     {
         var modelName = ResolveModelName(agent) ?? "n/a";
-        _logger?.Append(runId, $"{phase} [{current}/{max}] | {agent.Name ?? agent.Role ?? "agent"} | {modelName}");
+        _logger?.Append(runId, $"{phase} [{current}/{max}] | {agent.Description ?? agent.Role ?? "agent"} | {modelName}");
     }
 
     private string? ResolveModelName(Agent agent)

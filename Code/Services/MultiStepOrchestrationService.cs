@@ -2017,7 +2017,7 @@ namespace TinyGenerator.Services
             var summarizerAgent = _database.ListAgents()
                 .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
                     a.Role.Equals("summarizer", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(a => a.Description ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
 
             if (summarizerAgent == null)
@@ -2029,7 +2029,7 @@ namespace TinyGenerator.Services
             var summaryModelName = _database.GetModelInfoById(summarizerAgent.ModelId ?? 0)?.Name;
             if (string.IsNullOrWhiteSpace(summaryModelName))
             {
-                _logger.Log("Warning", "MultiStep", $"Summarizer agent {summarizerAgent.Name} has no model configured, returning full text");
+                _logger.Log("Warning", "MultiStep", $"Summarizer agent {summarizerAgent.Description} has no model configured, returning full text");
                 return text;
             }
 
@@ -2204,7 +2204,7 @@ RIASSUNTO:";
             var summarizerAgent = _database.ListAgents()
                 .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
                     a.Role.Equals("summarizer", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(a => a.Description ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
 
             if (summarizerAgent == null)
@@ -2216,7 +2216,7 @@ RIASSUNTO:";
             var summaryModelName = _database.GetModelInfoById(summarizerAgent.ModelId ?? 0)?.Name;
             if (string.IsNullOrWhiteSpace(summaryModelName))
             {
-                _logger.Log("Warning", "MultiStep", $"Summarizer agent {summarizerAgent.Name} has no model configured, skipping context summarization");
+                _logger.Log("Warning", "MultiStep", $"Summarizer agent {summarizerAgent.Description} has no model configured, skipping context summarization");
                 return context;
             }
 
@@ -2230,7 +2230,7 @@ RIASSUNTO:";
                 var cloned = new Agent
                 {
                     Id = summarizerAgent.Id,
-                    Name = summarizerAgent.Name,
+                    Name = summarizerAgent.Description,
                     Role = summarizerAgent.Role,
                     ModelId = summarizerAgent.ModelId,
                     ModelName = summarizerAgent.ModelName,
@@ -2350,7 +2350,7 @@ RIASSUNTO:";
                 var fallbackAgent = new Agent
                 {
                     Id = currentAgent.Id,
-                    Name = currentAgent.Name,
+                    Name = currentAgent.Description,
                     Role = currentAgent.Role,
                     ModelId = fallbackModel.Id,
                     ModelName = fallbackModelName,
@@ -2425,7 +2425,7 @@ RIASSUNTO:";
                         output,
                         taskTypeInfo?.ParsedValidationCriteria,
                         threadId,
-                        $"{currentAgent.Name} (fallback: {fallbackModel.Name})",
+                        $"{currentAgent.Description} (fallback: {fallbackModel.Name})",
                         fallbackModel.Name
                     );
                 }
@@ -3052,10 +3052,10 @@ RIASSUNTO:";
             }
 
             var evaluator = evaluators
-                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(a => a.Description ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .First();
 
-            _logger.Log("Information", "MultiStep", $"Evaluating step {stepNumber} with evaluator {evaluator.Name}");
+            _logger.Log("Information", "MultiStep", $"Evaluating step {stepNumber} with evaluator {evaluator.Description}");
 
             ChapterEvaluationResult? result;
             try
@@ -3065,7 +3065,7 @@ RIASSUNTO:";
             }
             catch (Exception ex)
             {
-                _logger.Log("Warning", "MultiStep", $"Evaluator {evaluator.Name} failed: {ex.Message}");
+                _logger.Log("Warning", "MultiStep", $"Evaluator {evaluator.Description} failed: {ex.Message}");
                 result = null;
             }
 
@@ -3076,7 +3076,7 @@ RIASSUNTO:";
             }
 
             var evalFeedback = new StringBuilder();
-            evalFeedback.AppendLine($"### Valutatore: {evaluator.Name} (punteggio medio: {result.AverageScore:F1})");
+            evalFeedback.AppendLine($"### Valutatore: {evaluator.Description} (punteggio medio: {result.AverageScore:F1})");
             evalFeedback.AppendLine($"- Coerenza narrativa: {result.NarrativeCoherenceScore}/10 - {result.NarrativeCoherenceFeedback}");
             evalFeedback.AppendLine($"- Originalita: {result.OriginalityScore}/10 - {result.OriginalityFeedback}");
             evalFeedback.AppendLine($"- Impatto emotivo: {result.EmotionalImpactScore}/10 - {result.EmotionalImpactFeedback}");
@@ -3084,7 +3084,7 @@ RIASSUNTO:";
             evalFeedback.AppendLine($"**Valutazione complessiva:** {result.OverallFeedback}");
 
             _logger.Log("Information", "MultiStep", 
-                $"Evaluator {evaluator.Name}: avg={result.AverageScore:F1} (coherence={result.NarrativeCoherenceScore}, originality={result.OriginalityScore}, emotion={result.EmotionalImpactScore}, style={result.StyleScore})");
+                $"Evaluator {evaluator.Description}: avg={result.AverageScore:F1} (coherence={result.NarrativeCoherenceScore}, originality={result.OriginalityScore}, emotion={result.EmotionalImpactScore}, style={result.StyleScore})");
 
             var overallAverage = result.AverageScore;
             var combinedFeedback = evalFeedback.ToString();
@@ -3107,7 +3107,7 @@ RIASSUNTO:";
             var modelName = modelInfo?.Name;
             if (string.IsNullOrWhiteSpace(modelName))
             {
-                _logger.Log("Warning", "MultiStep", $"Evaluator {evaluator.Name} has no model configured, skipping evaluation");
+                _logger.Log("Warning", "MultiStep", $"Evaluator {evaluator.Description} has no model configured, skipping evaluation");
                 return null;
             }
 
@@ -3219,13 +3219,13 @@ Chiama la funzione evaluate_chapter con i tuoi punteggi e feedback.";
                     }
                     catch
                     {
-                        _logger.Log("Warning", "MultiStep", $"Could not parse evaluation result from {evaluator.Name}");
+                        _logger.Log("Warning", "MultiStep", $"Could not parse evaluation result from {evaluator.Description}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger.Log("Error", "MultiStep", $"Evaluation by {evaluator.Name} failed: {ex.Message}");
+                _logger.Log("Error", "MultiStep", $"Evaluation by {evaluator.Description} failed: {ex.Message}");
             }
 
             return null;
@@ -3249,3 +3249,4 @@ Chiama la funzione evaluate_chapter con i tuoi punteggi e feedback.";
         }
     }
 }
+

@@ -182,7 +182,7 @@ namespace TinyGenerator.Services
                 {
                     if (string.IsNullOrWhiteSpace(agentName))
                     {
-                        agentName = agent.Name;
+                        agentName = agent.Description;
                     }
                     if (string.IsNullOrWhiteSpace(agentRole))
                     {

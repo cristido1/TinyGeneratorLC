@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -241,7 +241,7 @@ public class ChunkProcessingServiceTests
         };
 
         return new ChunkProcessRequest(
-            Agent: new Agent { Name = "Ambient", Role = CommandRoleCodes.AmbientExpert, Temperature = 0.1 },
+            Agent: new Agent { Description = "Ambient", Role = CommandRoleCodes.AmbientExpert, Temperature = 0.1 },
             RoleCode: CommandRoleCodes.AmbientExpert,
             SystemPrompt: "system",
             ChunkText: "001 Testo chunk",

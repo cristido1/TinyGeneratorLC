@@ -148,7 +148,7 @@ public sealed class DatabaseService
         return new ModelInfo
         {
             Id = source.Id,
-            Name = source.Name,
+            Description = source.Description,
             CallName = source.CallName,
             SizeText = source.SizeText,
             Provider = source.Provider,
@@ -215,7 +215,7 @@ public sealed class DatabaseService
         return new TinyGenerator.Models.Role
         {
             Id = source.Id,
-            Name = source.Name,
+            Description = source.Description,
             LinkedCommand = source.LinkedCommand,
             CreatedAt = source.CreatedAt,
             UpdatedAt = source.UpdatedAt,
@@ -235,7 +235,7 @@ public sealed class DatabaseService
         return new TinyGenerator.Models.Agent
         {
             Id = source.Id,
-            Name = source.Name,
+            Description = source.Description,
             Role = source.Role,
             ModelId = source.ModelId,
             VoiceId = source.VoiceId,
@@ -327,7 +327,7 @@ public sealed class DatabaseService
         {
             using var conn = CreateDapperConnection();
             conn.Open();
-            var rows = conn.Query<TinyGenerator.Models.Role>("SELECT id, description AS Name, linked_command, created_at, updated_at, is_active, is_deleted, sort_order FROM roles").ToList();
+            var rows = conn.Query<TinyGenerator.Models.Role>("SELECT id, description AS Description, linked_command, created_at, updated_at, is_active, is_deleted, sort_order FROM roles").ToList();
             return rows.OrderBy(r => r.Name).ToList();
         }
     }
@@ -337,7 +337,7 @@ public sealed class DatabaseService
         using var context = CreateDbContext();
         try
         {
-            var agents = context.Agents.AsNoTracking().OrderBy(a => a.Name).ToList();
+            var agents = context.Agents.AsNoTracking().OrderBy(a => a.Description).ToList();
             // Populate friendly ModelName and MultiStepTemplateName
             var modelMap = context.Models.AsNoTracking().ToDictionary(m => m.Id.GetValueOrDefault(), m => m.Name ?? string.Empty);
             var templateMap = context.StepTemplates.AsNoTracking().ToDictionary(t => t.Id, t => t.Name ?? string.Empty);
@@ -352,8 +352,8 @@ public sealed class DatabaseService
         {
             using var conn = CreateDapperConnection();
             conn.Open();
-            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, description AS Name, role, model_id, voice_rowid, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, sort_order, allowed_profiles FROM agents").ToList();
-            return rows.OrderBy(a => a.Name).ToList();
+            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, description AS Description, role, model_id, voice_rowid, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, sort_order, allowed_profiles FROM agents").ToList();
+            return rows.OrderBy(a => a.Description).ToList();
         }
     }
 
@@ -2911,7 +2911,7 @@ LIMIT @limitRows;";
         using var context = CreateDbContext();
         return context.Agents
             .Where(a => a.ModelId == modelId)
-            .Select(a => a.Name ?? string.Empty)
+            .Select(a => a.Description ?? string.Empty)
             .Where(n => !string.IsNullOrWhiteSpace(n))
             .ToList();
     }
@@ -3121,7 +3121,7 @@ LIMIT @limitRows;";
         {
             var s = search.Trim();
             query = query.Where(x =>
-                (x.Agent.Name ?? string.Empty).Contains(s) ||
+                (x.Agent.Description ?? string.Empty).Contains(s) ||
                 (x.Agent.Role ?? string.Empty).Contains(s) ||
                 (x.Agent.Skills ?? string.Empty).Contains(s) ||
                 (x.ModelName ?? string.Empty).Contains(s));
@@ -3157,17 +3157,17 @@ LIMIT @limitRows;";
         var ob = (orderBy ?? "name").ToLowerInvariant();
         query = ob switch
         {
-            "role" => query.OrderBy(x => x.Agent.Role).ThenBy(x => x.Agent.Name),
-            "model" => query.OrderBy(x => x.ModelName).ThenBy(x => x.Agent.Name),
-            "temperature" => query.OrderBy(x => x.Agent.Temperature).ThenBy(x => x.Agent.Name),
-            "topp" => query.OrderBy(x => x.Agent.TopP).ThenBy(x => x.Agent.Name),
-            "repeatpenalty" => query.OrderBy(x => x.Agent.RepeatPenalty).ThenBy(x => x.Agent.Name),
-            "topk" => query.OrderBy(x => x.Agent.TopK).ThenBy(x => x.Agent.Name),
-            "repeatlastn" => query.OrderBy(x => x.Agent.RepeatLastN).ThenBy(x => x.Agent.Name),
-            "numpredict" => query.OrderBy(x => x.Agent.NumPredict).ThenBy(x => x.Agent.Name),
-            "voice" => query.OrderBy(x => x.Agent.VoiceId).ThenBy(x => x.Agent.Name),
-            "skills" => query.OrderBy(x => x.Agent.Skills).ThenBy(x => x.Agent.Name),
-            _ => query.OrderBy(x => x.Agent.Name)
+            "role" => query.OrderBy(x => x.Agent.Role).ThenBy(x => x.Agent.Description),
+            "model" => query.OrderBy(x => x.ModelName).ThenBy(x => x.Agent.Description),
+            "temperature" => query.OrderBy(x => x.Agent.Temperature).ThenBy(x => x.Agent.Description),
+            "topp" => query.OrderBy(x => x.Agent.TopP).ThenBy(x => x.Agent.Description),
+            "repeatpenalty" => query.OrderBy(x => x.Agent.RepeatPenalty).ThenBy(x => x.Agent.Description),
+            "topk" => query.OrderBy(x => x.Agent.TopK).ThenBy(x => x.Agent.Description),
+            "repeatlastn" => query.OrderBy(x => x.Agent.RepeatLastN).ThenBy(x => x.Agent.Description),
+            "numpredict" => query.OrderBy(x => x.Agent.NumPredict).ThenBy(x => x.Agent.Description),
+            "voice" => query.OrderBy(x => x.Agent.VoiceId).ThenBy(x => x.Agent.Description),
+            "skills" => query.OrderBy(x => x.Agent.Skills).ThenBy(x => x.Agent.Description),
+            _ => query.OrderBy(x => x.Agent.Description)
         };
 
         var total = query.Count();
@@ -4624,7 +4624,7 @@ SET TotalScore = (
         var genId = Guid.NewGuid().ToString();
         var ts = DateTime.UtcNow.ToString("o");
 
-        int? aidA = context.Agents.FirstOrDefault(a => a.Name == "WriterA")?.Id;
+        int? aidA = context.Agents.FirstOrDefault(a => a.Description == "WriterA")?.Id;
         var charCountA = (r.StoryA ?? string.Empty).Length;
         var storyA = new StoryRecord
         {
@@ -4642,7 +4642,7 @@ SET TotalScore = (
         };
         context.Stories.Add(storyA);
 
-        int? aidB = context.Agents.FirstOrDefault(a => a.Name == "WriterB")?.Id;
+        int? aidB = context.Agents.FirstOrDefault(a => a.Description == "WriterB")?.Id;
         var charCountB = (r.StoryB ?? string.Empty).Length;
         var storyB = new StoryRecord
         {
@@ -4660,7 +4660,7 @@ SET TotalScore = (
         };
         context.Stories.Add(storyB);
 
-        int? aidC = context.Agents.FirstOrDefault(a => a.Name == "WriterC")?.Id;
+        int? aidC = context.Agents.FirstOrDefault(a => a.Description == "WriterC")?.Id;
         var charCountC = (r.StoryC ?? string.Empty).Length;
         var storyC = new StoryRecord
         {
@@ -4714,7 +4714,7 @@ SET TotalScore = (
             if (s.AgentId.HasValue)
             {
                 var agent = context.Agents.Find(s.AgentId.Value);
-                s.Agent = agent?.Name ?? string.Empty;
+                s.Agent = agent?.Description ?? string.Empty;
             }
         }
         return stories;
@@ -5984,7 +5984,7 @@ VALUES (
         if (s.AgentId.HasValue)
         {
             var agent = context.Agents.Find(s.AgentId.Value);
-            s.Agent = agent?.Name ?? string.Empty;
+            s.Agent = agent?.Description ?? string.Empty;
         }
         return s;
     }
@@ -6038,7 +6038,7 @@ VALUES (
         if (agentId.HasValue)
         {
             var agent = context.Agents.Find(agentId.Value);
-            var sanitizedAgentName = SanitizeFolderName(agent?.Name ?? $"agent{agentId.Value}");
+            var sanitizedAgentName = SanitizeFolderName(agent?.Description ?? $"agent{agentId.Value}");
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
             folder = $"{sanitizedAgentName}_{timestamp}";
         }
@@ -6113,7 +6113,7 @@ VALUES (
         if (agentId.HasValue)
         {
             var agent = context.Agents.Find(agentId.Value);
-            var sanitizedAgentName = SanitizeFolderName(agent?.Name ?? $"agent{agentId.Value}");
+            var sanitizedAgentName = SanitizeFolderName(agent?.Description ?? $"agent{agentId.Value}");
             var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
             folder = $"{sanitizedAgentName}_{timestamp}";
         }
@@ -7443,7 +7443,7 @@ SELECT last_insert_rowid();",
         const string sql = @"
 SELECT
     id          AS Id,
-    description AS Name,
+    description AS Description,
     gender      AS Gender,
     created_at AS CreatedAt,
     COALESCE(verified, 0) AS Verified
@@ -7466,7 +7466,7 @@ ORDER BY
         const string sql = @"
 SELECT
     id          AS Id,
-    description AS Name,
+    description AS Description,
     gender      AS Gender,
     created_at AS CreatedAt,
     COALESCE(verified, 0) AS Verified
@@ -7493,7 +7493,7 @@ LIMIT 1;";
         var existing = conn.QueryFirstOrDefault<NameGenderEntry>(@"
 SELECT
     id          AS Id,
-    description AS Name,
+    description AS Description,
     gender      AS Gender,
     created_at AS CreatedAt,
     COALESCE(verified, 0) AS Verified
@@ -8617,6 +8617,7 @@ CREATE TABLE IF NOT EXISTS usage_state (
                 Console.WriteLine("[DB] Migration: creating stats_models table");
                 conn.Execute(@"
 CREATE TABLE IF NOT EXISTS stats_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     model_name TEXT NOT NULL,
     operation TEXT NOT NULL,
     count_used INTEGER NOT NULL DEFAULT 0,
@@ -8638,7 +8639,7 @@ CREATE TABLE IF NOT EXISTS stats_models (
     done_stop_count INTEGER NOT NULL DEFAULT 0,
     done_length_count INTEGER NOT NULL DEFAULT 0,
     done_other_count INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (model_name, operation)
+    UNIQUE (model_name, operation)
 );
 ");
             }
@@ -9001,7 +9002,7 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
         try
         {
             var rows = conn.Query<(int Id, string Name, string? SizeText)>(
-                "SELECT Id, description as Name, size_text as SizeText FROM models");
+                "SELECT Id, description AS Description, size_text as SizeText FROM models");
             foreach (var row in rows)
             {
                 var normalized = NormalizeModelSizeText(row.SizeText, row.Name);
@@ -9665,7 +9666,8 @@ VALUES
                 Console.WriteLine("[DB] Creating sentiment_embeddings table");
                 conn.Execute(@"
 CREATE TABLE sentiment_embeddings (
-    sentiment TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sentiment TEXT NOT NULL UNIQUE,
     embedding TEXT NOT NULL,
     model TEXT,
     created_at TEXT DEFAULT (datetime('now'))
@@ -10045,7 +10047,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         // Note: 'speed' column is excluded as it's not in ModelInfo
         return string.Join(", ", new[] { 
             "Id", 
-            "description as Name", 
+            "description AS Description", 
             "call_name as CallName",
             "size_text as SizeText",
             "Provider", 
@@ -11787,10 +11789,12 @@ WHERE Id = @modelId;";
         using var conn = CreateConnection();
         conn.Open();
         conn.Execute(@"
-            INSERT OR REPLACE INTO sentiment_embeddings 
-                (sentiment, embedding, model, created_at)
-            VALUES 
-                (@Sentiment, @Embedding, @Model, @CreatedAt)",
+            INSERT INTO sentiment_embeddings (sentiment, embedding, model, created_at)
+            VALUES (@Sentiment, @Embedding, @Model, @CreatedAt)
+            ON CONFLICT(sentiment) DO UPDATE SET
+                embedding = excluded.embedding,
+                model = excluded.model,
+                created_at = excluded.created_at",
             embedding);
     }
 
@@ -11801,7 +11805,7 @@ WHERE Id = @modelId;";
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
         using var context = CreateDbContext();
-        return context.Agents.FirstOrDefault(a => a.Name == name);
+        return context.Agents.FirstOrDefault(a => a.Description == name);
     }
 
     /// <summary>

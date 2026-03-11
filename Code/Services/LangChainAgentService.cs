@@ -82,7 +82,7 @@ namespace TinyGenerator.Services
                 var agent = _database.GetAgentById(agentId);
                 if (agent != null)
                 {
-                    _logger?.Log("Info", "LangChainAgentService", $"Retrieved agent {agentId}: {agent.Name}");
+                    _logger?.Log("Info", "LangChainAgentService", $"Retrieved agent {agentId}: {agent.Description}");
                 }
                 else
                 {
@@ -133,7 +133,7 @@ namespace TinyGenerator.Services
                 }
 
                 _logger?.Log("Info", "LangChainAgentService",
-                    $"Orchestrator ready for agent {agentId}: {agent.Name}");
+                    $"Orchestrator ready for agent {agentId}: {agent.Description}");
                 return orchestrator;
             }
             catch (Exception ex)
@@ -162,7 +162,7 @@ namespace TinyGenerator.Services
                     {
                         _kernelFactory.EnsureOrchestratorForAgent(agent.Id, null, ParseAgentSkills(agent));
                         _logger?.Log("Info", "LangChainAgentService",
-                            $"Initialized orchestrator for agent {agent.Id}: {agent.Name}");
+                            $"Initialized orchestrator for agent {agent.Id}: {agent.Description}");
                     }
                     catch (Exception ex)
                     {
@@ -263,3 +263,4 @@ namespace TinyGenerator.Services
         }
     }
 }
+

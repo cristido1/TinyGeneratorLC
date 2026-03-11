@@ -281,7 +281,7 @@ public class TestAutomationController : ControllerBase
                 .Select(a => new
                 {
                     id = a.Id,
-                    name = a.Name,
+                    name = a.Description,
                     role = a.Role,
                     modelId = a.ModelId
                 })
@@ -363,3 +363,4 @@ public class GenerateTtsRequest
     public int VoiceId { get; set; }
     public string? OutputFolder { get; set; }
 }
+

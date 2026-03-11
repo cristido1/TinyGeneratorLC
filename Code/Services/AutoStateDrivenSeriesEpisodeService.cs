@@ -206,7 +206,7 @@ public sealed class AutoStateDrivenSeriesEpisodeService : BackgroundService
                 ["episodeId"] = episode.Id.ToString(),
                 ["episodeNumber"] = episode.Number.ToString(),
                 ["writerAgentId"] = writer.Id.ToString(),
-                ["writerName"] = writer.Name,
+                ["writerName"] = writer.Description,
                 ["targetMinutes"] = minutes.ToString(),
                 ["wordsPerMinute"] = wpm.ToString()
             },
@@ -289,3 +289,4 @@ public sealed class AutoStateDrivenSeriesEpisodeService : BackgroundService
         }
     }
 }
+

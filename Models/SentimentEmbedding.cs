@@ -11,13 +11,13 @@ namespace TinyGenerator.Models;
 [Table("sentiment_embeddings")]
 public partial class SentimentEmbedding : ISoftDelete, IActiveFlag, IOrderable, IEntity
 {
-    [NotMapped]
+    [Key]
+    [Column("id")]
     public int Id { get; set; }
 
     /// <summary>
     /// Nome del sentimento (chiave primaria)
     /// </summary>
-    [Key]
     [Column("sentiment")]
     [MaxLength(50)]
     public string Sentiment { get; set; } = string.Empty;

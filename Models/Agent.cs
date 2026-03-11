@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
@@ -11,8 +11,15 @@ namespace TinyGenerator.Models
         public int Id { get; set; }
         
         [Column("description")]
-        public string Name { get; set; } = string.Empty;
-        
+        public string Description { get; set; } = string.Empty;
+
+        [NotMapped]
+        public string Name
+        {
+            get => Description;
+            set => Description = value ?? string.Empty;
+        }
+
         [Column("role")]
         public string Role { get; set; } = string.Empty; // coordinator, writer, story_evaluator, musician, sfx, tts, ambient, mixer
         

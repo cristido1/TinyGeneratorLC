@@ -65,6 +65,11 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<ModelRole> ModelRoles => Set<ModelRole>();
     public DbSet<ModelRoleError> ModelRoleErrors => Set<ModelRoleError>();
     public DbSet<ImageAsset> Images => Set<ImageAsset>();
+    public DbSet<NumeratorStateEntry> NumeratorsState => Set<NumeratorStateEntry>();
+    public DbSet<MetadataTableEntry> MetadataTables => Set<MetadataTableEntry>();
+    public DbSet<MetadataFieldEntry> MetadataFields => Set<MetadataFieldEntry>();
+    public DbSet<CommandEntry> Commands => Set<CommandEntry>();
+    public DbSet<MetadataCommandEntry> MetadataCommands => Set<MetadataCommandEntry>();
     // Note: Memory table excluded - using Dapper for embedding queries
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -221,7 +226,18 @@ public class TinyGeneratorDbContext : DbContext
             .IsUnique();
 
         modelBuilder.Entity<ModelStatsRecord>()
-            .HasKey(s => new { s.ModelName, s.Operation });
+            .HasKey(s => s.Id);
+
+        modelBuilder.Entity<ModelStatsRecord>()
+            .HasIndex(s => new { s.ModelName, s.Operation })
+            .IsUnique();
+
+        modelBuilder.Entity<NumeratorStateEntry>()
+            .HasKey(n => n.Id);
+
+        modelBuilder.Entity<NumeratorStateEntry>()
+            .HasIndex(n => n.Key)
+            .IsUnique();
 
         modelBuilder.Entity<AppEventDefinition>()
             .HasKey(a => a.Id);
@@ -231,6 +247,42 @@ public class TinyGeneratorDbContext : DbContext
 
         modelBuilder.Entity<ImageAsset>()
             .HasKey(i => i.Id);
+
+        modelBuilder.Entity<MetadataTableEntry>()
+            .HasKey(m => m.Id);
+
+        modelBuilder.Entity<MetadataFieldEntry>()
+            .HasKey(m => m.Id);
+
+        modelBuilder.Entity<CommandEntry>()
+            .HasKey(c => c.Id);
+
+        modelBuilder.Entity<MetadataCommandEntry>()
+            .HasKey(m => m.Id);
+
+        modelBuilder.Entity<MetadataCommandEntry>()
+            .HasOne<CommandEntry>()
+            .WithMany()
+            .HasForeignKey(m => m.CommandId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<MetadataCommandEntry>()
+            .HasOne<MetadataTableEntry>()
+            .WithMany()
+            .HasForeignKey(m => m.TableId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<MetadataFieldEntry>()
+            .HasOne<MetadataTableEntry>()
+            .WithMany()
+            .HasForeignKey(m => m.ParentTableId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<MetadataTableEntry>()
+            .HasOne<MetadataTableEntry>()
+            .WithMany()
+            .HasForeignKey(m => m.ChildTableId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         modelBuilder.Entity<LogEntry>()
             .HasKey(l => l.Id);

@@ -74,7 +74,7 @@ public sealed class ChunkProcessingService : IChunkProcessingService
                        operationId: null,
                        stepNumber: null,
                        maxStep: null,
-                       agentName: request.Agent.Name,
+                       agentName: request.Agent.Description,
                        agentRole: request.RoleCode))
             {
                 responseJson = await bridge.CallModelWithToolsAsync(
@@ -139,3 +139,4 @@ public sealed class ChunkProcessingService : IChunkProcessingService
         };
     }
 }
+

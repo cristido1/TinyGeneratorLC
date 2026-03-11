@@ -131,7 +131,7 @@ public sealed partial class Series : ISoftDelete, IActiveFlag, IOrderable, IEnti
     public int? PlannerMethodId { get; set; }
 
     /// <summary>
-    /// Default tactical planning grammar for episodes in this series (tipo_planning.id_tipo_planning)
+    /// Default tactical planning grammar for episodes in this series (tipo_planning.id)
     /// </summary>
     [Column("default_tipo_planning_id")]
     public int? DefaultTipoPlanningId { get; set; }

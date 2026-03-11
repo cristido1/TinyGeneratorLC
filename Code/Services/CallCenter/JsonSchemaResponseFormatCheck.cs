@@ -463,3 +463,4 @@ public sealed class JsonSchemaDeterministicResult : IDeterministicResult
     public long CheckDurationMs { get; init; }
     public string? CorrectedText { get; init; }
 }
+

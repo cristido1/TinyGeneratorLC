@@ -302,6 +302,17 @@
                 </div>
             </div>
         </div>
+        <div class="col-6 col-md-3 col-xl-2">
+            <div class="kpi-card kpi-compact" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip("KPI_DB_SIZE", "DB Size")">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <div class="kpi-value">@Model.DatabaseSizeMb.ToString("F2")</div>
+                        <div class="kpi-label mt-1">DB Size (MB)</div>
+                    </div>
+                    <i class="bi bi-database kpi-icon"></i>
+                </div>
+            </div>
+        </div>
     </div>
     @if (Model.AdditionalKpis.Any())
     {

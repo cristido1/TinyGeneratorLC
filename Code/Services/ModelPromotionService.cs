@@ -84,7 +84,7 @@ public sealed class ModelPromotionService
 
         var agents = await _context.Agents.AsNoTracking()
             .Where(a => a.IsActive)
-            .Select(a => new { a.Id, a.Name, a.Role })
+            .Select(a => new { a.Id, a.Description, a.Role })
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
@@ -100,8 +100,8 @@ public sealed class ModelPromotionService
 
             foreach (var a in agents)
             {
-                var byName = !string.IsNullOrWhiteSpace(a.Name) &&
-                             string.Equals(Normalize(a.Name), hint, StringComparison.OrdinalIgnoreCase);
+                var byName = !string.IsNullOrWhiteSpace(a.Description) &&
+                             string.Equals(Normalize(a.Description), hint, StringComparison.OrdinalIgnoreCase);
                 if (byName)
                 {
                     outAgents.Add(a.Id);
@@ -250,7 +250,7 @@ public sealed class ModelPromotionService
             results.Add(new PromotionResult(
                 roleCode ?? string.Empty,
                 agent.Id,
-                agent.Name ?? $"agent_{agent.Id}",
+                agent.Description ?? $"agent_{agent.Id}",
                 oldModelId,
                 oldModelName,
                 best.Value.ModelId,
@@ -263,7 +263,7 @@ public sealed class ModelPromotionService
                 _logger?.Log(
                     "Information",
                     "PROMOTION",
-                    $"PROMOTION source={source}; role={roleCode}; agent_id={agent.Id}; agent={agent.Name}; old_model={oldModelName ?? "(none)"}; new_model={best.Value.ModelName}",
+                    $"PROMOTION source={source}; role={roleCode}; agent_id={agent.Id}; agent={agent.Description}; old_model={oldModelName ?? "(none)"}; new_model={best.Value.ModelName}",
                     result: "SUCCESS");
             }
         }
@@ -321,3 +321,4 @@ public sealed class ModelPromotionService
     private static string Normalize(string? value)
         => (value ?? string.Empty).Trim().ToLowerInvariant();
 }
+

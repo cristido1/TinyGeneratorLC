@@ -346,7 +346,7 @@ public sealed class DefaultAgentExecutor : IAgentExecutor
         _logger?.Log(
             "Information",
             "StoryLive",
-            $"story_live request setup: story_id={request.StoryId}; role={innerRequest.RoleCode}; enable_stream={innerRequest.EnableStreamingOutput}; group={request.StoryLiveGroup ?? "(none)"}; agent={request.Agent.Name}; model={ResolveModelName(request.Agent) ?? "unknown"}",
+            $"story_live request setup: story_id={request.StoryId}; role={innerRequest.RoleCode}; enable_stream={innerRequest.EnableStreamingOutput}; group={request.StoryLiveGroup ?? "(none)"}; agent={request.Agent.Description}; model={ResolveModelName(request.Agent) ?? "unknown"}",
             result: "SUCCESS");
 
         var exec = await _agentCallService.ExecuteAsync(innerRequest, ct).ConfigureAwait(false);

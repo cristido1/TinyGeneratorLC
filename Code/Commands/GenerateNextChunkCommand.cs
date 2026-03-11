@@ -690,7 +690,7 @@ public sealed class GenerateNextChunkCommand : ICommand
 
     private string BuildAgentIdentity(Agent agent)
     {
-        var name = string.IsNullOrWhiteSpace(agent.Name) ? $"id={agent.Id}" : agent.Name.Trim();
+        var name = string.IsNullOrWhiteSpace(agent.Description) ? $"id={agent.Id}" : agent.Description.Trim();
         var role = string.IsNullOrWhiteSpace(agent.Role) ? "writer" : agent.Role.Trim();
         var model = !string.IsNullOrWhiteSpace(agent.ModelName)
             ? agent.ModelName!.Trim()

@@ -244,7 +244,7 @@ namespace TinyGenerator.Services
             var checkerAgent = _database.ListAgents()
                 .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
                     a.Role.Equals("response_checker", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(a => a.Description ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
 
             if (checkerAgent == null)
@@ -471,7 +471,7 @@ namespace TinyGenerator.Services
             var checkerAgent = _database.ListAgents()
                 .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
                     a.Role.Equals("response_checker", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(a => a.Description ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
 
             if (checkerAgent == null)
@@ -751,7 +751,7 @@ namespace TinyGenerator.Services
             var checkerAgent = _database.ListAgents()
                 .Where(a => a.IsActive && !string.IsNullOrWhiteSpace(a.Role) &&
                     a.Role.Equals("response_checker", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(a => a.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(a => a.Description ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
 
             if (checkerAgent == null)

@@ -47,6 +47,7 @@ public sealed class Sound : ISoundFile, IActiveFlag, IOrderable, IEntity
     public string? Embedding { get; set; }
     [Column("created_at")]
     public string? InsertDate { get; set; }
+    [Column("duration_seconds")]
     public double? DurationSeconds { get; set; }
     [Column("is_active")]
     public bool IsActive { get; set; } = true;
@@ -58,21 +59,35 @@ public sealed class Sound : ISoundFile, IActiveFlag, IOrderable, IEntity
         set => IsActive = value;
     }
 
+    [Column("usage_count")]
     public int UsageCount { get; set; }
 
+    [Column("usage_last")]
     public string? UsageLast { get; set; }
 
+    [Column("score_loudness")]
     public double? ScoreLoudness { get; set; }
+    [Column("score_dynamic")]
     public double? ScoreDynamic { get; set; }
+    [Column("score_clipping")]
     public double? ScoreClipping { get; set; }
+    [Column("score_noise")]
     public double? ScoreNoise { get; set; }
+    [Column("score_duration")]
     public double? ScoreDuration { get; set; }
+    [Column("score_format")]
     public double? ScoreFormat { get; set; }
+    [Column("score_consistency")]
     public double? ScoreConsistency { get; set; }
+    [Column("score_tag_match")]
     public double? ScoreTagMatch { get; set; }
+    [Column("score_human")]
     public double? ScoreHuman { get; set; }
+    [Column("score_final")]
     public double? ScoreFinal { get; set; }
+    [Column("score_last_calc")]
     public string? ScoreLastCalc { get; set; }
+    [Column("score_version")]
     public string? ScoreVersion { get; set; }
 
     [Column("sort_order")]

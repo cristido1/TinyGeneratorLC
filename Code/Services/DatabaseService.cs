@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using TinyGenerator.Models;
 using TinyGenerator.Data;
 using System.Text.Json;
+using System.Reflection;
 using System.Threading.Tasks;
 using ModelInfo = TinyGenerator.Models.ModelInfo;
 // CallRecord model removed - no alias kept
@@ -296,6 +297,93 @@ public sealed class DatabaseService
             _agentsCache = null;
             _agentsCacheExpiresUtc = DateTime.MinValue;
         }
+    }
+
+    public void InvalidateEntityCache(string? tableOrEntityName)
+    {
+        var normalized = NormalizeCacheKey(tableOrEntityName);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return;
+        }
+
+        var candidates = BuildCacheKeyCandidates(normalized)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var key in candidates)
+        {
+            TryInvalidateCacheBucket(key);
+        }
+    }
+
+    private static string NormalizeCacheKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var key = value.Trim().ToLowerInvariant();
+        key = Regex.Replace(key, @"[^a-z0-9_]", string.Empty);
+        return key;
+    }
+
+    private static IEnumerable<string> BuildCacheKeyCandidates(string normalized)
+    {
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            yield break;
+        }
+
+        yield return normalized;
+
+        if (normalized.EndsWith("s", StringComparison.Ordinal))
+        {
+            var singular = normalized[..^1];
+            if (!string.IsNullOrWhiteSpace(singular))
+            {
+                yield return singular;
+            }
+        }
+        else
+        {
+            yield return normalized + "s";
+        }
+    }
+
+    private bool TryInvalidateCacheBucket(string key)
+    {
+        var type = GetType();
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var cacheField = type.GetField($"_{key}Cache", flags);
+        var expiresField = type.GetField($"_{key}CacheExpiresUtc", flags);
+        var lockField = type.GetField($"_{key}CacheLock", flags);
+
+        if (cacheField == null && expiresField == null)
+        {
+            return false;
+        }
+
+        if (lockField?.GetValue(this) is object lockObj)
+        {
+            lock (lockObj)
+            {
+                cacheField?.SetValue(this, null);
+                if (expiresField != null)
+                {
+                    expiresField.SetValue(this, DateTime.MinValue);
+                }
+            }
+            return true;
+        }
+
+        cacheField?.SetValue(this, null);
+        if (expiresField != null)
+        {
+            expiresField.SetValue(this, DateTime.MinValue);
+        }
+        return true;
     }
 
     private List<ModelInfo> LoadModelsFromDatabase()
@@ -7607,7 +7695,7 @@ SELECT
     Code,
     Value,
     Description,
-    SortOrder,
+    COALESCE(sort_order, 0) AS SortOrder,
     COALESCE(IsActive, 0) AS IsActive,
     COALESCE(Weight, 1) AS Weight,
     COALESCE(CreatedAt, '') AS CreatedAt,
@@ -7621,7 +7709,7 @@ WHERE (@type IS NULL OR @type = '' OR lower(Type) = lower(@type))
         OR lower(Value) LIKE '%' || lower(@search) || '%'
         OR lower(COALESCE(Description, '')) LIKE '%' || lower(@search) || '%'
       )
-ORDER BY lower(Type) ASC, SortOrder ASC, lower(Value) ASC, Id ASC;";
+ORDER BY lower(Type) ASC, COALESCE(sort_order, 0) ASC, lower(Value) ASC, Id ASC;";
 
         return conn.Query<GenericLookupEntry>(sql, new { search, type }).ToList();
     }
@@ -7639,7 +7727,7 @@ SELECT
     Code,
     Value,
     Description,
-    SortOrder,
+    COALESCE(sort_order, 0) AS SortOrder,
     COALESCE(IsActive, 0) AS IsActive,
     COALESCE(Weight, 1) AS Weight,
     COALESCE(CreatedAt, '') AS CreatedAt,
@@ -7743,7 +7831,7 @@ SET
     Code = @code,
     Value = @value,
     Description = @description,
-    SortOrder = @sortOrder,
+    sort_order = @sortOrder,
     IsActive = @isActive,
     Weight = @weight,
     UpdatedAt = datetime('now')
@@ -7770,7 +7858,7 @@ WHERE Id = @id;",
         var id = conn.ExecuteScalar<long>(
             @"
 INSERT INTO GenericLookup (
-    Type, Code, Value, Description, SortOrder, IsActive, Weight, CreatedAt, UpdatedAt
+    Type, Code, Value, Description, sort_order, IsActive, Weight, CreatedAt, UpdatedAt
 )
 VALUES (
     @type, @code, @value, @description, @sortOrder, @isActive, @weight, datetime('now'), datetime('now')
@@ -10603,10 +10691,18 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
 
     public LogEntry? GetLogById(long id)
     {
+        if (id <= 0 || id > int.MaxValue)
+        {
+            return null;
+        }
+
+        var logId = (int)id;
         using var context = CreateDbContext();
         try
         {
-            var log = context.Logs.Find(id);
+            var log = context.Logs
+                .AsNoTracking()
+                .FirstOrDefault(l => l.Id.HasValue && l.Id.Value == logId);
             if (log != null)
             {
                 EnrichLogForDisplay(log);
@@ -11215,14 +11311,34 @@ WHERE Id = @modelId;";
         if (context == null || !agentId.HasValue) return;
         try
         {
+            var evaluatedStatus = context.StoriesStatus
+                .FirstOrDefault(s => s.Code != null && s.Code.ToLower() == "evaluated")
+                ?? context.StoriesStatus.Find(EvaluatedStatusId);
+            if (evaluatedStatus == null)
+            {
+                return;
+            }
+
             var totalEvaluations = context.StoryEvaluations.Count(se => se.StoryId == storyId);
             if (totalEvaluations >= 2)
             {
                 var story = FindStoryById(context, storyId);
                 if (story != null)
                 {
-                    story.StatusId = EvaluatedStatusId;
-                    context.SaveChanges();
+                    var currentStatus = story.StatusId.HasValue
+                        ? context.StoriesStatus.Find(story.StatusId.Value)
+                        : null;
+
+                    // Never roll back a story already beyond "evaluated".
+                    var canSetEvaluated =
+                        currentStatus == null ||
+                        currentStatus.Step <= evaluatedStatus.Step;
+
+                    if (canSetEvaluated && story.StatusId != evaluatedStatus.Id)
+                    {
+                        story.StatusId = evaluatedStatus.Id;
+                        context.SaveChanges();
+                    }
                 }
             }
         }
@@ -11238,14 +11354,49 @@ WHERE Id = @modelId;";
         if (conn == null || !agentId.HasValue) return;
         try
         {
+            var evaluated = conn.QueryFirstOrDefault<(int Id, int Step)>(
+                @"SELECT id AS Id, step AS Step
+                  FROM stories_status
+                  WHERE lower(code) = 'evaluated'
+                  LIMIT 1;");
+            if (evaluated.Id <= 0)
+            {
+                evaluated = conn.QueryFirstOrDefault<(int Id, int Step)>(
+                    @"SELECT id AS Id, step AS Step
+                      FROM stories_status
+                      WHERE id = @statusId
+                      LIMIT 1;",
+                    new { statusId = EvaluatedStatusId });
+            }
+            if (evaluated.Id <= 0)
+            {
+                return;
+            }
+
             var totalEvaluations = conn.ExecuteScalar<int>(
                 "SELECT COUNT(*) FROM stories_evaluations WHERE story_id = @sid",
                 new { sid = storyId });
             if (totalEvaluations >= 2)
             {
-                conn.Execute(
-                    "UPDATE stories SET status_id = @statusId WHERE id = @sid",
-                    new { statusId = EvaluatedStatusId, sid = storyId });
+                var current = conn.QueryFirstOrDefault<(int? StatusId, int? Step)>(
+                    @"SELECT s.status_id AS StatusId, st.step AS Step
+                      FROM stories s
+                      LEFT JOIN stories_status st ON st.id = s.status_id
+                      WHERE s.id = @sid
+                      LIMIT 1;",
+                    new { sid = storyId });
+
+                var canSetEvaluated =
+                    !current.StatusId.HasValue ||
+                    !current.Step.HasValue ||
+                    current.Step.Value <= evaluated.Step;
+
+                if (canSetEvaluated && current.StatusId != evaluated.Id)
+                {
+                    conn.Execute(
+                        "UPDATE stories SET status_id = @statusId WHERE id = @sid",
+                        new { statusId = evaluated.Id, sid = storyId });
+                }
             }
         }
         catch

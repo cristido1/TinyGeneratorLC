@@ -5,6 +5,7 @@ using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using System.Data.Common;
@@ -13,6 +14,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Storage;
 using TinyGenerator.Data;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
@@ -167,7 +169,6 @@ ORDER BY name;";
         var skipped = new List<string>();
         var succeeded = new List<string>();
 
-        await using var tx = await _db.Database.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
             var tableNames = _db.MetadataTables
@@ -184,11 +185,13 @@ ORDER BY name;";
                     continue;
                 }
 
+                await using var tx = await _db.Database.BeginTransactionAsync().ConfigureAwait(false);
                 try
                 {
                     if (!TryResolveEntity(tableName, out var entityType, out var resolveError))
                     {
                         skipped.Add($"{tableName}: {resolveError}");
+                        await tx.RollbackAsync().ConfigureAwait(false);
                         continue;
                     }
 
@@ -196,13 +199,32 @@ ORDER BY name;";
                     if (pk == null || pk.Properties.Count != 1 || !string.Equals(pk.Properties[0].Name, "Id", StringComparison.OrdinalIgnoreCase))
                     {
                         skipped.Add($"{tableName}: PK non supportata (richiesta PK singola 'Id').");
+                        await tx.RollbackAsync().ConfigureAwait(false);
                         continue;
                     }
 
                     var fieldMetas = BuildFieldMetadata(entityType);
+                    var checkAllowedValues = LoadTableCheckAllowedValues(tableName);
                     var fkMetas = BuildForeignKeyMetadata(entityType)
                         .GroupBy(x => x.DependentField, StringComparer.OrdinalIgnoreCase)
                         .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                    foreach (var dbFk in LoadDatabaseForeignKeys(tableName))
+                    {
+                        var field = fieldMetas.FirstOrDefault(f =>
+                            string.Equals(f.Name, dbFk.DependentField, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(f.ColumnName, dbFk.DependentField, StringComparison.OrdinalIgnoreCase));
+                        if (field == null) continue;
+                        if (fkMetas.ContainsKey(field.Name)) continue;
+
+                        fkMetas[field.Name] = new CrudForeignKeyMeta
+                        {
+                            DependentField = field.Name,
+                            DescriptionField = string.Empty,
+                            PrincipalEntity = dbFk.PrincipalEntity,
+                            PrincipalTable = dbFk.PrincipalTable,
+                            PrincipalKeyField = dbFk.PrincipalKeyField
+                        };
+                    }
 
                     var createPayload = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
                     var uniqueTag = $"{tableName}_{Guid.NewGuid():N}";
@@ -231,7 +253,13 @@ ORDER BY name;";
                                 continue;
                             }
 
-                            createPayload[field.Name] = parentKey;
+                            createPayload[field.Name] = CoerceValueToClrType(parentKey, field.ClrType);
+                            continue;
+                        }
+
+                        if (TryResolveCheckConstraintValue(field, checkAllowedValues, out var checkValue))
+                        {
+                            createPayload[field.Name] = checkValue;
                             continue;
                         }
 
@@ -241,26 +269,35 @@ ORDER BY name;";
                     if (skipTable)
                     {
                         skipped.Add($"{tableName}: {skipReason}");
+                        await tx.RollbackAsync().ConfigureAwait(false);
                         continue;
                     }
 
                     if (createPayload.Count == 0)
                     {
                         skipped.Add($"{tableName}: nessun campo valorizzabile.");
+                        await tx.RollbackAsync().ConfigureAwait(false);
                         continue;
                     }
 
-                    var createResult = await Create(tableName, ToJsonElement(createPayload)).ConfigureAwait(false);
-                    if (!TryReadEnvelope(createResult, out var createEnvelope, out var createError) || !IsSuccessEnvelope(createEnvelope))
+                    var createExec = await ExecuteSmokeMutationWithConstraintFixesAsync(
+                        tableName,
+                        createPayload,
+                        fieldMetas,
+                        fkMetas,
+                        payload => Create(tableName, payload)).ConfigureAwait(false);
+                    if (!createExec.Success)
                     {
-                        failures.Add($"{tableName}: CREATE failed ({createError ?? "esito non valido"})");
+                        failures.Add($"{tableName}: CREATE failed ({createExec.Error ?? "esito non valido"})");
+                        await tx.RollbackAsync().ConfigureAwait(false);
                         continue;
                     }
 
-                    var idValue = ExtractIdFromEnvelope(createEnvelope);
+                    var idValue = ExtractIdFromEnvelope(createExec.Envelope);
                     if (idValue is null)
                     {
                         failures.Add($"{tableName}: CREATE ok ma Id non trovato.");
+                        await tx.RollbackAsync().ConfigureAwait(false);
                         continue;
                     }
 
@@ -275,15 +312,27 @@ ORDER BY name;";
 
                     if (updateField != null)
                     {
+                        var updateValue = GenerateSmokeUpdateValue(updateField.Name, updateField.ClrType, now, uniqueTag);
+                        if (TryResolveCheckConstraintValue(updateField, checkAllowedValues, out var checkUpdateValue))
+                        {
+                            updateValue = checkUpdateValue;
+                        }
+
                         var updatePayload = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
                         {
-                            [updateField.Name] = GenerateSmokeUpdateValue(updateField.Name, updateField.ClrType, now, uniqueTag)
+                            [updateField.Name] = updateValue
                         };
 
-                        var updateResult = await Update(tableName, Convert.ToString(idValue, CultureInfo.InvariantCulture) ?? string.Empty, ToJsonElement(updatePayload)).ConfigureAwait(false);
-                        if (!TryReadEnvelope(updateResult, out var updateEnvelope, out var updateError) || !IsSuccessEnvelope(updateEnvelope))
+                        var updateExec = await ExecuteSmokeMutationWithConstraintFixesAsync(
+                            tableName,
+                            updatePayload,
+                            fieldMetas,
+                            fkMetas,
+                            payload => Update(tableName, Convert.ToString(idValue, CultureInfo.InvariantCulture) ?? string.Empty, payload)).ConfigureAwait(false);
+                        if (!updateExec.Success)
                         {
-                            failures.Add($"{tableName}: UPDATE failed ({updateError ?? "esito non valido"})");
+                            failures.Add($"{tableName}: UPDATE failed ({updateExec.Error ?? "esito non valido"})");
+                            await tx.RollbackAsync().ConfigureAwait(false);
                             continue;
                         }
                     }
@@ -292,18 +341,24 @@ ORDER BY name;";
                     if (!TryReadEnvelope(deleteResult, out var deleteEnvelope, out var deleteError) || !IsSuccessEnvelope(deleteEnvelope))
                     {
                         failures.Add($"{tableName}: DELETE failed ({deleteError ?? "esito non valido"})");
+                        await tx.RollbackAsync().ConfigureAwait(false);
                         continue;
                     }
 
                     succeeded.Add(tableName);
+                    await tx.RollbackAsync().ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    failures.Add($"{tableName}: {ex.Message}");
+                    var message = FlattenExceptionMessage(ex);
+                    failures.Add($"{tableName}: {message}");
+                    await tx.RollbackAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _db.ChangeTracker.Clear();
                 }
             }
-
-            await tx.RollbackAsync().ConfigureAwait(false);
             var skippedPayload = request.IncludeSkippedDetails ? skipped : new List<string>();
             return Ok(new
             {
@@ -320,7 +375,6 @@ ORDER BY name;";
         }
         catch (Exception ex)
         {
-            await tx.RollbackAsync().ConfigureAwait(false);
             return BadRequest(new { success = false, error = ex.Message });
         }
     }
@@ -370,6 +424,7 @@ ORDER BY name;";
         }
 
         var sorts = (request.Sorts ?? new List<CrudSort>()).Where(s => !string.IsNullOrWhiteSpace(s.Field)).ToList();
+        MaybeInjectOrderableSortForLookup(entityType, request, sorts);
         var fkSortMap = foreignKeys
             .Where(fk => !string.IsNullOrWhiteSpace(fk.DescriptionField) && !string.IsNullOrWhiteSpace(fk.DependentField))
             .GroupBy(fk => fk.DescriptionField, StringComparer.OrdinalIgnoreCase)
@@ -574,6 +629,7 @@ ORDER BY name;";
 
         _db.Add(entity);
         await _db.SaveChangesAsync().ConfigureAwait(false);
+        _database.InvalidateEntityCache(entityType.GetTableName() ?? entityType.ClrType.Name);
         var createdRow = ToDictionary(entity);
         var metadataTable = LoadMetadataTableConfig(entityType.GetTableName());
         var metadataFieldOverrides = LoadMetadataFieldOverrides(metadataTable?.TableId);
@@ -626,6 +682,7 @@ ORDER BY name;";
         ApplyTimeStampedFields(entity, isCreate: false);
 
         await _db.SaveChangesAsync().ConfigureAwait(false);
+        _database.InvalidateEntityCache(entityType.GetTableName() ?? entityType.ClrType.Name);
         var updatedRow = ToDictionary(entity);
         var metadataTable = LoadMetadataTableConfig(entityType.GetTableName());
         var metadataFieldOverrides = LoadMetadataFieldOverrides(metadataTable?.TableId);
@@ -681,6 +738,7 @@ ORDER BY name;";
             _db.Remove(entity);
         }
         await _db.SaveChangesAsync().ConfigureAwait(false);
+        _database.InvalidateEntityCache(entityType.GetTableName() ?? entityType.ClrType.Name);
         return Ok(new { success = true });
     }
 
@@ -957,6 +1015,252 @@ ORDER BY name;";
         return null;
     }
 
+    private async Task<(bool Success, JsonElement Envelope, string? Error)> ExecuteSmokeMutationWithConstraintFixesAsync(
+        string tableName,
+        Dictionary<string, object?> payload,
+        List<CrudFieldMeta> fieldMetas,
+        Dictionary<string, CrudForeignKeyMeta> fkMetas,
+        Func<JsonElement, Task<IActionResult>> executeAction)
+    {
+        JsonElement envelope = default;
+        string? lastError = null;
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var result = await executeAction(ToJsonElement(payload)).ConfigureAwait(false);
+            if (!TryReadEnvelope(result, out envelope, out lastError))
+            {
+                return (false, envelope, lastError ?? "Risultato azione non supportato.");
+            }
+
+            if (IsSuccessEnvelope(envelope))
+            {
+                return (true, envelope, null);
+            }
+
+            if (string.IsNullOrWhiteSpace(lastError))
+            {
+                break;
+            }
+
+            var fixedCheck = TryApplyCheckConstraintFix(lastError, payload, fieldMetas);
+            var fixedUnique = !fixedCheck && TryApplyUniqueConstraintFix(tableName, lastError, payload, fieldMetas, fkMetas);
+            if (!fixedCheck && !fixedUnique)
+            {
+                break;
+            }
+        }
+
+        return (false, envelope, lastError);
+    }
+
+    private bool TryApplyCheckConstraintFix(string error, Dictionary<string, object?> payload, List<CrudFieldMeta> fieldMetas)
+    {
+        var marker = "CHECK constraint failed:";
+        var markerIdx = error.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIdx < 0) return false;
+
+        var expression = error[(markerIdx + marker.Length)..].Trim().Trim('\'', '"');
+        if (string.IsNullOrWhiteSpace(expression)) return false;
+
+        var candidateField = fieldMetas
+            .Where(f =>
+                expression.Contains(f.Name, StringComparison.OrdinalIgnoreCase) ||
+                expression.Contains(f.ColumnName, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(f => f.ColumnName.Length)
+            .FirstOrDefault();
+        if (candidateField == null) return false;
+
+        var inMatch = Regex.Match(expression, @"\bIN\s*\((?<vals>[^)]*)\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!inMatch.Success) return false;
+
+        var rawValues = inMatch.Groups["vals"].Value;
+        var quotedValues = Regex.Matches(rawValues, @"'(?<v>(?:''|[^'])*)'", RegexOptions.CultureInvariant)
+            .Cast<Match>()
+            .Select(m => m.Groups["v"].Value.Replace("''", "'", StringComparison.Ordinal))
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .ToList();
+        if (quotedValues.Count == 0) return false;
+
+        var selected = quotedValues[0];
+        var converted = CoerceValueToClrType(selected, candidateField.ClrType);
+        if (payload.TryGetValue(candidateField.Name, out var current) &&
+            string.Equals(Convert.ToString(current, CultureInfo.InvariantCulture), Convert.ToString(converted, CultureInfo.InvariantCulture), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        payload[candidateField.Name] = converted;
+        return true;
+    }
+
+    private bool TryApplyUniqueConstraintFix(
+        string tableName,
+        string error,
+        Dictionary<string, object?> payload,
+        List<CrudFieldMeta> fieldMetas,
+        Dictionary<string, CrudForeignKeyMeta> fkMetas)
+    {
+        var marker = "UNIQUE constraint failed:";
+        var markerIdx = error.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIdx < 0) return false;
+
+        var raw = error[(markerIdx + marker.Length)..].Trim().Trim('\'', '"');
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+
+        var parts = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 1) return false;
+
+        var single = parts[0];
+        var dotIdx = single.LastIndexOf('.');
+        var columnToken = dotIdx >= 0 ? single[(dotIdx + 1)..].Trim() : single.Trim();
+        if (string.IsNullOrWhiteSpace(columnToken)) return false;
+
+        var field = fieldMetas.FirstOrDefault(f =>
+            string.Equals(f.ColumnName, columnToken, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(f.Name, columnToken, StringComparison.OrdinalIgnoreCase));
+        if (field == null) return false;
+
+        if (fkMetas.TryGetValue(field.Name, out var fk))
+        {
+            var parentKey = QueryFirstUnusedPrincipalKeyValue(fk.PrincipalTable, fk.PrincipalKeyField, tableName, field.ColumnName);
+            if (parentKey != null)
+            {
+                payload[field.Name] = CoerceValueToClrType(parentKey, field.ClrType);
+                return true;
+            }
+        }
+
+        var currentText = Convert.ToString(payload.GetValueOrDefault(field.Name), CultureInfo.InvariantCulture) ?? string.Empty;
+        if (string.Equals(field.ClrType, "String", StringComparison.OrdinalIgnoreCase))
+        {
+            payload[field.Name] = $"{currentText}_{Guid.NewGuid():N}"[..Math.Min(40, currentText.Length + 33)];
+            return true;
+        }
+
+        if (field.Nullable)
+        {
+            payload[field.Name] = null;
+            return true;
+        }
+
+        return false;
+    }
+
+    private object? QueryFirstUnusedPrincipalKeyValue(string? principalTable, string? principalKeyField, string? childTable, string? childColumn)
+    {
+        if (string.IsNullOrWhiteSpace(principalTable) ||
+            string.IsNullOrWhiteSpace(principalKeyField) ||
+            string.IsNullOrWhiteSpace(childTable) ||
+            string.IsNullOrWhiteSpace(childColumn))
+        {
+            return null;
+        }
+
+        var connection = _db.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            connection.Open();
+        }
+
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = _db.Database.CurrentTransaction?.GetDbTransaction();
+        var pTable = QuoteIdentifier(principalTable);
+        var pKey = QuoteIdentifier(principalKeyField);
+        var cTable = QuoteIdentifier(childTable);
+        var cColumn = QuoteIdentifier(childColumn);
+        cmd.CommandText = $@"
+SELECT p.{pKey}
+FROM {pTable} p
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM {cTable} c
+    WHERE c.{cColumn} = p.{pKey}
+)
+LIMIT 1;";
+
+        var value = cmd.ExecuteScalar();
+        return value == DBNull.Value ? null : value;
+    }
+
+    private static string QuoteIdentifier(string identifier)
+    {
+        return $"\"{(identifier ?? string.Empty).Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+    }
+
+    private Dictionary<string, IReadOnlyList<string>> LoadTableCheckAllowedValues(string tableName)
+    {
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(tableName)) return result;
+
+        var connection = _db.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            connection.Open();
+        }
+
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = _db.Database.CurrentTransaction?.GetDbTransaction();
+        cmd.CommandText = @"
+SELECT sql
+FROM sqlite_master
+WHERE type = 'table'
+  AND lower(name) = lower(@tableName)
+LIMIT 1;";
+        var p = cmd.CreateParameter();
+        p.ParameterName = "@tableName";
+        p.Value = tableName;
+        cmd.Parameters.Add(p);
+
+        var rawSql = Convert.ToString(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(rawSql)) return result;
+
+        var checkPattern = new Regex(@"(?:\blower\s*\(\s*(?<col1>[a-zA-Z0-9_]+)\s*\)|(?<col2>[a-zA-Z0-9_]+))\s+IN\s*\((?<vals>[^)]*)\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        foreach (Match match in checkPattern.Matches(rawSql))
+        {
+            if (!match.Success) continue;
+            var column = match.Groups["col1"].Success ? match.Groups["col1"].Value : match.Groups["col2"].Value;
+            if (string.IsNullOrWhiteSpace(column)) continue;
+
+            var valuesRaw = match.Groups["vals"].Value;
+            var values = Regex.Matches(valuesRaw, @"'(?<v>(?:''|[^'])*)'", RegexOptions.CultureInvariant)
+                .Cast<Match>()
+                .Select(m => m.Groups["v"].Value.Replace("''", "'", StringComparison.Ordinal))
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (values.Count == 0) continue;
+
+            result[column] = values;
+        }
+
+        return result;
+    }
+
+    private static bool TryResolveCheckConstraintValue(
+        CrudFieldMeta field,
+        Dictionary<string, IReadOnlyList<string>> checkAllowedValues,
+        out object? value)
+    {
+        value = null;
+        if (checkAllowedValues.Count == 0) return false;
+
+        if (!checkAllowedValues.TryGetValue(field.ColumnName, out var values) &&
+            !checkAllowedValues.TryGetValue(field.Name, out values))
+        {
+            return false;
+        }
+
+        var selected = values.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(selected))
+        {
+            return false;
+        }
+
+        value = CoerceValueToClrType(selected, field.ClrType);
+        return true;
+    }
+
     private static object? GenerateSmokeValue(string fieldName, string clrTypeName, DateTime now, string uniqueTag)
     {
         var name = fieldName.ToLowerInvariant();
@@ -981,7 +1285,7 @@ ORDER BY name;";
                 return 1.5;
             case "boolean":
             case "bool":
-                return true;
+                return false;
             case "datetime":
             case "datetimeoffset":
                 return nowIso;
@@ -1024,7 +1328,7 @@ ORDER BY name;";
                 return 2.5;
             case "boolean":
             case "bool":
-                return false;
+                return true;
             case "datetime":
             case "datetimeoffset":
                 return nowIso;
@@ -1093,6 +1397,47 @@ ORDER BY name;";
 
         return null;
     }
+
+    private static string FlattenExceptionMessage(Exception ex)
+    {
+        var parts = new List<string>();
+        var current = ex;
+        while (current != null)
+        {
+            if (!string.IsNullOrWhiteSpace(current.Message))
+            {
+                parts.Add(current.Message.Trim());
+            }
+            current = current.InnerException;
+        }
+
+        return parts.Count == 0 ? "Errore sconosciuto." : string.Join(" | ", parts.Distinct());
+    }
+
+    private static object? CoerceValueToClrType(object? value, string clrTypeName)
+    {
+        if (value is null) return null;
+        var type = (clrTypeName ?? string.Empty).ToLowerInvariant();
+        try
+        {
+            return type switch
+            {
+                "string" => Convert.ToString(value, CultureInfo.InvariantCulture),
+                "int32" or "int" => Convert.ToInt32(value, CultureInfo.InvariantCulture),
+                "int64" or "long" => Convert.ToInt64(value, CultureInfo.InvariantCulture),
+                "double" => Convert.ToDouble(value, CultureInfo.InvariantCulture),
+                "single" or "float" => Convert.ToSingle(value, CultureInfo.InvariantCulture),
+                "decimal" => Convert.ToDecimal(value, CultureInfo.InvariantCulture),
+                "boolean" or "bool" => Convert.ToBoolean(value, CultureInfo.InvariantCulture),
+                _ => value
+            };
+        }
+        catch
+        {
+            return value;
+        }
+    }
+
 
     private static void ApplyTimeStampedFields(object entity, bool isCreate)
     {
@@ -1186,6 +1531,16 @@ ORDER BY name;";
             return null;
         }
 
+        string? childTableName = null;
+        if (metadata.ChildTableId is > 0)
+        {
+            childTableName = _db.MetadataTables
+                .AsNoTracking()
+                .Where(x => x.Id == metadata.ChildTableId.Value)
+                .Select(x => x.TableName)
+                .FirstOrDefault();
+        }
+
         return new CrudTableMetadataConfig
         {
             TableId = metadata.Id,
@@ -1201,6 +1556,7 @@ ORDER BY name;";
             AllowUpdate = metadata.AllowUpdate,
             AllowDelete = metadata.AllowDelete,
             ChildTableId = metadata.ChildTableId,
+            ChildTableName = childTableName,
             ChildTableParentIdFieldName = metadata.ChildTableParentIdFieldName
         };
     }
@@ -1663,9 +2019,12 @@ VALUES
     private static Expression BuildStringCall(Expression member, string method, Expression constant)
     {
         var safeMember = member.Type == typeof(string) ? member : Expression.Call(member, "ToString", Type.EmptyTypes);
+        var toLower = typeof(string).GetMethod(nameof(string.ToLower), Type.EmptyTypes)!;
+        var loweredMember = Expression.Call(safeMember, toLower);
+        var loweredConstant = Expression.Call(constant, toLower);
         return Expression.AndAlso(
             Expression.NotEqual(safeMember, Expression.Constant(null, typeof(string))),
-            Expression.Call(safeMember, typeof(string).GetMethod(method, new[] { typeof(string) })!, constant));
+            Expression.Call(loweredMember, typeof(string).GetMethod(method, new[] { typeof(string) })!, loweredConstant));
     }
 
     private static IQueryable ApplyWhere(IQueryable source, Type type, LambdaExpression predicate)
@@ -1803,6 +2162,70 @@ VALUES
         return true;
     }
 
+    private static void MaybeInjectOrderableSortForLookup(IEntityType entityType, CrudQueryRequest request, List<CrudSort> sorts)
+    {
+        if (!typeof(IOrderable).IsAssignableFrom(entityType.ClrType))
+        {
+            return;
+        }
+
+        if (FindProperty(entityType.ClrType, nameof(IOrderable.SortOrder)) == null)
+        {
+            return;
+        }
+
+        if (sorts.Any(s => string.Equals(s.Field, nameof(IOrderable.SortOrder), StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        // Detect generic FK lookup requests emitted by Shared/Index combos:
+        // page=1, large page size, no filters/global search, sort by PK asc.
+        if (request.Page != 1 || request.PageSize < 500)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.GlobalSearch))
+        {
+            return;
+        }
+
+        if (request.Filters is { Count: > 0 })
+        {
+            return;
+        }
+
+        if (sorts.Count != 1)
+        {
+            return;
+        }
+
+        var pk = entityType.FindPrimaryKey();
+        var pkName = pk?.Properties.FirstOrDefault()?.Name;
+        if (string.IsNullOrWhiteSpace(pkName))
+        {
+            return;
+        }
+
+        var sort = sorts[0];
+        if (!string.Equals(sort.Field, pkName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!string.Equals(sort.Dir, "asc", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        sorts.Insert(0, new CrudSort
+        {
+            Field = nameof(IOrderable.SortOrder),
+            Dir = "asc"
+        });
+    }
+
     private static int QueryableCount(IQueryable query)
     {
         var method = typeof(Queryable).GetMethods()
@@ -1814,10 +2237,22 @@ VALUES
     private static PropertyInfo? FindProperty(Type type, string? field)
     {
         if (string.IsNullOrWhiteSpace(field)) return null;
+        var normalized = field.Trim();
         return type.GetProperties(BindingFlags.Instance | BindingFlags.Public)
-            .FirstOrDefault(p => p.CanRead && p.CanWrite &&
-                                 !Attribute.IsDefined(p, typeof(NotMappedAttribute)) &&
-                                 string.Equals(p.Name, field.Trim(), StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(p =>
+            {
+                if (!p.CanRead || !p.CanWrite) return false;
+                if (Attribute.IsDefined(p, typeof(NotMappedAttribute))) return false;
+
+                if (string.Equals(p.Name, normalized, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                var col = p.GetCustomAttribute<ColumnAttribute>();
+                return !string.IsNullOrWhiteSpace(col?.Name) &&
+                       string.Equals(col!.Name, normalized, StringComparison.OrdinalIgnoreCase);
+            });
     }
 
     private static bool TryParseSingleKey(IEntityType entityType, string rawId, out object keyValue, out string error)
@@ -2139,10 +2574,14 @@ VALUES
             var useCount = TryGetIntValue(row, nameof(IUsageStats.UseCount));
             var success = TryGetIntValue(row, nameof(IUsageStats.UseSuccessed));
             var failed = TryGetIntValue(row, nameof(IUsageStats.UseFailed));
-            var denominator = useCount > 0 ? useCount : (success + failed);
-            var percent = denominator > 0
-                ? Math.Round((double)success * 100.0 / denominator, 2, MidpointRounding.AwayFromZero)
-                : 0.0;
+            if (useCount <= 0)
+            {
+                row["SuccessRatePercent"] = null;
+                continue;
+            }
+
+            var denominator = useCount;
+            var percent = Math.Round((double)success * 100.0 / denominator, 2, MidpointRounding.AwayFromZero);
             row["SuccessRatePercent"] = percent;
         }
     }
@@ -2314,8 +2753,48 @@ VALUES
         return list;
     }
 
+    private List<CrudForeignKeyMeta> LoadDatabaseForeignKeys(string tableName)
+    {
+        var result = new List<CrudForeignKeyMeta>();
+        if (string.IsNullOrWhiteSpace(tableName)) return result;
+
+        var connection = _db.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            connection.Open();
+        }
+
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = _db.Database.CurrentTransaction?.GetDbTransaction();
+        var escapedTableName = tableName.Replace("'", "''", StringComparison.Ordinal);
+        cmd.CommandText = $"PRAGMA foreign_key_list('{escapedTableName}');";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var principalTable = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            var dependentField = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+            var principalKey = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
+            if (string.IsNullOrWhiteSpace(principalTable) || string.IsNullOrWhiteSpace(dependentField) || string.IsNullOrWhiteSpace(principalKey))
+            {
+                continue;
+            }
+
+            result.Add(new CrudForeignKeyMeta
+            {
+                DependentField = dependentField,
+                DescriptionField = string.Empty,
+                PrincipalEntity = principalTable,
+                PrincipalTable = principalTable,
+                PrincipalKeyField = principalKey
+            });
+        }
+
+        return result;
+    }
+
     private static List<CrudFieldMeta> BuildFieldMetadata(IEntityType entityType)
     {
+        var tableIdentifier = StoreObjectIdentifier.Table(entityType.GetTableName() ?? string.Empty, entityType.GetSchema());
         var pk = entityType.FindPrimaryKey();
         var pkNames = new HashSet<string>(
             (pk?.Properties ?? Array.Empty<IProperty>()).Select(p => p.Name),
@@ -2331,6 +2810,7 @@ VALUES
         {
             var clrType = Nullable.GetUnderlyingType(prop.ClrType) ?? prop.ClrType;
             var clrTypeName = clrType.Name;
+            var columnName = prop.GetColumnName(tableIdentifier) ?? prop.GetColumnBaseName() ?? prop.Name;
 
             fkByDependent.TryGetValue(prop.Name, out var fk);
             var principalTable = fk?.PrincipalEntityType.GetTableName() ?? fk?.PrincipalEntityType.ClrType.Name;
@@ -2339,6 +2819,7 @@ VALUES
             result.Add(new CrudFieldMeta
             {
                 Name = prop.Name,
+                ColumnName = columnName,
                 ClrType = clrTypeName,
                 Nullable = prop.IsNullable,
                 IsPrimaryKey = pkNames.Contains(prop.Name),
@@ -2614,6 +3095,7 @@ public sealed class CrudForeignKeyMeta
 public sealed class CrudFieldMeta
 {
     public string Name { get; set; } = string.Empty;
+    public string ColumnName { get; set; } = string.Empty;
     public string ClrType { get; set; } = string.Empty;
     public bool Nullable { get; set; }
     public bool IsPrimaryKey { get; set; }
@@ -2639,6 +3121,7 @@ public sealed class CrudTableMetadataConfig
     public bool AllowUpdate { get; set; } = true;
     public bool AllowDelete { get; set; } = true;
     public int? ChildTableId { get; set; }
+    public string? ChildTableName { get; set; }
     public string? ChildTableParentIdFieldName { get; set; }
 }
 

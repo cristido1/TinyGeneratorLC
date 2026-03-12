@@ -87,6 +87,7 @@ namespace TinyGenerator.Pages.Models
             existing.NoTools = Model.NoTools;
             existing.Thinking = Model.Thinking;
             existing.Note = Model.Note;
+            existing.SortOrder = Model.SortOrder;
             existing.Image = string.IsNullOrWhiteSpace(Model.Image) ? null : Model.Image.Trim();
 
             // Business rule: if provider is local then IsLocal = true

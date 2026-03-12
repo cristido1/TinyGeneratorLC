@@ -77,7 +77,9 @@ public sealed class CallCenter : ICallCenter
 
         var stopwatch = Stopwatch.StartNew();
         var operationName = string.IsNullOrWhiteSpace(options.Operation) ? "call_center" : options.Operation.Trim();
-        var updatedHistory = new ChatHistory(history.Messages);
+        var baselineHistory = CloneHistory(history);
+        var updatedHistory = CloneHistory(baselineHistory);
+        var systemPromptByModel = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var usedModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var attemptsTotal = 0;
         var attemptsCurrentAgent = 0;
@@ -132,9 +134,11 @@ public sealed class CallCenter : ICallCenter
             }
 
             var roleCode = string.IsNullOrWhiteSpace(currentAgent.Role) ? "agent" : currentAgent.Role;
-            var systemPromptForCurrentCall = string.IsNullOrWhiteSpace(options.SystemPromptOverride)
-                ? _systemPromptBuilder.Build(currentAgent, roleCode)
-                : options.SystemPromptOverride!;
+            var systemPromptForCurrentCall = ResolveSystemPromptForCurrentAgent(
+                currentAgent,
+                roleCode,
+                options.SystemPromptOverride,
+                systemPromptByModel);
             UpsertConversationSystemMessage(updatedHistory, systemPromptForCurrentCall);
 
             string? previousNormalizedResponse = null;
@@ -209,7 +213,7 @@ public sealed class CallCenter : ICallCenter
                 if (failedChecker != null)
                 {
                     lastFailure = failedChecker.FailureReason ?? $"agent_checker_failed:{failedChecker.CheckerAgentName}";
-                    AppendFailureForRetry(updatedHistory, operationName, lastFailure, normalizedResponse);
+                    AppendFailureForRetry(updatedHistory, lastFailure);
                     _logger?.Log(
                         "Warning",
                         "CallCenter",
@@ -252,8 +256,9 @@ public sealed class CallCenter : ICallCenter
                         _logger?.Log(
                             "Information",
                             "CallCenter",
-                            $"operation={operationName}; fallback_type=model; agent={currentAgent.Name}; from_model={previousModel}; to_model={nextModel}; retries_reset_to={retriesPerModel}; conversation=preserved",
+                            $"operation={operationName}; fallback_type=model; agent={currentAgent.Name}; from_model={previousModel}; to_model={nextModel}; retries_reset_to={retriesPerModel}; conversation=reset_to_baseline",
                             result: "SUCCESS");
+                        updatedHistory = CloneHistory(baselineHistory);
                         currentAgent = retryDecisionAfterChecker.FallbackAgent;
                         attemptsCurrentAgent = 0;
                         continue;
@@ -297,7 +302,7 @@ public sealed class CallCenter : ICallCenter
             }
 
             lastFailure = string.IsNullOrWhiteSpace(result.Error) ? "agent_call_failed" : result.Error;
-            AppendFailureForRetry(updatedHistory, operationName, lastFailure, result.Text);
+            AppendFailureForRetry(updatedHistory, lastFailure);
             if (!string.IsNullOrWhiteSpace(liveGroup))
             {
                 await PublishStoryLiveFailedAsync(liveGroup!, storyId, lastFailure).ConfigureAwait(false);
@@ -345,8 +350,9 @@ public sealed class CallCenter : ICallCenter
                 _logger?.Log(
                     "Information",
                     "CallCenter",
-                    $"operation={operationName}; fallback_type=model; agent={currentAgent.Name}; from_model={previousModel}; to_model={nextModel}; retries_reset_to={retriesPerModel}; conversation=preserved",
+                    $"operation={operationName}; fallback_type=model; agent={currentAgent.Name}; from_model={previousModel}; to_model={nextModel}; retries_reset_to={retriesPerModel}; conversation=reset_to_baseline",
                     result: "SUCCESS");
+                updatedHistory = CloneHistory(baselineHistory);
                 currentAgent = retryDecision.FallbackAgent;
                 attemptsCurrentAgent = 0;
                 continue;
@@ -458,6 +464,37 @@ public sealed class CallCenter : ICallCenter
         return fallbackModelId;
     }
 
+    private string ResolveSystemPromptForCurrentAgent(
+        Agent agent,
+        string roleCode,
+        string? overrideSystemPrompt,
+        Dictionary<string, string> systemPromptByModel)
+    {
+        if (!string.IsNullOrWhiteSpace(overrideSystemPrompt))
+        {
+            return overrideSystemPrompt!;
+        }
+
+        var cacheKey = BuildSystemPromptCacheKey(agent, roleCode);
+        if (systemPromptByModel.TryGetValue(cacheKey, out var cached) && !string.IsNullOrWhiteSpace(cached))
+        {
+            return cached;
+        }
+
+        var built = _systemPromptBuilder.Build(agent, roleCode);
+        systemPromptByModel[cacheKey] = built;
+        return built;
+    }
+
+    private string BuildSystemPromptCacheKey(Agent agent, string roleCode)
+    {
+        var safeRole = string.IsNullOrWhiteSpace(roleCode) ? "agent" : roleCode.Trim().ToLowerInvariant();
+        var modelKey = agent.ModelId.HasValue && agent.ModelId.Value > 0
+            ? $"id:{agent.ModelId.Value}"
+            : $"name:{(ResolveModelName(agent) ?? "unknown").Trim().ToLowerInvariant()}";
+        return $"{safeRole}|{modelKey}";
+    }
+
     private async Task TryAskFailureExplanationAsync(
         long storyId,
         int threadId,
@@ -467,9 +504,20 @@ public sealed class CallCenter : ICallCenter
         string failureReason,
         CancellationToken cancellationToken)
     {
+        if (HasStructuredResponseFormat(agent, options))
+        {
+            _logger?.Log(
+                "Information",
+                "CallCenter",
+                $"operation=fail_explanation; status=SKIPPED; story_id={storyId}; thread_id={threadId}; agent={agent.Description}; reason=json_response_format_active",
+                result: "SKIPPED");
+            return;
+        }
+
         try
         {
-            history.AddUser(
+            var diagnosticHistory = CloneHistory(history);
+            diagnosticHistory.AddUser(
                 "[CALLCENTER_EXPLAIN_REQUEST] Spiega in massimo 6 righe il motivo del fallimento precedente e come correggerlo.");
 
             var req = new CommandModelExecutionService.Request
@@ -478,7 +526,7 @@ public sealed class CallCenter : ICallCenter
                 Agent = agent,
                 RoleCode = string.IsNullOrWhiteSpace(agent.Role) ? "agent" : agent.Role,
                 Prompt = string.Empty,
-                ConversationMessages = history.Messages
+                ConversationMessages = diagnosticHistory.Messages
                     .Where(m => m != null && !string.IsNullOrWhiteSpace(m.Content))
                     .Select(m => new ConversationMessage
                     {
@@ -503,7 +551,6 @@ public sealed class CallCenter : ICallCenter
             var explanation = await _agentCallService.ExecuteAsync(req, cancellationToken).ConfigureAwait(false);
             if (explanation.Success && !string.IsNullOrWhiteSpace(explanation.Text))
             {
-                history.AddAssistant($"[FAIL_EXPLANATION] {explanation.Text.Trim()}");
                 _logger?.Log(
                     "Information",
                     "CallCenter",
@@ -527,6 +574,36 @@ public sealed class CallCenter : ICallCenter
                 $"operation=fail_explanation; status=FAILED; story_id={storyId}; thread_id={threadId}; agent={agent.Description}; reason={ex.Message}",
                 result: "FAILED");
         }
+    }
+
+    private static bool HasStructuredResponseFormat(Agent agent, CallOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(agent?.JsonResponseFormat))
+        {
+            return true;
+        }
+
+        return options?.ResponseFormat != null;
+    }
+
+    private static ChatHistory CloneHistory(ChatHistory history)
+    {
+        var clone = new ChatHistory();
+        if (history?.Messages == null)
+        {
+            return clone;
+        }
+
+        foreach (var message in history.Messages.Where(m => m != null && !string.IsNullOrWhiteSpace(m.Content)))
+        {
+            clone.Messages.Add(new ConversationMessage
+            {
+                Role = message.Role,
+                Content = message.Content
+            });
+        }
+
+        return clone;
     }
 
     private static string BuildPromptFromHistory(ChatHistory history)
@@ -578,96 +655,17 @@ public sealed class CallCenter : ICallCenter
         return null;
     }
 
-    private void AppendFailureForRetry(ChatHistory history, string operationName, string reason, string? failedResponse)
+    private static void AppendFailureForRetry(ChatHistory history, string reason)
     {
-        if (IsConversationalFailureContextEnabled(operationName))
-        {
-            AppendConversationalFailureContext(history, reason, failedResponse);
-            return;
-        }
-
         AppendFailureToHistory(history, reason);
-    }
-
-    private bool IsConversationalFailureContextEnabled(string? operationName)
-    {
-        try
-        {
-            var op = string.IsNullOrWhiteSpace(operationName) ? "call_center" : operationName.Trim();
-            var policies = _responseValidationOptions?.CurrentValue?.CommandPolicies;
-            if (policies == null || policies.Count == 0)
-            {
-                return true;
-            }
-
-            if (TryGetResponseValidationPolicyForOperation(policies, op, out var policy) &&
-                policy?.UseConversationalFailureContext.HasValue == true)
-            {
-                return policy.UseConversationalFailureContext.Value;
-            }
-
-            return true;
-        }
-        catch
-        {
-            return true;
-        }
-    }
-
-    private static bool TryGetResponseValidationPolicyForOperation(
-        Dictionary<string, ResponseValidationCommandPolicy> policies,
-        string operation,
-        out ResponseValidationCommandPolicy? policy)
-    {
-        policy = null;
-        if (policies.TryGetValue(operation, out var exact) && exact != null)
-        {
-            policy = exact;
-            return true;
-        }
-
-        var key = operation;
-        while (!string.IsNullOrWhiteSpace(key))
-        {
-            var slash = key.LastIndexOf('/');
-            if (slash <= 0) break;
-            key = key[..slash];
-            if (policies.TryGetValue(key, out var pref) && pref != null)
-            {
-                policy = pref;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static void AppendConversationalFailureContext(ChatHistory history, string reason, string? failedResponse)
-    {
-        if (history == null) return;
-
-        history.AddUser(
-            "[CALLCENTER_LAST_FAILURE_REASON] " + reason + "\n" +
-            "[CALLCENTER_RETRY_REQUEST] Rispondi di nuovo rispettando tutti i vincoli della richiesta e correggendo gli errori evidenziati.");
     }
 
     private static void AppendFailureToHistory(ChatHistory history, string reason)
     {
         if (history == null) return;
 
-        var failureMessage = $"[CALLCENTER_LAST_FAILURE] Tentativo fallito: {reason}";
-        var lastNonSystem = history.Messages
-            .LastOrDefault(m => !string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase));
-
-        // Keep user/assistant alternation in history.
-        if (lastNonSystem != null &&
-            string.Equals(lastNonSystem.Role, "user", StringComparison.OrdinalIgnoreCase))
-        {
-            history.AddAssistant(failureMessage);
-            return;
-        }
-
-        history.AddUser(failureMessage);
+        var normalizedReason = string.IsNullOrWhiteSpace(reason) ? "errore_non_specificato" : reason.Trim();
+        history.AddUser($"[CALLCENTER_LAST_ERRORS] {normalizedReason}");
     }
 
     private static void UpsertConversationSystemMessage(ChatHistory history, string systemPrompt)

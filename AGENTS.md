@@ -56,8 +56,14 @@
 ## CallCenter - Modalita Conversazione (obbligatoria)
 - Il `CallCenter` deve inviare ai modelli una conversazione reale (lista messaggi con ruolo `system` / `user` / `assistant`).
 - E' vietato appiattire (flatten) la cronologia in un unico prompt testuale con prefissi tipo `[user]` / `[assistant]`.
-- Nei retry NON reiniettare l'intera risposta fallita: aggiungere solo un nuovo messaggio con il motivo del fallimento e richiesta di correzione.
+- Nei retry NON reiniettare l'intera risposta fallita: aggiungere solo un nuovo messaggio con i soli errori dell'ultima risposta.
 - Queste regole valgono sempre per chiamate primarie, retry e fallback.
+- Errori storici modello nel `system`:
+  - La lista degli errori piu commessi del modello/ruolo/agente va inserita solo nel primo messaggio `system` per quello specifico modello durante la singola chiamata `CallCenter`.
+  - Non rigenerare la stessa lista a ogni retry sullo stesso modello.
+  - Se subentra un modello di fallback diverso, costruire il `system` iniziale per quel modello una sola volta.
+- Modifica comportamento retry/fallback:
+  - Qualsiasi modifica a queste regole (history, `system`, errori aggiunti in conversazione, fallback) richiede SEMPRE permesso esplicito dell'utente prima di procedere.
 
 ## Collaborazione e Spirito Critico
 - L'obiettivo principale e' la qualita' del progetto, non "avere ragione".
@@ -65,3 +71,4 @@
 - Se esiste un approccio migliore, proponilo con pro/contro e impatto pratico; poi attendi la decisione finale dell'utente.
 - La decisione finale resta dell'utente: una volta presa, eseguila senza discussioni ulteriori.
 - Evita esecuzione cieca degli ordini quando emergono rischi evidenti, regressioni o incoerenze con i vincoli del progetto.
+- Non usare soluzioni di ripiego "facili" per aggirare il problema tecnico richiesto. Se la soluzione corretta e' bloccata, incerta o comporta tradeoff rilevanti, fermati e chiedi esplicitamente all'utente come procedere.

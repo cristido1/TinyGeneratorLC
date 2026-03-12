@@ -329,7 +329,8 @@
                 var btn = $(this);
                 var tr = btn.closest('tr');
                 var row = table.row(tr);
-                var logId = tr.data('id');
+                var rowData = row && typeof row.data === 'function' ? row.data() : null;
+                var logId = tr.data('id') || (rowData ? rowData.id : null);
 
                 if (row.child.isShown()) {
                     // Close
@@ -338,6 +339,12 @@
                     btn.text('+');
                 } else {
                     // Open: fetch message lazily from server
+                    if (!logId) {
+                        row.child(formatLogDetailsFromMessage('ID log non disponibile')).show();
+                        tr.addClass('shown');
+                        btn.text('âˆ’');
+                        return;
+                    }
                     btn.prop('disabled', true);
                     $.ajax({
                         url: '?handler=Message&id=' + encodeURIComponent(logId),

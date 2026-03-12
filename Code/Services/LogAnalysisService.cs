@@ -108,7 +108,8 @@ namespace TinyGenerator.Services
             var analysis = new LogAnalysis
             {
                 ThreadId = threadId,
-                ModelId = modelName,
+                // log_analysis.model_id has FK -> models.Id; persist the numeric model id.
+                ModelId = agent.ModelId.Value.ToString(),
                 RunScope = scope,
                 Description = textContent.Trim(),
                 Succeeded = true

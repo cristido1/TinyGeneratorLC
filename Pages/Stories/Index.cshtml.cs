@@ -244,8 +244,59 @@ namespace TinyGenerator.Pages.Stories
                 metadata: BuildMetadata(id, "evaluate_action_pacing", agent));
 
             TempData["StatusMessage"] = $"Valutazione azione/ritmo avviata (run {runId}).";
-        return RedirectToPage();
-    }
+            return RedirectToPage();
+        }
+
+        public IActionResult OnPostAddMissingEvaluation(long id)
+        {
+            var story = _stories.GetStoryById(id);
+            if (story == null)
+            {
+                TempData["ErrorMessage"] = "Storia non trovata.";
+                return RedirectToPage();
+            }
+
+            var hasEvaluations = (_stories.GetEvaluationsForStory(id)?.Count ?? 0) > 0;
+            if (hasEvaluations)
+            {
+                TempData["StatusMessage"] = "La storia ha già almeno una valutazione.";
+                return RedirectToPage();
+            }
+
+            var agent = _database.ListAgents()
+                .Where(a => a.IsActive &&
+                    (a.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) == true ||
+                     a.Role?.Equals("coherence_evaluator", StringComparison.OrdinalIgnoreCase) == true))
+                .OrderBy(a => a.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) == true ? 0 : 1)
+                .ThenBy(a => a.Id)
+                .FirstOrDefault();
+
+            if (agent == null)
+            {
+                TempData["ErrorMessage"] = "Nessun agente valutatore attivo disponibile.";
+                return RedirectToPage();
+            }
+
+            var isCoherence = agent.Role?.Equals("coherence_evaluator", StringComparison.OrdinalIgnoreCase) == true;
+            var opName = isCoherence ? "evaluate_coherence" : "evaluate_story";
+
+            var runId = QueueStoryCommand(
+                id,
+                opName,
+                async ctx =>
+                {
+                    IStoryCommand cmd = isCoherence
+                        ? new EvaluateCoherenceCommand(_stories, id, agent.Id)
+                        : new EvaluateStoryCommand(_stories, id, agent.Id);
+                    return await cmd.ExecuteAsync(ctx.CancellationToken);
+                },
+                "Valutazione avviata in background.",
+                threadScopeOverride: $"story/{opName}/agent_{agent.Id}",
+                metadata: BuildMetadata(id, opName, agent));
+
+            TempData["StatusMessage"] = $"Valutazione avviata in background (run {runId}).";
+            return RedirectToPage();
+        }
 
         public IActionResult OnPostRevise(long id)
         {
@@ -2106,6 +2157,18 @@ $@"<!doctype html>
             actions.Add(new { id = "cino_optimize", title = "Ottimizza con CINO", method = "POST", url = Url.Page("/Stories/Index", null, new { handler = "CinoOptimize", id = s.Id }, Request.Scheme), confirm = true });
 
             var evalCount = s.Evaluations?.Count ?? 0;
+            if (evalCount == 0)
+            {
+                actions.Add(new
+                {
+                    id = "add_missing_evaluation",
+                    title = "Aggiungi valutazione",
+                    method = "POST",
+                    url = Url.Page("/Stories/Index", null, new { handler = "AddMissingEvaluation", id = s.Id }, Request.Scheme),
+                    confirm = true
+                });
+            }
+
             if (!string.IsNullOrWhiteSpace(s.StoryRevised) && evalCount >= 2)
             {
                 actions.Add(new

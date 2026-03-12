@@ -11,3 +11,194 @@
 <div id="metadata-vue-app"></div>
 
 <script type="module" src="~/js/vue-roles/metadata-index.js" asp-append-version="true"></script>
+
+@section Scripts {
+    <script>
+        (function () {
+            const root = document.getElementById('metadata-vue-app');
+            if (!root) return;
+
+            const menuId = 'metadata-row-context-menu';
+
+            function getStorageKey(cardIndex) {
+                return `metadata_hidden_columns_${cardIndex}`;
+            }
+
+            function loadHiddenColumns(cardIndex) {
+                try {
+                    const raw = localStorage.getItem(getStorageKey(cardIndex));
+                    const arr = raw ? JSON.parse(raw) : [];
+                    return new Set(Array.isArray(arr) ? arr : []);
+                } catch {
+                    return new Set();
+                }
+            }
+
+            function saveHiddenColumns(cardIndex, hidden) {
+                try {
+                    localStorage.setItem(getStorageKey(cardIndex), JSON.stringify(Array.from(hidden)));
+                } catch { }
+            }
+
+            function applyColumnVisibility(table, hidden) {
+                table.querySelectorAll('tr').forEach(row => {
+                    Array.from(row.children).forEach((cell, idx) => {
+                        cell.style.display = hidden.has(idx) ? 'none' : '';
+                    });
+                });
+            }
+
+            function buildColumnPicker(card, cardIndex, table) {
+                const toolbar = card.querySelector('.metadata-toolbar');
+                if (!toolbar) return;
+                if (toolbar.querySelector(`.metadata-colpicker[data-card-index="${cardIndex}"]`)) return;
+
+                const hidden = loadHiddenColumns(cardIndex);
+                const wrapper = document.createElement('details');
+                wrapper.className = 'metadata-colpicker';
+                wrapper.dataset.cardIndex = String(cardIndex);
+                wrapper.style.position = 'relative';
+
+                const summary = document.createElement('summary');
+                summary.textContent = 'Colonne';
+                summary.className = 'p-button p-component p-button-secondary p-button-outlined';
+                summary.style.cursor = 'pointer';
+                summary.style.listStyle = 'none';
+                summary.style.padding = '.45rem .8rem';
+                summary.style.borderRadius = '6px';
+                wrapper.appendChild(summary);
+
+                const panel = document.createElement('div');
+                panel.style.position = 'absolute';
+                panel.style.top = '110%';
+                panel.style.right = '0';
+                panel.style.zIndex = '1200';
+                panel.style.minWidth = '220px';
+                panel.style.maxHeight = '280px';
+                panel.style.overflow = 'auto';
+                panel.style.background = '#fff';
+                panel.style.border = '1px solid #d8dee9';
+                panel.style.borderRadius = '8px';
+                panel.style.padding = '.5rem';
+                panel.style.boxShadow = '0 8px 22px rgba(0,0,0,.16)';
+                wrapper.appendChild(panel);
+
+                const headers = Array.from(table.querySelectorAll('thead th')).map((th, idx) => ({
+                    idx,
+                    text: (th.textContent || '').trim() || `Colonna ${idx + 1}`
+                }));
+
+                headers.forEach(h => {
+                    const label = document.createElement('label');
+                    label.style.display = 'flex';
+                    label.style.alignItems = 'center';
+                    label.style.gap = '.5rem';
+                    label.style.padding = '.2rem 0';
+
+                    const input = document.createElement('input');
+                    input.type = 'checkbox';
+                    input.checked = !hidden.has(h.idx);
+                    input.addEventListener('change', () => {
+                        if (input.checked) hidden.delete(h.idx);
+                        else hidden.add(h.idx);
+                        saveHiddenColumns(cardIndex, hidden);
+                        applyColumnVisibility(table, hidden);
+                    });
+
+                    const span = document.createElement('span');
+                    span.textContent = h.text;
+                    label.appendChild(input);
+                    label.appendChild(span);
+                    panel.appendChild(label);
+                });
+
+                toolbar.appendChild(wrapper);
+                applyColumnVisibility(table, hidden);
+            }
+
+            function getOrCreateMenu() {
+                let menu = document.getElementById(menuId);
+                if (menu) return menu;
+
+                menu = document.createElement('div');
+                menu.id = menuId;
+                menu.style.position = 'fixed';
+                menu.style.zIndex = '2000';
+                menu.style.display = 'none';
+                menu.style.background = '#fff';
+                menu.style.border = '1px solid #d8dee9';
+                menu.style.borderRadius = '8px';
+                menu.style.boxShadow = '0 8px 22px rgba(0,0,0,.16)';
+                menu.style.padding = '.3rem';
+
+                document.body.appendChild(menu);
+                document.addEventListener('click', () => { menu.style.display = 'none'; });
+                window.addEventListener('scroll', () => { menu.style.display = 'none'; }, true);
+
+                return menu;
+            }
+
+            function showContextMenu(x, y, onEdit) {
+                const menu = getOrCreateMenu();
+                menu.innerHTML = '';
+
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.textContent = 'Modifica riga';
+                btn.style.border = 'none';
+                btn.style.background = 'transparent';
+                btn.style.padding = '.4rem .7rem';
+                btn.style.cursor = 'pointer';
+                btn.style.width = '100%';
+                btn.style.textAlign = 'left';
+                btn.addEventListener('click', () => {
+                    menu.style.display = 'none';
+                    onEdit();
+                });
+                menu.appendChild(btn);
+
+                menu.style.left = `${x}px`;
+                menu.style.top = `${y}px`;
+                menu.style.display = 'block';
+            }
+
+            function attachRowContextMenu(card) {
+                const tbody = card.querySelector('.p-datatable-tbody');
+                const toolbar = card.querySelector('.metadata-toolbar');
+                if (!tbody || !toolbar || tbody.dataset.ctxBound === '1') return;
+
+                tbody.dataset.ctxBound = '1';
+                tbody.addEventListener('contextmenu', (ev) => {
+                    const row = ev.target.closest('tr');
+                    if (!row) return;
+
+                    ev.preventDefault();
+                    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+                    showContextMenu(ev.clientX, ev.clientY, () => {
+                        const editButton = Array.from(toolbar.querySelectorAll('button'))
+                            .find(b => ((b.textContent || '').trim().toLowerCase()).includes('modifica'))
+                            || Array.from(toolbar.querySelectorAll('button'))
+                                .find(b => ((b.getAttribute('aria-label') || '').trim().toLowerCase()).includes('modifica'));
+                        if (editButton) editButton.click();
+                    });
+                });
+            }
+
+            function refreshEnhancements() {
+                const cards = Array.from(root.querySelectorAll('.metadata-card'));
+                cards.forEach((card, idx) => {
+                    const table = card.querySelector('.p-datatable-table');
+                    if (!table) return;
+                    buildColumnPicker(card, idx, table);
+                    applyColumnVisibility(table, loadHiddenColumns(idx));
+                    attachRowContextMenu(card);
+                });
+            }
+
+            const observer = new MutationObserver(() => refreshEnhancements());
+            observer.observe(root, { childList: true, subtree: true });
+            refreshEnhancements();
+        })();
+    </script>
+}

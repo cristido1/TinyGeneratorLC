@@ -160,6 +160,12 @@ Flusso richiesto per la generazione storia NRE:
 
 4. Dopo il fail explanation:
    - il CallCenter cerca ed usa il modello di fallback secondo le regole correnti.
+   - quando cambia modello, il `system` viene ricostruito per il nuovo modello.
+   - la lista "errori storici piu commessi" viene inserita solo nel primo `system` del modello usato in quella chiamata CallCenter, non a ogni retry sullo stesso modello.
+
+4.b Retry e messaggi di errore in conversazione:
+   - nei retry non viene reiniettata la risposta fallita completa.
+   - viene aggiunto un solo nuovo messaggio con i soli errori dell'ultima risposta (`CALLCENTER_LAST_ERRORS`).
 
 5. La promozione dei modelli NON avviene durante la singola response:
    - viene lanciata dal CommandDispatcher solo al termine del comando iniziale di generazione storia.

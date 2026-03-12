@@ -65,12 +65,22 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<ModelRole> ModelRoles => Set<ModelRole>();
     public DbSet<ModelRoleError> ModelRoleErrors => Set<ModelRoleError>();
     public DbSet<ImageAsset> Images => Set<ImageAsset>();
+    public DbSet<MappedSentiment> MappedSentiments => Set<MappedSentiment>();
+    public DbSet<SentimentEmbedding> SentimentEmbeddings => Set<SentimentEmbedding>();
+    public DbSet<Sound> Sounds => Set<Sound>();
+    public DbSet<SoundMissing> SoundsMissing => Set<SoundMissing>();
+    public DbSet<MemoryEntry> MemoryEntries => Set<MemoryEntry>();
+    public DbSet<MemoryNewFixEntry> MemoryNewFixEntries => Set<MemoryNewFixEntry>();
+    public DbSet<EvaluationLegacyEntry> EvaluationsLegacy => Set<EvaluationLegacyEntry>();
+    public DbSet<NarrativeAgentCallLogEntry> NarrativeAgentCallLogs => Set<NarrativeAgentCallLogEntry>();
+    public DbSet<NarrativePlanningStateEntry> NarrativePlanningStates => Set<NarrativePlanningStateEntry>();
+    public DbSet<StoryChunkFactEntry> StoryChunkFacts => Set<StoryChunkFactEntry>();
     public DbSet<NumeratorStateEntry> NumeratorsState => Set<NumeratorStateEntry>();
     public DbSet<MetadataTableEntry> MetadataTables => Set<MetadataTableEntry>();
     public DbSet<MetadataFieldEntry> MetadataFields => Set<MetadataFieldEntry>();
     public DbSet<CommandEntry> Commands => Set<CommandEntry>();
     public DbSet<MetadataCommandEntry> MetadataCommands => Set<MetadataCommandEntry>();
-    // Note: Memory table excluded - using Dapper for embedding queries
+    // Memory tables are also mapped for generic CRUD metadata/smoke coverage.
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -247,6 +257,12 @@ public class TinyGeneratorDbContext : DbContext
 
         modelBuilder.Entity<ImageAsset>()
             .HasKey(i => i.Id);
+
+        modelBuilder.Entity<MemoryEntry>()
+            .HasKey(m => m.Id);
+
+        modelBuilder.Entity<MemoryNewFixEntry>()
+            .HasKey(m => m.Id);
 
         modelBuilder.Entity<MetadataTableEntry>()
             .HasKey(m => m.Id);

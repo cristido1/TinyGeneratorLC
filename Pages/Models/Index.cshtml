@@ -91,7 +91,7 @@
                     <th data-col="maxctx">MaxCtx</th>
                     <th data-col="ctxtouse">CtxToUse</th>
                     <th data-col="total">Total</th>
-                    <th data-col="base">Base</th>
+                    <th data-col="base">Fn Call</th>
                     <th data-col="texteval">TextEval</th>
                     <th data-col="writer">Writer</th>
                     <th data-col="tts">TTS</th>
@@ -106,7 +106,7 @@
                     <th data-col="promotions">Promotions</th>
                     <th data-col="demotions">Demotions</th>
                     <th data-col="rankgain">Rank Gain</th>
-                    <th data-col="duration">Duration</th>
+                    <th data-col="duration">Fn Call Time</th>
                     <th data-col="costin">Cost In</th>
                     <th data-col="costout">Cost Out</th>
                     <th data-col="createdat">Created</th>
@@ -381,6 +381,20 @@
                                     alert(msg);
                                 })
                                 .catch(function(err) { alert('Errore avvio intelligenceTest: ' + err.message); });
+                        }
+                    },
+                    {
+                        text: '<i class="bi bi-shield-check me-1"></i>Validate JSON examples',
+                        className: 'btn btn-sm btn-light border text-primary',
+                        attr: { style: 'width: auto; flex: 0 0 auto;' },
+                        action: function() {
+                            fetch('/api/commands/validate-agent-json-examples', { method: 'POST' })
+                                .then(function(resp) { return resp.ok ? resp.json() : resp.text().then(function(t){ throw new Error(t); }); })
+                                .then(function(data) {
+                                    var msg = data.runId ? ('Comando avviato (' + data.runId + ')') : 'Comando avviato';
+                                    alert(msg);
+                                })
+                                .catch(function(err) { alert('Errore avvio validate JSON examples: ' + err.message); });
                         }
                     },
                     {

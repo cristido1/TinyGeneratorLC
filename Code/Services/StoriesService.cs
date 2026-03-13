@@ -47,6 +47,7 @@ public sealed partial class StoriesService
     private readonly IOptionsMonitor<NarratorVoiceOptions>? _narratorVoiceOptions;
     private readonly StoryEvaluationOptions _storyEvaluationOptions;
     private readonly IOptionsMonitor<AutomaticOperationsOptions>? _idleAutoOptions;
+    private readonly IOptionsMonitor<MonomodelModeOptions>? _monomodelOptions;
     private readonly IOptionsMonitor<StoryTaggingPipelineOptions>? _storyTaggingOptions;
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly IServiceHealthMonitor? _healthMonitor;
@@ -89,6 +90,7 @@ public sealed partial class StoriesService
         IOptionsMonitor<NarratorVoiceOptions>? narratorVoiceOptions = null,
         IOptions<StoryEvaluationOptions>? storyEvaluationOptions = null,
         IOptionsMonitor<AutomaticOperationsOptions>? idleAutoOptions = null,
+        IOptionsMonitor<MonomodelModeOptions>? monomodelOptions = null,
         IServiceScopeFactory? scopeFactory = null,
         IOptionsMonitor<StoryTaggingPipelineOptions>? storyTaggingOptions = null,
         IServiceHealthMonitor? healthMonitor = null,
@@ -111,6 +113,7 @@ public sealed partial class StoriesService
         _storyEvaluationOptions = storyEvaluationOptions?.Value ?? new StoryEvaluationOptions();
         _scopeFactory = scopeFactory;
         _idleAutoOptions = idleAutoOptions;
+        _monomodelOptions = monomodelOptions;
         _storyTaggingOptions = storyTaggingOptions;
         _healthMonitor = healthMonitor;
         _soundSearchService = soundSearchService;
@@ -10860,6 +10863,7 @@ private static string? SelectMusicFileDeterministic(
             };
 
             process.StartInfo.ArgumentList.Add("-y");
+            process.StartInfo.ArgumentList.Add("-hide_banner");
             if (useConcatInput)
             {
                 process.StartInfo.ArgumentList.Add("-f");
@@ -10903,6 +10907,7 @@ private static string? SelectMusicFileDeterministic(
             process.StartInfo.ArgumentList.Add("-movflags");
             process.StartInfo.ArgumentList.Add("+faststart");
             process.StartInfo.ArgumentList.Add(outputVideoPath);
+            _customLogger?.Append(runId, $"[{story.Id}] ffmpeg video args: {string.Join(" ", process.StartInfo.ArgumentList)}");
 
             process.Start();
             var stderrTask = process.StandardError.ReadToEndAsync();
@@ -10926,7 +10931,11 @@ private static string? SelectMusicFileDeterministic(
                 return (true, null);
             }
 
-            var shortErr = stderr.Substring(0, Math.Min(1200, stderr.Length));
+            var compactErr = (stderr ?? string.Empty).Trim();
+            // ffmpeg prints banner/config first; the actionable error is usually at the end of stderr.
+            var shortErr = compactErr.Length <= 1200
+                ? compactErr
+                : compactErr.Substring(Math.Max(0, compactErr.Length - 1200));
             return (false, $"Errore ffmpeg video (exit code {process.ExitCode}): {shortErr}");
         }
 
@@ -12862,6 +12871,61 @@ private static string? SelectMusicFileDeterministic(
         catch
         {
             return "series";
+        }
+    }
+
+    public bool IsMonomodelModeEnabled()
+    {
+        try
+        {
+            return _monomodelOptions?.CurrentValue?.Enabled ?? false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public string GetMonomodelModeModelDescription()
+    {
+        try
+        {
+            return (_monomodelOptions?.CurrentValue?.ModelDescription ?? string.Empty).Trim();
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    public void SetMonomodelMode(bool enabled, string? modelDescription)
+    {
+        try
+        {
+            var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+            if (!File.Exists(appSettingsPath))
+            {
+                return;
+            }
+
+            var json = File.ReadAllText(appSettingsPath);
+            var root = JsonNode.Parse(json) as JsonObject;
+            if (root == null)
+            {
+                return;
+            }
+
+            var monoNode = root["MonomodelMode"] as JsonObject ?? new JsonObject();
+            monoNode["Enabled"] = enabled;
+            monoNode["ModelDescription"] = (modelDescription ?? string.Empty).Trim();
+            root["MonomodelMode"] = monoNode;
+
+            var updated = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(appSettingsPath, updated);
+        }
+        catch
+        {
+            // best-effort
         }
     }
 

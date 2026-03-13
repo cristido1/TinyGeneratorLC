@@ -255,6 +255,7 @@ else
 }
 builder.Services.Configure<StateDrivenStoryGenerationOptions>(builder.Configuration.GetSection("StateDrivenStoryGeneration"));
 builder.Services.Configure<NarrativeRuntimeEngineOptions>(builder.Configuration.GetSection("NarrativeRuntimeEngine"));
+builder.Services.Configure<MonomodelModeOptions>(builder.Configuration.GetSection("MonomodelMode"));
 builder.Services.AddSingleton<TextValidationService>();
 // TTS schema generation options (pause/gap between phrases)
 builder.Services.Configure<TtsSchemaGenerationOptions>(builder.Configuration.GetSection("TtsSchemaGeneration"));
@@ -299,6 +300,7 @@ builder.Services.AddSingleton<CommandDispatcher>(sp =>
     new CommandDispatcher(
         sp.GetService<IOptions<CommandDispatcherOptions>>(),
         sp.GetService<IOptions<CommandPoliciesOptions>>(),
+        sp.GetService<IOptionsMonitor<MonomodelModeOptions>>(),
         sp.GetService<ICustomLogger>(),
         sp.GetService<IHubContext<TinyGenerator.Hubs.ProgressHub>>(),
         sp.GetService<NumeratorService>(),
@@ -334,6 +336,7 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     narratorVoiceOptions: sp.GetService<IOptionsMonitor<NarratorVoiceOptions>>(),
     storyEvaluationOptions: sp.GetService<IOptions<StoryEvaluationOptions>>(),
     idleAutoOptions: sp.GetService<IOptionsMonitor<AutomaticOperationsOptions>>(),
+    monomodelOptions: sp.GetService<IOptionsMonitor<MonomodelModeOptions>>(),
     scopeFactory: sp.GetService<IServiceScopeFactory>(),
     storyTaggingOptions: sp.GetService<IOptionsMonitor<StoryTaggingPipelineOptions>>(),
     healthMonitor: sp.GetService<IServiceHealthMonitor>(),

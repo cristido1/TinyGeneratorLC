@@ -83,7 +83,8 @@ public static class TaggingResponseFormat
             "Restituisci SOLO un JSON valido nel formato richiesto dalla request.\n" +
             "Regole:\n" +
             "- Nessun markdown, nessun testo extra.\n" +
-            "- Compila solo i campi previsti dallo schema.\n";
+            "- Compila solo i campi previsti dallo schema.\n" +
+            "- Se nel chunk non sono necessari effetti sonori, restituisci esplicitamente: {\"entries\":[]}.\n";
     }
 
     private static string GetMusicFormat()

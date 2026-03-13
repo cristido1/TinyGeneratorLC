@@ -82,6 +82,8 @@ namespace TinyGenerator.Services
         private readonly object _queueLock = new();
         private readonly SemaphoreSlim _queueSemaphore = new(0);
         private readonly int _parallelism;
+        private readonly SemaphoreSlim _queueConfiguredSemaphore;
+        private readonly SemaphoreSlim _monomodelQueueSemaphore = new(2, 2);
         private readonly ICustomLogger? _logger;
         private readonly Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? _hubContext;
         private readonly NumeratorService? _numerator;
@@ -100,6 +102,7 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<long, SemaphoreSlim> _batchStoryLocks = new();
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _batchOperationSemaphores = new(StringComparer.OrdinalIgnoreCase);
         private readonly SemaphoreSlim _batchGlobalSemaphore;
+        private readonly IOptionsMonitor<MonomodelModeOptions>? _monomodelModeOptions;
         private readonly int _maxBatchProcessesPerOperation;
         private static readonly HashSet<string> ExternalBatchStoryOperations = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -113,15 +116,19 @@ namespace TinyGenerator.Services
         public CommandDispatcher(
             IOptions<CommandDispatcherOptions>? options,
             IOptions<CommandPoliciesOptions>? policies,
+            IOptionsMonitor<MonomodelModeOptions>? monomodelModeOptions = null,
             ICustomLogger? logger = null,
             Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? hubContext = null,
             NumeratorService? numerator = null,
             IServiceProvider? services = null)
         {
             _parallelism = Math.Max(1, options?.Value?.MaxParallelCommands ?? 2);
+            // Default mode: force serialized queue execution (1 at a time).
+            _queueConfiguredSemaphore = new SemaphoreSlim(1, 1);
             var maxBatchGlobal = Math.Max(1, options?.Value?.MaxBatchProcessesGlobal ?? 8);
             _maxBatchProcessesPerOperation = Math.Max(1, options?.Value?.MaxBatchProcessesPerOperation ?? 3);
             _batchGlobalSemaphore = new SemaphoreSlim(maxBatchGlobal, maxBatchGlobal);
+            _monomodelModeOptions = monomodelModeOptions;
             _logger = logger;
             _hubContext = hubContext;
             _numerator = numerator;
@@ -366,6 +373,18 @@ namespace TinyGenerator.Services
             var semaphore = _batchStoryLocks.GetOrAdd(storyId, _ => new SemaphoreSlim(1, 1));
             await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
             return new AsyncReleaseHandle(() => semaphore.Release());
+        }
+
+        private async ValueTask<IAsyncDisposable> AcquireQueueExecutionSlotAsync(CancellationToken cancellationToken)
+        {
+            if (_monomodelModeOptions?.CurrentValue?.Enabled == true)
+            {
+                await _monomodelQueueSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                return new AsyncReleaseHandle(() => _monomodelQueueSemaphore.Release());
+            }
+
+            await _queueConfiguredSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return new AsyncReleaseHandle(() => _queueConfiguredSemaphore.Release());
         }
 
         private static bool TryGetStoryId(IReadOnlyDictionary<string, string>? metadata, out long storyId)
@@ -646,11 +665,15 @@ namespace TinyGenerator.Services
         public Task StartAsync(CancellationToken cancellationToken)
         {
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            for (int i = 0; i < _parallelism; i++)
+            var workerCount = Math.Max(_parallelism, 2);
+            for (int i = 0; i < workerCount; i++)
             {
                 _workers.Add(Task.Run(() => WorkerLoopAsync(_cts.Token), CancellationToken.None));
             }
-            _logger?.Log("Information", "Command", $"CommandDispatcher avviato con parallelismo={_parallelism}");
+            _logger?.Log(
+                "Information",
+                "Command",
+                $"CommandDispatcher avviato con workers={workerCount}; queue_parallelismo_default=1; queue_parallelismo_monomodel=2; queue_parallelismo_configurato={_parallelism}");
             return Task.CompletedTask;
         }
 
@@ -689,6 +712,7 @@ namespace TinyGenerator.Services
 
                     if (workItem != null)
                     {
+                        await using var queueSlot = await AcquireQueueExecutionSlotAsync(stoppingToken).ConfigureAwait(false);
                         await ProcessWorkItemAsync(workItem, stoppingToken).ConfigureAwait(false);
                     }
                 }
@@ -1313,6 +1337,8 @@ Completed:
             catch { }
             _cts?.Dispose();
             _queueSemaphore?.Dispose();
+            _queueConfiguredSemaphore?.Dispose();
+            _monomodelQueueSemaphore?.Dispose();
         }
 
         public async Task<CommandResult> WaitForCompletionAsync(string runId, CancellationToken cancellationToken = default)

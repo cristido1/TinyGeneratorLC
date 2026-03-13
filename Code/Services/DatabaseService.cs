@@ -2609,10 +2609,37 @@ VALUES (@parentId, @errorText, @errorType, 1, @now, @now);";
     {
         if (preferredAgentId.HasValue && preferredAgentId.Value > 0)
         {
-            var existsPreferred = conn.ExecuteScalar<long>(
-                "SELECT COUNT(*) FROM agents WHERE id = @id",
-                new { id = preferredAgentId.Value });
-            if (existsPreferred > 0)
+            var normalizedRole = string.IsNullOrWhiteSpace(roleCode) ? null : roleCode.Trim();
+            long preferredMatchesRole;
+            if (roleId.HasValue && roleId.Value > 0)
+            {
+                preferredMatchesRole = conn.ExecuteScalar<long>(
+                    @"SELECT COUNT(*)
+                      FROM agents a
+                      JOIN roles r ON lower(trim(a.role)) = lower(trim(r.description))
+                      WHERE a.id = @id
+                        AND r.id = @roleId",
+                    new
+                    {
+                        id = preferredAgentId.Value,
+                        roleId = roleId.Value
+                    });
+            }
+            else
+            {
+                preferredMatchesRole = conn.ExecuteScalar<long>(
+                    @"SELECT COUNT(*)
+                      FROM agents
+                      WHERE id = @id
+                        AND (@roleCode IS NOT NULL AND lower(trim(role)) = lower(trim(@roleCode)))",
+                    new
+                    {
+                        id = preferredAgentId.Value,
+                        roleCode = normalizedRole
+                    });
+            }
+
+            if (preferredMatchesRole > 0)
             {
                 return preferredAgentId.Value;
             }
@@ -2651,7 +2678,8 @@ VALUES (@parentId, @errorText, @errorType, 1, @now, @now);";
             }
         }
 
-        return conn.ExecuteScalar<int?>("SELECT id FROM agents ORDER BY id ASC LIMIT 1");
+        // Never fallback to an arbitrary agent: this would attach usage/errors to the wrong model_roles parent.
+        return null;
     }
 
     public bool RecordModelRoleUsage(string? roleCode, int? modelId, string? modelName, bool success, int? agentId = null)

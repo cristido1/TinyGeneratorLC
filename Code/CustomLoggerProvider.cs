@@ -7,32 +7,27 @@ namespace TinyGenerator.Services
     {
         private readonly ICustomLogger? _customLogger;
         private readonly IServiceProvider? _serviceProvider;
+        private ICustomLogger? _resolvedCustomLogger;
+        private int _resolveAttempted;
+        [ThreadStatic]
+        private static bool _resolvingCustomLogger;
 
         // Existing constructor preserved for backward compatibility (direct injection)
         public CustomLoggerProvider(ICustomLogger customLogger)
         {
             _customLogger = customLogger ?? throw new ArgumentNullException(nameof(customLogger));
-            try { System.Console.WriteLine("[Startup] CustomLoggerProvider constructed with direct ICustomLogger"); } catch { }
         }
 
         // Lazy-constructor: accept IServiceProvider and resolve dependencies when needed (avoids cycles during DI ValidateOnBuild)
         public CustomLoggerProvider(IServiceProvider serviceProvider)
         {
             _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
-            try { System.Console.WriteLine("[Startup] CustomLoggerProvider constructed with IServiceProvider (lazy)"); } catch { }
         }
 
         public ILogger CreateLogger(string categoryName)
         {
             // Resolve dependencies lazily to avoid cycles during startup validation
-            ICustomLogger? custom = _customLogger;
-            
-            // DO NOT attempt to resolve ICustomLogger from _serviceProvider here!
-            // This causes infinite loops during DI setup because CustomLogger creation
-            // may trigger logger creation, leading to circular dependencies.
-            // If custom is null, we simply fall back to console logging in AdapterLogger.
-
-            try { System.Console.WriteLine($"[Startup] CustomLoggerProvider.CreateLogger(category={categoryName}) customPresent={custom != null}"); } catch { }
+            ICustomLogger? custom = _customLogger ?? TryResolveCustomLogger();
             return new AdapterLogger(categoryName, custom);
         }
 
@@ -66,8 +61,11 @@ namespace TinyGenerator.Services
                     var stateStr = state?.ToString();
                     if (_custom == null)
                     {
-                        // Best-effort: if a custom DB logger is not available, fall back to console logging
-                        System.Console.WriteLine($"{DateTime.UtcNow:o} [{_category}] {level}: {message} {exception?.ToString()}");
+                        // Keep fallback lightweight to avoid startup slowdowns from framework log noise.
+                        if (ShouldWriteConsoleFallback(_category, logLevel))
+                        {
+                            System.Console.WriteLine($"{DateTime.UtcNow:o} [{_category}] {level}: {message} {exception?.ToString()}");
+                        }
                     }
                     else
                     {
@@ -92,6 +90,65 @@ namespace TinyGenerator.Services
                 {
                     // Swallow logging failures to avoid recursive errors
                 }
+            }
+
+            private static bool ShouldWriteConsoleFallback(string? category, LogLevel level)
+            {
+                if (level < LogLevel.Warning)
+                {
+                    return false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(category) &&
+                    category.StartsWith("Microsoft.AspNetCore.DataProtection", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+        }
+
+        private ICustomLogger? TryResolveCustomLogger()
+        {
+            if (_customLogger != null)
+            {
+                return _customLogger;
+            }
+
+            if (_resolvedCustomLogger != null)
+            {
+                return _resolvedCustomLogger;
+            }
+
+            if (_serviceProvider == null)
+            {
+                return null;
+            }
+
+            if (System.Threading.Interlocked.CompareExchange(ref _resolveAttempted, 1, 0) != 0)
+            {
+                return _resolvedCustomLogger;
+            }
+
+            if (_resolvingCustomLogger)
+            {
+                return null;
+            }
+
+            try
+            {
+                _resolvingCustomLogger = true;
+                _resolvedCustomLogger = _serviceProvider.GetService(typeof(ICustomLogger)) as ICustomLogger;
+                return _resolvedCustomLogger;
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                _resolvingCustomLogger = false;
             }
         }
 

@@ -200,6 +200,43 @@ namespace TinyGenerator.Controllers
         }
 
         /// <summary>
+        /// POST /api/commands/validate-agent-json-examples?includeInactive=false&maxExamplesPerAgent=10
+        /// Avvia un controllo deterministico degli esempi JSON presenti nelle instructions degli agenti
+        /// che hanno json_response_format valorizzato. Esito dettagliato salvato in system_reports.
+        /// </summary>
+        [HttpPost("validate-agent-json-examples")]
+        public IActionResult ValidateAgentJsonExamples(
+            [FromQuery] bool includeInactive = false,
+            [FromQuery] int maxExamplesPerAgent = 10)
+        {
+            var runId = Guid.NewGuid().ToString();
+            var cmd = new ValidateAgentJsonInstructionExamplesCommand(
+                _database,
+                _logger,
+                includeInactive: includeInactive,
+                maxExamplesPerAgent: Math.Max(1, maxExamplesPerAgent));
+
+            _dispatcher.Enqueue(
+                cmd,
+                runId: runId,
+                metadata: new Dictionary<string, string>
+                {
+                    ["operation"] = "validate_agent_json_examples",
+                    ["includeInactive"] = includeInactive.ToString(),
+                    ["maxExamplesPerAgent"] = Math.Max(1, maxExamplesPerAgent).ToString()
+                },
+                priority: cmd.Priority);
+
+            return Ok(new
+            {
+                runId,
+                includeInactive,
+                maxExamplesPerAgent = Math.Max(1, maxExamplesPerAgent),
+                message = "Validation command enqueued"
+            });
+        }
+
+        /// <summary>
         /// POST /api/commands/state-story/start
         /// Creates a new state-driven story with a NarrativeProfile and activates it (single active story enforced).
         /// </summary>

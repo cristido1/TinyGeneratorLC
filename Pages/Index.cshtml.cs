@@ -29,6 +29,9 @@ public class IndexModel : PageModel
     // Auto-advancement property
     public bool EnableAutoAdvancement { get; set; }
     public string AutoAdvancementMode { get; set; } = "series";
+    public bool MonomodelModeEnabled { get; set; }
+    public string MonomodelModelDescription { get; set; } = string.Empty;
+    public List<string> AvailableModelDescriptions { get; set; } = new();
 
     public class WriterRanking
     {
@@ -154,6 +157,12 @@ public class IndexModel : PageModel
             AutoAdvancementMode = _stories.GetAutoAdvancementMode();
         });
 
+        Guarded("monomodel_mode", () =>
+        {
+            MonomodelModeEnabled = _stories.IsMonomodelModeEnabled();
+            MonomodelModelDescription = _stories.GetMonomodelModeModelDescription();
+        });
+
         Guarded("stories_count", () =>
         {
             allStories = _stories.GetAllStories();
@@ -165,6 +174,18 @@ public class IndexModel : PageModel
             var models = _database.ListModels();
             EnabledModels = models.Count(m => m.Enabled);
             DisabledModels = models.Count(m => !m.Enabled);
+            AvailableModelDescriptions = models
+                .Where(m => m.Enabled)
+                .Select(m => (m.Name ?? string.Empty).Trim())
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (!string.IsNullOrWhiteSpace(MonomodelModelDescription) &&
+                !AvailableModelDescriptions.Contains(MonomodelModelDescription, StringComparer.OrdinalIgnoreCase))
+            {
+                AvailableModelDescriptions.Insert(0, MonomodelModelDescription);
+            }
         });
 
         Guarded("audio_master_count", () =>
@@ -251,6 +272,27 @@ public class IndexModel : PageModel
         {
             BestModelsByRole = LoadBestModelsByRole();
         });
+    }
+
+    public IActionResult OnPostSetMonomodelMode(bool enabled, string? modelDescription)
+    {
+        try
+        {
+            _stories.SetMonomodelMode(enabled, modelDescription);
+            var normalizedModel = (modelDescription ?? string.Empty).Trim();
+            TempData["Message"] = enabled
+                ? string.IsNullOrWhiteSpace(normalizedModel)
+                    ? "Monomodel Mode abilitata. Seleziona un modello fisso."
+                    : $"Monomodel Mode abilitata con modello fisso: {normalizedModel}."
+                : "Monomodel Mode disabilitata.";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error setting Monomodel Mode");
+            TempData["Error"] = "Errore durante il salvataggio della Monomodel Mode.";
+        }
+
+        return RedirectToPage();
     }
     
     public IActionResult OnPostToggleAutoAdvancement(bool enabled, string? mode)

@@ -380,12 +380,12 @@ internal static class JsonDeterministicAutoFixer
         if (types.Contains("array") && node is JsonObject objNode)
         {
             fixes.Add($"coerzione_array:{path}");
-            node = new JsonArray(objNode);
+            node = new JsonArray(CloneNode(objNode));
         }
         else if (types.Contains("object") && node is JsonArray arrNode && arrNode.Count == 1 && arrNode[0] is JsonObject singleObj)
         {
             fixes.Add($"coerzione_object:{path}");
-            node = singleObj;
+            node = CloneNode(singleObj);
         }
 
         if (node is JsonValue valueNode)
@@ -419,7 +419,14 @@ internal static class JsonDeterministicAutoFixer
                 }
 
                 if (kv.Value == null) continue;
-                obj[kv.Key] = CoerceToSchema(kv.Value, propSchema.Value, $"{path}.{kv.Key}", fixes);
+                var coercedChild = CoerceToSchema(kv.Value, propSchema.Value, $"{path}.{kv.Key}", fixes);
+                // Avoid reattaching a node that already belongs to the same parent.
+                // JsonNode throws "The node already has a parent" on same-node assignment.
+                if (object.ReferenceEquals(coercedChild, kv.Value))
+                {
+                    continue;
+                }
+                obj[kv.Key] = coercedChild;
             }
         }
 
@@ -428,7 +435,13 @@ internal static class JsonDeterministicAutoFixer
             for (var i = 0; i < arr.Count; i++)
             {
                 if (arr[i] == null) continue;
-                arr[i] = CoerceToSchema(arr[i]!, itemsSchema, $"{path}[{i}]", fixes);
+                var currentItem = arr[i]!;
+                var coercedItem = CoerceToSchema(currentItem, itemsSchema, $"{path}[{i}]", fixes);
+                if (object.ReferenceEquals(coercedItem, currentItem))
+                {
+                    continue;
+                }
+                arr[i] = coercedItem;
             }
         }
 
@@ -478,6 +491,12 @@ internal static class JsonDeterministicAutoFixer
         }
 
         return valueNode;
+    }
+
+    private static JsonNode CloneNode(JsonNode node)
+    {
+        // JsonNode cannot be attached to two parents; clone before reparenting in coercion paths.
+        return JsonNode.Parse(node.ToJsonString())!;
     }
 
     private static string? FindClosestProperty(string source, IEnumerable<string> candidates)

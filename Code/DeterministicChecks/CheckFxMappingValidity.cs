@@ -8,6 +8,15 @@ public sealed class CheckFxMappingValidity : CheckBase
     {
         var started = DateTime.UtcNow;
         var tags = StoryTaggingService.ParseFxMapping(textToCheck ?? string.Empty, out var invalidLines);
+        var minFxTags = Math.Max(0, GetOption("MinFxTags", 0));
+
+        // Explicitly allow "no FX for this chunk" when configured minimum is zero.
+        // This keeps the pipeline permissive for chunks that genuinely do not need effects.
+        if (minFxTags == 0 && tags.Count == 0)
+        {
+            return Build(true, "ok (no fx required)", started);
+        }
+
         if (invalidLines > 0)
         {
             var template = GetOption("InvalidLinesErrorMessage", "Formato FX non valido: {invalid} righe non rispettano il formato richiesto.");
@@ -15,7 +24,6 @@ public sealed class CheckFxMappingValidity : CheckBase
             return Build(false, message, started);
         }
 
-        var minFxTags = Math.Max(0, GetOption("MinFxTags", 0));
         if (tags.Count < minFxTags)
         {
             var template = GetOption(

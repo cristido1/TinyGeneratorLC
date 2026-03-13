@@ -15,6 +15,8 @@ public sealed class CallCenter : ICallCenter
     private readonly IHubContext<StoryLiveHub>? _hubContext;
     private readonly ICustomLogger? _logger;
     private readonly IOptionsMonitor<ResponseValidationOptions>? _responseValidationOptions;
+    private readonly IOptionsMonitor<MonomodelModeOptions>? _monomodelModeOptions;
+    private readonly IOptionsMonitor<MemoryEmbeddingOptions>? _memoryEmbeddingOptions;
     private readonly IAgentExecutor _agentExecutor;
     private readonly IDeterministicValidator _deterministicValidator;
     private readonly IResponseValidator _responseValidator;
@@ -30,12 +32,16 @@ public sealed class CallCenter : ICallCenter
         IResponseValidator? responseValidator,
         IRetryPolicy? retryPolicy,
         ISystemPromptBuilder? systemPromptBuilder,
+        IOptionsMonitor<MonomodelModeOptions>? monomodelModeOptions,
+        IOptionsMonitor<MemoryEmbeddingOptions>? memoryEmbeddingOptions,
         IHubContext<StoryLiveHub>? hubContext = null,
         ICustomLogger? logger = null)
     {
         _agentCallService = agentCallService;
         _database = database;
         _responseValidationOptions = responseValidationOptions;
+        _monomodelModeOptions = monomodelModeOptions;
+        _memoryEmbeddingOptions = memoryEmbeddingOptions;
         _agentExecutor = agentExecutor ?? new DefaultAgentExecutor(agentCallService, database, responseValidationOptions, logger);
         _deterministicValidator = deterministicValidator ?? new DefaultDeterministicValidator();
         _responseValidator = responseValidator ?? new DefaultResponseValidator();
@@ -58,6 +64,8 @@ public sealed class CallCenter : ICallCenter
             ServiceLocator.Services?.GetService<IResponseValidator>(),
             ServiceLocator.Services?.GetService<IRetryPolicy>(),
             ServiceLocator.Services?.GetService<ISystemPromptBuilder>(),
+            ServiceLocator.Services?.GetService<IOptionsMonitor<MonomodelModeOptions>>(),
+            ServiceLocator.Services?.GetService<IOptionsMonitor<MemoryEmbeddingOptions>>(),
             ServiceLocator.Services?.GetService<IHubContext<StoryLiveHub>>(),
             logger)
     {
@@ -100,6 +108,7 @@ public sealed class CallCenter : ICallCenter
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            currentAgent = ApplyMonomodelOverrideIfActive(currentAgent);
             var modelName = ResolveModelName(currentAgent) ?? "unknown";
             if (!string.IsNullOrWhiteSpace(modelName))
             {
@@ -655,6 +664,111 @@ public sealed class CallCenter : ICallCenter
         return null;
     }
 
+    private Agent ApplyMonomodelOverrideIfActive(Agent agent)
+    {
+        if (agent == null)
+        {
+            throw new ArgumentNullException(nameof(agent));
+        }
+
+        var mono = _monomodelModeOptions?.CurrentValue;
+        if (mono == null || !mono.Enabled)
+        {
+            return agent;
+        }
+
+        var fixedModelDescription = (mono.ModelDescription ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(fixedModelDescription))
+        {
+            return agent;
+        }
+
+        var currentModelName = ResolveModelName(agent) ?? agent.ModelName?.Trim() ?? string.Empty;
+        var currentModelId = ResolveEffectiveModelId(agent.ModelId, currentModelName);
+
+        var embeddingModelName = (_memoryEmbeddingOptions?.CurrentValue?.Model ?? string.Empty).Trim();
+        var embeddingModelId = _database.GetModelIdByName(embeddingModelName);
+        if (embeddingModelId.HasValue && embeddingModelId.Value > 0 &&
+            currentModelId.HasValue && currentModelId.Value == embeddingModelId.Value)
+        {
+            return agent;
+        }
+
+        if (!string.IsNullOrWhiteSpace(embeddingModelName) &&
+            string.Equals(currentModelName, embeddingModelName, StringComparison.OrdinalIgnoreCase))
+        {
+            return agent;
+        }
+
+        var fixedModelId = _database.GetModelIdByName(fixedModelDescription);
+        var currentMatchesFixed = false;
+        if (fixedModelId.HasValue && fixedModelId.Value > 0 &&
+            currentModelId.HasValue && currentModelId.Value > 0)
+        {
+            currentMatchesFixed = fixedModelId.Value == currentModelId.Value;
+        }
+        else
+        {
+            currentMatchesFixed = string.Equals(currentModelName, fixedModelDescription, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (currentMatchesFixed)
+        {
+            return agent;
+        }
+
+        var overridden = CloneAgent(agent);
+        if (fixedModelId.HasValue && fixedModelId.Value > 0)
+        {
+            overridden.ModelId = fixedModelId.Value;
+        }
+        else
+        {
+            overridden.ModelId = null;
+        }
+
+        overridden.ModelName = fixedModelDescription;
+        _logger?.Log(
+            "Information",
+            "CallCenter",
+            $"operation=monomodel_override; agent={agent.Name}; role={agent.Role}; from_model={currentModelName}; to_model={fixedModelDescription}",
+            result: "SUCCESS");
+        return overridden;
+    }
+
+    private static Agent CloneAgent(Agent source)
+    {
+        return new Agent
+        {
+            Id = source.Id,
+            Name = source.Name,
+            Role = source.Role,
+            ModelId = source.ModelId,
+            ModelName = source.ModelName,
+            VoiceId = source.VoiceId,
+            Skills = source.Skills,
+            Config = source.Config,
+            JsonResponseFormat = source.JsonResponseFormat,
+            Prompt = source.Prompt,
+            Instructions = source.Instructions,
+            ExecutionPlan = source.ExecutionPlan,
+            IsActive = source.IsActive,
+            CreatedAt = source.CreatedAt,
+            UpdatedAt = source.UpdatedAt,
+            Notes = source.Notes,
+            Temperature = source.Temperature,
+            TopP = source.TopP,
+            RepeatPenalty = source.RepeatPenalty,
+            TopK = source.TopK,
+            RepeatLastN = source.RepeatLastN,
+            NumPredict = source.NumPredict,
+            Thinking = source.Thinking,
+            MultiStepTemplateId = source.MultiStepTemplateId,
+            SortOrder = source.SortOrder,
+            AllowedProfiles = source.AllowedProfiles
+        };
+    }
+
     private static void AppendFailureForRetry(ChatHistory history, string reason)
     {
         AppendFailureToHistory(history, reason);
@@ -829,6 +943,8 @@ public sealed class CallCenter : ICallCenter
             _responseValidator,
             _retryPolicy,
             _systemPromptBuilder,
+            _monomodelModeOptions,
+            _memoryEmbeddingOptions,
             _hubContext,
             _logger);
     }

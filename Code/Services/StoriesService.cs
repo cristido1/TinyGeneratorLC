@@ -13330,6 +13330,18 @@ private static string? SelectMusicFileDeterministic(
     {
         try
         {
+            var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+            if (File.Exists(appSettingsPath))
+            {
+                var json = File.ReadAllText(appSettingsPath);
+                var root = JsonNode.Parse(json) as JsonObject;
+                var enabledFromFile = root?["AutomaticOperations"]?["Enabled"]?.GetValue<bool?>();
+                if (enabledFromFile.HasValue)
+                {
+                    return enabledFromFile.Value;
+                }
+            }
+
             return _idleAutoOptions?.CurrentValue?.Enabled ?? false;
         }
         catch
@@ -13372,6 +13384,18 @@ private static string? SelectMusicFileDeterministic(
     {
         try
         {
+            var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+            if (File.Exists(appSettingsPath))
+            {
+                var json = File.ReadAllText(appSettingsPath);
+                var root = JsonNode.Parse(json) as JsonObject;
+                var modeFromFile = root?["AutomaticOperations"]?["AutoAdvancementMode"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(modeFromFile))
+                {
+                    return NormalizeAutoAdvancementMode(modeFromFile);
+                }
+            }
+
             var mode = _idleAutoOptions?.CurrentValue?.AutoAdvancementMode;
             return NormalizeAutoAdvancementMode(mode);
         }
@@ -13477,6 +13501,11 @@ private static string? SelectMusicFileDeterministic(
         if (normalized == "nre_manual")
         {
             return "nre_manual";
+        }
+
+        if (normalized == "complete_existing_first")
+        {
+            return "complete_existing_first";
         }
 
         return "series";

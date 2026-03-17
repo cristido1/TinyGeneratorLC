@@ -170,7 +170,7 @@ namespace TinyGenerator.Services.Commands
                             Operation = CommandScopePaths.AddVoiceTagsToStory,
                             Timeout = TimeSpan.FromSeconds(90),
                             MaxRetries = Math.Max(0, maxAttempts - 1),
-                            UseResponseChecker = true,
+                            UseResponseChecker = false,
                             AllowFallback = _tuning.TransformStoryRawToTagged.EnableFallback,
                             AskFailExplanation = _tuning.TransformStoryRawToTagged.DiagnoseOnFinalFailure,
                             SystemPromptOverride = systemPrompt

@@ -319,13 +319,19 @@ public class IndexModel : PageModel
             _stories.SetAutoAdvancementMode(mode);
             var selectedMode = string.Equals(mode, "nre", StringComparison.OrdinalIgnoreCase)
                 ? "nre"
-                : (string.Equals(mode, "nre_manual", StringComparison.OrdinalIgnoreCase) ? "nre_manual" : "series");
+                : (string.Equals(mode, "nre_manual", StringComparison.OrdinalIgnoreCase)
+                    ? "nre_manual"
+                    : (string.Equals(mode, "complete_existing_first", StringComparison.OrdinalIgnoreCase)
+                        ? "complete_existing_first"
+                        : "series"));
             TempData["Message"] = enabled
                 ? selectedMode == "nre"
                     ? "Avanzamento automatico abilitato in modalita NRE casuale: in inattivita verra accodata una nuova storia NRE (15 step)."
                     : selectedMode == "nre_manual"
                         ? "Avanzamento automatico abilitato in modalita NRE manuale: le storie generate verranno portate fino a valutazione effettuata."
-                        : "Avanzamento automatico abilitato in modalita Serie: in inattivita verra avanzata una serie."
+                        : selectedMode == "complete_existing_first"
+                            ? "Avanzamento automatico abilitato in modalita completamento: il sistema prova prima a completare storie esistenti, poi genera nuove storie se non c'e backlog."
+                            : "Avanzamento automatico abilitato in modalita Serie: in inattivita verra avanzata una serie."
                 : "Avanzamento automatico disabilitato.";
         }
         catch (Exception ex)

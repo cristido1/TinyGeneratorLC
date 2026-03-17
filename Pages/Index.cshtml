@@ -259,6 +259,15 @@
                         {
                             <option value="nre_manual">Genera nuova storia NRE manuale (fino a valutazione)</option>
                         }
+
+                        @if (Model.AutoAdvancementMode == "complete_existing_first")
+                        {
+                            <option value="complete_existing_first" selected>Completa storie esistenti prima di crearne nuove</option>
+                        }
+                        else
+                        {
+                            <option value="complete_existing_first">Completa storie esistenti prima di crearne nuove</option>
+                        }
                     </select>
                 </div>
             </form>

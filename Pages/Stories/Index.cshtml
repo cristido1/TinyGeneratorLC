@@ -317,6 +317,14 @@
                                         </div>
                                     </div>
                                 </div>
+                                <div class="card mb-2">
+                                    <div class="card-body py-2">
+                                        <div class="small">
+                                            <div><strong>summary:</strong></div>
+                                            <div class="mt-1" style="white-space: pre-wrap;">@(!string.IsNullOrWhiteSpace(s.Summary) ? s.Summary : "-")</div>
+                                        </div>
+                                    </div>
+                                </div>
                                 @if (s.Evaluations != null && s.Evaluations.Any())
                                 {
                                     foreach (var e in s.Evaluations)

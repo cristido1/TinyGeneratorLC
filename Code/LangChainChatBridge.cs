@@ -6,6 +6,7 @@ using System.Threading;
 using System.Text;
 using System.IO;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using TinyGenerator.Models;
 using TinyGenerator.Services;
 using Microsoft.Extensions.Configuration;
@@ -1262,6 +1263,7 @@ namespace TinyGenerator.Services
                 }
 
                 var isOllama = _forceOllama ?? _modelEndpoint.ToString().Contains("11434", StringComparison.OrdinalIgnoreCase);
+                var workingMessages = PrepareMessagesForSend(messages, tools, requestId);
                 
                 // For Ollama, create request with format or tools
                 // For OpenAI, include tools with tool_choice="auto"
@@ -1276,7 +1278,7 @@ namespace TinyGenerator.Services
                     var requestBody = new Dictionary<string, object>
                     {
                         { "model", _modelId },
-                        { "messages", messages.Select(m => new { role = m.Role, content = m.Content }).ToList() },
+                        { "messages", workingMessages.Select(m => new { role = m.Role, content = m.Content }).ToList() },
                         { "stream", ollamaStreaming }
                     };
 
@@ -1331,38 +1333,7 @@ namespace TinyGenerator.Services
                                              _modelId.Contains("gpt-5", StringComparison.OrdinalIgnoreCase);
                     
                     // Serialize messages properly for OpenAI format
-                    var serializedMessages = messages.Select(m =>
-                    {
-                        var msgDict = new Dictionary<string, object>
-                        {
-                            { "role", m.Role },
-                            { "content", m.Content ?? string.Empty }
-                        };
-                        
-                        // Add tool_calls for assistant messages that have them
-                        if (m.Role == "assistant" && m.ToolCalls != null && m.ToolCalls.Any())
-                        {
-                            msgDict["tool_calls"] = m.ToolCalls.Select(tc => new Dictionary<string, object>
-                            {
-                                { "id", tc.Id },
-                                { "type", "function" },
-                                { "function", new Dictionary<string, object>
-                                    {
-                                        { "name", tc.ToolName },
-                                        { "arguments", tc.Arguments }
-                                    }
-                                }
-                            }).ToList();
-                        }
-                        
-                        // Add tool_call_id for tool messages
-                        if (m.Role == "tool" && !string.IsNullOrEmpty(m.ToolCallId))
-                        {
-                            msgDict["tool_call_id"] = m.ToolCallId;
-                        }
-                        
-                        return msgDict;
-                    }).ToList();
+                    var serializedMessages = SerializeConversationMessages(workingMessages);
                     
                     var requestDict = new Dictionary<string, object>
                     {
@@ -1976,6 +1947,314 @@ namespace TinyGenerator.Services
                     ParseToolCallsFromElement(item, toolCalls);
                 }
             }
+        }
+
+        private List<ConversationMessage> PrepareMessagesForSend(
+            IReadOnlyList<ConversationMessage> sourceMessages,
+            IReadOnlyList<Dictionary<string, object>> tools,
+            string? requestId)
+        {
+            var prepared = CloneConversationMessages(sourceMessages);
+            if (!_isVllm || !NumCtx.HasValue || NumCtx.Value <= 0)
+            {
+                return prepared;
+            }
+
+            var hasStructuredResponseFormat = ResponseFormat != null;
+            var expectedOutputTokens = Math.Max(32, MaxResponseTokens ?? 128);
+
+            if (IsWithinVllmSafetyMargin(prepared, tools, hasStructuredResponseFormat, expectedOutputTokens, out var initialEstimated, out var initialAllowed))
+            {
+                return prepared;
+            }
+
+            var removedThirdStep = false;
+            var removedHistoricalErrors = false;
+            var removedJsonExample = false;
+            var reductionRound = 0;
+
+            while (reductionRound < 12)
+            {
+                reductionRound++;
+                var changed = false;
+
+                if (!removedThirdStep)
+                {
+                    removedThirdStep = TryRemoveThirdConversationStep(prepared);
+                    changed = changed || removedThirdStep;
+                }
+
+                if (!changed && !removedHistoricalErrors)
+                {
+                    removedHistoricalErrors = TryRemoveHistoricalErrorsFromSystem(prepared);
+                    changed = changed || removedHistoricalErrors;
+                }
+
+                if (!changed && !removedJsonExample)
+                {
+                    removedJsonExample = TryRemoveSingleJsonExample(prepared);
+                    changed = changed || removedJsonExample;
+                }
+
+                if (!changed)
+                {
+                    changed = TryShrinkLongestMessage(prepared);
+                }
+
+                if (!changed)
+                {
+                    break;
+                }
+
+                if (IsWithinVllmSafetyMargin(prepared, tools, hasStructuredResponseFormat, expectedOutputTokens, out var currentEstimated, out var currentAllowed))
+                {
+                    _logger?.Log(
+                        "Warning",
+                        "LangChainBridge",
+                        $"[ReqID: {requestId}] vLLM prompt reduction applied: est_input {initialEstimated}->{currentEstimated}, allowed_input={currentAllowed}, num_ctx={NumCtx.Value}, expected_output={expectedOutputTokens}");
+                    return prepared;
+                }
+            }
+
+            if (IsWithinVllmSafetyMargin(prepared, tools, hasStructuredResponseFormat, expectedOutputTokens, out var finalEstimated, out var finalAllowed))
+            {
+                _logger?.Log(
+                    "Warning",
+                    "LangChainBridge",
+                    $"[ReqID: {requestId}] vLLM prompt reduction applied: est_input {initialEstimated}->{finalEstimated}, allowed_input={finalAllowed}, num_ctx={NumCtx.Value}, expected_output={expectedOutputTokens}");
+            }
+
+            return prepared;
+        }
+
+        private bool IsWithinVllmSafetyMargin(
+            IReadOnlyList<ConversationMessage> messages,
+            IReadOnlyList<Dictionary<string, object>> tools,
+            bool hasStructuredResponseFormat,
+            int expectedOutputTokens,
+            out int estimatedInputTokens,
+            out int allowedInputTokens)
+        {
+            var serialized = SerializeConversationMessages(messages);
+            estimatedInputTokens = EstimateVllmInputTokens(serialized, tools, hasStructuredResponseFormat);
+            var dynamicSlack = Math.Max(64, estimatedInputTokens / 20);
+            var safetyBuffer = 256 + dynamicSlack;
+            allowedInputTokens = NumCtx.HasValue ? (NumCtx.Value - Math.Max(1, expectedOutputTokens) - safetyBuffer) : int.MaxValue;
+            return NumCtx.HasValue && NumCtx.Value > 0 && allowedInputTokens > 0 && estimatedInputTokens <= allowedInputTokens;
+        }
+
+        private static List<Dictionary<string, object>> SerializeConversationMessages(IReadOnlyList<ConversationMessage> messages)
+        {
+            var serialized = new List<Dictionary<string, object>>();
+            foreach (var m in messages ?? Array.Empty<ConversationMessage>())
+            {
+                if (m == null) continue;
+
+                var msgDict = new Dictionary<string, object>
+                {
+                    { "role", m.Role ?? string.Empty },
+                    { "content", m.Content ?? string.Empty }
+                };
+
+                if (string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase) &&
+                    m.ToolCalls != null &&
+                    m.ToolCalls.Any())
+                {
+                    msgDict["tool_calls"] = m.ToolCalls.Select(tc => new Dictionary<string, object>
+                    {
+                        { "id", tc.Id },
+                        { "type", "function" },
+                        { "function", new Dictionary<string, object>
+                            {
+                                { "name", tc.ToolName },
+                                { "arguments", tc.Arguments }
+                            }
+                        }
+                    }).ToList();
+                }
+
+                if (string.Equals(m.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrEmpty(m.ToolCallId))
+                {
+                    msgDict["tool_call_id"] = m.ToolCallId!;
+                }
+
+                serialized.Add(msgDict);
+            }
+
+            return serialized;
+        }
+
+        private static List<ConversationMessage> CloneConversationMessages(IReadOnlyList<ConversationMessage> messages)
+        {
+            var clone = new List<ConversationMessage>();
+            foreach (var message in messages ?? Array.Empty<ConversationMessage>())
+            {
+                if (message == null) continue;
+                clone.Add(new ConversationMessage
+                {
+                    Role = message.Role,
+                    Content = message.Content,
+                    ToolCallId = message.ToolCallId,
+                    ToolCalls = message.ToolCalls?.Select(tc => new ToolCallFromModel
+                    {
+                        Id = tc.Id,
+                        ToolName = tc.ToolName,
+                        Arguments = tc.Arguments
+                    }).ToList()
+                });
+            }
+
+            return clone;
+        }
+
+        private static bool TryRemoveThirdConversationStep(List<ConversationMessage> messages)
+        {
+            if (messages == null || messages.Count == 0)
+            {
+                return false;
+            }
+
+            var conversationIndexes = messages
+                .Select((m, idx) => new { Message = m, Index = idx })
+                .Where(x => x.Message != null &&
+                            !string.Equals(x.Message.Role, "system", StringComparison.OrdinalIgnoreCase) &&
+                            !string.IsNullOrWhiteSpace(x.Message.Content))
+                .Select(x => x.Index)
+                .ToList();
+
+            if (conversationIndexes.Count <= 4)
+            {
+                return false;
+            }
+
+            messages.RemoveAt(conversationIndexes[2]);
+            return true;
+        }
+
+        private static bool TryRemoveHistoricalErrorsFromSystem(List<ConversationMessage> messages)
+        {
+            if (messages == null || messages.Count == 0)
+            {
+                return false;
+            }
+
+            var changed = false;
+            const string marker = "IN PASSATO HAI COMMESSO QUESTI ERRORI";
+            foreach (var m in messages)
+            {
+                if (m == null ||
+                    !string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrWhiteSpace(m.Content))
+                {
+                    continue;
+                }
+
+                var content = m.Content!;
+                var idx = content.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0)
+                {
+                    continue;
+                }
+
+                var reduced = content[..idx].TrimEnd();
+                if (!string.Equals(reduced, content, StringComparison.Ordinal))
+                {
+                    m.Content = reduced;
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+
+        private static bool TryRemoveSingleJsonExample(List<ConversationMessage> messages)
+        {
+            if (messages == null || messages.Count == 0)
+            {
+                return false;
+            }
+
+            var jsonBlockRegex = new Regex(@"```json\s*[\s\S]*?```", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var seenExamples = 0;
+            for (var i = 0; i < messages.Count; i++)
+            {
+                var m = messages[i];
+                if (m == null || string.IsNullOrWhiteSpace(m.Content))
+                {
+                    continue;
+                }
+
+                var matches = jsonBlockRegex.Matches(m.Content);
+                if (matches.Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (Match match in matches)
+                {
+                    if (!match.Success) continue;
+                    seenExamples++;
+                    if (seenExamples == 2)
+                    {
+                        m.Content = m.Content.Remove(match.Index, match.Length).Trim();
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryShrinkLongestMessage(List<ConversationMessage> messages)
+        {
+            if (messages == null || messages.Count == 0)
+            {
+                return false;
+            }
+
+            var candidate = messages
+                .Where(m => m != null && !string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(m => m.Content?.Length ?? 0)
+                .FirstOrDefault();
+            if (candidate == null || string.IsNullOrWhiteSpace(candidate.Content))
+            {
+                return false;
+            }
+
+            var original = candidate.Content!;
+            if (original.Length < 600)
+            {
+                return false;
+            }
+
+            var targetLength = Math.Max(400, (int)(original.Length * 0.85));
+            if (targetLength >= original.Length)
+            {
+                return false;
+            }
+
+            var headLength = Math.Max(1, (int)(targetLength * 0.7));
+            var tailLength = Math.Max(1, targetLength - headLength);
+            if (headLength + tailLength >= original.Length)
+            {
+                return false;
+            }
+
+            var reduced = string.Concat(
+                original[..headLength],
+                Environment.NewLine,
+                "[...contenuto ridotto automaticamente per limiti di contesto...]",
+                Environment.NewLine,
+                original[^tailLength..]);
+
+            if (reduced.Length >= original.Length)
+            {
+                return false;
+            }
+
+            candidate.Content = reduced;
+            return true;
         }
 
         private int ClampVllmMaxTokens(

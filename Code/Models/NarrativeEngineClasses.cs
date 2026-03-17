@@ -1636,8 +1636,10 @@ public class NreEngine : IEngine
 
     private static string BuildEvaluatorUserInput(string prompt, NarrativePhase phase, List<NarrativeBlock> blocks, string newBlock, int previousBlocksWindow)
     {
+        // Limitiamo il contesto dell'evaluator per ridurre il rischio di overflow del model context.
+        var evaluatorWindow = Math.Max(1, Math.Min(previousBlocksWindow, 1));
         var tail = blocks
-            .TakeLast(Math.Max(1, previousBlocksWindow))
+            .TakeLast(evaluatorWindow)
             .Select(b => $"- {b.Text}")
             .ToList();
         var previousBlocks = tail.Count == 0 ? "(nessuno)" : string.Join(Environment.NewLine + Environment.NewLine, tail);
@@ -1658,8 +1660,10 @@ public class NreEngine : IEngine
         string? costSeverity,
         string? combatIntensity)
     {
+        // Limitiamo il contesto dell'evaluator per ridurre il rischio di overflow del model context.
+        var evaluatorWindow = Math.Max(1, Math.Min(previousBlocksWindow, 1));
         var tail = blocks
-            .TakeLast(Math.Max(1, previousBlocksWindow))
+            .TakeLast(evaluatorWindow)
             .Select(b => $"- {b.Text}")
             .ToList();
         var previousBlocks = tail.Count == 0 ? "(nessuno)" : string.Join(Environment.NewLine + Environment.NewLine, tail);

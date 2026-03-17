@@ -253,6 +253,24 @@ namespace TinyGenerator.Services
                 return;
             }
 
+            if (mode == "complete_existing_first")
+            {
+                for (var i = 0; i < burst; i++)
+                {
+                    // Priority: complete existing backlog first.
+                    if (TryRunAutoCompleteBacklogImmediate(opts))
+                    {
+                        continue;
+                    }
+
+                    if (!TryRunAutoNreStoryGeneration(opts, useManualMethod: false))
+                    {
+                        break;
+                    }
+                }
+                return;
+            }
+
             for (var i = 0; i < burst; i++)
             {
                 if (!TryRunAutoStateDrivenSeriesEpisode(opts))
@@ -1810,6 +1828,11 @@ namespace TinyGenerator.Services
             if (string.Equals(mode, "nre_manual", StringComparison.OrdinalIgnoreCase))
             {
                 return "nre_manual";
+            }
+
+            if (string.Equals(mode, "complete_existing_first", StringComparison.OrdinalIgnoreCase))
+            {
+                return "complete_existing_first";
             }
 
             return "series";
